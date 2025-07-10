@@ -117,6 +117,40 @@ export const ShareVideo = forwardRef<
     videoMetadataLoaded
   );
 
+  // Global timeline seeking (desktop)
+  useEffect(() => {
+    if (!seeking) return;
+    const timeline = document.getElementById("seek");
+    if (!timeline) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseMove
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseMove(syntheticEvent);
+    };
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseUp
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseUp(syntheticEvent);
+    };
+    document.addEventListener("mousemove", handleGlobalMouseMove);
+    document.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleGlobalMouseMove);
+      document.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, [seeking]);
+
   // Update isMP4Source based on query result
   useEffect(() => {
     if (videoSourceData) {
@@ -955,9 +989,8 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
-          isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
@@ -971,11 +1004,10 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
-              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
-                ? "opacity-100"
-                : "opacity-0"
-            }`}
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
+              ? "opacity-100"
+              : "opacity-0"
+              }`}
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -1024,9 +1056,8 @@ export const ShareVideo = forwardRef<
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div
-            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
-              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
-            }`}
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+              }`}
           >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
@@ -1109,21 +1140,13 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
-        }`}
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
+          }`}
       >
         <div
           id="seek"
           className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
-          onMouseMove={(e) => {
-            handleSeekMouseMove(e);
-          }}
-          onMouseUp={handleSeekMouseUp}
-          onMouseLeave={() => {
-            setSeeking(false);
-          }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
             handleSeekMouseMove(e);
@@ -1216,7 +1239,7 @@ export const ShareVideo = forwardRef<
                 left: `${watchedPercentage}%`,
               }}
               className={clsx(
-                "drag-button absolute top-2 z-20 -mt-1.5 -ml-2 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
+                "drag-button absolute top-2 z-20 -mt-1.5 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
                 seeking
                   ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                   : ""
@@ -1228,9 +1251,8 @@ export const ShareVideo = forwardRef<
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
-          overlayVisible ? "translate-y-0" : "translate-y-full"
-        }`}
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
+          }`}
         onMouseEnter={() => {
           setIsHoveringControls(true);
         }}
@@ -1597,7 +1619,7 @@ function CommentIndicators(props: {
         return (
           <div
             key={comment.id}
-            className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+            className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 md:-mt-5"
             style={{
               left: `${commentPosition}%`,
             }}
