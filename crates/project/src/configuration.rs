@@ -541,7 +541,7 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let config_str =
             std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
-        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+        let config: Self = serde_json::from_str(&config_str).unwrap_or_default();
 
         Ok(config)
     }
