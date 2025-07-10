@@ -881,7 +881,7 @@ export const EmbedVideo = forwardRef<
                     return (
                       <div
                         key={chapter.start}
-                        className="relative h-full cursor-pointer group"
+                        className="h-full cursor-pointer group"
                         style={{ width: `${chapterWidth}%` }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -903,9 +903,6 @@ export const EmbedVideo = forwardRef<
                             className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
                             style={{ width: `${watchedPercentage}%` }}
                           />
-                        )}
-                        {currentTime > chapterEnd && (
-                          <div className="absolute top-0 left-0 w-full h-full bg-white" />
                         )}
                       </div>
                     );
