@@ -1766,7 +1766,10 @@ function ZoomSegmentConfig(props: {
             )
           }
           minValue={props.segment.start + 1}
-          maxValue={project.timeline?.segments?.[0].end}
+          maxValue={
+            project.timeline?.zoomSegments[props.segmentIndex + 1]?.start ||
+            project.timeline?.segments[0].end
+          }
           step={0.001}
           formatTooltip={(v: number) => {
             const duration = v - props.segment.start;
