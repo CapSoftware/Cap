@@ -105,13 +105,13 @@ export const authOptions = (): NextAuthOptions => {
     events: {
       async signIn({ user, account, isNewUser }) {
         if (isNewUser) {
-          // Check if dub_id cookie is present
           const dubId = cookies().get("dub_id")?.value;
+          const dubPartnerData = cookies().get("dub_partner_data")?.value;
 
           if (dubId) {
             try {
-              // Send lead event to Dub
-              await dub().track.lead({
+              console.log("Attempting to track lead with Dub...");
+              const trackResult = await dub().track.lead({
                 clickId: dubId,
                 eventName: "Sign Up",
                 externalId: user.id,
@@ -120,13 +120,21 @@ export const authOptions = (): NextAuthOptions => {
                 customerAvatar: user.image || undefined,
               });
 
-              // Delete the dub_id cookie
-              cookies().set("dub_id", "", {
-                expires: new Date(0),
-              });
+              console.log("Dub tracking successful:", trackResult);
+
+              // Properly delete the dub_id cookie
+              cookies().delete("dub_id");
+
+              // Also delete dub_partner_data if it exists
+              if (dubPartnerData) {
+                cookies().delete("dub_partner_data");
+              }
             } catch (error) {
               console.error("Failed to track lead with Dub:", error);
+              console.error("Error details:", JSON.stringify(error, null, 2));
             }
+          } else {
+            console.log("No dub_id cookie found - referral tracking skipped");
           }
 
           const organizationId = nanoId();

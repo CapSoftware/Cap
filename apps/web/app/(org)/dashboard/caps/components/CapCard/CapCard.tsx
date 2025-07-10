@@ -62,6 +62,8 @@ export interface CapCardProps extends PropsWithChildren {
   hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
   isDeleting?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 export const CapCard = ({

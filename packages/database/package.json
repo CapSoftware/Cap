@@ -22,7 +22,7 @@
     "@react-email/render": "1.1.2",
     "@react-email/tailwind": "^1.0.5",
     "drizzle-orm": "0.43.1",
-    "dub": "^0.33.1",
+    "dub": "^0.64.0",
     "nanoid": "^5.0.4",
     "next": "14.2.9",
     "next-auth": "^4.24.5",
