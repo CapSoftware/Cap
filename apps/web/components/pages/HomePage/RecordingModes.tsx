@@ -97,7 +97,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap.so/embed/8cq21vmz12tm1zf"
+                src="http://localhost:3000/embed/nyb0x5znd822kqb"
                 frameBorder="0"
                 allowFullScreen
                 style={{
