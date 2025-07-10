@@ -875,21 +875,13 @@ export const EmbedVideo = forwardRef<
                     const chapterWidth =
                       (chapterDuration / longestDuration) * 100;
 
-                    const chapterProgress = Math.max(
-                      0,
-                      Math.min(
-                        (currentTime - chapterStart) / chapterDuration,
-                        1
-                      )
-                    );
-
                     const isCurrentChapter =
                       currentTime >= chapterStart && currentTime < chapterEnd;
 
                     return (
                       <div
                         key={chapter.start}
-                        className="relative h-full cursor-pointer group"
+                        className="h-full cursor-pointer group"
                         style={{ width: `${chapterWidth}%` }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -908,12 +900,9 @@ export const EmbedVideo = forwardRef<
                         />
                         {isCurrentChapter && (
                           <div
-                            className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                            style={{ width: `${chapterProgress * 100}%` }}
+                            className="absolute top-0 left-0 h-full bg-white"
+                            style={{ width: `${watchedPercentage}%` }}
                           />
-                        )}
-                        {currentTime > chapterEnd && (
-                          <div className="absolute top-0 left-0 w-full h-full bg-white" />
                         )}
                       </div>
                     );
