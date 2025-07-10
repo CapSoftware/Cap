@@ -900,7 +900,7 @@ export const EmbedVideo = forwardRef<
                         />
                         {isCurrentChapter && (
                           <div
-                            className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
+                            className="absolute top-0 left-0 h-full bg-white"
                             style={{ width: `${watchedPercentage}%` }}
                           />
                         )}
