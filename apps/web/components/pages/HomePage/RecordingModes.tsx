@@ -5,7 +5,6 @@ import {
 } from "@/utils/platform";
 import { Button } from "@cap/ui";
 import clsx from "clsx";
-import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
 import { useState } from "react";
@@ -98,7 +97,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap.so/embed/8cq21vmz12tm1zf"
+                src="http://localhost:3000/embed/nyb0x5znd822kqb"
                 frameBorder="0"
                 allowFullScreen
                 style={{
