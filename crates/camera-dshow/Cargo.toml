@@ -20,3 +20,5 @@ workspace = true
 
 [dev-dependencies]
 inquire = "0.7.5"
+tracing.workspace = true
+tracing-subscriber = "0.3.19"

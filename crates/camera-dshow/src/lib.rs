@@ -30,7 +30,7 @@ use windows::{
         },
     },
 };
-use windows_core::GUID;
+use windows_core::{GUID, PWSTR};
 
 pub trait IPinExt {
     unsafe fn matches_category(&self, category: GUID) -> bool;
@@ -59,8 +59,8 @@ impl IPinExt for IPin {
     unsafe fn matches_major_type(&self, major_type: GUID) -> bool {
         let mut connection_media_type = AM_MEDIA_TYPE::default();
         self.ConnectionMediaType(&mut connection_media_type)
-            .unwrap();
-        connection_media_type.majortype == major_type
+            .map(|_| connection_media_type.majortype == major_type)
+            .unwrap_or(false)
     }
 }
 
@@ -70,6 +70,12 @@ pub trait IBaseFilterExt {
         direction: PIN_DIRECTION,
         category: GUID,
         major_type: GUID,
+    ) -> Option<IPin>;
+
+    unsafe fn get_pin_by_name(
+        &self,
+        direction: PIN_DIRECTION,
+        name: Option<&PWSTR>,
     ) -> Option<IPin>;
 }
 
@@ -98,6 +104,35 @@ impl IBaseFilterExt for IBaseFilter {
                 {
                     return Some(pin);
                 }
+            }
+        }
+
+        None
+    }
+
+    unsafe fn get_pin_by_name(
+        &self,
+        direction: PIN_DIRECTION,
+        name: Option<&PWSTR>,
+    ) -> Option<IPin> {
+        let pin_enum = self.EnumPins().unwrap();
+
+        let _ = pin_enum.Reset();
+
+        dbg!(direction);
+
+        let mut pin = [None];
+        while pin_enum.Next(&mut pin, None) == S_OK {
+            let Some(pin) = pin[0].take() else {
+                break;
+            };
+
+            let pin_dir = pin.QueryDirection().unwrap();
+
+            dbg!(pin_dir);
+
+            if pin_dir == direction {
+                return Some(pin);
             }
         }
 
