@@ -9,7 +9,7 @@ import { DateRange, getDateRangeFilter } from "./dateRangeUtils";
 
 export async function lookupUserById(data: FormData) {
   const currentUser = await getCurrentUser();
-  if (!currentUser?.email.endsWith("@cap.so")) return;
+  if (currentUser?.email !== "richie@mcilroy.co") return;
 
   const [user] = await db()
     .select()
@@ -21,7 +21,7 @@ export async function lookupUserById(data: FormData) {
 
 export async function getUsersCreatedToday() {
   const currentUser = await getCurrentUser();
-  if (!currentUser?.email.endsWith("@cap.so")) return null;
+  if (currentUser?.email !== "richie@mcilroy.co") return null;
 
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
@@ -36,7 +36,7 @@ export async function getUsersCreatedToday() {
 
 export async function getUsersCreatedInRange(dateRange: DateRange) {
   const currentUser = await getCurrentUser();
-  if (!currentUser?.email.endsWith("@cap.so")) return null;
+  if (currentUser?.email !== "richie@mcilroy.co") return null;
 
   const { start, end } = getDateRangeFilter(dateRange);
 
@@ -55,7 +55,7 @@ export async function getUsersCreatedInRange(dateRange: DateRange) {
 
 export async function getPaidUsersStats() {
   const currentUser = await getCurrentUser();
-  if (!currentUser?.email.endsWith("@cap.so")) return null;
+  if (currentUser?.email !== "richie@mcilroy.co") return null;
 
   // Get all users with active subscriptions (including third-party)
   const paidUsers = await db()
@@ -169,11 +169,11 @@ export async function getPaidUsersStats() {
 
 export async function getPaidUsersStatsInRange(dateRange: DateRange) {
   const currentUser = await getCurrentUser();
-  if (!currentUser?.email.endsWith("@cap.so")) return null;
+  if (currentUser?.email !== "richie@mcilroy.co") return null;
 
   const { start, end } = getDateRangeFilter(dateRange);
 
-  // Get all users with active subscriptions created in the date range
+  // Get paid users who joined within the date range
   const paidUsers = await db()
     .select({
       id: users.id,
@@ -197,10 +197,8 @@ export async function getPaidUsersStatsInRange(dateRange: DateRange) {
           ),
           isNotNull(users.thirdPartyStripeSubscriptionId)
         ),
-        dateRange !== "allTime" ? and(
-          gte(users.created_at, start),
-          lte(users.created_at, end)
-        ) : sql`1=1`
+        gte(users.created_at, start),
+        lte(users.created_at, end)
       )
     );
 

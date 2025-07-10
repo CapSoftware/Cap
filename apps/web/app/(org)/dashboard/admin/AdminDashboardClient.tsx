@@ -67,7 +67,7 @@ export default function AdminDashboardClient() {
 
         <div className="bg-white rounded-lg shadow p-6">
           <h2 className="text-sm font-medium text-gray-600 mb-2">
-            Total Paid Users
+            New Paid Users
           </h2>
           {loading ? (
             <div className="h-9 bg-gray-200 rounded animate-pulse"></div>
