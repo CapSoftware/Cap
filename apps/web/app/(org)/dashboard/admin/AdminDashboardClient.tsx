@@ -1,11 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import {
-  DateRange,
-  getUsersCreatedInRange,
-  getPaidUsersStatsInRange,
-} from "./actions";
+import { getUsersCreatedInRange, getPaidUsersStatsInRange } from "./actions";
+import { DateRange } from "./dateRangeUtils";
 import UserLookup from "./UserLookup";
 
 type Stats = {
