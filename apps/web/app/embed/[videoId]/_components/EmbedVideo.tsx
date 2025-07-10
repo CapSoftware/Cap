@@ -875,14 +875,6 @@ export const EmbedVideo = forwardRef<
                     const chapterWidth =
                       (chapterDuration / longestDuration) * 100;
 
-                    const chapterProgress = Math.max(
-                      0,
-                      Math.min(
-                        (currentTime - chapterStart) / chapterDuration,
-                        1
-                      )
-                    );
-
                     const isCurrentChapter =
                       currentTime >= chapterStart && currentTime < chapterEnd;
 
@@ -907,15 +899,11 @@ export const EmbedVideo = forwardRef<
                           }}
                         />
                         {isCurrentChapter && (
-  <div
-    className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-    style={{
-      left: 0,
-      right: `calc(100% - ${chapterProgress * 100}%)`,
-      pointerEvents: 'none',
-    }}
-  />
-)}
+                          <div
+                            className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
+                            style={{ width: `${watchedPercentage}%` }}
+                          />
+                        )}
                         {currentTime > chapterEnd && (
                           <div className="absolute top-0 left-0 w-full h-full bg-white" />
                         )}
