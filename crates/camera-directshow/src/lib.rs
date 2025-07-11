@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use std::{
     ffi::{OsString, c_void},
     ops::Deref,
