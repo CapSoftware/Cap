@@ -2,7 +2,9 @@
 
 import { Button } from "@cap/ui";
 import Link from "next/link";
+import {motion} from 'framer-motion'
 import { useEffect } from "react";
+import LeftBlueHue from "@/components/pages/HomePage/LeftBlueHue";
 
 interface ToolCategory {
   title: string;
@@ -34,64 +36,39 @@ const toolCategories: ToolCategory[] = [
 ];
 
 export function PageContent() {
-  useEffect(() => {
-    const animateClouds = () => {
-      const cloud1 = document.getElementById("cloud-1");
-      const cloud2 = document.getElementById("cloud-2");
 
-      if (cloud1 && cloud2) {
-        cloud1.animate(
-          [
-            { transform: "translateX(0) translateY(0)" },
-            { transform: "translateX(-10px) translateY(5px)" },
-            { transform: "translateX(10px) translateY(-5px)" },
-            { transform: "translateX(0) translateY(0)" },
-          ],
-          {
-            duration: 15000,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        );
-
-        cloud2.animate(
-          [
-            { transform: "translateX(0) translateY(0)" },
-            { transform: "translateX(10px) translateY(-5px)" },
-            { transform: "translateX(-10px) translateY(5px)" },
-            { transform: "translateX(0) translateY(0)" },
-          ],
-          {
-            duration: 18000,
-            iterations: Infinity,
-            easing: "ease-in-out",
-          }
-        );
-      }
-    };
-
-    animateClouds();
-  }, []);
 
   return (
-    <div className="py-20 md:py-28">
-      <div className="wrapper">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-medium tracking-tight text-gray-900 mb-4">
-            Try our free tools
-          </h1>
-          <p className="text-xl text-gray-600 max-w-3xl mx-auto">
-            Powerful browser-based utilities that run directly on your device.
-            No uploads, no installations, maximum privacy.
-          </p>
+    <>
+     <div
+        className="relative overflow-hidden pt-[100px] md:pt-[180px]"
+        
+      >
+        <div className="relative z-10 px-5 w-full h-full flex flex-col justify-center">
+          <div className="mx-auto text-center wrapper wrapper-sm">
+            <h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[2.75rem] md:leading-[3.25rem] font-medium relative z-10 text-black mb-6">
+               Try our free tools
+            </h1>
+            <p className="mx-auto mb-10 max-w-2xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
+             Powerful browser-based utilities that run directly on your device. No uploads, no installations, maximum privacy.
+            </p>
+          </div>
+          <div className="flex flex-col justify-center items-center space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
+        
+          </div>
+         
+
         </div>
 
-        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
-          {toolCategories.map((category) => (
+        
+      </div>
+      <div className="wrapper mx-auto">
+        <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3 px-12 mt-16">
+           {toolCategories.map((category) => (
             <Link
               key={category.href}
               href={category.href}
-              className="group block p-8 border border-gray-200 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
+              className="group block p-8 border border-gray-200 bg-gray-1 rounded-xl hover:border-blue-500 hover:shadow-md transition-all"
             >
               <div className="flex flex-col items-center text-center">
                 <div className="flex-shrink-0 p-3 bg-blue-100 rounded-xl mb-5">
@@ -117,48 +94,30 @@ export function PageContent() {
             </Link>
           ))}
         </div>
-
         <div
-          className="mx-auto mt-16 mb-8 rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
-          style={{
-            minHeight: "300px",
-            background:
-              "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
-          }}
+        className="mx-auto wrapper mt-16 mb-8 bg-white rounded-3xl overflow-hidden relative flex flex-col justify-center p-12"
+        style={{
+          minHeight: "300px",
+          backgroundImage: "url('/illustrations/ctabg.svg')",
+          backgroundSize: "cover",
+          backgroundRepeat: "no-repeat",
+        }}
+      
         >
-          <div
-            id="cloud-1"
-            className="absolute top-0 -right-20 opacity-30 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
-          >
-            <img
-              className="max-w-[40vw] h-auto"
-              src="/illustrations/cloud-1.png"
-              alt="Footer Cloud One"
-            />
-          </div>
-          <div
-            id="cloud-2"
-            className="absolute bottom-0 left-0 opacity-30 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
-          >
-            <img
-              className="max-w-[40vw] h-auto"
-              src="/illustrations/cloud-2.png"
-              alt="Footer Cloud Two"
-            />
-          </div>
-          <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
+         
+          <div className=" mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[800px] mx-auto mb-8">
-              <h2 className="text-3xl md:text-4xl font-medium text-white mb-4 drop-shadow-md">
+              <h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-4 drop-shadow-md">
                 The open source Loom alternative
               </h2>
-              <p className="text-xl text-white/90 mb-6">
+              <p className="text-xl  mb-6 text-gray-10">
                 Cap is lightweight, powerful, and cross-platform. Record and
                 share securely in seconds with custom S3 bucket support.
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4">
               <Button
-                variant="white"
+                variant="gray"
                 href="/download"
                 size="lg"
                 className="w-full sm:w-auto transition-all duration-300 font-medium px-8 py-3"
@@ -169,6 +128,8 @@ export function PageContent() {
           </div>
         </div>
       </div>
-    </div>
+      
+    </>
+
   );
 }

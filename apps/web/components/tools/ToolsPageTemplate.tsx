@@ -119,7 +119,7 @@ export const ToolsPageTemplate = ({
   return (
     <>
       {/* Compact Hero Section */}
-      <div className="relative mt-[60px] overflow-hidden bg-gradient-to-b from-blue-50/50 to-white">
+      <div className="relative pt-[60px] md:pt-[120px] overflow-hidden ">
         {/* Breadcrumbs */}
         <div className="wrapper relative z-20 pt-4 px-5 text-center">
           <div className="flex items-center justify-center text-sm">
@@ -144,57 +144,14 @@ export const ToolsPageTemplate = ({
             </p>
           </div>
         </div>
-
-        {/* Simplified Background Elements */}
-        <div className="absolute inset-0 z-0 overflow-hidden opacity-50">
-          <LeftBlueHue />
-
-          {/* Reduced number of clouds for cleaner look */}
-          <motion.img
-            style={{ mixBlendMode: "plus-lighter" }}
-            initial={{ right: 100, top: 30, rotate: 180 }}
-            animate={{ x: "-30vw" }}
-            transition={{
-              duration: 300,
-              repeat: Infinity,
-              repeatType: "reverse",
-              ease: "linear",
-            }}
-            className="absolute w-full max-w-[400px] z-[5] select-none opacity-30"
-            src="/illustrations/bottomcloud.webp"
-            alt="Background cloud"
-          />
-
-          <motion.img
-            style={{ mixBlendMode: "screen" }}
-            animate={{ x: [0, "50vw"] }}
-            transition={{
-              duration: 200,
-              repeat: Infinity,
-              repeatType: "reverse",
-            }}
-            className="absolute top-[20px] left-[-60px] max-w-[300px] select-none z-[5] pointer-events-none opacity-30"
-            src="/illustrations/smallcloudthree.webp"
-            alt="Background cloud"
-          />
-        </div>
-
-        {/** Right Blue Hue */}
-        <div
-          className="w-[500px] h-[300px] bg-gradient-to-l rounded-full blur-[80px]
-          absolute top-10 z-[0] right-0 from-[#A6D7FF] to-transparent opacity-40"
-        />
-      </div>
-
-      {/* Tool Container - Now positioned for visibility above the fold */}
-      <div className="wrapper py-10 bg-white relative z-10">
+        <div className="wrapper py-10 relative z-10">
         <div className="mx-auto max-w-4xl bg-white rounded-2xl shadow-lg p-6 md:p-8 border border-gray-100">
           {toolComponent}
         </div>
       </div>
 
       {/* Main Content - Features & FAQ */}
-      <div className="wrapper py-16 bg-gradient-to-b from-white to-gray-50 relative z-10">
+      <div className="wrapper py-16  relative z-10">
         {/* Features Section */}
         <div className="mb-20">
           <div className="text-center max-w-[800px] mx-auto mb-12">
@@ -264,44 +221,26 @@ export const ToolsPageTemplate = ({
 
         {/* Clean CTA Section */}
         <div
-          className="wrapper max-w-[900px] mx-auto rounded-2xl overflow-hidden relative flex flex-col justify-center p-8 md:p-10"
+          className="wrapper max-w-[900px] mx-auto rounded-2xl bg-white overflow-hidden relative flex flex-col justify-center p-8 md:p-10"
           style={{
-            background:
-              "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
+            backgroundImage: "url('/illustrations/ctabg.svg')",
+            backgroundSize: "cover",
+            backgroundRepeat: "no-repeat",
           }}
         >
-          <div
-            id="cloud-4"
-            className="absolute top-0 -right-20 opacity-20 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
-          >
-            <img
-              className="max-w-[30vw] h-auto"
-              src="/illustrations/cloud-1.png"
-              alt="Footer Cloud"
-            />
-          </div>
-          <div
-            id="cloud-5"
-            className="absolute bottom-0 left-0 opacity-20 z-0 pointer-events-none transition-transform duration-700 ease-in-out"
-          >
-            <img
-              className="max-w-[30vw] h-auto"
-              src="/illustrations/cloud-2.png"
-              alt="Footer Cloud"
-            />
-          </div>
+        
           <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[700px] mx-auto mb-6">
-              <h2 className="text-2xl md:text-3xl font-medium text-white mb-3 drop-shadow-md">
+              <h2 className="text-2xl md:text-3xl font-medium text-gray-12 mb-3 drop-shadow-md">
                 {content.cta.title}
               </h2>
-              <p className="text-lg text-white/90 mb-5">
+              <p className="text-lg text-gray-10 mb-5">
                 {content.cta.description}
               </p>
             </div>
             <div className="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4">
               <Button
-                variant="white"
+                variant="gray"
                 href="/download"
                 size="lg"
                 className="w-full sm:w-auto transition-all duration-200 font-medium px-8"
@@ -312,6 +251,10 @@ export const ToolsPageTemplate = ({
           </div>
         </div>
       </div>
+      </div>
+
+      {/* Tool Container - Now positioned for visibility above the fold */}
+      
 
       <style jsx global>{`
         @keyframes fade-in-down {

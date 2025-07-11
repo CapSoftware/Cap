@@ -117,6 +117,40 @@ export const ShareVideo = forwardRef<
     videoMetadataLoaded
   );
 
+  // Global timeline seeking (desktop)
+  useEffect(() => {
+    if (!seeking) return;
+    const timeline = document.getElementById("seek");
+    if (!timeline) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseMove
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseMove(syntheticEvent);
+    };
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseUp
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseUp(syntheticEvent);
+    };
+    document.addEventListener("mousemove", handleGlobalMouseMove);
+    document.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleGlobalMouseMove);
+      document.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, [seeking]);
+
   // Update isMP4Source based on query result
   useEffect(() => {
     if (videoSourceData) {
@@ -955,9 +989,8 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
-          isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
@@ -971,11 +1004,10 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
-              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
-                ? "opacity-100"
-                : "opacity-0"
-            }`}
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
+              ? "opacity-100"
+              : "opacity-0"
+              }`}
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -1024,9 +1056,8 @@ export const ShareVideo = forwardRef<
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div
-            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
-              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
-            }`}
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+              }`}
           >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
@@ -1109,21 +1140,13 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
-        }`}
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
+          }`}
       >
         <div
           id="seek"
           className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
-          onMouseMove={(e) => {
-            handleSeekMouseMove(e);
-          }}
-          onMouseUp={handleSeekMouseUp}
-          onMouseLeave={() => {
-            setSeeking(false);
-          }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
             handleSeekMouseMove(e);
@@ -1144,79 +1167,50 @@ export const ShareVideo = forwardRef<
             onMouseMove={handleTimelineHover}
             onMouseLeave={handleTimelineLeave}
           >
+            {/* Render chapter backgrounds */}
             {chapters.length > 0 && longestDuration > 0 ? (
               <div className="absolute top-2.5 w-full h-1 sm:h-1.5 z-10 flex">
                 {chapters.map((chapter, index) => {
                   const nextChapter = chapters[index + 1];
                   const chapterStart = chapter.start;
-                  const chapterEnd = nextChapter
-                    ? nextChapter.start
-                    : longestDuration;
+                  const chapterEnd = nextChapter ? nextChapter.start : longestDuration;
                   const chapterDuration = chapterEnd - chapterStart;
-                  const chapterWidth =
-                    (chapterDuration / longestDuration) * 100;
-
-                  const chapterProgress = Math.max(
-                    0,
-                    Math.min((currentTime - chapterStart) / chapterDuration, 1)
-                  );
-
-                  const isCurrentChapter =
-                    currentTime >= chapterStart && currentTime < chapterEnd;
-
+                  const chapterWidth = (chapterDuration / longestDuration) * 100;
                   return (
                     <div
                       key={chapter.start}
                       className="relative h-full cursor-pointer group"
-                      style={{ width: `${chapterWidth}%` }}
+                      style={{
+                        width: `${chapterWidth}%`,
+                        background: "rgba(156, 163, 175, 0.5)", // bg-gray-400 bg-opacity-50
+                        borderRight:
+                          index < chapters.length - 1
+                            ? "1px solid rgba(255,255,255,0.3)"
+                            : "none",
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         applyTimeToVideos(chapter.start);
                       }}
-                    >
-                      <div
-                        className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
-                        style={{
-                          boxShadow: "0 0 20px rgba(0,0,0,0.6)",
-                          borderRight:
-                            index < chapters.length - 1
-                              ? "1px solid rgba(255,255,255,0.3)"
-                              : "none",
-                        }}
-                      />
-                      {isCurrentChapter && (
-                        <div
-                          className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                          style={{ width: `${chapterProgress * 100}%` }}
-                        />
-                      )}
-                      {currentTime > chapterEnd && (
-                        <div className="absolute top-0 left-0 w-full h-full bg-white" />
-                      )}
-                    </div>
+                    />
                   );
                 })}
               </div>
             ) : (
-              <>
-                <div
-                  style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
-                  className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
-                />
-                <div
-                  className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
-                  style={{ width: `${watchedPercentage}%` }}
-                />
-              </>
+              <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10" />
             )}
-
+            {/* Render the main progress bar (white) */}
+            <div
+              className="absolute top-2.5 h-1 sm:h-1.5 bg-white z-20"
+              style={{ width: `${watchedPercentage}%` }}
+            />
             <div
               style={{
                 boxShadow: "0 0 20px rgba(0,0,0,0.1)",
                 left: `${watchedPercentage}%`,
               }}
               className={clsx(
-                "drag-button absolute top-2 z-20 -mt-1.5 -ml-2 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
+                "drag-button absolute top-2 z-20 -mt-1.5 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
                 seeking
                   ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                   : ""
@@ -1228,9 +1222,8 @@ export const ShareVideo = forwardRef<
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
-          overlayVisible ? "translate-y-0" : "translate-y-full"
-        }`}
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
+          }`}
         onMouseEnter={() => {
           setIsHoveringControls(true);
         }}
@@ -1283,7 +1276,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}
@@ -1597,7 +1590,7 @@ function CommentIndicators(props: {
         return (
           <div
             key={comment.id}
-            className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+            className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 md:-mt-5"
             style={{
               left: `${commentPosition}%`,
             }}
