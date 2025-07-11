@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel, or, sql, and } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 import {
   videos,
@@ -8,6 +8,9 @@ import {
   sharedVideos,
   organizationMembers,
   organizations,
+  spaces,
+  spaceMembers,
+  spaceVideos,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
@@ -508,69 +511,207 @@ async function AuthorizedContent({
 
   const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
-  const [
-    membersList,
-    userOrganizations,
-    sharedOrganizations,
-    { customDomain, domainVerified },
-  ] = await Promise.all([
-    membersListPromise,
-    userOrganizationsPromise,
-    sharedOrganizationsPromise,
-    customDomainPromise,
-  ]);
+  if (!user) {
+    return notFound();
+  }
 
-  const videoWithOrganizationInfo: VideoWithOrganization = {
-    ...video,
-    organizationMembers: membersList.map((member) => member.userId),
-    organizationId: video.sharedOrganization?.organizationId ?? undefined,
-    sharedOrganizations: sharedOrganizations,
-    password: null,
-    hasPassword: video.password !== null,
-  };
 
-  return (
-    <>
-      <div className="container flex-1 px-4 py-4 mx-auto">
-        <ShareHeader
-          data={{
-            ...videoWithOrganizationInfo,
-            createdAt: video.metadata?.customCreatedAt
-              ? new Date(video.metadata.customCreatedAt)
-              : video.createdAt,
-          }}
-          user={user}
-          customDomain={customDomain}
-          domainVerified={domainVerified}
-          sharedOrganizations={
-            videoWithOrganizationInfo.sharedOrganizations || []
-          }
-          userOrganizations={userOrganizations}
-          NODE_ENV={process.env.NODE_ENV}
-        />
+  let activeOrganizationId = user.activeOrganizationId;
 
-        <Share
-          data={videoWithOrganizationInfo}
-          user={user}
-          comments={commentsPromise}
-          views={viewsPromise}
-          customDomain={customDomain}
-          domainVerified={domainVerified}
-          userOrganizations={userOrganizations}
-          initialAiData={initialAiData}
-          aiGenerationEnabled={aiGenerationEnabled}
-        />
-      </div>
-      <div className="py-4 mt-auto">
-        <a
-          target="_blank"
-          href={`/?ref=video_${video.id}`}
-          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
-        >
-          <span className="text-sm">Recorded with</span>
-          <Logo className="w-14 h-auto" />
-        </a>
-      </div>
-    </>
-  );
+  if (!activeOrganizationId) {
+    return notFound();
+  }
+
+  // Add a single 'All spaces' entry for the active organization
+  const activeOrgInfo = await db()
+    .select({
+      ownerId: organizations.ownerId,
+      name: organizations.name,
+    })
+    .from(organizations)
+    .where(eq(organizations.id, activeOrganizationId))
+    .limit(1);
+
+  if (activeOrgInfo) {
+    // Count all members in the organization
+    const orgMemberCountResult = await db()
+      .select({ value: sql<number>`COUNT(*)` })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          activeOrganizationId
+        )
+      );
+    const orgMemberCount = orgMemberCountResult[0]?.value || 0;
+
+    // Count all videos shared with the organization (via sharedVideos table)
+    const orgVideoCountResult = await db()
+      .select({
+        value: sql<number>`COUNT(DISTINCT ${sharedVideos.videoId})`,
+      })
+      .from(sharedVideos)
+      .where(
+        eq(sharedVideos.organizationId, activeOrganizationId)
+      );
+    const orgVideoCount = orgVideoCountResult[0]?.value || 0;
+
+    if (!activeOrgInfo[0]) {
+      return notFound();
+    }
+
+
+    // Add a single 'All Spaces' entry for the active organization (minimal, no counts)
+    const allSpacesEntry = {
+      id: activeOrganizationId,
+      primary: true,
+      privacy: "Public" as const,
+      name: `All ${activeOrgInfo[0].name}`,
+      description: `View all content in ${activeOrgInfo[0].name}`,
+      organizationId: activeOrganizationId,
+      iconUrl: null,
+      memberCount: orgMemberCount,
+      createdById: activeOrgInfo[0].ownerId,
+      videoCount: orgVideoCount,
+    } as const;
+
+    // get all the spaces that the video has been shared to (spaces + org-level)
+    const videoSpacesData = await db()
+      .select({
+        id: spaces.id,
+        name: spaces.name,
+        organizationId: spaces.organizationId,
+        iconUrl: spaces.iconUrl,
+        isOrg: sql<boolean>`FALSE`,
+      })
+      .from(spaceVideos)
+      .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+      .where(eq(spaceVideos.videoId, videoId));
+
+    // get org-level sharing for this video
+    const orgShare = await db()
+      .select({
+        id: organizations.id,
+        name: organizations.name,
+        organizationId: organizations.id,
+        iconUrl: organizations.iconUrl,
+        isOrg: sql<boolean>`TRUE`,
+      })
+      .from(sharedVideos)
+      .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+      .where(and(eq(sharedVideos.videoId, videoId), eq(organizations.id, activeOrganizationId)));
+
+    const spacesDataPromise = db()
+      .select({
+        id: spaces.id,
+        primary: spaces.primary,
+        privacy: spaces.privacy,
+        name: spaces.name,
+        description: spaces.description,
+        organizationId: spaces.organizationId,
+        createdById: spaces.createdById,
+        iconUrl: spaces.iconUrl,
+        memberCount: sql<number>`(
+        SELECT COUNT(*) FROM space_members WHERE space_members.spaceId = spaces.id
+      )`,
+        videoCount: sql<number>`(
+        SELECT COUNT(*) FROM space_videos WHERE space_videos.spaceId = spaces.id
+      )`,
+      })
+      .from(spaces)
+      .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
+      .where(
+        and(
+          eq(spaces.organizationId, activeOrganizationId),
+          or(
+            // User is the space creator
+            eq(spaces.createdById, user?.id),
+            // User is a member of the space
+            eq(spaceMembers.userId, user?.id),
+            // Space is public within the organization
+            eq(spaces.privacy, "Public")
+          )
+        )
+      )
+      .groupBy(spaces.id);
+
+
+    const [
+      membersList,
+      userOrganizations,
+      sharedOrganizations,
+      spacesDataRaw,
+      videoSharedSpacesData,
+      orgShareData,
+      { customDomain, domainVerified },
+    ] = await Promise.all([
+      membersListPromise,
+      userOrganizationsPromise,
+      sharedOrganizationsPromise,
+      spacesDataPromise,
+      videoSpacesData,
+      orgShare,
+      customDomainPromise,
+    ]);
+
+    const spacesData = [allSpacesEntry, ...spacesDataRaw];
+    const videoSharedSpaces = [...orgShareData, ...videoSharedSpacesData];
+
+
+    const videoWithOrganizationInfo: VideoWithOrganization = {
+      ...video,
+      organizationMembers: membersList.map((member) => member.userId),
+      organizationId: video.sharedOrganization?.organizationId ?? undefined,
+      sharedOrganizations: sharedOrganizations,
+      password: null,
+      hasPassword: video.password !== null,
+    };
+
+    return (
+      <>
+        <div className="container flex-1 px-4 py-4 mx-auto">
+          <ShareHeader
+            data={{
+              ...videoWithOrganizationInfo,
+              createdAt: video.metadata?.customCreatedAt
+                ? new Date(video.metadata.customCreatedAt)
+                : video.createdAt,
+            }}
+            user={user}
+            customDomain={customDomain}
+            spaces={spacesData}
+            domainVerified={domainVerified}
+            sharedOrganizations={
+              videoWithOrganizationInfo.sharedOrganizations || []
+            }
+            sharedSpaces={videoSharedSpaces}
+            userOrganizations={userOrganizations}
+            NODE_ENV={process.env.NODE_ENV}
+          />
+
+          <Share
+            data={videoWithOrganizationInfo}
+            user={user}
+            comments={commentsPromise}
+            views={viewsPromise}
+            customDomain={customDomain}
+            domainVerified={domainVerified}
+            userOrganizations={userOrganizations}
+            initialAiData={initialAiData}
+            aiGenerationEnabled={aiGenerationEnabled}
+          />
+        </div>
+        <div className="py-4 mt-auto">
+          <a
+            target="_blank"
+            href={`/?ref=video_${video.id}`}
+            className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
+          >
+            <span className="text-sm">Recorded with</span>
+            <Logo className="w-14 h-auto" />
+          </a>
+        </div>
+      </>
+    );
+  }
 }
