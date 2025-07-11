@@ -1,4 +1,5 @@
 import { buildEnv, serverEnv } from "@cap/env";
+import { render, renderAsync } from "@react-email/render";
 import { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 
@@ -34,17 +35,19 @@ export const sendEmail = async ({
     return Promise.resolve();
   }
 
+  if (marketing && !buildEnv.NEXT_PUBLIC_IS_CAP) return;
+  let from;
+
+  if (marketing) from = "Richie from Cap <richie@send.cap.so>";
+  else if (buildEnv.NEXT_PUBLIC_IS_CAP)
+    from = "Cap Auth <no-reply@auth.cap.so>";
+  else from = `auth@${serverEnv().RESEND_FROM_DOMAIN}`;
+
   return r.emails.send({
-    from: marketing
-      ? "Richie from Cap <richie@send.cap.so>"
-      : buildEnv.NEXT_PUBLIC_IS_CAP
-      ? "Cap Auth <no-reply@auth.cap.so>"
-      : `auth@${
-          serverEnv().RESEND_FROM_DOMAIN ?? buildEnv.NEXT_PUBLIC_WEB_URL
-        }`,
+    from,
     to: test ? "delivered@resend.dev" : email,
     subject,
     react,
     scheduledAt,
-  } as EmailOptions) as any;
+  }) as any;
 };

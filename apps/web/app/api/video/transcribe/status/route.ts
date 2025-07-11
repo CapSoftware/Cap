@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (video[0].transcriptionStatus === "COMPLETE") {
-    if (isAiGenerationEnabled(user)) {
+    if (await isAiGenerationEnabled(user)) {
       Promise.resolve().then(() => {
         generateAiMetadata(videoId, user.id).catch(error => {
           console.error("Error generating AI metadata:", error);

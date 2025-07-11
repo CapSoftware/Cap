@@ -4,8 +4,8 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { db } from "@cap/database";
 import { users } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import posthog from "posthog-js";
+import { buildEnv, serverEnv } from "@cap/env";
+import { PostHog } from "posthog-node";
 
 export async function POST(request: NextRequest) {
   console.log("Starting subscription process");
@@ -36,15 +36,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Track subscription initiated event
-    if (typeof window !== "undefined") {
-      posthog.capture("subscription_initiated", {
-        price_id: priceId,
-        quantity: quantity,
-        platform: "web",
-      });
-    }
-
     if (!user.stripeCustomerId) {
       console.log("Creating new Stripe customer for user:", user.id);
       const customer = await stripe().customers.create({
@@ -75,10 +66,32 @@ export async function POST(request: NextRequest) {
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
+      metadata: { platform: "web", dubCustomerId: user.id },
     });
 
     if (checkoutSession.url) {
       console.log("Successfully created checkout session");
+
+      try {
+        const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
+          host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
+        });
+
+        ph.capture({
+          distinctId: user.id,
+          event: "checkout_started",
+          properties: {
+            price_id: priceId,
+            quantity: quantity,
+            platform: "web",
+          },
+        });
+
+        await ph.shutdown();
+      } catch (e) {
+        console.error("Failed to capture checkout_started in PostHog", e);
+      }
+
       return Response.json({ url: checkoutSession.url }, { status: 200 });
     }
 

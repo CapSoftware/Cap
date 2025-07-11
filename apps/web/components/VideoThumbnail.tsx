@@ -1,3 +1,4 @@
+import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { LogoSpinner } from "@cap/ui";
 import clsx from "clsx";
 import Image from "next/image";
@@ -8,6 +9,8 @@ interface VideoThumbnailProps {
   videoId: string;
   alt: string;
   imageClass?: string;
+  objectFit?: string;
+  containerClass?: string;
 }
 
 function generateRandomGrayScaleColor() {
@@ -20,36 +23,61 @@ function generateRandomGrayScaleColor() {
 }
 
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
-  ({ userId, videoId, alt, imageClass }) => {
+  ({
+    userId,
+    videoId,
+    alt,
+    imageClass,
+    objectFit = "cover",
+    containerClass,
+  }) => {
     const [imageUrls, setImageUrls] = useState({ screen: "" });
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState(false);
+    const { uploadingCapId } = useUploadingContext()
 
     useEffect(() => {
+      // Reset states when videoId changes
+      setLoading(true);
+      setFailed(false);
+
       const fetchPreSignedUrls = async () => {
         try {
+          // Add cache busting parameter to ensure we get fresh thumbnails
+          const cacheBuster = new Date().getTime();
           const response = await fetch(
-            `/api/thumbnail?userId=${userId}&videoId=${videoId}`
+            `/api/thumbnail?userId=${userId}&videoId=${videoId}&t=${cacheBuster}`
           );
           if (response.ok) {
             const data = await response.json();
-            setImageUrls({ screen: data.screen });
+            // Add cache busting to the thumbnail URL as well
+            setImageUrls({ screen: `${data.screen}${data.screen.includes('?') ? '&' : '?'}t=${cacheBuster}` });
           } else {
             console.error("Failed to fetch pre-signed URLs");
+            setFailed(true);
           }
         } catch (error) {
           console.error("Error fetching pre-signed URLs:", error);
+          setFailed(true);
+        } finally {
+          // If we couldn't fetch the URL, we should stop showing the spinner
+          if (!imageUrls.screen) {
+            setLoading(false);
+          }
         }
       };
 
       fetchPreSignedUrls();
-    }, [userId, videoId]);
+    }, [userId, videoId, uploadingCapId]);
 
     const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
 
     return (
       <div
-        className={`overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`}
+        className={clsx(
+          `overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video`,
+          containerClass
+        )}
       >
         <div className="flex absolute top-0 left-0 z-10 justify-center items-center w-full h-full">
           {failed ? (
@@ -66,9 +94,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
         {imageUrls.screen && (
           <Image
             src={imageUrls.screen}
-            layout="fill"
+            fill={true}
+            sizes="(max-width: 768px) 100vw, 33vw"
             alt={alt}
-            objectFit="cover"
+            key={videoId}
+            style={{ objectFit: objectFit as any }}
             className={clsx("w-full h-full", imageClass)}
             onLoad={() => setLoading(false)}
             onError={() => {

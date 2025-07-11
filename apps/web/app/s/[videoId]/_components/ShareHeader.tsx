@@ -1,24 +1,23 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import { videos } from "@cap/database/schema";
 import moment from "moment";
 import { userSelectProps } from "@cap/database/auth/session";
-import {
-  faChevronDown,
-  faLock,
-  faUnlock,
-} from "@fortawesome/free-solid-svg-icons";
+import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Copy, Globe2 } from "lucide-react";
-import { buildEnv, NODE_ENV } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { SharingDialog } from "@/app/dashboard/caps/components/SharingDialog";
 import clsx from "clsx";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
 
 export const ShareHeader = ({
   data,
@@ -26,25 +25,40 @@ export const ShareHeader = ({
   customDomain,
   domainVerified,
   sharedOrganizations = [],
-  userOrganizations = [],
+  sharedSpaces = [],
+  NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
-  customDomain: string | null;
-  domainVerified: boolean;
+  customDomain?: string | null;
+  domainVerified?: boolean;
   sharedOrganizations?: { id: string; name: string }[];
   userOrganizations?: { id: string; name: string }[];
+  sharedSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
+  userSpaces?: {
+    id: string;
+    name: string;
+    iconUrl?: string;
+    organizationId: string;
+  }[];
+  NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
   const [isEditing, setIsEditing] = useState(false);
   const [title, setTitle] = useState(data.name);
-  const [isDownloading, setIsDownloading] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-  const [currentSharedOrganizations, setCurrentSharedOrganizations] =
-    useState(sharedOrganizations);
 
-  const isOwner = user !== null && user.id.toString() === data.ownerId;
+  const contextData = useDashboardContext();
+  const contextSharedSpaces = contextData?.sharedSpaces || null;
+  const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
+
+  const isOwner = user && user.id.toString() === data.ownerId;
 
   const { webUrl } = usePublicEnv();
 
@@ -75,33 +89,40 @@ export const ShareHeader = ({
   };
 
   const getVideoLink = () => {
-    return customDomain && domainVerified
-      ? `https://${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `https://cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+    if (NODE_ENV === "development" && customDomain && domainVerified) {
+      return `https://${customDomain}/s/${data.id}`;
+    } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+      return `${webUrl}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+      return `https://${customDomain}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+      return `https://cap.link/${data.id}`;
+    } else {
+      return `${webUrl}/s/${data.id}`;
+    }
   };
 
   const getDisplayLink = () => {
-    return customDomain && domainVerified
-      ? `${customDomain}/s/${data.id}`
-      : buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-      ? `cap.link/${data.id}`
-      : `${webUrl}/s/${data.id}`;
+    if (NODE_ENV === "development" && customDomain && domainVerified) {
+      return `${customDomain}/s/${data.id}`;
+    } else if (NODE_ENV === "development" && !customDomain && !domainVerified) {
+      return `${webUrl}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
+      return `${customDomain}/s/${data.id}`;
+    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+      return `cap.link/${data.id}`;
+    } else {
+      return `${webUrl}/s/${data.id}`;
+    }
   };
 
   const isUserPro = user
     ? isUserOnProPlan({
-        subscriptionStatus: user.stripeSubscriptionStatus,
-      })
+      subscriptionStatus: user.stripeSubscriptionStatus,
+    })
     : false;
 
-  const handleSharingUpdated = (updatedSharedOrganizations: string[]) => {
-    setCurrentSharedOrganizations(
-      userOrganizations?.filter((organization) =>
-        updatedSharedOrganizations.includes(organization.id)
-      )
-    );
+  const handleSharingUpdated = () => {
     refresh();
   };
 
@@ -110,10 +131,13 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (currentSharedOrganizations?.length === 0) {
+      if (
+        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
+        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
+      ) {
         return (
           <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
             onClick={() => setIsSharingDialogOpen(true)}
           >
             Not shared{" "}
@@ -123,7 +147,7 @@ export const ShareHeader = ({
       } else {
         return (
           <p
-            className={clsx(baseClassName, "hover:text-gray-12 cursor-pointer")}
+            className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
             onClick={() => setIsSharingDialogOpen(true)}
           >
             Shared{" "}
@@ -143,8 +167,7 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedOrganizations={currentSharedOrganizations || []}
-        userOrganizations={userOrganizations}
+        sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>
@@ -165,10 +188,7 @@ export const ShareHeader = ({
                   <h1
                     className="text-xl sm:text-2xl"
                     onClick={() => {
-                      if (
-                        user !== null &&
-                        user.id.toString() === data.ownerId
-                      ) {
+                      if (user && user.id.toString() === data.ownerId) {
                         setIsEditing(true);
                       }
                     }}
@@ -178,7 +198,7 @@ export const ShareHeader = ({
                 )}
               </div>
               {user && renderSharedStatus()}
-              <p className="text-sm text-gray-10 mt-1">
+              <p className="mt-1 text-sm text-gray-10">
                 {moment(data.createdAt).fromNow()}
               </p>
             </div>
@@ -186,10 +206,10 @@ export const ShareHeader = ({
           {user !== null && (
             <div className="flex space-x-2">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex gap-2 items-center">
                   {data.password && (
                     <FontAwesomeIcon
-                      className="size-4 text-amber-600"
+                      className="text-amber-600 size-4"
                       icon={faLock}
                     />
                   )}

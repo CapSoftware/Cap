@@ -8,7 +8,7 @@ export const commands = {
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
-async setCameraInput(label: string | null) : Promise<null> {
+async setCameraInput(label: string | null) : Promise<boolean> {
     return await TAURI_INVOKE("set_camera_input", { label });
 },
 async startRecording(inputs: StartRecordingInputs) : Promise<null> {
@@ -22,6 +22,12 @@ async pauseRecording() : Promise<null> {
 },
 async resumeRecording() : Promise<null> {
     return await TAURI_INVOKE("resume_recording");
+},
+async restartRecording() : Promise<null> {
+    return await TAURI_INVOKE("restart_recording");
+},
+async deleteRecording() : Promise<null> {
+    return await TAURI_INVOKE("delete_recording");
 },
 async listCameras() : Promise<string[]> {
     return await TAURI_INVOKE("list_cameras");
@@ -76,6 +82,12 @@ async getVideoMetadata(path: string) : Promise<VideoRecordingMetadata> {
 },
 async createEditorInstance() : Promise<SerializedEditorInstance> {
     return await TAURI_INVOKE("create_editor_instance");
+},
+async getMicWaveforms() : Promise<number[][]> {
+    return await TAURI_INVOKE("get_mic_waveforms");
+},
+async getSystemAudioWaveforms() : Promise<number[][]> {
+    return await TAURI_INVOKE("get_system_audio_waveforms");
 },
 async startPlayback(fps: number, resolutionBase: XY<number>) : Promise<null> {
     return await TAURI_INVOKE("start_playback", { fps, resolutionBase });
@@ -247,9 +259,7 @@ recordingStopped: RecordingStopped,
 renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenSettings: RequestOpenSettings,
-requestRestartRecording: RequestRestartRecording,
 requestStartRecording: RequestStartRecording,
-requestStopRecording: RequestStopRecording,
 uploadProgress: UploadProgress
 }>({
 audioInputLevelChange: "audio-input-level-change",
@@ -266,9 +276,7 @@ recordingStopped: "recording-stopped",
 renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenSettings: "request-open-settings",
-requestRestartRecording: "request-restart-recording",
 requestStartRecording: "request-start-recording",
-requestStopRecording: "request-stop-recording",
 uploadProgress: "upload-progress"
 })
 
@@ -294,8 +302,9 @@ export type AuthenticationInvalid = null
 export type BackgroundConfiguration = { source: BackgroundSource; blur: number; padding: number; rounding: number; inset: number; crop: Crop | null; shadow?: number; advancedShadow?: ShadowConfiguration | null }
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
-export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding?: number; shadow?: number; advanced_shadow?: ShadowConfiguration | null }
+export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding?: number; shadow?: number; advanced_shadow?: ShadowConfiguration | null; shape?: CameraShape }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
+export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
@@ -318,14 +327,15 @@ export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
-export type ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
+export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
-export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; systemAudioCapture?: boolean; serverUrl?: string; 
+export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; 
 /**
  * @deprecated
  */
 openEditorAfterRecording?: boolean }
+export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }
@@ -335,6 +345,7 @@ export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
+export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
 export type NewNotification = { title: string; body: string; is_error: boolean }
@@ -349,24 +360,22 @@ export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null; captions?: CaptionsData | null }
-export type ProjectRecordings = { segments: SegmentRecordings[] }
+export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
 export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
 export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
-export type RecordingStopped = { path: string }
+export type RecordingStopped = null
 export type RecordingType = "studio" | "instant"
 export type RenderFrameEvent = { frame_number: number; fps: number; resolution_base: XY<number> }
 export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
-export type RequestRestartRecording = null
 export type RequestStartRecording = null
-export type RequestStopRecording = null
-export type S3UploadMeta = { id: string; user_id: string; aws_region?: string; aws_bucket?: string; aws_endpoint?: string }
+export type S3UploadMeta = { id: string }
 export type ScreenCaptureTarget = { variant: "window"; id: number } | { variant: "screen"; id: number } | { variant: "area"; screen: number; bounds: Bounds }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
-export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordings; path: string }
+export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }
 export type ShadowConfiguration = { size: number; opacity: number; blur: number }
 export type SharingMeta = { id: string; link: string }
 export type ShowCapWindow = "Setup" | "Main" | { Settings: { page: string | null } } | { Editor: { project_path: string } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { CaptureArea: { screen_id: number } } | "Camera" | { InProgressRecording: { position: [number, number] | null } } | "Upgrade" | "ModeSelect"

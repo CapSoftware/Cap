@@ -5,7 +5,7 @@ import { faCloudUpload, faSpinner } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 export interface FileInputProps {
@@ -14,6 +14,7 @@ export interface FileInputProps {
   id?: string;
   name?: string;
   className?: string;
+  notDraggingClassName?: string;
   initialPreviewUrl?: string | null;
   onRemove?: () => void;
   isLoading?: boolean;
@@ -25,6 +26,7 @@ export const FileInput: React.FC<FileInputProps> = ({
   id = "file",
   name = "file",
   className = "",
+  notDraggingClassName = "",
   initialPreviewUrl = null,
   onRemove,
   isLoading = false,
@@ -32,7 +34,9 @@ export const FileInput: React.FC<FileInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(initialPreviewUrl);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(
+    initialPreviewUrl
+  );
 
   // Update preview URL when initialPreviewUrl changes
   useEffect(() => {
@@ -75,26 +79,26 @@ export const FileInput: React.FC<FileInputProps> = ({
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    
+
     if (disabled) return;
-    
+
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
       // Set the file to the input element
       const file = files[0];
-      
+
       if (fileInputRef.current && file) {
         try {
           // Create a new DataTransfer instance
           const dataTransfer = new DataTransfer();
           dataTransfer.items.add(file);
           fileInputRef.current.files = dataTransfer.files;
-          
+
           // Trigger onChange event manually
-          const event = new Event('change', { bubbles: true });
+          const event = new Event("change", { bubbles: true });
           fileInputRef.current.dispatchEvent(event);
         } catch (error) {
-          console.error('Error handling file drop:', error);
+          console.error("Error handling file drop:", error);
         }
       }
     }
@@ -104,34 +108,39 @@ export const FileInput: React.FC<FileInputProps> = ({
     const file = fileInputRef.current?.files?.[0];
     if (file) {
       // Validate file type - only allow jpg, jpeg, svg, and png
-      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/svg+xml'];
+      const allowedTypes = [
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/svg+xml",
+      ];
       if (!allowedTypes.includes(file.type)) {
         toast.error("Please select a JPG, JPEG, PNG, or SVG file");
         if (fileInputRef.current) {
-          fileInputRef.current.value = '';
+          fileInputRef.current.value = "";
         }
         return;
       }
-      
+
       // Validate file size (limit to 2MB)
       if (file.size > 2 * 1024 * 1024) {
         toast.error("File size must be less than 2MB");
         if (fileInputRef.current) {
-          fileInputRef.current.value = '';
+          fileInputRef.current.value = "";
         }
         return;
       }
-      
+
       // Clean up previous preview URL if it's not the initial preview URL
       if (previewUrl && previewUrl !== initialPreviewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
-      
+
       // Create a new preview URL for immediate feedback
       const newPreviewUrl = URL.createObjectURL(file);
       setPreviewUrl(newPreviewUrl);
       setSelectedFile(null);
-      
+
       // Call the onChange callback
       if (onChange) {
         onChange(file);
@@ -141,24 +150,24 @@ export const FileInput: React.FC<FileInputProps> = ({
 
   const handleRemove = (e: React.MouseEvent) => {
     e.stopPropagation();
-    
+
     // Clean up preview URL if it's not the initial preview URL
     if (previewUrl && previewUrl !== initialPreviewUrl) {
       URL.revokeObjectURL(previewUrl);
     }
-    
+
     setPreviewUrl(null);
     setSelectedFile(null);
-    
+
     if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+      fileInputRef.current.value = "";
     }
-    
+
     // Call the onRemove callback
     if (onRemove) {
       onRemove();
     }
-    
+
     // Call the onChange callback with null
     if (onChange) {
       onChange(null);
@@ -167,48 +176,53 @@ export const FileInput: React.FC<FileInputProps> = ({
 
   return (
     <div className={`relative ${className}`}>
-      <div className="h-[46.5px]"> {/* Fixed height container to prevent resizing */}
-        {(selectedFile || previewUrl) ? (
-          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-3 border-gray-4 h-full">
+      <div className="h-[44px]">
+        {" "}
+        {/* Fixed height container to prevent resizing */}
+        {selectedFile || previewUrl ? (
+          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-1 border-gray-4 h-full">
             <div className="flex flex-1 gap-1.5 items-center">
               <div className="flex flex-1 gap-1 items-center">
                 {selectedFile ? (
                   <>
-                    <p className="text-xs font-medium w-fit max-w-[150px] truncate text-gray-12">{selectedFile.name}</p>
-                    <p className="text-xs text-gray-10 min-w-fit">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                    <p className="text-xs font-medium w-fit max-w-[150px] truncate text-gray-12">
+                      {selectedFile.name}
+                    </p>
+                    <p className="text-xs text-gray-10 min-w-fit">
+                      {(selectedFile.size / 1024).toFixed(1)} KB
+                    </p>
                   </>
                 ) : (
                   <div className="flex gap-2 items-center">
-                  <p className="text-xs font-medium text-gray-12">Current icon: </p>
-                  <div className="overflow-hidden relative flex-shrink-0 rounded-md size-5">
-                  {previewUrl && (
-                    <Image 
-                      src={previewUrl} 
-                      alt="File preview" 
-                      fill 
-                      className="object-contain rounded-full"
-                    />
-                  )}
-                </div>
-                </div>
+                    <p className="text-xs font-medium text-gray-12">
+                      Current icon:{" "}
+                    </p>
+                    <div className="overflow-hidden relative flex-shrink-0 rounded-md size-5">
+                      {previewUrl && (
+                        <Image
+                          src={previewUrl}
+                          alt="File preview"
+                          fill
+                          className="object-contain rounded-full"
+                        />
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
             <Button
               variant="destructive"
-              style={{
-                "--gradient-border-radius": "8px",
-              } as React.CSSProperties}
               size="xs"
-              className="min-w-[80px]"
               disabled={isLoading || disabled}
               onClick={handleRemove}
+              style={
+                {
+                  "--gradient-border-radius": "8px",
+                } as React.CSSProperties
+              }
             >
-              {isLoading ? (
-                <FontAwesomeIcon icon={faSpinner} className="animate-spin" />
-              ) : (
-                <>Remove</>
-              )}
+              Remove
             </Button>
           </div>
         ) : (
@@ -220,24 +234,26 @@ export const FileInput: React.FC<FileInputProps> = ({
             onDrop={handleDrop}
             className={clsx(
               "flex gap-3 justify-center items-center px-4 w-full rounded-xl border border-dashed transition-all duration-300 cursor-pointer h-full",
-              isDragging ? "border-blue-500 bg-gray-5" : "hover:bg-gray-4 border-gray-8",
+              isDragging
+                ? "border-blue-500 bg-gray-5"
+                : "hover:bg-gray-2 border-gray-5 " + notDraggingClassName,
               isLoading || disabled ? "opacity-50 pointer-events-none" : ""
             )}
           >
             {isLoading ? (
               <FontAwesomeIcon
-                className="animate-spin text-gray-10 size-5"
+                className="animate-spin text-gray-10 size-4"
                 icon={faSpinner}
               />
             ) : (
               <FontAwesomeIcon
-                className="text-gray-10 size-5"
+                className="text-gray-10 size-4"
                 icon={faCloudUpload}
               />
             )}
-            <p className="text-sm truncate text-gray-11">
-              {isLoading 
-                ? "Uploading..." 
+            <p className="text-[13px] truncate text-gray-11">
+              {isLoading
+                ? "Uploading..."
                 : "Choose a file or drag & drop it here"}
             </p>
           </div>

@@ -1,6 +1,6 @@
-import { Share } from "./Share";
 import { db } from "@cap/database";
-import { eq, desc, sql, count } from "drizzle-orm";
+import { eq, InferSelectModel } from "drizzle-orm";
+import { Logo } from "@cap/ui";
 import {
   videos,
   comments,
@@ -10,19 +10,20 @@ import {
   organizations,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
+import { getCurrentUser } from "@cap/database/auth/session";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { ImageViewer } from "./_components/ImageViewer";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
-import { getScreenshot } from "@/actions/screenshots/get-screenshot";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { isAiGenerationEnabled } from "@/utils/flags";
+
+import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
-import { decrypt } from "@cap/database/crypto";
+import { ShareHeader } from "./_components/ShareHeader";
+import { userHasAccessToVideo } from "@/utils/auth";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -47,10 +48,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
   hasPassword?: boolean;
 };
 
-export async function generateMetadata(
-  { params }: Props,
-  parent: ResolvingMetadata
-): Promise<Metadata> {
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
@@ -71,45 +69,24 @@ export async function generateMetadata(
 
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
-  const userAgent = headersList.get("x-user-agent") || "";
-
-  console.log("[generateMetadata] User Agent:", userAgent);
 
   const allowedReferrers = [
     "x.com",
+    "twitter.com",
     "facebook.com",
     "fb.com",
     "slack.com",
     "notion.so",
     "linkedin.com",
-    "reddit.com",
-    "youtube.com",
-    "quora.com",
-    "t.co",
   ];
-
-  const allowedBots = ["twitterbot"];
 
   const isAllowedReferrer = allowedReferrers.some((domain) =>
     referrer.includes(domain)
   );
 
-  const userAgentLower = userAgent.toLowerCase();
-  const isAllowedBot = allowedBots.some((bot) =>
-    userAgentLower.includes(bot.toLowerCase())
-  );
-
-  const isTwitterBot = userAgentLower.includes("twitterbot");
-
-  const shouldAllowIndexing = isAllowedReferrer || isAllowedBot || isTwitterBot;
-
-  const robotsDirective = shouldAllowIndexing
+  const robotsDirective = isAllowedReferrer
     ? "index, follow"
     : "noindex, nofollow";
-
-  if (isTwitterBot) {
-    console.log("[generateMetadata] Twitter bot detected, allowing indexing");
-  }
 
   if (video.public === false) {
     return {
@@ -138,18 +115,7 @@ export async function generateMetadata(
           },
         ],
       },
-      twitter: {
-        card: "summary_large_image",
-        title: "Cap: This video is private",
-        description: "This video is private and cannot be shared.",
-        images: [
-          new URL(
-            `/api/video/og?videoId=${videoId}`,
-            buildEnv.NEXT_PUBLIC_WEB_URL
-          ).toString(),
-        ],
-      },
-      robots: isTwitterBot ? "index, follow" : "noindex, nofollow",
+      robots: "noindex, nofollow",
     };
   }
 
@@ -211,7 +177,7 @@ export async function generateMetadata(
       ],
     },
     twitter: {
-      card: "summary_large_image",
+      card: "player",
       title: video.name + " | Cap Recording",
       description: "Watch this video on Cap",
       images: [
@@ -220,6 +186,18 @@ export async function generateMetadata(
           buildEnv.NEXT_PUBLIC_WEB_URL
         ).toString(),
       ],
+      players: {
+        playerUrl: new URL(
+          `/s/${videoId}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        streamUrl: new URL(
+          `/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
+          buildEnv.NEXT_PUBLIC_WEB_URL
+        ).toString(),
+        width: 1280,
+        height: 720,
+      },
     },
     robots: robotsDirective,
   };
@@ -230,11 +208,9 @@ export default async function ShareVideoPage(props: Props) {
   const videoId = params.videoId as string;
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const user = (await getCurrentUser()) as typeof userSelectProps | null;
-  const userId = user?.id as string | undefined;
-  console.log("[ShareVideoPage] Current user:", userId);
+  const userPromise = getCurrentUser();
 
-  const videoWithOrganization = await db()
+  const [video] = await db()
     .select({
       id: videos.id,
       name: videos.name,
@@ -262,14 +238,56 @@ export default async function ShareVideoPage(props: Props) {
     })
     .from(videos)
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-    .where(eq(videos.id, videoId))
-    .execute();
-
-  const video = videoWithOrganization[0];
+    .where(eq(videos.id, videoId));
 
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
+  }
+
+  const userAccess = await userHasAccessToVideo(userPromise, video);
+
+  if (userAccess === "private") return <p>This video is private</p>;
+
+  return (
+    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+      <PasswordOverlay
+        isOpen={userAccess === "needs-password"}
+        videoId={video.id}
+      />
+      {userAccess === "has-access" && (
+        <AuthorizedContent video={video} user={userPromise} />
+      )}
+    </div>
+  );
+}
+
+async function AuthorizedContent({
+  video,
+  user: _user,
+}: {
+  video: InferSelectModel<typeof videos> & {
+    sharedOrganization: { organizationId: string } | null;
+  };
+  user: MaybePromise<InferSelectModel<typeof users> | null>;
+}) {
+  const user = await _user;
+  const videoId = video.id;
+  const userId = user?.id;
+
+  let aiGenerationEnabled = false;
+  const videoOwnerQuery = await db()
+    .select({
+      email: users.email,
+      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+    })
+    .from(users)
+    .where(eq(users.id, video.ownerId))
+    .limit(1);
+
+  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
+    const videoOwner = videoOwnerQuery[0];
+    aiGenerationEnabled = await isAiGenerationEnabled(videoOwner);
   }
 
   if (video.sharedOrganization?.organizationId) {
@@ -289,9 +307,9 @@ export default async function ShareVideoPage(props: Props) {
           organization[0].allowedEmailDomain
         );
         return (
-          <div className="flex flex-col items-center justify-center min-h-screen p-4 text-center">
-            <h1 className="text-2xl font-bold mb-4">Access Restricted</h1>
-            <p className="text-gray-600 mb-2">
+          <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+            <h1 className="mb-4 text-2xl font-bold">Access Restricted</h1>
+            <p className="mb-2 text-gray-10">
               This video is only accessible to members of this organization.
             </p>
             <p className="text-gray-600">
@@ -309,7 +327,7 @@ export default async function ShareVideoPage(props: Props) {
     video.transcriptionStatus !== "PROCESSING"
   ) {
     console.log("[ShareVideoPage] Starting transcription for video:", videoId);
-    await transcribeVideo(videoId, video.ownerId);
+    await transcribeVideo(videoId, video.ownerId, aiGenerationEnabled);
 
     const updatedVideoQuery = await db()
       .select({
@@ -353,21 +371,6 @@ export default async function ShareVideoPage(props: Props) {
   const currentMetadata = (video.metadata as VideoMetadata) || {};
   const metadata = currentMetadata;
   let initialAiData = null;
-  let aiGenerationEnabled = false;
-
-  const videoOwnerQuery = await db()
-    .select({
-      email: users.email,
-      stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-    })
-    .from(users)
-    .where(eq(users.id, video.ownerId))
-    .limit(1);
-
-  if (videoOwnerQuery.length > 0 && videoOwnerQuery[0]) {
-    const videoOwner = videoOwnerQuery[0];
-    aiGenerationEnabled = isAiGenerationEnabled(videoOwner);
-  }
 
   if (metadata.summary || metadata.chapters || metadata.aiTitle) {
     initialAiData = {
@@ -408,11 +411,84 @@ export default async function ShareVideoPage(props: Props) {
     }
   }
 
-  if (video.public === false && userId !== video.ownerId) {
-    return <p>This video is private</p>;
-  }
+  const customDomainPromise = (async () => {
+    if (!user) {
+      return { customDomain: null, domainVerified: false };
+    }
+    const activeOrganizationId = user.activeOrganizationId;
+    if (!activeOrganizationId) {
+      return { customDomain: null, domainVerified: false };
+    }
 
-  const commentsQuery: CommentWithAuthor[] = await db()
+    // Fetch the active org
+    const orgArr = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, activeOrganizationId))
+      .limit(1);
+
+    const org = orgArr[0];
+    if (
+      org &&
+      org.customDomain &&
+      org.domainVerified !== null &&
+      user.id === video.ownerId
+    ) {
+      return { customDomain: org.customDomain, domainVerified: true };
+    }
+    return { customDomain: null, domainVerified: false };
+  })();
+
+  const sharedOrganizationsPromise = db()
+    .select({ id: sharedVideos.organizationId, name: organizations.name })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  const userOrganizationsPromise = (async () => {
+    if (!userId) return [];
+
+    const [ownedOrganizations, memberOrganizations] = await Promise.all([
+      db()
+        .select({ id: organizations.id, name: organizations.name })
+        .from(organizations)
+        .where(eq(organizations.ownerId, userId)),
+      db()
+        .select({ id: organizations.id, name: organizations.name })
+        .from(organizations)
+        .innerJoin(
+          organizationMembers,
+          eq(organizations.id, organizationMembers.organizationId)
+        )
+        .where(eq(organizationMembers.userId, userId)),
+    ]);
+
+    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
+    const uniqueOrganizationIds = new Set();
+
+    return allOrganizations.filter((organization) => {
+      if (uniqueOrganizationIds.has(organization.id)) return false;
+      uniqueOrganizationIds.add(organization.id);
+      return true;
+    });
+  })();
+
+  const membersListPromise = video.sharedOrganization?.organizationId
+    ? db()
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          video.sharedOrganization.organizationId
+        )
+      )
+    : Promise.resolve([]);
+
+  const commentsPromise = db()
     .select({
       id: comments.id,
       content: comments.content,
@@ -427,190 +503,74 @@ export default async function ShareVideoPage(props: Props) {
     })
     .from(comments)
     .leftJoin(users, eq(comments.authorId, users.id))
-    .where(eq(comments.videoId, videoId));
+    .where(eq(comments.videoId, videoId))
+    .execute();
 
-  let screenshotUrl;
-  if (video.isScreenshot === true) {
-    try {
-      const data = await getScreenshot(video.ownerId, videoId);
-      screenshotUrl = data.url;
+  const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
-      return (
-        <ImageViewer
-          imageSrc={screenshotUrl}
-          data={video}
-          user={user}
-          comments={commentsQuery}
-        />
-      );
-    } catch (error) {
-      console.error("[ShareVideoPage] Error fetching screenshot:", error);
-      return <p>Failed to load screenshot</p>;
-    }
-  }
-
-  const analyticsData = await getVideoAnalytics(videoId);
-
-  const initialAnalytics = {
-    views: analyticsData.count || 0,
-    comments: commentsQuery.filter((c) => c.type === "text").length,
-    reactions: commentsQuery.filter((c) => c.type === "emoji").length,
-  };
-
-  let customDomain: string | null = null;
-  let domainVerified = false;
-
-  if (video.sharedOrganization?.organizationId) {
-    const organizationData = await db()
-      .select({
-        customDomain: organizations.customDomain,
-        domainVerified: organizations.domainVerified,
-      })
-      .from(organizations)
-      .where(eq(organizations.id, video.sharedOrganization.organizationId))
-      .limit(1);
-
-    if (
-      organizationData.length > 0 &&
-      organizationData[0] &&
-      organizationData[0].customDomain
-    ) {
-      customDomain = organizationData[0].customDomain;
-      if (organizationData[0].domainVerified !== null) {
-        domainVerified = true;
-      }
-    }
-  }
-
-  if (!customDomain && video.ownerId) {
-    const ownerOrganizations = await db()
-      .select({
-        customDomain: organizations.customDomain,
-        domainVerified: organizations.domainVerified,
-      })
-      .from(organizations)
-      .where(eq(organizations.ownerId, video.ownerId))
-      .limit(1);
-
-    if (
-      ownerOrganizations.length > 0 &&
-      ownerOrganizations[0] &&
-      ownerOrganizations[0].customDomain
-    ) {
-      customDomain = ownerOrganizations[0].customDomain;
-      if (ownerOrganizations[0].domainVerified !== null) {
-        domainVerified = true;
-      }
-    }
-  }
-
-  const sharedOrganizationsData = await db()
-    .select({
-      id: sharedVideos.organizationId,
-      name: organizations.name,
-    })
-    .from(sharedVideos)
-    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .where(eq(sharedVideos.videoId, videoId));
-
-  let userOrganizations: { id: string; name: string }[] = [];
-  if (userId) {
-    const ownedOrganizations = await db()
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-      })
-      .from(organizations)
-      .where(eq(organizations.ownerId, userId));
-
-    const memberOrganizations = await db()
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-      })
-      .from(organizations)
-      .innerJoin(
-        organizationMembers,
-        eq(organizations.id, organizationMembers.organizationId)
-      )
-      .where(eq(organizationMembers.userId, userId));
-
-    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
-    const uniqueOrganizationIds = new Set();
-    userOrganizations = allOrganizations.filter((organization) => {
-      if (uniqueOrganizationIds.has(organization.id)) return false;
-      uniqueOrganizationIds.add(organization.id);
-      return true;
-    });
-  }
-
-  const membersList = video.sharedOrganization?.organizationId
-    ? await db()
-        .select({
-          userId: organizationMembers.userId,
-        })
-        .from(organizationMembers)
-        .where(
-          eq(
-            organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
-        )
-    : [];
+  const [
+    membersList,
+    userOrganizations,
+    sharedOrganizations,
+    { customDomain, domainVerified },
+  ] = await Promise.all([
+    membersListPromise,
+    userOrganizationsPromise,
+    sharedOrganizationsPromise,
+    customDomainPromise,
+  ]);
 
   const videoWithOrganizationInfo: VideoWithOrganization = {
     ...video,
     organizationMembers: membersList.map((member) => member.userId),
     organizationId: video.sharedOrganization?.organizationId ?? undefined,
-    sharedOrganizations: sharedOrganizationsData,
+    sharedOrganizations: sharedOrganizations,
     password: null,
     hasPassword: video.password !== null,
   };
 
-  let aiUiEnabled = false;
-  if (user?.email) {
-    aiUiEnabled = isAiUiEnabled({
-      email: user.email,
-      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
-    });
-    console.log(
-      `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
-    );
-  }
-
-  const authorized =
-    !videoWithOrganizationInfo.hasPassword ||
-    user?.id === videoWithOrganizationInfo.ownerId ||
-    (await verifyPasswordCookie(video.password ?? ""));
-
   return (
-    <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
-      <PasswordOverlay
-        isOpen={!authorized}
-        videoId={videoWithOrganizationInfo.id}
-      />
-      {authorized && (
+    <>
+      <div className="container flex-1 px-4 py-4 mx-auto">
+        <ShareHeader
+          data={{
+            ...videoWithOrganizationInfo,
+            createdAt: video.metadata?.customCreatedAt
+              ? new Date(video.metadata.customCreatedAt)
+              : video.createdAt,
+          }}
+          user={user}
+          customDomain={customDomain}
+          domainVerified={domainVerified}
+          sharedOrganizations={
+            videoWithOrganizationInfo.sharedOrganizations || []
+          }
+          userOrganizations={userOrganizations}
+          NODE_ENV={process.env.NODE_ENV}
+        />
+
         <Share
           data={videoWithOrganizationInfo}
           user={user}
-          comments={commentsQuery}
-          initialAnalytics={initialAnalytics}
+          comments={commentsPromise}
+          views={viewsPromise}
           customDomain={customDomain}
           domainVerified={domainVerified}
           userOrganizations={userOrganizations}
           initialAiData={initialAiData}
           aiGenerationEnabled={aiGenerationEnabled}
-          aiUiEnabled={aiUiEnabled}
         />
-      )}
-    </div>
+      </div>
+      <div className="py-4 mt-auto">
+        <a
+          target="_blank"
+          href={`/?ref=video_${video.id}`}
+          className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
+        >
+          <span className="text-sm">Recorded with</span>
+          <Logo className="w-14 h-auto" />
+        </a>
+      </div>
+    </>
   );
-}
-
-async function verifyPasswordCookie(videoPassword: string) {
-  const password = cookies().get("x-cap-password")?.value;
-  if (!password) return false;
-
-  const decrypted = await decrypt(password).catch(() => "");
-  return decrypted === videoPassword;
 }

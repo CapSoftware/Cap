@@ -16,7 +16,7 @@ pub async fn create_camera_preview_ws() -> (
         while let Ok(raw_frame) = _camera_rx.recv() {
             let mut frame = raw_frame.frame;
 
-            if frame.format() != Pixel::RGBA {
+            if frame.format() != Pixel::RGBA || frame.width() > 1280 || frame.height() > 720 {
                 let converter = match &mut converter {
                     Some((format, converter))
                         if *format == frame.format()
@@ -29,10 +29,15 @@ pub async fn create_camera_preview_ws() -> (
                         &mut converter
                             .insert((
                                 frame.format(),
-                                ffmpeg::software::converter(
-                                    (frame.width(), frame.height()),
+                                ffmpeg::software::scaling::Context::get(
                                     frame.format(),
+                                    frame.width(),
+                                    frame.height(),
                                     Pixel::RGBA,
+                                    1280,
+                                    (1280.0 / (frame.width() as f64 / frame.height() as f64))
+                                        as u32,
+                                    ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
                                 )
                                 .unwrap(),
                             ))
@@ -40,8 +45,11 @@ pub async fn create_camera_preview_ws() -> (
                     }
                 };
 
-                let mut new_frame =
-                    ffmpeg::util::frame::Video::new(Pixel::RGBA, frame.width(), frame.height());
+                let mut new_frame = ffmpeg::util::frame::Video::new(
+                    Pixel::RGBA,
+                    converter.output().width,
+                    converter.output().height,
+                );
 
                 converter.run(&frame, &mut new_frame).unwrap();
 

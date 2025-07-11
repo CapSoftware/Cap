@@ -13,7 +13,12 @@ const { version } = packageJson;
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
-  transpilePackages: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
+  transpilePackages: [
+    "@cap/ui",
+    "@cap/utils",
+    "@cap/web-api-contract",
+    "next-mdx-remote",
+  ],
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -21,13 +26,8 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   experimental: {
-    instrumentationHook: process.env.DOCKER_BUILD === "true",
+    instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
     optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
-    serverComponentsExternalPackages: [
-      "@react-email/components",
-      "@react-email/render",
-      "@react-email/tailwind",
-    ],
   },
   images: {
     remotePatterns: [
@@ -102,7 +102,8 @@ const nextConfig = {
     appVersion: version,
   },
   // If the DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
-  output: process.env.DOCKER_BUILD === "true" ? "standalone" : undefined,
+  output:
+    process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
 };
 
 export default nextConfig;

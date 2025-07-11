@@ -125,7 +125,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
         <div className="mb-4 text-sm font-medium text-blue-600 fade-in-down">
           {content.category}
         </div>
-        <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6 fade-in-down">
+        <h1 className="text-4xl md:text-5xl font-medium text-gray-900 mb-6 fade-in-down">
           {content.title}
         </h1>
         <p className="text-xl md:text-2xl mb-8 max-w-3xl mx-auto text-gray-700 fade-in-down animate-delay-1">
@@ -153,7 +153,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 
       {/* Hero TL;DR */}
       <div className="mb-12 bg-blue-50 p-8 rounded-xl border border-blue-100 shadow-md hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-        <h2 className="text-2xl font-bold text-gray-900 mb-4 relative inline-block">
+        <h2 className="text-2xl font-medium text-gray-900 mb-4 relative inline-block">
           TL;DR
           <span className="absolute -bottom-1 left-0 w-16 h-1 bg-blue-500 rounded-full"></span>
         </h2>
@@ -162,7 +162,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
           <Button
             href={content.cta.buttonLink}
             size="lg"
-            variant="radialblue"
+            variant="blue"
             className="px-6 py-3 shadow-lg hover:shadow-xl transform hover:-translate-y-1 transition-all duration-300"
           >
             {content.cta.buttonText}
@@ -173,7 +173,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* Comparison Table */}
       {content.comparisonTable && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-8 relative inline-block">
             {content.comparisonTable.title}
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -217,7 +217,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {content.methods &&
         content.methods.map((method, index) => (
           <section key={index} className="mb-16">
-            <h2 className="text-3xl font-bold text-gray-900 mb-6 relative inline-block">
+            <h2 className="text-3xl font-medium text-gray-900 mb-6 relative inline-block">
               {method.title}
               <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
             </h2>
@@ -244,7 +244,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* Troubleshooting */}
       {content.troubleshooting && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-8 relative inline-block">
             {content.troubleshooting.title}
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -268,7 +268,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* Pro Tips */}
       {content.proTips && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-8 relative inline-block">
             {content.proTips.title}
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -292,7 +292,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* Video Demo */}
       {content.videoDemo && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-6 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-6 relative inline-block">
             {content.videoDemo.title}
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -311,7 +311,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* FAQs */}
       {content.faqs && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-8 relative inline-block">
             Frequently Asked Questions
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -335,7 +335,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
       {/* Testimonial */}
       {content.testimonial && (
         <section className="mb-16">
-          <h2 className="text-3xl font-bold text-gray-900 mb-8 relative inline-block">
+          <h2 className="text-3xl font-medium text-gray-900 mb-8 relative inline-block">
             What Users Are Saying
             <span className="absolute -bottom-2 left-1/2 transform -translate-x-1/2 w-20 h-1 bg-blue-500 rounded-full"></span>
           </h2>
@@ -388,7 +388,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
             />
           </div>
           <div className="relative z-10">
-            <h2 className="text-3xl font-bold mb-4 text-white">
+            <h2 className="text-3xl font-medium mb-4 text-white">
               {content.cta.title}
             </h2>
             <p className="text-xl mb-8 text-white/90">

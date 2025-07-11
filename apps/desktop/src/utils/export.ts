@@ -7,7 +7,6 @@ export async function exportVideo(
   onProgress: (progress: FramesRendered) => void
 ) {
   const progress = new Channel<FramesRendered>((e) => {
-    console.log({ e });
     onProgress(e);
   });
   return await commands.exportVideo(projectPath, progress, settings);

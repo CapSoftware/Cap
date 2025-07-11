@@ -191,12 +191,39 @@ export const organizationInvites = mysqlTable(
   })
 );
 
+export const folders = mysqlTable(
+  "folders",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    name: varchar("name", { length: 255 }).notNull(),
+    color: varchar("color", {
+      length: 16,
+      enum: ["normal", "blue", "red", "yellow"],
+    })
+      .notNull()
+      .default("normal"),
+    organizationId: nanoId("organizationId").notNull(),
+    createdById: nanoId("createdById").notNull(),
+    parentId: nanoIdNullable("parentId"),
+    spaceId: nanoIdNullable("spaceId"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+    parentIdIndex: index("parent_id_idx").on(table.parentId),
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+  })
+);
+
 export const videos = mysqlTable(
   "videos",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     ownerId: nanoId("ownerId").notNull(),
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
+    // DEPRECATED
     awsRegion: varchar("awsRegion", { length: 255 }),
     awsBucket: varchar("awsBucket", { length: 255 }),
     bucket: nanoIdNullable("bucket"),
@@ -219,11 +246,13 @@ export const videos = mysqlTable(
       >()
       .notNull()
       .default({ type: "MediaConvert" }),
+    folderId: nanoIdNullable("folderId"),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),
     publicIndex: index("is_public_idx").on(table.public),
+    folderIdIndex: index("folder_id_idx").on(table.folderId),
   })
 );
 
@@ -312,6 +341,8 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   videos: many(videos),
   sharedVideos: many(sharedVideos),
   customBucket: one(s3Buckets),
+  spaces: many(spaces),
+  spaceMembers: many(spaceMembers),
 }));
 
 export const accountsRelations = relations(accounts, ({ one }) => ({
@@ -338,6 +369,7 @@ export const organizationsRelations = relations(
     organizationMembers: many(organizationMembers),
     sharedVideos: many(sharedVideos),
     organizationInvites: many(organizationInvites),
+    spaces: many(spaces),
   })
 );
 
@@ -389,6 +421,11 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
     references: [users.id],
   }),
   sharedVideos: many(sharedVideos),
+  spaceVideos: many(spaceVideos),
+  folder: one(folders, {
+    fields: [videos.folderId],
+    references: [folders.id],
+  }),
 }));
 
 export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
@@ -404,4 +441,125 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
     fields: [sharedVideos.sharedByUserId],
     references: [users.id],
   }),
+}));
+
+export const spaces = mysqlTable(
+  "spaces",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    primary: boolean("primary").notNull().default(false),
+    name: varchar("name", { length: 255 }).notNull(),
+    organizationId: nanoId("organizationId").notNull(),
+    createdById: nanoId("createdById").notNull(),
+    iconUrl: varchar("iconUrl", { length: 255 }),
+    description: varchar("description", { length: 1000 }),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
+      .notNull()
+      .default("Private"),
+  },
+  (table) => ({
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+  })
+);
+
+export const spaceMembers = mysqlTable(
+  "space_members",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    userId: nanoId("userId").notNull(),
+    role: varchar("role", { length: 255 }).notNull().default("member"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    userIdIndex: index("user_id_idx").on(table.userId),
+    spaceIdUserIdIndex: index("space_id_user_id_idx").on(
+      table.spaceId,
+      table.userId
+    ),
+  })
+);
+
+export const spaceVideos = mysqlTable(
+  "space_videos",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    spaceId: nanoId("spaceId").notNull(),
+    folderId: nanoIdNullable("folderId"),
+    videoId: nanoId("videoId").notNull(),
+    addedById: nanoId("addedById").notNull(),
+    addedAt: timestamp("addedAt").notNull().defaultNow(),
+  },
+  (table) => ({
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    folderIdIndex: index("folder_id_idx").on(table.folderId),
+    videoIdIndex: index("video_id_idx").on(table.videoId),
+    addedByIdIndex: index("added_by_id_idx").on(table.addedById),
+    spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
+      table.spaceId,
+      table.videoId
+    ),
+  })
+);
+
+export const spacesRelations = relations(spaces, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [spaces.organizationId],
+    references: [organizations.id],
+  }),
+  createdBy: one(users, {
+    fields: [spaces.createdById],
+    references: [users.id],
+  }),
+  spaceMembers: many(spaceMembers),
+  spaceVideos: many(spaceVideos),
+}));
+
+export const spaceMembersRelations = relations(spaceMembers, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceMembers.spaceId],
+    references: [spaces.id],
+  }),
+  user: one(users, {
+    fields: [spaceMembers.userId],
+    references: [users.id],
+  }),
+}));
+
+export const spaceVideosRelations = relations(spaceVideos, ({ one }) => ({
+  space: one(spaces, {
+    fields: [spaceVideos.spaceId],
+    references: [spaces.id],
+  }),
+  video: one(videos, {
+    fields: [spaceVideos.videoId],
+    references: [videos.id],
+  }),
+  addedBy: one(users, {
+    fields: [spaceVideos.addedById],
+    references: [users.id],
+  }),
+}));
+
+export const foldersRelations = relations(folders, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [folders.organizationId],
+    references: [organizations.id],
+  }),
+  createdBy: one(users, {
+    fields: [folders.createdById],
+    references: [users.id],
+  }),
+  parentFolder: one(folders, {
+    fields: [folders.parentId],
+    references: [folders.id],
+    relationName: "parentChild",
+  }),
+  childFolders: many(folders, { relationName: "parentChild" }),
+  videos: many(videos),
 }));

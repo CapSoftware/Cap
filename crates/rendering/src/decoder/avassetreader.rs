@@ -398,7 +398,5 @@ impl AVAssetReaderDecoder {
                 }
             }
         }
-
-        println!("Decoder thread ended");
     }
 }

@@ -65,9 +65,7 @@ pub struct CaptionsLayer {
 }
 
 impl CaptionsLayer {
-    /// Create a new captions layer
     pub fn new(device: &Device, queue: &Queue) -> Self {
-        info!("Initializing new CaptionsLayer");
         // Create default settings buffer
         let settings = CaptionSettings::default();
         let settings_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

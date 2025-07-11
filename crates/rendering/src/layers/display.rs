@@ -2,7 +2,7 @@ use cap_project::XY;
 
 use crate::{
     composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
-    DecodedSegmentFrames, ProjectUniforms,
+    DecodedSegmentFrames,
 };
 
 pub struct DisplayLayer {
@@ -15,35 +15,20 @@ pub struct DisplayLayer {
 
 impl DisplayLayer {
     pub fn new(device: &wgpu::Device) -> Self {
-        let frame_texture = Self::create_frame_texture(device, 1920, 1080);
-        Self {
-            frame_texture_view: frame_texture.create_view(&Default::default()),
-            frame_texture,
-            uniforms_buffer: CompositeVideoFrameUniforms::default().to_buffer(device),
-            pipeline: CompositeVideoFramePipeline::new(device),
-            bind_group: None,
-        }
-    }
+        let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_view = frame_texture.create_view(&Default::default());
 
-    fn create_frame_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
-        device.create_texture(
-            &(wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_DST,
-                label: Some("Screen Frame texture"),
-                view_formats: &[],
-            }),
-        )
+        let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
+        let pipeline = CompositeVideoFramePipeline::new(device);
+        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+
+        Self {
+            frame_texture_view,
+            frame_texture,
+            uniforms_buffer,
+            pipeline,
+            bind_group,
+        }
     }
 
     pub fn prepare(
@@ -52,12 +37,22 @@ impl DisplayLayer {
         queue: &wgpu::Queue,
         segment_frames: &DecodedSegmentFrames,
         frame_size: XY<u32>,
-        uniforms: &ProjectUniforms,
+        uniforms: CompositeVideoFrameUniforms,
     ) {
         if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
         {
-            self.frame_texture = Self::create_frame_texture(device, frame_size.x, frame_size.y);
+            self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
+                device,
+                frame_size.x,
+                frame_size.y,
+            );
             self.frame_texture_view = self.frame_texture.create_view(&Default::default());
+
+            self.bind_group = Some(self.pipeline.bind_group(
+                &device,
+                &self.uniforms_buffer,
+                &self.frame_texture_view,
+            ));
         }
 
         queue.write_texture(
@@ -80,17 +75,7 @@ impl DisplayLayer {
             },
         );
 
-        queue.write_buffer(
-            &self.uniforms_buffer,
-            0,
-            bytemuck::cast_slice(&[uniforms.display]),
-        );
-
-        self.bind_group = Some(self.pipeline.bind_group(
-            &device,
-            &uniforms.display.to_buffer(&device),
-            &self.frame_texture_view,
-        ));
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {

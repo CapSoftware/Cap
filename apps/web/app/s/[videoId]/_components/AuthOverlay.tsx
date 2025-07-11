@@ -146,7 +146,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
                     <p className="text-lg text-white">
-                      <span className="font-bold text-white">
+                      <span className="font-medium text-white">
                         Development mode:
                       </span>{" "}
                       Auth URL will be logged to your dev console.

@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "db818ca1-e79f-4d6b-9c28-4d29eb8771ab",
-  "prevId": "08624504-7fe8-4741-bac1-0c308816f3d5",
+  "id": "fd21ec29-1327-4043-83d4-a594e87a437a",
+  "prevId": "49ce971d-dbc0-4954-80d1-15c0ede03235",
   "tables": {
     "accounts": {
       "name": "accounts",
@@ -302,6 +302,126 @@
       "uniqueConstraints": {
         "comments_id_unique": {
           "name": "comments_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "folders": {
+      "name": "folders",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "color": {
+          "name": "color",
+          "type": "varchar(16)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'normal'"
+        },
+        "organizationId": {
+          "name": "organizationId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdById": {
+          "name": "createdById",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "parentId": {
+          "name": "parentId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "spaceId": {
+          "name": "spaceId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "organization_id_idx": {
+          "name": "organization_id_idx",
+          "columns": [
+            "organizationId"
+          ],
+          "isUnique": false
+        },
+        "created_by_id_idx": {
+          "name": "created_by_id_idx",
+          "columns": [
+            "createdById"
+          ],
+          "isUnique": false
+        },
+        "parent_id_idx": {
+          "name": "parent_id_idx",
+          "columns": [
+            "parentId"
+          ],
+          "isUnique": false
+        },
+        "space_id_idx": {
+          "name": "space_id_idx",
+          "columns": [
+            "spaceId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "folders_id": {
+          "name": "folders_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "folders_id_unique": {
+          "name": "folders_id_unique",
           "columns": [
             "id"
           ]
@@ -908,6 +1028,303 @@
       },
       "checkConstraint": {}
     },
+    "space_members": {
+      "name": "space_members",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spaceId": {
+          "name": "spaceId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'member'"
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "space_id_idx": {
+          "name": "space_id_idx",
+          "columns": [
+            "spaceId"
+          ],
+          "isUnique": false
+        },
+        "user_id_idx": {
+          "name": "user_id_idx",
+          "columns": [
+            "userId"
+          ],
+          "isUnique": false
+        },
+        "space_id_user_id_idx": {
+          "name": "space_id_user_id_idx",
+          "columns": [
+            "spaceId",
+            "userId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_members_id": {
+          "name": "space_members_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "space_members_id_unique": {
+          "name": "space_members_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "space_videos": {
+      "name": "space_videos",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "spaceId": {
+          "name": "spaceId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "videoId": {
+          "name": "videoId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "addedById": {
+          "name": "addedById",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "addedAt": {
+          "name": "addedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {
+        "space_id_idx": {
+          "name": "space_id_idx",
+          "columns": [
+            "spaceId"
+          ],
+          "isUnique": false
+        },
+        "video_id_idx": {
+          "name": "video_id_idx",
+          "columns": [
+            "videoId"
+          ],
+          "isUnique": false
+        },
+        "added_by_id_idx": {
+          "name": "added_by_id_idx",
+          "columns": [
+            "addedById"
+          ],
+          "isUnique": false
+        },
+        "space_id_video_id_idx": {
+          "name": "space_id_video_id_idx",
+          "columns": [
+            "spaceId",
+            "videoId"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "space_videos_id": {
+          "name": "space_videos_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "space_videos_id_unique": {
+          "name": "space_videos_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "spaces": {
+      "name": "spaces",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "primary": {
+          "name": "primary",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "organizationId": {
+          "name": "organizationId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdById": {
+          "name": "createdById",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "iconUrl": {
+          "name": "iconUrl",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "description": {
+          "name": "description",
+          "type": "varchar(1000)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "onUpdate": true,
+          "default": "(now())"
+        },
+        "privacy": {
+          "name": "privacy",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'Private'"
+        }
+      },
+      "indexes": {
+        "organization_id_idx": {
+          "name": "organization_id_idx",
+          "columns": [
+            "organizationId"
+          ],
+          "isUnique": false
+        },
+        "created_by_id_idx": {
+          "name": "created_by_id_idx",
+          "columns": [
+            "createdById"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "spaces_id": {
+          "name": "spaces_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "spaces_id_unique": {
+          "name": "spaces_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
     "users": {
       "name": "users",
       "columns": {
@@ -1281,6 +1698,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": "('{\"type\":\"MediaConvert\"}')"
+        },
+        "folderId": {
+          "name": "folderId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         }
       },
       "indexes": {
@@ -1302,6 +1726,13 @@
           "name": "is_public_idx",
           "columns": [
             "public"
+          ],
+          "isUnique": false
+        },
+        "folder_id_idx": {
+          "name": "folder_id_idx",
+          "columns": [
+            "folderId"
           ],
           "isUnique": false
         }

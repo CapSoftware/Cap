@@ -300,7 +300,12 @@ impl AudioRenderer {
                     if project.audio.mute {
                         f32::NEG_INFINITY
                     } else {
-                        t.gain(&project.audio)
+                        let g = t.gain(&project.audio);
+                        if g < -30.0 {
+                            f32::NEG_INFINITY
+                        } else {
+                            g
+                        }
                     },
                     t.stereo_mode(&project.audio),
                 )

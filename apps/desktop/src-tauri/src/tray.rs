@@ -1,12 +1,12 @@
 use crate::windows::ShowCapWindow;
 use crate::{
-    RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
-    RequestStartRecording, RequestStopRecording,
+    recording, RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
 };
-use cap_fail::fail;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::menu::{MenuId, PredefinedMenuItem};
+use tauri::Manager;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -134,7 +134,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |tray, event| {
                 if let tauri::tray::TrayIconEvent::Click { .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
-                        let _ = RequestStopRecording.emit(&app_handle);
+                        let app = app_handle.clone();
+                        tokio::spawn(async move {
+                            let _ = recording::stop_recording(app.clone(), app.state()).await;
+                        });
                     } else {
                         let _ = tray.set_visible(true);
                     }

@@ -5,30 +5,8 @@ export interface FeatureFlagUser {
   stripeSubscriptionStatus?: string | null;
 }
 
-export function isAiUiEnabled(user: FeatureFlagUser): boolean {
-  if (!user.email) {
-    return false;
-  }
-
-  const allowedDomains = ["@cap.so", "@mcilroy.co"];
-  return allowedDomains.some(domain => 
-    user.email.includes(domain)
-  );
-}
-
-export function isAiGenerationEnabled(user: FeatureFlagUser): boolean {
-  if (!user.email) {
-    return false;
-  }
-
-  const allowedDomains = ["@cap.so", "@mcilroy.co"];
-  const hasAllowedEmail = allowedDomains.some(domain => 
-    user.email.includes(domain)
-  );
-
-  const isProUser = isUserOnProPlan({
+export async function isAiGenerationEnabled(user: FeatureFlagUser): Promise<boolean> {
+  return isUserOnProPlan({
     subscriptionStatus: user.stripeSubscriptionStatus || null,
   });
-
-  return hasAllowedEmail && isProUser;
 } 

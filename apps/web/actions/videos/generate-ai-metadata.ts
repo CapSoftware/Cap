@@ -3,35 +3,16 @@
 import { GetObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { db } from "@cap/database";
-import { s3Buckets, videos, users } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
-import { createS3Client } from "@/utils/s3";
-import { isAiGenerationEnabled } from "@/utils/flags";
-
+import { createBucketProvider } from "@/utils/s3";
 export async function generateAiMetadata(videoId: string, userId: string) {
-  
   if (!serverEnv().OPENAI_API_KEY) {
-    console.error("[generateAiMetadata] Missing OpenAI API key, skipping AI metadata generation");
-    return;
-  }
-  const userQuery = await db()
-    .select({ 
-      email: users.email, 
-      stripeSubscriptionStatus: users.stripeSubscriptionStatus 
-    })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
-
-  if (userQuery.length === 0 || !userQuery[0]) {
-    console.error(`[generateAiMetadata] User ${userId} not found for feature flag check`);
-    return;
-  }
-
-  const user = userQuery[0];
-  if (!isAiGenerationEnabled(user)) {
+    console.error(
+      "[generateAiMetadata] Missing OpenAI API key, skipping AI metadata generation"
+    );
     return;
   }
   const videoQuery = await db()
@@ -40,65 +21,64 @@ export async function generateAiMetadata(videoId: string, userId: string) {
     .where(eq(videos.id, videoId));
 
   if (videoQuery.length === 0 || !videoQuery[0]?.video) {
-    console.error(`[generateAiMetadata] Video ${videoId} not found in database`);
+    console.error(
+      `[generateAiMetadata] Video ${videoId} not found in database`
+    );
     return;
   }
-  
+
   const videoData = videoQuery[0].video;
-  const metadata = videoData.metadata as VideoMetadata || {};
-  
+  const metadata = (videoData.metadata as VideoMetadata) || {};
+
   if (metadata.aiProcessing === true) {
-    
     const updatedAtTime = new Date(videoData.updatedAt).getTime();
     const currentTime = new Date().getTime();
     const tenMinutesInMs = 10 * 60 * 1000;
     const minutesElapsed = Math.round((currentTime - updatedAtTime) / 60000);
-    
+
     if (currentTime - updatedAtTime > tenMinutesInMs) {
       await db()
         .update(videos)
-        .set({ 
+        .set({
           metadata: {
             ...metadata,
             aiProcessing: false,
-            generationError: null
-          }
+            generationError: null,
+          },
         })
         .where(eq(videos.id, videoId));
-      
+
       metadata.aiProcessing = false;
       metadata.generationError = null;
     } else {
       return;
     }
   }
-  
+
   if (metadata.summary || metadata.chapters) {
-    
     if (metadata.aiProcessing) {
       await db()
         .update(videos)
-        .set({ 
+        .set({
           metadata: {
             ...metadata,
-            aiProcessing: false 
-          }
+            aiProcessing: false,
+          },
         })
         .where(eq(videos.id, videoId));
     }
     return;
   }
-  
+
   if (videoData?.transcriptionStatus !== "COMPLETE") {
-    
     if (metadata.aiProcessing) {
       await db()
         .update(videos)
-        .set({ 
+        .set({
           metadata: {
             ...metadata,
-            aiProcessing: false 
-          }
+            aiProcessing: false,
+          },
         })
         .where(eq(videos.id, videoId));
     }
@@ -108,11 +88,11 @@ export async function generateAiMetadata(videoId: string, userId: string) {
   try {
     await db()
       .update(videos)
-      .set({ 
+      .set({
         metadata: {
           ...metadata,
-          aiProcessing: true 
-        }
+          aiProcessing: true,
+        },
       })
       .where(eq(videos.id, videoId));
     const query = await db()
@@ -128,37 +108,31 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 
     const row = query[0];
     if (!row || !row.video) {
-      console.error(`[generateAiMetadata] Video record not found for ${videoId}`);
+      console.error(
+        `[generateAiMetadata] Video record not found for ${videoId}`
+      );
       throw new Error(`Video record not found for ${videoId}`);
     }
-    
-    const { video, bucket } = row;
+
+    const { video } = row;
 
     const awsBucket = video.awsBucket;
     if (!awsBucket) {
-      console.error(`[generateAiMetadata] AWS bucket not found for video ${videoId}`);
+      console.error(
+        `[generateAiMetadata] AWS bucket not found for video ${videoId}`
+      );
       throw new Error(`AWS bucket not found for video ${videoId}`);
     }
-    const [s3Client] = await createS3Client(bucket);
-    
+
+    const bucket = await createBucketProvider(row.bucket);
+
     const transcriptKey = `${userId}/${videoId}/transcription.vtt`;
-    const transcriptUrl = await getSignedUrl(
-      s3Client,
-      new GetObjectCommand({
-        Bucket: awsBucket,
-        Key: transcriptKey,
-      })
-    );
-    const res = await fetch(transcriptUrl);
-    if (!res.ok) {
-      console.error(`[generateAiMetadata] Failed to fetch transcript: ${res.status} ${res.statusText}`);
-      throw new Error(`Failed to fetch transcript: ${res.status} ${res.statusText}`);
-    }
-    
-    const vtt = await res.text();
+    const vtt = await bucket.getObject(transcriptKey);
 
     if (!vtt || vtt.length < 10) {
-      console.error(`[generateAiMetadata] Transcript is empty or too short (${vtt.length} chars)`);
+      console.error(
+        `[generateAiMetadata] Transcript is empty or too short (${vtt?.length} chars)`
+      );
       throw new Error("Transcript is empty or too short");
     }
 
@@ -172,7 +146,7 @@ export async function generateAiMetadata(videoId: string, userId: string) {
           !l.includes("-->")
       )
       .join(" ");
-    
+
     const prompt = `You are Cap AI. Summarize the transcript and provide JSON in the following format:
 {
   "title": "string",
@@ -194,26 +168,34 @@ ${transcriptText}`;
     });
     if (!aiRes.ok) {
       const errorText = await aiRes.text();
-      console.error(`[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`);
+      console.error(
+        `[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`
+      );
       throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
     }
 
     const aiJson = await aiRes.json();
     const content = aiJson.choices?.[0]?.message?.content || "{}";
-    
-    let data: { title?: string; summary?: string; chapters?: { title: string; start: number }[] } = {};
+
+    let data: {
+      title?: string;
+      summary?: string;
+      chapters?: { title: string; start: number }[];
+    } = {};
     try {
       data = JSON.parse(content);
     } catch (e) {
       console.error(`[generateAiMetadata] Error parsing OpenAI response: ${e}`);
-      data = { 
-        title: "Generated Title", 
-        summary: "The AI was unable to generate a proper summary for this content.",
-        chapters: []
+      data = {
+        title: "Generated Title",
+        summary:
+          "The AI was unable to generate a proper summary for this content.",
+        chapters: [],
       };
     }
 
-    const currentMetadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
+    const currentMetadata: VideoMetadata =
+      (video.metadata as VideoMetadata) || {};
     const updatedMetadata: VideoMetadata = {
       ...currentMetadata,
       aiTitle: data.title || currentMetadata.aiTitle,
@@ -221,13 +203,20 @@ ${transcriptText}`;
       chapters: data.chapters || currentMetadata.chapters,
       aiProcessing: false,
     };
-    
+
     await db()
       .update(videos)
       .set({ metadata: updatedMetadata })
       .where(eq(videos.id, videoId));
-      
-    if (video.name?.startsWith("Cap Recording -") && data.title) {
+
+    const hasDatePattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(
+      video.name || ""
+    );
+
+    if (
+      (video.name?.startsWith("Cap Recording -") || hasDatePattern) &&
+      data.title
+    ) {
       await db()
         .update(videos)
         .set({ name: data.title })
@@ -235,24 +224,32 @@ ${transcriptText}`;
     }
   } catch (error) {
     console.error(`[generateAiMetadata] Error for video ${videoId}:`, error);
-    
+
     try {
-      const currentVideo = await db().select().from(videos).where(eq(videos.id, videoId));
+      const currentVideo = await db()
+        .select()
+        .from(videos)
+        .where(eq(videos.id, videoId));
       if (currentVideo.length > 0 && currentVideo[0]) {
-        const currentMetadata: VideoMetadata = (currentVideo[0].metadata as VideoMetadata) || {};
+        const currentMetadata: VideoMetadata =
+          (currentVideo[0].metadata as VideoMetadata) || {};
         await db()
           .update(videos)
-          .set({ 
+          .set({
             metadata: {
               ...currentMetadata,
               aiProcessing: false,
-              generationError: error instanceof Error ? error.message : String(error)
-            }
+              generationError:
+                error instanceof Error ? error.message : String(error),
+            },
           })
           .where(eq(videos.id, videoId));
       }
     } catch (updateError) {
-      console.error(`[generateAiMetadata] Failed to reset processing flag:`, updateError);
+      console.error(
+        `[generateAiMetadata] Failed to reset processing flag:`,
+        updateError
+      );
     }
   }
 }

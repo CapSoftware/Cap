@@ -19,7 +19,6 @@ import PricingRive from "../../assets/rive/pricing.riv";
 import { authStore } from "../../store";
 
 import { Dialog, DialogContent, Input } from "../editor/ui";
-import callbackTemplate from "./callback.template";
 
 const proFeatures = [
   "Commercial License Included",
@@ -306,9 +305,7 @@ export default function Page() {
                   <Show when={license.data.expiryDate}>
                     {(expiryDate) => (
                       <div class="space-y-1">
-                        <label class="text-sm text-gray-12">
-                          Expires
-                        </label>
+                        <label class="text-sm text-gray-12">Expires</label>
                         <p class="text-gray-10">
                           {new Date(expiryDate()).toLocaleDateString(
                             undefined,

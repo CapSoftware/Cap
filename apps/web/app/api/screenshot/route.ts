@@ -2,15 +2,9 @@ import { type NextRequest } from "next/server";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import {
-  S3Client,
-  ListObjectsV2Command,
-  GetObjectCommand,
-} from "@aws-sdk/client-s3";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { getHeaders } from "@/utils/helpers";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createBucketProvider } from "@/utils/s3";
 import { S3_BUCKET_URL } from "@cap/utils";
 import { serverEnv } from "@cap/env";
 
@@ -75,18 +69,13 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const Bucket = await getS3Bucket(bucket);
+  const bucketProvider = await createBucketProvider(bucket);
   const screenshotPrefix = `${userId}/${videoId}/`;
 
   try {
-    const [s3Client] = await createS3Client(bucket);
-
-    const objectsCommand = new ListObjectsV2Command({
-      Bucket,
-      Prefix: screenshotPrefix,
+    const objects = await bucketProvider.listObjects({
+      prefix: screenshotPrefix,
     });
-
-    const objects = await s3Client.send(objectsCommand);
 
     const screenshot = objects.Contents?.find((object) =>
       object.Key?.endsWith(".png")
@@ -102,14 +91,7 @@ export async function GET(request: NextRequest) {
     let screenshotUrl: string;
 
     if (video.awsBucket !== serverEnv().CAP_AWS_BUCKET) {
-      screenshotUrl = await getSignedUrl(
-        s3Client,
-        new GetObjectCommand({
-          Bucket,
-          Key: screenshot.Key,
-        }),
-        { expiresIn: 3600 }
-      );
+      screenshotUrl = await bucketProvider.getSignedObjectUrl(screenshot.Key!);
     } else {
       screenshotUrl = `${S3_BUCKET_URL}/${screenshot.Key}`;
     }

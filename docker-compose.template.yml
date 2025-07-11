@@ -7,14 +7,12 @@ name: cap-so-docker-template
 services:
   cap-web:
     container_name: cap-web
-    image: cap-web-docker:latest
+    image: ghcr.io/capsoftware/cap-web:latest
     restart: unless-stopped
     environment:
       DATABASE_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
-      DATABASE_MIGRATION_URL: 'mysql://root:@ps-mysql:3306/planetscale?ssl={"rejectUnauthorized":false}'
       WEB_URL: http://localhost:3000
       NEXTAUTH_URL: http://localhost:3000
-      DOCKER_BUILD: true
       # CHANGE THESE TO YOUR OWN VALUES
       DATABASE_ENCRYPTION_KEY: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
       NEXTAUTH_SECRET: c7a1e98e1e5e4cec5a3fbf5eaf502d262fb99807ae2be8ee70537409e29cb6f9
@@ -23,7 +21,8 @@ services:
       CAP_AWS_SECRET_KEY: capS3root
       CAP_AWS_BUCKET: capso
       CAP_AWS_REGION: us-east-1
-      CAP_AWS_ENDPOINT: http://minio:3902
+      S3_PUBLIC_ENDPOINT: http://localhost:3902
+      S3_INTERNAL_ENDPOINT: http://minio:3902
     ports:
       - 3000:3000
 
