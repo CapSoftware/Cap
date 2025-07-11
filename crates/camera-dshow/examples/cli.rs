@@ -4,22 +4,24 @@ use tracing::{info, trace};
 use windows::{
     core::Interface,
     Win32::{
-        Foundation::{E_NOTIMPL, E_POINTER, SIZE, S_FALSE, S_OK},
+        Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, SIZE, S_FALSE, S_OK},
         Media::{
             DirectShow::{
                 IAMStreamConfig, IAMVideoControl, IBaseFilter, IBaseFilter_Impl,
-                ICaptureGraphBuilder2, IEnumPins, IEnumPins_Impl, IFilterGraph, IGraphBuilder,
-                IMediaControl, IMediaFilter, IMediaFilter_Impl, IMemInputPin, IMemInputPin_Impl,
-                IPin, IPin_Impl, State_Paused, State_Running, State_Stopped, FILTER_STATE,
-                PINDIR_INPUT, PINDIR_OUTPUT, VFW_E_NOT_CONNECTED, VFW_E_NO_ALLOCATOR,
+                ICaptureGraphBuilder2, IEnumMediaTypes, IEnumMediaTypes_Impl, IEnumPins,
+                IEnumPins_Impl, IFilterGraph, IGraphBuilder, IMediaControl, IMediaFilter,
+                IMediaFilter_Impl, IMemInputPin, IMemInputPin_Impl, IPin, IPin_Impl, State_Paused,
+                State_Running, State_Stopped, FILTER_STATE, PINDIR_INPUT, PINDIR_OUTPUT,
+                VFW_E_NOT_CONNECTED, VFW_E_NO_ALLOCATOR,
             },
+            KernelStreaming::{KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER},
             MediaFoundation::{
                 CLSID_CaptureGraphBuilder2, CLSID_FilterGraph, FORMAT_VideoInfo, MEDIATYPE_Video,
-                AM_MEDIA_TYPE, PIN_CATEGORY_CAPTURE,
+                AM_MEDIA_TYPE, MEDIASUBTYPE_YUY2, PIN_CATEGORY_CAPTURE,
             },
         },
         System::Com::{
-            CoCreateInstance, CoInitialize, IMoniker, IPersist_Impl,
+            CoCreateInstance, CoInitialize, CoTaskMemAlloc, CoTaskMemFree, IMoniker, IPersist_Impl,
             StructuredStorage::IPropertyBag, CLSCTX_INPROC_SERVER,
         },
     },
@@ -119,6 +121,28 @@ struct SinkInputPin {
     current_media_type: RefCell<AM_MEDIA_TYPE>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<*const IBaseFilter>>,
+}
+
+impl SinkInputPin {
+    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) {
+        let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
+
+        video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
+        video_info_header.bmiHeader.biPlanes = 1;
+        video_info_header.bmiHeader.biClrImportant = 0;
+        video_info_header.bmiHeader.biClrUsed = 0;
+
+        media_type.majortype = MEDIATYPE_Video;
+        media_type.formattype = FORMAT_VideoInfo;
+        media_type.bTemporalCompression = false.into();
+
+        video_info_header.bmiHeader.biCompression =
+            u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
+        video_info_header.bmiHeader.biBitCount = 16;
+        video_info_header.bmiHeader.biWidth = 640;
+        video_info_header.bmiHeader.biHeight = 480;
+        media_type.subtype = MEDIASUBTYPE_YUY2;
+    }
 }
 
 impl IPin_Impl for SinkInputPin_Impl {
@@ -236,7 +260,11 @@ impl IPin_Impl for SinkInputPin_Impl {
         &self,
     ) -> windows_core::Result<windows::Win32::Media::DirectShow::IEnumMediaTypes> {
         trace!("EnumMediaTypes entry");
-        todo!()
+        Ok(TypeEnumerator {
+            index: Default::default(),
+            pin: self,
+        }
+        .into())
     }
 
     fn QueryInternalConnections(
@@ -269,6 +297,105 @@ impl IPin_Impl for SinkInputPin_Impl {
     fn NewSegment(&self, _tstart: i64, _tstop: i64, _drate: f64) -> windows_core::Result<()> {
         trace!("NewSegment entry");
         unreachable!()
+    }
+}
+
+#[implement(IEnumMediaTypes)]
+struct TypeEnumerator<'a> {
+    index: RefCell<i32>,
+    pin: &'a SinkInputPin,
+}
+
+impl<'a> TypeEnumerator<'a> {
+    unsafe fn free_allocated_media_types(allocated: usize, types: *mut *mut AM_MEDIA_TYPE) {
+        for i in 0..allocated {
+            CoTaskMemFree(Some((*(*types.add(i))).pbFormat as *const _));
+            CoTaskMemFree(Some(*types.add(i) as *const _));
+        }
+    }
+}
+
+impl<'a> IEnumMediaTypes_Impl for TypeEnumerator_Impl<'a> {
+    fn Next(
+        &self,
+        cmediatypes: u32,
+        ppmediatypes: *mut *mut AM_MEDIA_TYPE,
+        pcfetched: *mut u32,
+    ) -> windows_core::HRESULT {
+        trace!("TypeEnumerator::Next");
+        dbg!(cmediatypes);
+
+        let mut types_fetched = 0;
+
+        unsafe {
+            while types_fetched < cmediatypes {
+                let typ = CoTaskMemAlloc(size_of::<AM_MEDIA_TYPE>()) as *mut AM_MEDIA_TYPE;
+                if typ.is_null() {
+                    TypeEnumerator::free_allocated_media_types(
+                        types_fetched as usize,
+                        ppmediatypes,
+                    );
+                    return E_OUTOFMEMORY;
+                }
+                let typ = &mut *typ;
+
+                *typ = AM_MEDIA_TYPE::default();
+                typ.cbFormat = size_of::<KS_VIDEOINFOHEADER>() as u32;
+
+                println!("setup typ");
+
+                let format =
+                    CoTaskMemAlloc(size_of::<KS_VIDEOINFOHEADER>()) as *mut KS_VIDEOINFOHEADER;
+                if format.is_null() {
+                    CoTaskMemFree(Some((typ as *const AM_MEDIA_TYPE).cast()));
+                    TypeEnumerator::free_allocated_media_types(
+                        types_fetched as usize,
+                        ppmediatypes,
+                    );
+                    return E_OUTOFMEMORY;
+                }
+                println!("setup format");
+                typ.pbFormat = format as *mut _;
+
+                let format = &mut *format;
+
+                self.pin.get_valid_media_type(*self.index.borrow(), typ);
+                self.index.replace_with(|v| *v + 1);
+
+                *ppmediatypes.add(types_fetched as usize) = typ;
+
+                types_fetched += 1;
+            }
+
+            if !pcfetched.is_null() {
+                *pcfetched = types_fetched;
+                dbg!(*pcfetched);
+            }
+        }
+
+        dbg!(types_fetched, cmediatypes);
+        if types_fetched == cmediatypes {
+            S_OK
+        } else {
+            S_FALSE
+        }
+    }
+
+    fn Skip(&self, cmediatypes: u32) -> windows_core::Result<()> {
+        trace!("TypeEnumerator::Skip");
+        self.index.replace_with(|v| (*v) + cmediatypes as i32);
+        S_OK.ok()
+    }
+
+    fn Reset(&self) -> windows_core::Result<()> {
+        trace!("TypeEnumerator::Reset");
+        self.index.replace(0);
+        S_OK.ok()
+    }
+
+    fn Clone(&self) -> windows_core::Result<IEnumMediaTypes> {
+        trace!("TypeEnumerator::Clone");
+        unsafe { self.cast() }
     }
 }
 
@@ -544,7 +671,7 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
 
     fn Clone(&self) -> windows_core::Result<IEnumPins> {
         trace!("Clone entry");
-        let result = unsafe { self.cast::<IEnumPins>() };
+        let result = unsafe { self.cast() };
         trace!("Clone exit");
         result
     }
