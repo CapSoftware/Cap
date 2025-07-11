@@ -3,8 +3,7 @@
 import { SeoPageContent } from "@/components/seo/types";
 import { Button } from "@cap/ui";
 import MuxPlayer from "@mux/mux-player-react";
-import { motion } from "framer-motion";
-import { useEffect } from "react";
+
 
 const renderHTML = (content: string) => {
   const styledContent = content.replace(
@@ -51,10 +50,6 @@ export const SeoPageTemplate = ({
             </Button>
           </div>
         </div>
-
-       
-
-      
       </div>
 
       {/* Main Content */}
@@ -355,7 +350,7 @@ export const SeoPageTemplate = ({
 
         {/* Final CTA Section */}
         <div
-          className="wrapper max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center border border-gray-5 p-12 bg-white"
+          className="wrapper  mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center border border-gray-5 p-12 bg-white"
           style={{
             minHeight: "300px",
             backgroundImage: "url('/illustrations/ctabg.svg')",
@@ -363,7 +358,6 @@ export const SeoPageTemplate = ({
             backgroundRepeat: "no-repeat",
           }}
         >
-        
           <div className="wrapper mx-auto h-full flex flex-col justify-center items-center relative z-10">
             <div className="text-center max-w-[800px] mx-auto mb-8">
               <h2 className="text-3xl md:text-4xl font-medium text-gray-12 mb-4 drop-shadow-md">
@@ -375,7 +369,7 @@ export const SeoPageTemplate = ({
             </div>
             <div className="flex flex-col sm:flex-row items-center justify-center space-y-3 sm:space-y-0 sm:space-x-4">
               <Button
-                variant="gray"
+                variant="blue"
                 href="/pricing"
                 size="lg"
                 className="w-full sm:w-auto transition-all duration-300 font-medium px-8 py-3"
