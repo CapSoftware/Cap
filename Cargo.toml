@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
-	"crates/camera-dshow",
+	"crates/camera-dshow", "crates/camera-mediafoundation",
 ] # "apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]

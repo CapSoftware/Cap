@@ -1,32 +1,39 @@
 use cap_camera_dshow::*;
-use std::{cell::RefCell, fmt::Display, mem::ManuallyDrop, ptr::null_mut, time::Duration};
-use tracing::{info, trace};
+use std::{
+    cell::RefCell,
+    fmt::Display,
+    mem::ManuallyDrop,
+    ops::Deref,
+    ptr::{self, null_mut},
+    time::Duration,
+};
+use tracing::{error, info, trace};
 use windows::{
-    core::Interface,
     Win32::{
-        Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, SIZE, S_FALSE, S_OK},
+        Foundation::{E_NOTIMPL, E_OUTOFMEMORY, E_POINTER, S_FALSE, S_OK, SIZE},
         Media::{
             DirectShow::{
-                IAMStreamConfig, IAMVideoControl, IBaseFilter, IBaseFilter_Impl,
+                FILTER_STATE, IAMStreamConfig, IAMVideoControl, IBaseFilter, IBaseFilter_Impl,
                 ICaptureGraphBuilder2, IEnumMediaTypes, IEnumMediaTypes_Impl, IEnumPins,
                 IEnumPins_Impl, IFilterGraph, IGraphBuilder, IMediaControl, IMediaFilter,
-                IMediaFilter_Impl, IMemInputPin, IMemInputPin_Impl, IPin, IPin_Impl, State_Paused,
-                State_Running, State_Stopped, FILTER_STATE, PINDIR_INPUT, PINDIR_OUTPUT,
-                VFW_E_NOT_CONNECTED, VFW_E_NO_ALLOCATOR,
+                IMediaFilter_Impl, IMemInputPin, IMemInputPin_Impl, IPin, IPin_Impl, PINDIR_INPUT,
+                PINDIR_OUTPUT, State_Paused, State_Running, State_Stopped, VFW_E_NO_ALLOCATOR,
+                VFW_E_NOT_CONNECTED,
             },
             KernelStreaming::{KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER},
             MediaFoundation::{
-                CLSID_CaptureGraphBuilder2, CLSID_FilterGraph, FORMAT_VideoInfo, MEDIATYPE_Video,
-                AM_MEDIA_TYPE, MEDIASUBTYPE_YUY2, PIN_CATEGORY_CAPTURE,
+                AM_MEDIA_TYPE, CLSID_CaptureGraphBuilder2, CLSID_FilterGraph, FORMAT_VideoInfo,
+                MEDIASUBTYPE_YUY2, MEDIATYPE_Video, PIN_CATEGORY_CAPTURE,
             },
         },
         System::Com::{
-            CoCreateInstance, CoInitialize, CoTaskMemAlloc, CoTaskMemFree, IMoniker, IPersist_Impl,
-            StructuredStorage::IPropertyBag, CLSCTX_INPROC_SERVER,
+            CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize, CoTaskMemAlloc, CoTaskMemFree,
+            IMoniker, IPersist_Impl, StructuredStorage::IPropertyBag,
         },
     },
+    core::Interface,
 };
-use windows_core::{implement, ComObject, ComObjectInner, GUID};
+use windows_core::{ComObject, ComObjectInner, GUID, implement};
 
 fn main() {
     tracing_subscriber::fmt::init();
@@ -52,7 +59,6 @@ fn main() {
         let moniker = selected.0;
 
         let property_data: IPropertyBag = moniker.BindToStorage(None, None).unwrap();
-
         let device_name = property_data
             .read(windows_core::w!("FriendlyName"), None)
             .unwrap();
@@ -118,13 +124,13 @@ impl<'a> Display for VideoDeviceSelectOption<'a> {
 
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
-    current_media_type: RefCell<AM_MEDIA_TYPE>,
+    current_media_type: RefCell<AMMediaType>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<*const IBaseFilter>>,
 }
 
 impl SinkInputPin {
-    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) {
+    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool {
         let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
 
         video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
@@ -136,12 +142,17 @@ impl SinkInputPin {
         media_type.formattype = FORMAT_VideoInfo;
         media_type.bTemporalCompression = false.into();
 
-        video_info_header.bmiHeader.biCompression =
-            u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
-        video_info_header.bmiHeader.biBitCount = 16;
-        video_info_header.bmiHeader.biWidth = 640;
-        video_info_header.bmiHeader.biHeight = 480;
-        media_type.subtype = MEDIASUBTYPE_YUY2;
+        if index == 0 {
+            video_info_header.bmiHeader.biCompression =
+                u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
+            video_info_header.bmiHeader.biBitCount = 16;
+            video_info_header.bmiHeader.biWidth = 640;
+            video_info_header.bmiHeader.biHeight = 480;
+            media_type.subtype = MEDIASUBTYPE_YUY2;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -163,7 +174,8 @@ impl IPin_Impl for SinkInputPin_Impl {
         }
         let media_type = unsafe { &*pmt };
 
-        self.current_media_type.replace(media_type.clone());
+        dbg!(media_type);
+        // self.current_media_type.replace(media_type.clone());
         self.connected_pin.replace(Some(preceivepin.clone()));
         let result = unsafe { preceivepin.ReceiveConnection(&self.cast::<IPin>()?, pmt) };
         trace!("Connect exit");
@@ -176,7 +188,8 @@ impl IPin_Impl for SinkInputPin_Impl {
         pmt: *const windows::Win32::Media::MediaFoundation::AM_MEDIA_TYPE,
     ) -> windows_core::Result<()> {
         trace!("ReceiveConnection entry");
-        self.current_media_type.replace(unsafe { &*pmt }.clone());
+        self.current_media_type
+            .replace(AMMediaType::new(unsafe { &*pmt }));
         self.connected_pin.replace(pconnector.clone());
         trace!("ReceiveConnection exit");
         S_OK.ok()
@@ -212,7 +225,7 @@ impl IPin_Impl for SinkInputPin_Impl {
             .as_ref()
             .ok_or(VFW_E_NOT_CONNECTED)?;
 
-        unsafe { *pmt = self.current_media_type.borrow().clone() };
+        unsafe { *pmt = self.current_media_type.borrow().clone().into_inner() };
 
         trace!("ConnectionMediaType exit");
         Ok(())
@@ -324,6 +337,7 @@ impl<'a> IEnumMediaTypes_Impl for TypeEnumerator_Impl<'a> {
     ) -> windows_core::HRESULT {
         trace!("TypeEnumerator::Next");
         dbg!(cmediatypes);
+        dbg!(self.index.borrow());
 
         let mut types_fetched = 0;
 
@@ -342,8 +356,6 @@ impl<'a> IEnumMediaTypes_Impl for TypeEnumerator_Impl<'a> {
                 *typ = AM_MEDIA_TYPE::default();
                 typ.cbFormat = size_of::<KS_VIDEOINFOHEADER>() as u32;
 
-                println!("setup typ");
-
                 let format =
                     CoTaskMemAlloc(size_of::<KS_VIDEOINFOHEADER>()) as *mut KS_VIDEOINFOHEADER;
                 if format.is_null() {
@@ -354,26 +366,26 @@ impl<'a> IEnumMediaTypes_Impl for TypeEnumerator_Impl<'a> {
                     );
                     return E_OUTOFMEMORY;
                 }
-                println!("setup format");
                 typ.pbFormat = format as *mut _;
 
-                let format = &mut *format;
+                if self.pin.get_valid_media_type(*self.index.borrow(), typ) {
+                    self.index.replace_with(|v| *v + 1);
 
-                self.pin.get_valid_media_type(*self.index.borrow(), typ);
-                self.index.replace_with(|v| *v + 1);
+                    *ppmediatypes.add(types_fetched as usize) = typ;
 
-                *ppmediatypes.add(types_fetched as usize) = typ;
-
-                types_fetched += 1;
+                    types_fetched += 1;
+                } else {
+                    CoTaskMemFree(Some(format as *const _));
+                    CoTaskMemFree(Some(typ as *mut _ as *const _));
+                    break;
+                }
             }
 
             if !pcfetched.is_null() {
                 *pcfetched = types_fetched;
-                dbg!(*pcfetched);
             }
         }
 
-        dbg!(types_fetched, cmediatypes);
         if types_fetched == cmediatypes {
             S_OK
         } else {
@@ -441,10 +453,30 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         };
 
         let pts = ptimestart;
-        let bytes = unsafe { psample.GetSize() };
-        let format_str = unsafe { self.current_media_type.borrow().subtype_str() };
+        let bytes = unsafe { psample.GetActualDataLength() };
 
-        info!("New frame: pts={pts}, bytes={bytes}, format={format_str:?}");
+        unsafe {
+            if let Ok(new_media_type) = psample.GetMediaType() {
+                if !new_media_type.is_null() {
+                    self.current_media_type
+                        .replace(AMMediaType::new(&*new_media_type));
+                }
+            }
+        }
+
+        let media_type = self.current_media_type.borrow();
+
+        let format_str = unsafe { media_type.subtype_str() };
+
+        let video_info =
+            unsafe { &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER) };
+
+        println!(
+            "New frame: {}x{}, {pts}pts, {bytes} bytes, {}",
+            video_info.bmiHeader.biWidth,
+            video_info.bmiHeader.biHeight,
+            format_str.unwrap_or("unknown format")
+        );
 
         Ok(())
     }
@@ -641,11 +673,7 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
             }
         }
 
-        if pins_fetched == cpins {
-            S_OK
-        } else {
-            S_FALSE
-        }
+        if pins_fetched == cpins { S_OK } else { S_FALSE }
     }
 
     fn Skip(&self, cpins: u32) -> windows_core::Result<()> {
@@ -751,6 +779,11 @@ unsafe fn chromium_main(capture_filter: IBaseFilter) {
         })
     }
 
+    if formats.is_empty() {
+        error!("No formats found");
+        return;
+    }
+
     let selected_format = inquire::Select::new("Select a format", formats)
         .prompt()
         .unwrap();
@@ -821,4 +854,60 @@ unsafe fn chromium_main(capture_filter: IBaseFilter) {
     media_control.Run().unwrap();
 
     std::thread::sleep(Duration::from_secs(10));
+}
+
+#[derive(Default)]
+struct AMMediaType(AM_MEDIA_TYPE);
+
+impl AMMediaType {
+    pub fn new(typ: &AM_MEDIA_TYPE) -> Self {
+        Self(unsafe { copy_media_type(typ) })
+    }
+
+    pub fn into_inner(mut self) -> AM_MEDIA_TYPE {
+        let inner = std::mem::replace(&mut self.0, unsafe { std::mem::uninitialized() });
+        std::mem::forget(self);
+        inner
+    }
+}
+
+impl Deref for AMMediaType {
+    type Target = AM_MEDIA_TYPE;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Clone for AMMediaType {
+    fn clone(&self) -> Self {
+        Self(unsafe { copy_media_type(&self.0) })
+    }
+}
+
+impl Drop for AMMediaType {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.0.pbFormat.is_null() {
+                CoTaskMemFree(Some(self.0.pbFormat as *mut _));
+                self.0.pbFormat = null_mut();
+            }
+        }
+    }
+}
+
+unsafe fn copy_media_type(src: &AM_MEDIA_TYPE) -> AM_MEDIA_TYPE {
+    let mut dest = src.clone();
+
+    if src.cbFormat > 0 && !src.pbFormat.is_null() {
+        let format_size = src.cbFormat as usize;
+        let new_format = CoTaskMemAlloc(format_size) as *mut u8;
+
+        if !new_format.is_null() {
+            ptr::copy_nonoverlapping(src.pbFormat, new_format, format_size);
+            dest.pbFormat = new_format;
+        }
+    }
+
+    dest
 }

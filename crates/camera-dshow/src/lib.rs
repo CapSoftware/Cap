@@ -1,34 +1,34 @@
 use std::{
-    ffi::{c_void, OsString},
+    ffi::{OsString, c_void},
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{null, null_mut},
 };
 use windows::{
-    core::Interface,
     Win32::{
-        Foundation::{SIZE, S_OK},
+        Foundation::{S_OK, SIZE},
         Media::{
             DirectShow::{
-                IAMStreamConfig, IAMVideoControl, IBaseFilter, ICreateDevEnum, IPin,
-                AMPROPERTY_PIN_CATEGORY, PIN_DIRECTION, VIDEO_STREAM_CONFIG_CAPS,
+                AMPROPERTY_PIN_CATEGORY, IAMStreamConfig, IAMVideoControl, IBaseFilter,
+                ICreateDevEnum, IPin, PIN_DIRECTION, VIDEO_STREAM_CONFIG_CAPS,
             },
             KernelStreaming::{IKsPropertySet, KS_VIDEOINFOHEADER},
             MediaFoundation::{
-                AMPROPSETID_Pin, CLSID_SystemDeviceEnum, CLSID_VideoInputDeviceCategory,
-                AM_MEDIA_TYPE, MEDIASUBTYPE_ARGB32, MEDIASUBTYPE_I420, MEDIASUBTYPE_IYUV,
-                MEDIASUBTYPE_MJPG, MEDIASUBTYPE_RGB24, MEDIASUBTYPE_RGB32, MEDIASUBTYPE_UYVY,
-                MEDIASUBTYPE_YUY2,
+                AM_MEDIA_TYPE, AMPROPSETID_Pin, CLSID_SystemDeviceEnum,
+                CLSID_VideoInputDeviceCategory, MEDIASUBTYPE_ARGB32, MEDIASUBTYPE_I420,
+                MEDIASUBTYPE_IYUV, MEDIASUBTYPE_MJPG, MEDIASUBTYPE_NV12, MEDIASUBTYPE_RGB24,
+                MEDIASUBTYPE_RGB32, MEDIASUBTYPE_UYVY, MEDIASUBTYPE_YUY2,
             },
         },
         System::{
             Com::{
-                CoCreateInstance, IEnumMoniker, IErrorLog, IMoniker,
-                StructuredStorage::IPropertyBag, CLSCTX_INPROC_SERVER,
+                CLSCTX_INPROC_SERVER, CoCreateInstance, IEnumMoniker, IErrorLog, IMoniker,
+                StructuredStorage::IPropertyBag,
             },
             Variant::{VARIANT, VT_BSTR},
         },
     },
+    core::Interface,
 };
 use windows_core::{GUID, PWSTR};
 
@@ -234,6 +234,7 @@ impl AM_MEDIA_TYPEExt for AM_MEDIA_TYPE {
             t if t == MEDIASUBTYPE_MJPG => "mjpg",
             t if t == MEDIASUBTYPE_UYVY => "uyvy",
             t if t == MEDIASUBTYPE_ARGB32 => "argb32",
+            t if t == MEDIASUBTYPE_NV12 => "nv12",
             _ => return None,
         })
     }
