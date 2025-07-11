@@ -242,9 +242,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             start_time,
         };
 
-        let options = this
-            .create_options(scap_target, crop_area, captures_audio)
-            .await?;
+        let options = this.create_options(scap_target, crop_area, captures_audio)?;
 
         this.options = Arc::new(options);
 
@@ -396,7 +394,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         })
     }
 
-    async fn create_options(
+    fn create_options(
         &self,
         target: scap::Target,
         crop_area: Option<Area>,
