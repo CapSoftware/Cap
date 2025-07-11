@@ -952,7 +952,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cap-camera-dshow"
+name = "cap-camera-directshow"
 version = "0.1.0"
 dependencies = [
  "inquire",
