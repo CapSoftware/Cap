@@ -80,8 +80,8 @@ async function fetchFolders(spaceId: string) {
       parentId: folders.parentId,
       spaceId: folders.spaceId,
       videoCount: sql<number>`(
-    SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-  )`,
+          SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+        )`,
     })
     .from(folders)
     .where(
@@ -148,7 +148,6 @@ export default async function SharedCapsPage({
 
   const isSpace = spaceData.length > 0;
 
-  // --- Access checks ---
   if (isSpace) {
     const space = spaceData[0] as SpaceData;
     const isSpaceCreator = space.createdById === userId;
@@ -184,7 +183,7 @@ export default async function SharedCapsPage({
       fetchFolders(id),
     ]);
 
-    // --- Video fetching helpers ---
+
     async function fetchSpaceVideos(
       spaceId: string,
       page: number,
@@ -285,7 +284,6 @@ export default async function SharedCapsPage({
     }
 
 
-    // --- Organization video fetching helper ---
     async function fetchOrganizationVideos(
       orgId: string,
       page: number,
@@ -309,7 +307,7 @@ export default async function SharedCapsPage({
           .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
           .leftJoin(comments, eq(videos.id, comments.videoId))
           .leftJoin(users, eq(videos.ownerId, users.id))
-          .where(eq(sharedVideos.organizationId, orgId))
+          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId)))
           .groupBy(
             videos.id,
             videos.ownerId,
@@ -328,7 +326,8 @@ export default async function SharedCapsPage({
         db()
           .select({ count: count() })
           .from(sharedVideos)
-          .where(eq(sharedVideos.organizationId, orgId)),
+          .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
+          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId))),
       ]);
       return {
         videos: videoRows,

@@ -13,6 +13,7 @@ import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
 import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { FoldersDropdown } from "./FoldersDropdown";
 import clsx from "clsx";
+import { useDashboardContext } from "../../Contexts";
 
 export type FolderDataType = {
   name: string;
@@ -33,6 +34,7 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
   const folderRef = useRef<HTMLDivElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isMovingVideo, setIsMovingVideo] = useState(false);
+  const { activeOrganization } = useDashboardContext();
   // Use a ref to track drag state to avoid re-renders during animation
   const dragStateRef = useRef({
     isDragging: false,
@@ -91,7 +93,7 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
 
         try {
           setIsMovingVideo(true);
-          await moveVideoToFolder({ videoId: data.id, folderId: id, spaceId });
+          await moveVideoToFolder({ videoId: data.id, folderId: id, spaceId: spaceId ?? activeOrganization?.organization.id });
           toast.success(`"${data.name}" moved to "${name}" folder`);
         } catch (error) {
           console.error("Error moving video to folder:", error);

@@ -102,7 +102,15 @@ impl<T> PipelineBuilder<T> {
                                 info!("task '{name}' done");
                                 res
                             }))
-                            .map_err(|_| format!("Panicked"))
+                            .map_err(|e| {
+                                if let Some(s) = e.downcast_ref::<&'static str>() {
+                                    format!("Panicked: {s}")
+                                } else if let Some(s) = e.downcast_ref::<String>() {
+                                    format!("Panicked: {s}")
+                                } else {
+                                    format!("Panicked: Unknown error")
+                                }
+                            })
                         })
                         .and_then(|v| v);
                     let _ = done_tx.send(result);
