@@ -62,7 +62,7 @@ const MobileMenu: React.FC<MobileMenuProps> = ({
 }) => {
   console.log(auth, 'auth')
   return (
-    <div className="overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2">
+    <div className="overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2 block md:hidden">
       <div className="pb-12">
         <nav className="relative mt-24 mobile">
           <ul className="p-0 space-y-4">

@@ -89,4 +89,4 @@ const SettingsGearIcon = forwardRef<
 
 SettingsGearIcon.displayName = 'SettingsGearIcon';
 
-export { SettingsGearIcon };
+export default SettingsGearIcon;

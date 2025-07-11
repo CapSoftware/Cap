@@ -4,9 +4,11 @@ import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import WorkOSProvider from "next-auth/providers/workos";
-import { NODE_ENV, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
+import { cookies } from "next/headers";
+import { dub } from "../dub";
 
 import { db } from "../";
 import { users, organizations, organizationMembers } from "../schema";
@@ -103,6 +105,38 @@ export const authOptions = (): NextAuthOptions => {
     events: {
       async signIn({ user, account, isNewUser }) {
         if (isNewUser) {
+          const dubId = cookies().get("dub_id")?.value;
+          const dubPartnerData = cookies().get("dub_partner_data")?.value;
+
+          if (dubId) {
+            try {
+              console.log("Attempting to track lead with Dub...");
+              const trackResult = await dub().track.lead({
+                clickId: dubId,
+                eventName: "Sign Up",
+                externalId: user.id,
+                customerName: user.name || undefined,
+                customerEmail: user.email || undefined,
+                customerAvatar: user.image || undefined,
+              });
+
+              console.log("Dub tracking successful:", trackResult);
+
+              // Properly delete the dub_id cookie
+              cookies().delete("dub_id");
+
+              // Also delete dub_partner_data if it exists
+              if (dubPartnerData) {
+                cookies().delete("dub_partner_data");
+              }
+            } catch (error) {
+              console.error("Failed to track lead with Dub:", error);
+              console.error("Error details:", JSON.stringify(error, null, 2));
+            }
+          } else {
+            console.log("No dub_id cookie found - referral tracking skipped");
+          }
+
           const organizationId = nanoId();
 
           await db().insert(organizations).values({

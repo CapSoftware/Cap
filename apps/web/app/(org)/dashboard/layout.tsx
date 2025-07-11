@@ -9,6 +9,7 @@ import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
 
 export const dynamic = "force-dynamic";
+import { UploadingProvider } from "./caps/UploadingContext";
 
 export default async function DashboardLayout({
   children,
@@ -54,26 +55,28 @@ export default async function DashboardLayout({
   const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
 
   return (
-    <DashboardContexts
-      organizationData={organizationSelect}
-      activeOrganization={activeOrganization || null}
-      spacesData={spacesData}
-      user={user}
-      isSubscribed={isSubscribed}
-      initialTheme={theme as "light" | "dark"}
-      initialSidebarCollapsed={sidebar === "true"}
-    >
-      <div className="grid grid-cols-[auto,1fr] overflow-y-auto bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
-        <aside className="z-10 col-span-1 row-span-2">
-          <DesktopNav />
-        </aside>
-        <div className="flex col-span-1 row-span-2 h-full custom-scroll focus:outline-none">
-          <MobileNav />
-          <div className="dashboard-page">
-            <DashboardInner>{children}</DashboardInner>
+    <UploadingProvider>
+      <DashboardContexts
+        organizationData={organizationSelect}
+        activeOrganization={activeOrganization || null}
+        spacesData={spacesData}
+        user={user}
+        isSubscribed={isSubscribed}
+        initialTheme={theme as "light" | "dark"}
+        initialSidebarCollapsed={sidebar === "true"}
+      >
+        <div className="grid grid-cols-[auto,1fr] overflow-y-auto bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
+          <aside className="z-10 col-span-1 row-span-2">
+            <DesktopNav />
+          </aside>
+          <div className="flex col-span-1 row-span-2 h-full custom-scroll focus:outline-none">
+            <MobileNav />
+            <div className="dashboard-page">
+              <DashboardInner>{children}</DashboardInner>
+            </div>
           </div>
         </div>
-      </div>
-    </DashboardContexts>
+      </DashboardContexts>
+    </UploadingProvider>
   );
 }

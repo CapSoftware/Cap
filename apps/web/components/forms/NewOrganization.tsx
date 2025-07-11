@@ -45,7 +45,6 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
         ref={props.formRef}
         onSubmit={form.handleSubmit(async (values) => {
           try {
-            setIsUploading(true);
             props.setCreateLoading?.(true);
 
             // Create FormData to send both the organization name and icon file
@@ -55,6 +54,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             // Add the icon file if one was selected
             if (selectedFile) {
               formData.append("icon", selectedFile);
+              setIsUploading(true);
             }
 
             await createOrganization(formData);

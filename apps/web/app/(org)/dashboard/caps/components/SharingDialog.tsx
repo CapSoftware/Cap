@@ -19,12 +19,14 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { Spaces } from "../../dashboard-data";
 
 interface SharingDialogProps {
   isOpen: boolean;
   onClose: () => void;
   capId: string;
   capName: string;
+  spaces?: Spaces[];
   sharedSpaces: {
     id: string;
     name: string;
@@ -39,10 +41,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
+  spaces,
   sharedSpaces,
   onSharingUpdated,
 }) => {
-  const { spacesData } = useDashboardContext();
+  const { spacesData: ctxSpacesData } = useDashboardContext();
+  const spacesData = ctxSpacesData ?? spaces;
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
@@ -318,7 +322,7 @@ const SpaceCard = ({
     >
       <div
         className={clsx(
-          "flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-1",
+          "flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-2",
           "duration-200 w-full p-2.5 rounded-xl cursor-pointer",
           isSelected
             ? "bg-gray-3 border-green-500"

@@ -7,8 +7,8 @@ import { VideoMetadata } from "@cap/database/types";
 import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@cap/ui";
 import {
   faCheck,
-  faEllipsis,
-  faLock,
+  faCopy,
+  faEllipsis, faLock,
   faTrash,
   faUnlock,
   faVideo
@@ -24,6 +24,7 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
 import { CapCardContent } from "./CapCardContent";
+import { duplicateVideo } from "@/actions/videos/duplicate";
 
 
 
@@ -51,7 +52,7 @@ export interface CapCardProps extends PropsWithChildren {
     hasPassword?: boolean;
   };
   analytics: number;
-  onDelete?: (videoId: string) => Promise<void>;
+  onDelete?: () => Promise<void>;
   userId?: string;
   sharedCapCard?: boolean;
   isSelected?: boolean;
@@ -60,6 +61,9 @@ export interface CapCardProps extends PropsWithChildren {
   domainVerified?: boolean;
   hideSharedStatus?: boolean;
   anyCapSelected?: boolean;
+  isDeleting?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }
 
 export const CapCard = ({
@@ -75,6 +79,7 @@ export const CapCard = ({
   isSelected = false,
   onSelectToggle,
   anyCapSelected = false,
+  isDeleting = false,
 }: CapCardProps) => {
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
   const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
@@ -104,7 +109,7 @@ export const CapCard = ({
   const confirmRemoveCap = async () => {
     if (!onDelete) return;
     setRemoving(true);
-    await onDelete(cap.id);
+    await onDelete();
     setRemoving(false);
     setConfirmOpen(false);
   };
@@ -265,7 +270,7 @@ export const CapCard = ({
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         className={clsx(
-          "flex relative flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group border-px",
+          "flex relative transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group border-px",
           isSelected
             ? "!border-blue-10 border-px"
             : anyCapSelected
@@ -327,7 +332,24 @@ export const CapCard = ({
                 sideOffset={5}
               >
                 <DropdownMenuItem
-                  onClick={(e) => {
+                  onClick={async () => {
+                    try {
+                      await duplicateVideo(cap.id)
+                      toast.success("Cap duplicated successfully");
+                    } catch (error) {
+                      toast.error("Failed to duplicate cap");
+                    }
+                  }}
+                  className="flex gap-2 items-center rounded-lg"
+                >
+                  <FontAwesomeIcon
+                    className="size-3"
+                    icon={faCopy}
+                  />
+                  <p className="text-sm text-gray-12">Duplicate</p>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
                     if (!isSubscribed) {
                       setUpgradeModalOpen(true);
                     } else {
@@ -398,6 +420,11 @@ export const CapCard = ({
             "block group",
             anyCapSelected && "cursor-pointer pointer-events-none"
           )}
+          onClick={(e) => {
+            if (isDeleting) {
+              e.preventDefault();
+            }
+          }}
           href={`/s/${cap.id}`}
         >
           <VideoThumbnail

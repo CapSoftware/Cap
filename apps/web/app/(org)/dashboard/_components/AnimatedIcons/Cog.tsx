@@ -99,4 +99,4 @@ const CogIcon = forwardRef<CogIconHandle, CogIconProps>(
 
 CogIcon.displayName = 'CogIcon';
 
-export { CogIcon };
+export default CogIcon;

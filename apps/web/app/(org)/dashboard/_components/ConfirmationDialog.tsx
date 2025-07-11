@@ -40,11 +40,17 @@ export function ConfirmationDialog({
         </DialogHeader>
         <p className="p-5 text-[14px] leading-5 text-gray-11">{description}</p>
         <DialogFooter>
-          <Button onClick={onCancel} variant="gray" size="sm" disabled={loading}>
+          <Button onClick={(e) => {
+            e.stopPropagation();
+            onCancel();
+          }} variant="gray" size="sm" disabled={loading}>
             {cancelLabel}
           </Button>
           <Button
-            onClick={onConfirm}
+            onClick={(e) => {
+              e.stopPropagation();
+              onConfirm();
+            }}
             variant={confirmVariant}
             size="sm"
             spinner={loading}

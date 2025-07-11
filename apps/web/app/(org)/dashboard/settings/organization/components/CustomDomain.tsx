@@ -274,6 +274,7 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
             <Button
               type="submit"
               size="sm"
+              className="px-[1.5rem]"
               variant="dark"
               className="px-[1.5rem]"
               onClick={handleSubmit}
