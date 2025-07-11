@@ -1,8 +1,15 @@
 use cap_camera_avfoundation::{YCbCrMatrix, list_video_devices};
-use cidre::*;
+use cidre::{
+    av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
+    cv::pixel_buffer::LockFlags,
+    *,
+};
 use clap::{Args, Parser, Subcommand};
 use inquire::Select;
-use std::{fmt::Display, ops::Deref};
+use std::{
+    fmt::Display,
+    ops::{Deref, DerefMut},
+};
 
 #[derive(Parser)]
 struct Cli {
@@ -17,35 +24,27 @@ enum Commands {
 }
 
 pub fn main() {
-    let devices = list_video_devices();
-    let devices = devices
+    let _devices = list_video_devices();
+    let devices = _devices
         .iter()
-        .map(CaptureDeviceSelectOption)
+        .enumerate()
+        .map(|(i, v)| CaptureDeviceSelectOption(v, i))
         .collect::<Vec<_>>();
 
     let selected = Select::new("Select a device", devices).prompt().unwrap();
+    let mut selected_device = _devices.get(selected.1).unwrap();
 
     println!(
         "Info for device '{}'",
-        selected.localized_name().to_string()
+        selected_device.localized_name().to_string()
     );
 
-    let formats = selected.formats();
-    println!("Formats: {}", formats.len());
+    let formats = selected_device.formats();
+
+    let mut _formats = vec![];
 
     for (i, format) in formats.iter().enumerate() {
         let desc = format.format_desc();
-
-        println!("Format {i}:");
-        println!(
-            "  Dimensions: {}x{}",
-            desc.dimensions().width,
-            desc.dimensions().height
-        );
-        println!(
-            "  Pixel format: {}",
-            four_cc_to_string(desc.media_sub_type().to_be_bytes())
-        );
 
         let color_space = desc
             .ext(cm::FormatDescExtKey::ycbcr_matrix())
@@ -54,34 +53,141 @@ pub fn main() {
                     .and_then(|v| YCbCrMatrix::try_from(v).ok())
             })
             .unwrap_or(Some(YCbCrMatrix::Rec601));
-        println!(
-            "  Color space: {}",
-            color_space
-                .map(|v| v.to_string())
-                .unwrap_or("Unknown".to_string())
-        );
 
         let fr_ranges = format.video_supported_frame_rate_ranges();
-        println!("  Frame Rate Ranges: {}", fr_ranges.len());
 
         for fr_range in fr_ranges.iter() {
-            println!(
-                "    Min: {} ({}/{})",
-                fr_range.min_frame_rate(),
-                fr_range.min_frame_duration().scale,
-                fr_range.min_frame_duration().value
-            );
-            println!(
-                "    Max: {} ({}/{})",
-                fr_range.max_frame_rate(),
-                fr_range.max_frame_duration().scale,
-                fr_range.max_frame_duration().value
-            );
+            _formats.push(Format {
+                index: i,
+                width: desc.dimensions().width,
+                height: desc.dimensions().height,
+                fourcc: desc.media_sub_type(),
+                color_space,
+                max_frame_rate: (
+                    fr_range.min_frame_duration().value,
+                    fr_range.min_frame_duration().scale,
+                ),
+            });
         }
+    }
+
+    let selected_format = if _formats.len() > 1 {
+        inquire::Select::new("Select a format", _formats)
+            .prompt()
+            .unwrap()
+    } else {
+        _formats.remove(0)
+    };
+
+    let input = av::capture::DeviceInput::with_device(&selected_device).unwrap();
+    let queue = dispatch::Queue::new();
+    let delegate = OutputDelegate::new();
+    let mut output = av::capture::VideoDataOutput::new();
+
+    let mut session = av::capture::Session::new();
+
+    session.configure(|s| {
+        if s.can_add_input(&input) {
+            s.add_input(&input);
+        } else {
+            panic!("can't add input");
+        }
+
+        s.add_output(&output);
+    });
+
+    output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
+
+    let video_settings = ns::Dictionary::with_keys_values(
+        &[cv::pixel_buffer_keys::pixel_format().as_ns()],
+        &[ns::Number::with_u32(selected_format.fourcc).as_id_ref()],
+    );
+    output
+        .set_video_settings(Some(video_settings.as_ref()))
+        .unwrap();
+
+    // The device config must stay locked while running starts,
+    // otherwise start_running can overwrite the active format on macOS
+    // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
+    {
+        let mut _lock = selected_device.config_lock().unwrap();
+
+        _lock.set_active_format(&formats[selected_format.index]);
+
+        session.start_running();
+    }
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
+
+    session.stop_running();
+}
+
+struct Format {
+    index: usize,
+    width: i32,
+    height: i32,
+    fourcc: FourCharCode,
+    color_space: Option<YCbCrMatrix>,
+    max_frame_rate: (i64, i32),
+}
+
+impl Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}x{}, {} max fps ({}/{}) {}",
+            self.width,
+            self.height,
+            self.max_frame_rate.1 as f32 / self.max_frame_rate.0 as f32,
+            self.max_frame_rate.0,
+            self.max_frame_rate.1,
+            four_cc_to_string(self.fourcc.to_be_bytes())
+        )
     }
 }
 
-struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice);
+define_obj_type!(
+    OutputDelegate + VideoDataOutputSampleBufDelegateImpl,
+    (),
+    OUTPUT_DELEGATE
+);
+
+impl VideoDataOutputSampleBufDelegate for OutputDelegate {}
+
+#[objc::add_methods]
+impl VideoDataOutputSampleBufDelegateImpl for OutputDelegate {
+    extern "C" fn impl_capture_output_did_output_sample_buf_from_connection(
+        &mut self,
+        _cmd: Option<&cidre::objc::Sel>,
+        _output: &av::CaptureOutput,
+        sample_buf: &cm::SampleBuf,
+        _connection: &av::CaptureConnection,
+    ) {
+        let Some(image_buf) = sample_buf.image_buf() else {
+            return;
+        };
+
+        let total_bytes = if image_buf.plane_count() > 0 {
+            (0..image_buf.plane_count())
+                .map(|i| image_buf.plane_bytes_per_row(i) * image_buf.plane_height(i))
+                .sum::<usize>()
+        } else {
+            image_buf.plane_bytes_per_row(0) * image_buf.plane_height(0)
+        };
+
+        let mut format = image_buf.pixel_format().0.to_be_bytes();
+        let format_fourcc = four_cc_to_str(&mut format);
+
+        println!(
+            "New frame: {}x{}, {:.2}pts, {total_bytes} bytes, format={format_fourcc}",
+            image_buf.width(),
+            image_buf.height(),
+            sample_buf.pts().value as f64 / sample_buf.pts().scale as f64,
+        )
+    }
+}
+
+struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice, usize);
 
 impl<'a> Display for CaptureDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

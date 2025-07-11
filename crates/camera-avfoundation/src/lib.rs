@@ -17,15 +17,9 @@ pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
         );
 
     video_discovery_session.devices()
-
-    // let muxed_discovery_session =
-    //     av::CaptureDeviceDiscoverySession::with_device_types_media_and_pos(
-    //         &device_types,
-    //         Some(av::MediaType::video()),
-    //         av::CaptureDevicePos::Unspecified,
-    //     );
 }
 
+#[derive(Clone, Copy)]
 pub enum YCbCrMatrix {
     Rec601,
     Rec709,
