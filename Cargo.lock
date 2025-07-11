@@ -896,6 +896,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "camera-mediafoundation"
+version = "0.1.0"
+dependencies = [
+ "inquire",
+ "tracing",
+ "windows 0.60.0",
+ "windows-core 0.60.1",
+]
+
+[[package]]
 name = "camino"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -948,6 +958,17 @@ dependencies = [
  "cidre",
  "clap 4.5.40",
  "inquire",
+]
+
+[[package]]
+name = "cap-camera-directshow"
+version = "0.1.0"
+dependencies = [
+ "inquire",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.60.0",
+ "windows-core 0.60.1",
 ]
 
 [[package]]
