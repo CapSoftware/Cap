@@ -350,7 +350,7 @@ export const SeoPageTemplate = ({
 
         {/* Final CTA Section */}
         <div
-          className="wrapper  mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center border border-gray-5 p-12 bg-white"
+          className="max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center border border-gray-5 p-12 bg-white"
           style={{
             minHeight: "300px",
             backgroundImage: "url('/illustrations/ctabg.svg')",
