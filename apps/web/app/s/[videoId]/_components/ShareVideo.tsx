@@ -372,9 +372,9 @@ export const ShareVideo = forwardRef<
           } else {
             setIsPlaying(true);
 
-            // if (videoElement.currentTime === 0 && currentPosition > 0) {
-            //   videoElement.currentTime = currentPosition;
-            // }
+            if (videoElement.currentTime === 0 && currentPosition > 0) {
+              videoElement.currentTime = currentPosition;
+            }
           }
         }
       } catch (error) {
