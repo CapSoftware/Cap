@@ -327,6 +327,14 @@ export const ShareVideo = forwardRef<
 
           const currentPosition = videoElement.currentTime;
 
+          // If video is at the end, reset to 0 before playing
+          if (
+            videoElement.currentTime === videoElement.duration ||
+            videoElement.ended
+          ) {
+            videoElement.currentTime = 0;
+          }
+
           const playPromise = videoElement.play();
 
           if (playPromise !== undefined) {
@@ -1207,10 +1215,11 @@ export const ShareVideo = forwardRef<
             <div
               style={{
                 boxShadow: "0 0 20px rgba(0,0,0,0.1)",
-                left: `${watchedPercentage}%`,
+                left: `calc(${Math.max(0, Math.min(watchedPercentage + 0.82, 99.15))}% )`,
               }}
               className={clsx(
-                "drag-button absolute top-2 z-20 -mt-1.5 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
+                "drag-button absolute top-2 z-20 mx-auto -mt-1.5 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5 -translate-x-1/2",
+
                 seeking
                   ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                   : ""
