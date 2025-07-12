@@ -19,14 +19,12 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import { Spaces } from "../../dashboard-data";
 
 interface SharingDialogProps {
   isOpen: boolean;
   onClose: () => void;
   capId: string;
   capName: string;
-  spaces?: Spaces[];
   sharedSpaces: {
     id: string;
     name: string;
@@ -41,12 +39,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   onClose,
   capId,
   capName,
-  spaces,
   sharedSpaces,
   onSharingUpdated,
 }) => {
-  const { spacesData: ctxSpacesData } = useDashboardContext();
-  const spacesData = ctxSpacesData ?? spaces;
+  const { spacesData } = useDashboardContext();
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
