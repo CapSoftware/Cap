@@ -308,80 +308,78 @@ export const ShareVideo = forwardRef<
     };
   }, []);
 
-  const handlePlayPauseClick = async () => {
+  const handlePlayPauseClick = async (): Promise<void> => {
     const videoElement = videoRef.current;
-
     if (!videoElement) return;
 
     if (isPlaying) {
       videoElement.pause();
       setIsPlaying(false);
-    } else {
-      try {
-        if (!videoReadyToPlay) {
+      setTempOverlayVisible(true); // Show overlay briefly on pause
+      return;
+    }
+
+    if (!videoReadyToPlay) {
+      console.warn('Video is not ready to play yet.');
+      return;
+    }
+
+    const currentPosition = videoElement.currentTime;
+
+    try {
+      videoElement.muted = userMuted;
+
+      await videoElement.play();
+      setIsPlaying(true);
+      setTempOverlayVisible(true); // Show overlay briefly on play
+      scheduleHideControls(); // Schedule hiding controls after play
+
+      if (videoElement.currentTime === 0 && currentPosition > 0) {
+        videoElement.currentTime = currentPosition;
+      }
+
+      if (videoElement.muted !== userMuted) {
+        setUserMuted(videoElement.muted);
+      }
+    } catch (error: unknown) {
+      const playError = error as DOMException;
+      console.error('Error playing video:', playError);
+
+      if (playError.name === 'NotAllowedError') {
+        try {
+          videoElement.muted = true;
+          await videoElement.play();
           setIsPlaying(true);
-        } else {
+          setUserMuted(true);
+          setTempOverlayVisible(true);
+          scheduleHideControls();
+
+          if (videoElement.currentTime === 0 && currentPosition > 0) {
+            videoElement.currentTime = currentPosition;
+          }
+
           if (!userMuted) {
-            videoElement.muted = false;
+            requestAnimationFrame(() => {
+              try {
+                videoElement.muted = false;
+                setUserMuted(false);
+              } catch (err) {
+                console.error('Error unmuting video:', err);
+              }
+            });
           }
-
-          const currentPosition = videoElement.currentTime;
-
-
-          const playPromise = videoElement.play();
-
-          if (playPromise !== undefined) {
-            playPromise
-              .then(() => {
-                setIsPlaying(true);
-
-                if (videoElement.currentTime === 0 && currentPosition > 0) {
-                  videoElement.currentTime = currentPosition;
-                }
-              })
-              .catch((error) => {
-                console.error("Error with playing:", error);
-
-                if (error.name === "NotAllowedError") {
-                  videoElement.muted = true;
-                  videoElement
-                    .play()
-                    .then(() => {
-                      setIsPlaying(true);
-                      if (!userMuted) {
-                        setTimeout(() => {
-                          videoElement.muted = false;
-                        }, 100);
-                      }
-
-                      if (
-                        videoElement.currentTime === 0 &&
-                        currentPosition > 0
-                      ) {
-                        videoElement.currentTime = currentPosition;
-                      }
-                    })
-                    .catch((innerError) => {
-                      console.error(
-                        "Still can't play even with muted:",
-                        innerError
-                      );
-                    });
-                }
-              });
-          } else {
-            setIsPlaying(true);
-
-            if (videoElement.currentTime === 0 && currentPosition > 0) {
-              videoElement.currentTime = currentPosition;
-            }
-          }
+        } catch (mutedError: unknown) {
+          console.error('Failed to play video even with mute:', mutedError);
+          setIsPlaying(false);
+          setTempOverlayVisible(true);
         }
-      } catch (error) {
-        console.error("Error with playing:", error);
+      } else {
+        setIsPlaying(false);
+        setTempOverlayVisible(true);
       }
     }
   };
+
 
   const applyTimeToVideos = (time: number) => {
     if (!Number.isFinite(time)) {
