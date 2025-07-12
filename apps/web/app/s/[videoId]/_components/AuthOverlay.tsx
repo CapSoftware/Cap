@@ -62,16 +62,10 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                   />
                   Continue with Google
                 </Button>
-
-                <div className="relative">
-                  <div className="flex absolute inset-0 items-center">
-                    <div className="w-full border-t border-gray-5" />
-                  </div>
-                  <div className="flex relative justify-center">
-                    <span className="px-2 text-xs rounded-xl bg-gray-1 text-gray-12">
-                      Or
-                    </span>
-                  </div>
+                <div className="flex gap-4 items-center my-4">
+                  <span className="flex-1 h-px bg-gray-5" />
+                  <p className="text-sm text-center text-gray-8">OR</p>
+                  <span className="flex-1 h-px bg-gray-5" />
                 </div>
               </>
             )}
