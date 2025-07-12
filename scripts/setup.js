@@ -2,11 +2,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { exec as execCb, execFile } from "node:child_process";
+import { exec as execCb, execFile as execFileCb } from "node:child_process";
 import { env } from "node:process";
 import { promisify } from "node:util";
 
 const exec = promisify(execCb);
+const execFile = promisify(execFileCb);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
