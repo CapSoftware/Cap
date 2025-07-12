@@ -19,7 +19,7 @@ pub fn render_audio(
             .iter()
             .flat_map(|t| (t.0.samples().len() / t.0.channels() as usize).checked_sub(offset))
             .max()
-            .unwrap_or(usize::MAX),
+            .unwrap_or(0),
     );
 
     for i in 0..samples {
