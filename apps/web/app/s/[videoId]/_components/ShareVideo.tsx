@@ -327,13 +327,6 @@ export const ShareVideo = forwardRef<
 
           const currentPosition = videoElement.currentTime;
 
-          // If video is at the end, reset to 0 before playing
-          if (
-            videoElement.currentTime === videoElement.duration ||
-            videoElement.ended
-          ) {
-            videoElement.currentTime = 0;
-          }
 
           const playPromise = videoElement.play();
 
@@ -550,123 +543,110 @@ export const ShareVideo = forwardRef<
   }, [isMP4Source, data, previewWidth, previewHeight, isLargeScreen]);
 
   const updatePreviewFrame = (time: number) => {
-    if (!isLargeScreen) return;
+    if (!isLargeScreen || !isMP4Source) return;
 
-    if (!isMP4Source) return;
     setPreviewTime(time);
 
-    if (isPreviewSeeking) {
-      return;
-    }
+    if (isPreviewSeeking) return;
 
-    try {
-      if (scrubbingVideo && previewCanvasRef.current) {
-        const canvas = previewCanvasRef.current;
-        const ctx = canvas.getContext("2d");
+    const drawFrame = () => {
+      try {
+        if (scrubbingVideo && previewCanvasRef.current) {
+          const canvas = previewCanvasRef.current;
+          const ctx = canvas.getContext("2d");
 
-        if (ctx) {
-          if (
-            canvas.width !== previewWidth ||
-            canvas.height !== previewHeight
-          ) {
-            canvas.width = previewWidth;
-            canvas.height = previewHeight;
-          }
-
-          setIsPreviewSeeking(true);
-
-          scrubbingVideo.currentTime = time;
-
-          const handleSeeked = () => {
-            try {
-              ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
-
-              ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-              ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
-              ctx.fillStyle = "white";
-              ctx.font = "12px Arial";
-              ctx.textAlign = "center";
-              ctx.fillText(
-                formatTime(time),
-                canvas.width / 2,
-                canvas.height - 6
-              );
-
-              setPreviewLoaded(true);
-              setIsPreviewSeeking(false);
-            } catch (err) {
-              console.error("Error drawing frame:", err);
-              setIsPreviewSeeking(false);
+          if (ctx) {
+            // Ensure canvas dimensions match preview size
+            if (canvas.width !== previewWidth || canvas.height !== previewHeight) {
+              canvas.width = previewWidth;
+              canvas.height = previewHeight;
             }
 
-            scrubbingVideo.removeEventListener("seeked", handleSeeked);
-          };
+            setIsPreviewSeeking(true);
+            scrubbingVideo.currentTime = time;
 
-          scrubbingVideo.addEventListener("seeked", handleSeeked);
-
-          const timeoutId = setTimeout(() => {
-            if (isPreviewSeeking) {
+            const handleSeeked = () => {
               try {
-                ctx.drawImage(
-                  scrubbingVideo,
-                  0,
-                  0,
-                  canvas.width,
-                  canvas.height
-                );
+                // Draw the video frame
+                ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
 
+                // Draw time overlay
                 ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
                 ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
                 ctx.fillStyle = "white";
                 ctx.font = "12px Arial";
                 ctx.textAlign = "center";
-                ctx.fillText(
-                  formatTime(time),
-                  canvas.width / 2,
-                  canvas.height - 6
-                );
+                ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
 
                 setPreviewLoaded(true);
               } catch (err) {
-                console.error("Error drawing frame after timeout:", err);
+                console.error("Error drawing frame:", err);
               } finally {
                 setIsPreviewSeeking(false);
                 scrubbingVideo.removeEventListener("seeked", handleSeeked);
               }
+            };
+
+            scrubbingVideo.addEventListener("seeked", handleSeeked);
+
+            // Fallback if seeked event doesn't fire within 250ms
+            const timeoutId = setTimeout(() => {
+              if (isPreviewSeeking) {
+                try {
+                  ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
+                  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                  ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+                  ctx.fillStyle = "white";
+                  ctx.font = "12px Arial";
+                  ctx.textAlign = "center";
+                  ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
+                  setPreviewLoaded(true);
+                } catch (err) {
+                  console.error("Error drawing frame after timeout:", err);
+                } finally {
+                  setIsPreviewSeeking(false);
+                  scrubbingVideo.removeEventListener("seeked", handleSeeked);
+                }
+              }
+            }, 250);
+
+            return () => clearTimeout(timeoutId);
+          }
+        } else if (videoRef.current && previewCanvasRef.current) {
+          const canvas = previewCanvasRef.current;
+          const video = videoRef.current;
+          const ctx = canvas.getContext("2d");
+
+          if (ctx) {
+            try {
+              canvas.width = previewWidth;
+              canvas.height = previewHeight;
+
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+              ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+              ctx.fillStyle = "white";
+              ctx.font = "12px Arial";
+              ctx.textAlign = "center";
+              ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
+
+              setPreviewLoaded(true);
+            } catch (err) {
+              console.error("Error in fallback video capture:", err);
             }
-          }, 250);
-
-          return () => clearTimeout(timeoutId);
-        }
-      } else if (videoRef.current && previewCanvasRef.current) {
-        const canvas = previewCanvasRef.current;
-        const video = videoRef.current;
-        const ctx = canvas.getContext("2d");
-
-        if (ctx) {
-          try {
-            canvas.width = previewWidth;
-            canvas.height = previewHeight;
-
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-            ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
-            ctx.fillStyle = "white";
-            ctx.font = "12px Arial";
-            ctx.textAlign = "center";
-            ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
-
-            setPreviewLoaded(true);
-          } catch (err) {
-            console.error("Error in fallback video capture:", err);
           }
         }
+      } catch (err) {
+        console.error("Error updating preview frame:", err);
+        setIsPreviewSeeking(false);
       }
-    } catch (err) {
-      console.error("Error updating preview frame:", err);
-      setIsPreviewSeeking(false);
-    }
+    };
+
+    // Schedule the frame drawing with requestAnimationFrame
+    const rafId = requestAnimationFrame(drawFrame);
+
+    // Cleanup to cancel any pending animation frame
+    return () => cancelAnimationFrame(rafId);
   };
 
   const handleTimelineHover = (
