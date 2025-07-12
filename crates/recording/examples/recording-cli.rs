@@ -5,6 +5,8 @@ use cap_recording::RecordingBaseInputs;
 
 #[tokio::main]
 pub async fn main() {
+    tracing_subscriber::fmt::init();
+
     let _ = std::fs::remove_dir_all("/tmp/bruh");
     let _ = std::fs::create_dir("/tmp/bruh");
 

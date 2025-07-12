@@ -46,3 +46,4 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 tempfile = "3.20.0"
+tracing-subscriber = "0.3.19"

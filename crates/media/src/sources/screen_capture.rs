@@ -252,7 +252,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             (x, y)
         };
         #[cfg(windows)]
-        let video_size = (bounds.width as u32, bounds.height as u32);
+        // not sure how reliable this is for the general case so just use it for screen capture for now
+        let video_size = if matches!(target, ScreenCaptureTarget::Screen { .. }) {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        } else {
+            (bounds.width as u32, bounds.height as u32)
+        };
 
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
