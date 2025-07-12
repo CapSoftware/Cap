@@ -278,7 +278,7 @@ impl AudioRenderer {
         let max_samples = tracks
             .iter()
             .map(|t| t.data().sample_count())
-            .min()
+            .max()
             .unwrap();
 
         if self.cursor.samples >= max_samples {
