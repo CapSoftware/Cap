@@ -428,7 +428,9 @@ export const ShareVideo = forwardRef<
 
     videoElement.addEventListener("timeupdate", handleTimeUpdate);
     const handleEnded = () => {
-      setIsPlaying(false);
+      if (videoRef.current && videoRef.current.currentTime === videoRef.current.duration) {
+        setIsPlaying(false);
+      }
     };
     videoElement.addEventListener("ended", handleEnded);
 
@@ -1210,7 +1212,7 @@ export const ShareVideo = forwardRef<
             {/* Render the main progress bar (white) */}
             <div
               className="absolute top-2.5 h-1 sm:h-1.5 bg-white z-20"
-              style={{ width: `${watchedPercentage}%` }}
+              style={{ width: `${Math.max(0, Math.min(watchedPercentage + 0.82, 99.15))}%` }}
             />
             <div
               style={{
