@@ -1,5 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
+use crate::ExporterBase;
 use cap_editor::get_audio_segments;
 use cap_media::{
     data::{RawVideoFormat, VideoInfo},
@@ -13,8 +14,6 @@ use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
 use tracing::{info, trace, warn};
-
-use crate::{ExportError, ExporterBase};
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]
 pub enum ExportCompression {

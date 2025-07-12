@@ -16,8 +16,8 @@ import { usePublicEnv } from "@/utils/public-env";
 import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import clsx from "clsx";
-import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 
 export const ShareHeader = ({
   data,
@@ -26,6 +26,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   sharedSpaces = [],
+  spaces,
   NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
@@ -37,15 +38,10 @@ export const ShareHeader = ({
   sharedSpaces?: {
     id: string;
     name: string;
-    iconUrl?: string;
+    iconUrl: string | null;
     organizationId: string;
   }[];
-  userSpaces?: {
-    id: string;
-    name: string;
-    iconUrl?: string;
-    organizationId: string;
-  }[];
+  spaces?: Spaces[];
   NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
@@ -53,10 +49,6 @@ export const ShareHeader = ({
   const [title, setTitle] = useState(data.name);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
-
-  const contextData = useDashboardContext();
-  const contextSharedSpaces = contextData?.sharedSpaces || null;
-  const effectiveSharedSpaces = contextSharedSpaces || sharedSpaces;
 
   const isOwner = user && user.id.toString() === data.ownerId;
 
@@ -133,7 +125,7 @@ export const ShareHeader = ({
     if (isOwner) {
       if (
         (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
-        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
+        (sharedSpaces?.length === 0 || !sharedSpaces)
       ) {
         return (
           <p
@@ -167,7 +159,8 @@ export const ShareHeader = ({
         onClose={() => setIsSharingDialogOpen(false)}
         capId={data.id}
         capName={data.name}
-        sharedSpaces={effectiveSharedSpaces || []}
+        spaces={spaces}
+        sharedSpaces={sharedSpaces}
         onSharingUpdated={handleSharingUpdated}
       />
       <div>
