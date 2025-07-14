@@ -67,9 +67,9 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
   const headerContent = getHeaderContent();
 
   return (
-    <div className="mt-[100px] mb-10 sm:mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[16vh]">
+    <div className="mt-[100px] mb-10 sm:mb-[150px] min-h-screen w-full max-w-[1920px] overflow-x-hidden md:overflow-visible mx-auto md:mt-[20vh]">
       <div className="flex flex-col justify-center lg:justify-start xl:flex-row relative z-10 px-5 w-full mb-[200px]">
-        <div className="w-full max-w-[500px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
+        <div className="w-full max-w-2xl xl:max-w-[530px] 2xl:mt-12 mx-auto xl:ml-[100px] 2xl:ml-[150px]">
           <motion.div
             initial="hidden"
             animate="visible"
@@ -163,7 +163,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             <PlatformIcons />
 
             <Link
-              href="/pricing"
+              href="/download"
               className="mt-2 text-sm underline text-gray-10 hover:text-gray-12"
             >
               {homepageCopy.header.cta.seeOtherOptionsText}
@@ -195,12 +195,12 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             whileTap={{ scale: 0.95 }}
             whileHover={{ scale: 1.05 }}
             onClick={() => setVideoToggled(true)}
-            className="size-[70px] md:size-[100px] inset-x-0 mx-auto top-[35vw] xs:top-[180px] sm:top-[35vw] xl:top-[350px] 2xl:top-[400px] xl:left-[-50px] relative cursor-pointer z-10 
+            className="size-[100px] md:size-[150px] inset-x-0 mx-auto top-[35vw] xs:top-[180px] sm:top-[35vw] xl:top-[350px] 2xl:top-[400px] xl:left-[-120px] relative cursor-pointer z-10 
               shadow-[0px_60px_40px_3px_rgba(0,0,0,0.4)] flex items-center justify-center rounded-full bg-blue-500"
           >
             <FontAwesomeIcon
               icon={faPlay}
-              className="text-white size-4 md:size-6"
+              className="text-white size-8 md:size-12"
             />
           </motion.div>
           <Image

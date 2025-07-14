@@ -26,23 +26,13 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent
-        className="w-[90vw] sm:max-w-md p-6 rounded-xl"
-      >
+      <DialogContent className="w-[90vw] sm:max-w-md p-6 rounded-xl">
         <div className="space-y-6">
           <LogoBadge className="w-auto h-12" />
 
           <div className="text-left">
-            <h1
-              className="text-xl font-semibold"
-            >
-              Sign in to comment
-            </h1>
-            <p
-              className="text-lg text-gray-9"
-            >
-              Join the conversation.
-            </p>
+            <h1 className="text-xl font-semibold">Sign in to comment</h1>
+            <p className="text-lg text-gray-9">Join the conversation.</p>
           </div>
 
           <div className="flex flex-col space-y-3">
@@ -54,7 +44,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                   disabled={loading}
                 >
                   <Image
-                    src="/logos/google.svg"
+                    src="/google.svg"
                     alt="Google"
                     className="mr-1 size-4"
                     width={16}
@@ -127,7 +117,9 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               <Button
                 variant="primary"
                 type="submit"
-                icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
+                icon={
+                  <FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />
+                }
                 disabled={loading || emailSent}
               >
                 {emailSent

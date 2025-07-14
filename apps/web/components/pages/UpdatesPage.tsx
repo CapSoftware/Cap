@@ -35,7 +35,7 @@ export const UpdatesPage = () => {
     });
 
   return (
-    <div className="py-24 wrapper wrapper-sm">
+    <div className="py-32 md:py-40 wrapper wrapper-sm">
 
       {featuredPosts.length > 0 && (
         <div className="mb-6">

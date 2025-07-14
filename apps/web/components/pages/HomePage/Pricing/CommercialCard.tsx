@@ -69,9 +69,17 @@ export const CommercialCard = () => {
           <h3 className="mb-2 text-2xl text-center text-gray-12">
             {homepageCopy.pricing.commercial.title}
           </h3>
-          <p className="mb-6 text-base text-center text-gray-10 w-full max-w-[285px] mx-auto">
+          <p className="mb-2 text-base text-center text-gray-10 w-full max-w-[285px] mx-auto">
             {homepageCopy.pricing.commercial.description}
           </p>
+          <div className="text-center">
+            <a
+              href="/docs/commercial-license"
+              className="text-sm text-gray-10 hover:text-gray-12 underline"
+            >
+              Learn more about the commercial license here
+            </a>
+          </div>
         </div>
 
         <div className="mb-6 text-center">
