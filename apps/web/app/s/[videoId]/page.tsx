@@ -536,6 +536,8 @@ async function AuthorizedContent({
       <Head>
         <meta property="og:type" content="video.other" />
         <meta property="og:video" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}`} />
+        <meta property="og:video:url" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}`} />
+        <meta property="og:video:secure_url" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}`} />
         <meta property="og:video:type" content="video/mp4" />
         <meta property="og:video:width" content="1280" />
         <meta property="og:video:height" content="720" />
