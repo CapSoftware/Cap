@@ -12,28 +12,15 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import z from "zod";
 import { handle } from "hono/vercel";
-import { cors } from "hono/cors";
 
-import { withOptionalAuth } from "../utils";
+import { corsMiddleware, withOptionalAuth } from "../utils";
 import { userHasAccessToVideo } from "@/utils/auth";
-import { allowedOrigins } from "../utils";
 
 export const revalidate = "force-dynamic";
 
 const app = new Hono()
   .basePath("/api/playlist")
-  .use(
-    cors({
-      origin: allowedOrigins,
-      allowMethods: ["POST", "OPTIONS"],
-      allowHeaders: [
-        "Content-Type",
-        "Authorization",
-        "sentry-trace",
-        "baggage",
-      ],
-    })
-  )
+  .use(corsMiddleware)
   .use(withOptionalAuth)
   .get(
     "/",
@@ -86,38 +73,15 @@ const app = new Hono()
 
       const bucket = await createBucketProvider(customBucket);
 
-      // Handle .mp4 video streaming
-      if (video.source.type === "desktopMP4" || videoType === "mp4") {
-        const preSignedUrl = await bucket.getSignedObjectUrl(
-          `${video.ownerId}/${videoId}/result.mp4`
-        );
-
-        if (!preSignedUrl)
-          return c.json({ error: true, message: "Video not found" }, 404);
-
-        const videoResponse = await fetch(preSignedUrl);
-
-        if (!videoResponse.ok) {
-          throw new Error(`Failed to fetch video: ${videoResponse.statusText}`);
-        }
-
-        const videoBody = videoResponse.body;
-
-        if (!videoBody) {
-          throw new Error("Failed to fetch video body");
-        }
-
-        c.header("Content-Type", "video/mp4");
-        c.header(
-          "Content-Length",
-          videoResponse.headers.get("content-length") || ""
-        );
-        c.header("Access-Control-Allow-Credentials", "");
-        c.header("Access-Control-Allow-Origin", "*");
-        return c.body(videoBody);
-      }
-
       if (!customBucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
+        if (video.source.type === "desktopMP4") {
+          return c.redirect(
+            await bucket.getSignedObjectUrl(
+              `${video.ownerId}/${videoId}/result.mp4`
+            )
+          );
+        }
+
         if (video.source.type === "MediaConvert") {
           return c.redirect(
             await bucket.getSignedObjectUrl(
@@ -184,6 +148,15 @@ const app = new Hono()
           return c.text(playlist, {
             headers: CACHE_CONTROL_HEADERS,
           });
+        }
+
+        if (video.source.type === "desktopMP4") {
+          const playlistUrl = await bucket.getSignedObjectUrl(
+            `${video.ownerId}/${videoId}/result.mp4`
+          );
+          if (!playlistUrl) return new Response(null, { status: 404 });
+
+          return c.redirect(playlistUrl);
         }
 
         let prefix;
