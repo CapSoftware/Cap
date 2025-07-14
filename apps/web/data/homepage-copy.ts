@@ -245,7 +245,7 @@ export const homepageCopy: HomePageCopy = {
       },
       {
         question: "How long can I record for on the free version?",
-        answer: "You can record for 10 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
+        answer: "You can record for 5 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
       },
       {
         question: "How does Cap AI work?",
