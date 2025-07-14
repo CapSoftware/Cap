@@ -359,7 +359,7 @@ export const SeoPageTemplate = ({
         >
           <div className="flex relative z-10 flex-col justify-center items-center mx-auto h-full wrapper">
             <div className="text-center max-w-[800px] mx-auto mb-8">
-              <h2 className="mb-4 text-3xl font-medium drop-shadow-md md:text-4xl text-gray-12">
+              <h2 className="mb-4 text-3xl font-medium md:text-4xl text-gray-12">
                 {content.cta.title}
               </h2>
               <p className="mb-6 text-xl text-gray-10">

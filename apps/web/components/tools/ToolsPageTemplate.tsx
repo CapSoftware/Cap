@@ -220,7 +220,7 @@ export const ToolsPageTemplate = ({
 
           {/* Clean CTA Section */}
           <div
-            className="wrapper max-w-[900px] mx-auto rounded-2xl bg-white overflow-hidden relative flex flex-col justify-center p-8 md:p-10"
+            className="max-w-[900px] mx-auto rounded-2xl bg-white overflow-hidden relative flex flex-col justify-center p-8 md:p-10"
             style={{
               backgroundImage: "url('/illustrations/ctabg.svg')",
               backgroundSize: "cover",
@@ -230,7 +230,7 @@ export const ToolsPageTemplate = ({
 
             <div className="flex relative z-10 flex-col justify-center items-center mx-auto h-full wrapper">
               <div className="text-center max-w-[700px] mx-auto mb-6">
-                <h2 className="mb-3 text-2xl font-medium drop-shadow-md md:text-3xl text-gray-12">
+                <h2 className="mb-3 text-2xl font-medium md:text-3xl text-gray-12">
                   {content.cta.title}
                 </h2>
                 <p className="mb-5 text-lg text-gray-10">
