@@ -17,9 +17,7 @@ import {
   faWandMagicSparkles,
   faCamera,
   faKeyboard,
-  faChartLine,
-  faEye,
-  faVolumeUp,
+  faChartLine, faVolumeUp,
   faEdit,
   faDownload,
   faExpand,
@@ -32,7 +30,7 @@ import {
   faInfinity,
   faCheckCircle,
   faBolt,
-  faDesktop,
+  faDesktop
 } from "@fortawesome/free-solid-svg-icons";
 
 interface Feature {
@@ -381,7 +379,7 @@ export const FeaturesPage = () => {
         </div>
       </div>
 
-      <div className="wrapper pb-32">
+      <div className="pb-32 wrapper">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 auto-rows-[minmax(200px,_auto)] grid-flow-dense">
           {features.map((feature, index) => {
             const sizeClasses = {
@@ -411,32 +409,31 @@ export const FeaturesPage = () => {
                   <FontAwesomeIcon icon={feature.icon} className="w-6 h-6" />
                 </div>
 
-                <h3 className="text-lg font-semibold mb-2 text-gray-12">
+                <h3 className="mb-2 text-lg font-semibold text-gray-12">
                   {feature.title}
                   {feature.isPro && (
                     <Link
                       href="/pricing"
-                      className="ml-2 inline-flex items-center text-xs font-medium px-2 py-1 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 text-white hover:from-blue-500 hover:to-blue-700 transition-all duration-200"
+                      className="inline-flex items-center px-2 py-1 ml-2 text-xs font-medium text-white bg-gradient-to-br from-blue-400 to-blue-600 rounded-full transition-all duration-200 hover:from-blue-500 hover:to-blue-700"
                     >
                       Cap Pro
                     </Link>
                   )}
                   {feature.isComingSoon && (
-                    <span className="ml-2 text-xs font-medium px-2 py-1 rounded-full bg-gray-3 text-gray-10">
+                    <span className="px-2 py-1 ml-2 text-xs font-medium rounded-full bg-gray-3 text-gray-10">
                       SOON
                     </span>
                   )}
                 </h3>
-                <p className="text-sm text-gray-11 leading-relaxed">
+                <p className="text-sm leading-relaxed text-gray-11">
                   {feature.description}
                 </p>
 
-                <div className="absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-3 right-3 opacity-0 transition-opacity group-hover:opacity-100">
                   <FontAwesomeIcon
                     icon={categoryIcons[feature.category].icon}
-                    className={`w-4 h-4 ${
-                      categoryIcons[feature.category].color
-                    } opacity-50`}
+                    className={`w-4 h-4 ${categoryIcons[feature.category].color
+                      } opacity-50`}
                   />
                 </div>
               </div>
@@ -445,14 +442,14 @@ export const FeaturesPage = () => {
         </div>
       </div>
 
-      <div className="bg-gray-2 py-20">
-        <div className="wrapper text-center">
-          <h2 className="text-3xl font-medium mb-4">Ready to get started?</h2>
-          <p className="text-lg text-gray-10 mb-8 max-w-2xl mx-auto">
+      <div className="py-32 bg-gray-2 md:py-40">
+        <div className="text-center wrapper">
+          <h2 className="mb-4 text-3xl font-medium">Ready to get started?</h2>
+          <p className="mx-auto mb-8 max-w-2xl text-lg text-gray-10">
             Join thousands of users who are already creating better recordings
             with Cap.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="flex flex-col gap-4 justify-center sm:flex-row">
             <Button
               href="/download"
               variant="primary"

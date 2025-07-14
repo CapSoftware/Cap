@@ -17,12 +17,12 @@ export const DownloadPage = () => {
   const loading = platform === null;
 
   return (
-    <div className="pt-32 pb-16 wrapper wrapper-sm md:py-32">
+    <div className="py-32 md:py-40 wrapper wrapper-sm">
       <div className="space-y-4 text-center">
         {/* Debug toggle button in top-right corner */}
         <button
           onClick={() => setShowDebug(!showDebug)}
-          className="absolute top-4 right-4 px-2 py-1 text-xs text-gray-8 bg-gray-800 rounded hover:text-gray-300"
+          className="absolute top-4 right-4 px-2 py-1 text-xs bg-gray-800 rounded text-gray-8 hover:text-gray-300"
         >
           {showDebug ? "Hide Debug" : "Debug"}
         </button>
@@ -34,24 +34,24 @@ export const DownloadPage = () => {
             <div className="space-y-2">
               <button
                 className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "windows"
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
+                  ? "bg-blue-600"
+                  : "bg-gray-700 hover:bg-gray-600"
                   }`}
               >
                 Windows (Beta)
               </button>
               <button
                 className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "macos" && isIntel
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
+                  ? "bg-blue-600"
+                  : "bg-gray-700 hover:bg-gray-600"
                   }`}
               >
                 macOS (Intel)
               </button>
               <button
                 className={`text-xs px-2 py-1 rounded w-full text-left ${platform === "macos" && !isIntel
-                    ? "bg-blue-600"
-                    : "bg-gray-700 hover:bg-gray-600"
+                  ? "bg-blue-600"
+                  : "bg-gray-700 hover:bg-gray-600"
                   }`}
               >
                 macOS (Apple Silicon)
@@ -84,7 +84,7 @@ export const DownloadPage = () => {
               {getDownloadButtonText(platform, loading, isIntel)}
             </Button>
 
-            <div className="text-sm text-gray-8">
+            <div className="text-sm text-gray-10">
               {getVersionText(platform)}
             </div>
 
@@ -115,14 +115,14 @@ export const DownloadPage = () => {
         </div>
 
         <div className="pb-4 mt-6 fade-in-up animate-delay-2">
-          <h3 className="mb-2 text-sm font-medium text-gray-8">
+          <h3 className="mb-2 text-base font-medium text-gray-10">
             Other download options:
           </h3>
           <div className="flex flex-col gap-3 justify-center items-center md:flex-row">
             {platform !== "windows" && (
               <a
                 href="/download/windows"
-                className="text-sm text-gray-8 transition-all hover:underline"
+                className="text-sm transition-all text-gray-10 hover:underline"
               >
                 Windows (Beta)
               </a>
@@ -130,7 +130,7 @@ export const DownloadPage = () => {
             {platform === "macos" && isIntel && (
               <a
                 href="/download/apple-silicon"
-                className="text-sm text-gray-8 transition-all hover:underline"
+                className="text-sm transition-all text-gray-10 hover:underline"
               >
                 Apple Silicon
               </a>
@@ -138,7 +138,7 @@ export const DownloadPage = () => {
             {platform === "macos" && !isIntel && (
               <a
                 href="/download/apple-intel"
-                className="text-sm text-gray-8 transition-all hover:underline"
+                className="text-sm transition-all text-gray-10 hover:underline"
               >
                 Apple Intel
               </a>
@@ -147,13 +147,13 @@ export const DownloadPage = () => {
               <>
                 <a
                   href="/download/apple-silicon"
-                  className="text-sm text-gray-8 transition-all hover:underline"
+                  className="text-sm transition-all text-gray-8 hover:underline"
                 >
                   Apple Silicon
                 </a>
                 <a
                   href="/download/apple-intel"
-                  className="text-sm text-gray-8 transition-all hover:underline"
+                  className="text-sm transition-all text-gray-8 hover:underline"
                 >
                   Apple Intel
                 </a>
@@ -163,7 +163,7 @@ export const DownloadPage = () => {
         </div>
 
         {/* Discreet SEO Links */}
-        <div className="pt-8 mt-32 text-xs text-gray-1 border-t border-gray-200 opacity-70">
+        <div className="pt-8 mt-32 text-xs border-t border-gray-200 opacity-70 text-gray-1">
           <div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
             <a
               href="/screen-recorder"

@@ -6,7 +6,7 @@ export const DocsPage = () => {
   const allDocs = getDocs();
 
   return (
-    <div className="px-5 py-32 sm:py-32 w-full max-w-[1200px] mx-auto">
+    <div className="px-5 py-32 md:py-40 w-full max-w-[1200px] mx-auto">
       <div className="mb-14 text-center page-intro">
         <h1>Documentation</h1>
       </div>
