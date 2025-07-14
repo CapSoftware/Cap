@@ -12,15 +12,28 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import z from "zod";
 import { handle } from "hono/vercel";
+import { cors } from "hono/cors";
 
-import { corsMiddleware, withOptionalAuth } from "../utils";
+import { withOptionalAuth } from "../utils";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { allowedOrigins } from "../utils";
 
 export const revalidate = "force-dynamic";
 
 const app = new Hono()
   .basePath("/api/playlist")
-  .use(corsMiddleware)
+  .use(
+    cors({
+      origin: allowedOrigins,
+      allowMethods: ["POST", "OPTIONS"],
+      allowHeaders: [
+        "Content-Type",
+        "Authorization",
+        "sentry-trace",
+        "baggage",
+      ],
+    })
+  )
   .use(withOptionalAuth)
   .get(
     "/",
@@ -99,6 +112,7 @@ const app = new Hono()
           "Content-Length",
           videoResponse.headers.get("content-length") || ""
         );
+        c.header("Access-Control-Allow-Credentials", "");
         c.header("Access-Control-Allow-Origin", "*");
         return c.body(videoBody);
       }
