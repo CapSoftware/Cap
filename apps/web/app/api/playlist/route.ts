@@ -99,6 +99,7 @@ const app = new Hono()
           "Content-Length",
           videoResponse.headers.get("content-length") || ""
         );
+        c.header("Access-Control-Allow-Credentials", "");
         c.header("Access-Control-Allow-Origin", "*");
         return c.body(videoBody);
       }
