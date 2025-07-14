@@ -14,7 +14,7 @@ export const DocsPage = () => {
         {allDocs.map((doc) => (
           <article
             key={doc.slug}
-            className="overflow-hidden w-full rounded-xl border transition-shadow cursor-pointer hover:shadow-md"
+            className="overflow-hidden w-full bg-white rounded-xl border transition-shadow cursor-pointer hover:shadow-md"
           >
             <Link href={"/docs/" + doc.slug}>
               {doc.metadata.image && (

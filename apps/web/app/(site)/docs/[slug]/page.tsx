@@ -55,7 +55,7 @@ export default async function DocPage({ params }: DocProps) {
   }
 
   return (
-    <article className="py-32 mx-auto prose">
+    <article className="py-32 mx-auto md:py-40 prose">
       {doc.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image
