@@ -1,6 +1,8 @@
 import { db } from "@cap/database";
 import { eq, InferSelectModel } from "drizzle-orm";
 import { Logo } from "@cap/ui";
+import Head from "next/head";
+
 import {
   videos,
   comments,
@@ -531,6 +533,23 @@ async function AuthorizedContent({
 
   return (
     <>
+      <Head>
+        <meta property="og:type" content="video.other" />
+        <meta property="og:video" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/playlist?userId=${video.ownerId}&videoId=${video.id}`} />
+        <meta property="og:video:type" content="video/mp4" />
+        <meta property="og:video:width" content="1280" />
+        <meta property="og:video:height" content="720" />
+        <meta property="og:image" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${video.id}`} />
+        <meta property="og:title" content={`${video.name} | Cap Recording`} />
+        <meta property="og:description" content="Watch this video on Cap" />
+        <meta name="twitter:card" content="player" />
+        <meta name="twitter:title" content={`${video.name} | Cap Recording`} />
+        <meta name="twitter:description" content="Watch this video on Cap" />
+        <meta name="twitter:image" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/api/video/og?videoId=${video.id}`} />
+        <meta name="twitter:player" content={`${buildEnv.NEXT_PUBLIC_WEB_URL}/s/${video.id}`} />
+        <meta name="twitter:player:width" content="1280" />
+        <meta name="twitter:player:height" content="720" />
+      </Head>
       <div className="container flex-1 px-4 py-4 mx-auto">
         <ShareHeader
           data={{
