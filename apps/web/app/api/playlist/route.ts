@@ -73,15 +73,37 @@ const app = new Hono()
 
       const bucket = await createBucketProvider(customBucket);
 
-      if (!customBucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
-        if (video.source.type === "desktopMP4") {
-          return c.redirect(
-            await bucket.getSignedObjectUrl(
-              `${video.ownerId}/${videoId}/result.mp4`
-            )
-          );
+      // Handle .mp4 video streaming
+      if (video.source.type === "desktopMP4" || videoType === "mp4") {
+        const preSignedUrl = await bucket.getSignedObjectUrl(
+          `${video.ownerId}/${videoId}/result.mp4`
+        );
+
+        if (!preSignedUrl)
+          return c.json({ error: true, message: "Video not found" }, 404);
+
+        const videoResponse = await fetch(preSignedUrl);
+
+        if (!videoResponse.ok) {
+          throw new Error(`Failed to fetch video: ${videoResponse.statusText}`);
         }
 
+        const videoBody = videoResponse.body;
+
+        if (!videoBody) {
+          throw new Error("Failed to fetch video body");
+        }
+
+        c.header("Content-Type", "video/mp4");
+        c.header(
+          "Content-Length",
+          videoResponse.headers.get("content-length") || ""
+        );
+        c.header("Access-Control-Allow-Origin", "*");
+        return c.body(videoBody);
+      }
+
+      if (!customBucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
         if (video.source.type === "MediaConvert") {
           return c.redirect(
             await bucket.getSignedObjectUrl(
@@ -148,17 +170,6 @@ const app = new Hono()
           return c.text(playlist, {
             headers: CACHE_CONTROL_HEADERS,
           });
-        }
-
-        if (video.source.type === "desktopMP4") {
-          const playlistUrl = await bucket.getSignedObjectUrl(
-            `${video.ownerId}/${videoId}/result.mp4`
-          );
-          if (!playlistUrl) return new Response(null, { status: 404 });
-
-          console.log(`Got signed url for desktop: ${playlistUrl}`);
-
-          return c.redirect(playlistUrl);
         }
 
         let prefix;

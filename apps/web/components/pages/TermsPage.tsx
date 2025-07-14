@@ -2,17 +2,17 @@
 
 export const TermsPage = () => {
   return (
-    <div className="wrapper wrapper-sm py-20">
-      <div className="text-center space-y-6">
-        <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
+    <div className="py-32 md:py-40 wrapper wrapper-sm">
+      <div className="space-y-6 text-center">
+        <h1 className="text-3xl md:text-4xl fade-in-down animate-delay-1">
           Terms of Service
         </h1>
-        <p className="text-lg text-gray-8 max-w-lg mx-auto fade-in-down animate-delay-2">
+        <p className="pb-10 mx-auto max-w-lg text-lg text-gray-10 fade-in-down animate-delay-2">
           We've tried to make this terms of service policy as simple and
           digestible as possible. If you have any questions, please don't
           hesitate to reach out to us.
         </p>
-        <div className="legal-body text-left fade-in-up animate-delay-2">
+        <div className="text-left legal-body fade-in-up animate-delay-2">
           <>
             <ol>
               <li>
