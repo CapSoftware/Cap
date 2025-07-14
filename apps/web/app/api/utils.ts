@@ -1,11 +1,9 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { createMiddleware } from "hono/factory";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { cors } from "hono/cors";
 import { eq } from "drizzle-orm";
-import { getServerSession, Session } from "next-auth";
-import { authOptions } from "@cap/database/auth/auth-options";
 import { Context } from "hono";
 import { db } from "@cap/database";
 import { authApiKeys, users } from "@cap/database/schema";
@@ -65,7 +63,7 @@ export const withAuth = createMiddleware<{
   await next();
 });
 
-const allowedOrigins = [
+export const allowedOrigins = [
   buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",
