@@ -195,12 +195,12 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
             whileTap={{ scale: 0.95 }}
             whileHover={{ scale: 1.05 }}
             onClick={() => setVideoToggled(true)}
-            className="size-[70px] md:size-[100px] inset-x-0 mx-auto top-[35vw] xs:top-[180px] sm:top-[35vw] xl:top-[350px] 2xl:top-[400px] xl:left-[-50px] relative cursor-pointer z-10 
+            className="size-[100px] md:size-[150px] inset-x-0 mx-auto top-[35vw] xs:top-[180px] sm:top-[35vw] xl:top-[350px] 2xl:top-[400px] xl:left-[-120px] relative cursor-pointer z-10 
               shadow-[0px_60px_40px_3px_rgba(0,0,0,0.4)] flex items-center justify-center rounded-full bg-blue-500"
           >
             <FontAwesomeIcon
               icon={faPlay}
-              className="text-white size-4 md:size-6"
+              className="text-white size-8 md:size-12"
             />
           </motion.div>
           <Image
