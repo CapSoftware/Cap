@@ -376,12 +376,7 @@ const NormalLogin = ({
               onClick={handleGoogleSignIn}
               disabled={loading}
             >
-              <Image
-                src="/logos/google.svg"
-                alt="Google"
-                width={16}
-                height={16}
-              />
+              <Image src="/google.svg" alt="Google" width={16} height={16} />
               Login with Google
             </Button>
           </>

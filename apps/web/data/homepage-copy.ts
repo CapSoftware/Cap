@@ -110,7 +110,7 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
   header: {
     announcement: {
-      text: "🚨 Early adopter pricing ending soon",
+      text: "🚨 Early Adopter Pricing Ends Soon - Lock In Your Discount",
       href: "/pricing",
     },
     variants: {
@@ -123,7 +123,7 @@ export const homepageCopy: HomePageCopy = {
       primaryButton: "Upgrade to Cap Pro",
       secondaryButton: "Download",
       freeVersionText: "No credit card required. Get started for free.",
-      seeOtherOptionsText: "See pricing",
+      seeOtherOptionsText: "More download options",
     },
   },
   textReveal: "Record. Edit. Share.",
