@@ -61,7 +61,7 @@ export const PricingPage = () => {
 
   return (
     <motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-      <div className="py-12 mt-16 space-y-24 wrapper">
+      <div className="py-32 space-y-24 md:py-40 wrapper">
         <div>
           <motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
             <motion.h1

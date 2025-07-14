@@ -71,7 +71,7 @@ export default async function PostPage({ params }: PostProps) {
 
   return (
     <>
-      <article className="px-5 py-20 mx-auto sm:py-32 prose">
+      <article className="px-5 py-32 mx-auto md:py-40 prose">
         {post.metadata.image && (
           <div className="relative mb-12 h-[345px] w-full">
             <Image
@@ -93,7 +93,7 @@ export default async function PostPage({ params }: PostProps) {
                 {format(
                   parseISO(
                     (post.metadata as any).publishedAt ||
-                      new Date().toISOString()
+                    new Date().toISOString()
                   ),
                   "MMMM dd, yyyy"
                 )}
