@@ -226,7 +226,7 @@ export const Share = ({
     <div className="mt-4">
       <div className="flex flex-col gap-4 lg:flex-row">
         <div className="flex-1">
-          <div className="overflow-hidden relative p-3 aspect-video new-card-style">
+          <div className="relative p-3 aspect-video new-card-style">
             <ShareVideo
               data={{ ...data, transcriptionStatus }}
               user={user}
