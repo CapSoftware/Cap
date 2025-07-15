@@ -25,7 +25,7 @@ specta = { version = "=2.0.0-rc.20", features = [
 	"uuid",
 ] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "d69dcb2e653a" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "3782f9dd4ffb" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
@@ -63,3 +63,4 @@ dbg_macro = "deny"
 [patch.crates-io]
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
