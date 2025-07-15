@@ -53,14 +53,18 @@ pub fn interpolate_cursor(
         let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
-        let (pos, cursor_id) = cursor.moves.windows(2).enumerate().find_map(|(i, chunk)| {
-            if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
-                let c = &chunk[0];
-                Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))
-            } else {
-                None
-            }
-        })?;
+        let (pos, cursor_id) = cursor
+            .moves
+            .windows(2)
+            .enumerate()
+            .find_map(|(_i, chunk)| {
+                if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
+                    let c = &chunk[0];
+                    Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))
+                } else {
+                    None
+                }
+            })?;
 
         Some(InterpolatedCursorPosition {
             position: Coord::new(XY {
