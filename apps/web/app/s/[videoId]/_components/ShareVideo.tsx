@@ -102,18 +102,7 @@ export const ShareVideo = forwardRef<
           }))
         );
 
-        console.log("vttContent", vttContent)
-
-        // Create a Blob URL
-        const blob = new Blob([vttContent], { type: 'text/vtt' });
-        const url = URL.createObjectURL(blob);
-
-        setSubtitleUrl(url);
-
-        // Clean up the URL when component unmounts
-        return () => {
-          URL.revokeObjectURL(url);
-        };
+       setSubtitleUrl(vttContent);
       } catch (error) {
         console.error("Error creating subtitle URL:", error);
       }
