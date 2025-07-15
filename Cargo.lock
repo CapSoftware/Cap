@@ -1445,9 +1445,7 @@ version = "0.10.1"
 source = "git+https://github.com/CapSoftware/cidre?rev=517d097ae438#517d097ae4387ebb97f36c6e133b3c94dca78e25"
 dependencies = [
  "cidre-macros",
- "half",
  "parking_lot",
- "tokio",
 ]
 
 [[package]]
@@ -6705,7 +6703,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=3fd6ec9c5ebf#3fd6ec9c5ebf14fdebc5b6350b6eb6fb315d3eff"
+source = "git+https://github.com/CapSoftware/scap?rev=3782f9dd4ffb#3782f9dd4ffb9aba7f1a8b707dbddd777a9299ca"
 dependencies = [
  "cidre",
  "cocoa 0.25.0",
