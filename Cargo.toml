@@ -64,9 +64,3 @@ dbg_macro = "deny"
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
-
-# https://github.com/gfx-rs/wgpu/issues/7915
-# https://github.com/brendanzab/codespan/issues/389
-# https://github.com/brendanzab/codespan/pull/387
-# codespan-reporting = { git = "https://github.com/oscartbeaumont/codespan.git", rev = "1ce8d8fef87873c1a5d002bd098395cbae81cfe7" }
-# codespan-reporting = { git = "https://github.com/urisinger/codespan-style-write", rev = "164e6499a56ab10f5358ae1855be8266e210502c" }

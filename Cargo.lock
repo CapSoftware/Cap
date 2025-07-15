@@ -1043,7 +1043,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "wgpu",
  "whisper-rs",
  "windows 0.58.0",
  "windows-sys 0.59.0",
