@@ -1,4 +1,6 @@
-use cap_camera_avfoundation::{YCbCrMatrix, list_video_devices};
+use cap_camera_avfoundation::{
+    CallbackOutputDelegate, CallbackOutputDelegateInner, YCbCrMatrix, list_video_devices,
+};
 use cidre::{
     av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
     cv::pixel_buffer::LockFlags,
@@ -81,7 +83,32 @@ pub fn main() {
 
     let input = av::capture::DeviceInput::with_device(&selected_device).unwrap();
     let queue = dispatch::Queue::new();
-    let delegate = OutputDelegate::new();
+    let delegate = CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(
+        |_output, sample_buf, _connection| {
+            let Some(image_buf) = sample_buf.image_buf() else {
+                return;
+            };
+
+            let total_bytes = if image_buf.plane_count() > 0 {
+                (0..image_buf.plane_count())
+                    .map(|i| image_buf.plane_bytes_per_row(i) * image_buf.plane_height(i))
+                    .sum::<usize>()
+            } else {
+                image_buf.plane_bytes_per_row(0) * image_buf.plane_height(0)
+            };
+
+            let mut format = image_buf.pixel_format().0.to_be_bytes();
+            let format_fourcc = four_cc_to_str(&mut format);
+
+            println!(
+                "New frame: {}x{}, {:.2}pts, {total_bytes} bytes, format={format_fourcc}",
+                image_buf.width(),
+                image_buf.height(),
+                sample_buf.pts().value as f64 / sample_buf.pts().scale as f64,
+            )
+        },
+    )));
+
     let mut output = av::capture::VideoDataOutput::new();
 
     let mut session = av::capture::Session::new();
@@ -142,47 +169,6 @@ impl Display for Format {
             self.max_frame_rate.0,
             self.max_frame_rate.1,
             four_cc_to_string(self.fourcc.to_be_bytes())
-        )
-    }
-}
-
-define_obj_type!(
-    OutputDelegate + VideoDataOutputSampleBufDelegateImpl,
-    (),
-    OUTPUT_DELEGATE
-);
-
-impl VideoDataOutputSampleBufDelegate for OutputDelegate {}
-
-#[objc::add_methods]
-impl VideoDataOutputSampleBufDelegateImpl for OutputDelegate {
-    extern "C" fn impl_capture_output_did_output_sample_buf_from_connection(
-        &mut self,
-        _cmd: Option<&cidre::objc::Sel>,
-        _output: &av::CaptureOutput,
-        sample_buf: &cm::SampleBuf,
-        _connection: &av::CaptureConnection,
-    ) {
-        let Some(image_buf) = sample_buf.image_buf() else {
-            return;
-        };
-
-        let total_bytes = if image_buf.plane_count() > 0 {
-            (0..image_buf.plane_count())
-                .map(|i| image_buf.plane_bytes_per_row(i) * image_buf.plane_height(i))
-                .sum::<usize>()
-        } else {
-            image_buf.plane_bytes_per_row(0) * image_buf.plane_height(0)
-        };
-
-        let mut format = image_buf.pixel_format().0.to_be_bytes();
-        let format_fourcc = four_cc_to_str(&mut format);
-
-        println!(
-            "New frame: {}x{}, {:.2}pts, {total_bytes} bytes, format={format_fourcc}",
-            image_buf.width(),
-            image_buf.height(),
-            sample_buf.pts().value as f64 / sample_buf.pts().scale as f64,
         )
     }
 }
