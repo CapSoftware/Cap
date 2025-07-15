@@ -227,6 +227,16 @@ export const Caps = ({
     }
   };
 
+  const deleteCap = async (capId: string) => {
+    try {
+      await deleteVideo(capId);
+      toast.success("Cap deleted successfully");
+      refresh();
+    } catch (error) {
+      console.error("Error deleting cap:", error);
+    }
+  };
+
   if (count === 0) {
     return <EmptyCapState />;
   }
@@ -302,7 +312,13 @@ export const Caps = ({
                 key={cap.id}
                 cap={cap}
                 analytics={analytics[cap.id] || 0}
-                onDelete={deleteSelectedCaps}
+                onDelete={async () => {
+                  if (selectedCaps.length > 0) {
+                    await deleteSelectedCaps();
+                  } else {
+                    await deleteCap(cap.id);
+                  }
+                }}
                 userId={user?.id}
                 customDomain={customDomain}
                 domainVerified={domainVerified}
