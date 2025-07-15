@@ -39,7 +39,6 @@ export const ShareVideo = forwardRef<
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-  const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 
   const playerRef = useRef<Player | null>(null);
 
@@ -84,30 +83,35 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
-  // Create a Blob URL for the transcript VTT content
-  useEffect(() => {
-    if (transcriptContent) {
-      console.log("transcriptContent", transcriptContent);
-      try {
-        // Parse the transcript content to get the entries
-        const parsedEntries = parseVTT(transcriptContent);
-
-        // Format the entries as VTT
-        const vttContent = formatTranscriptAsVTT(
-          parsedEntries.map((entry, index) => ({
-            id: index + 1,
-            timestamp: entry.startTime,
-            text: entry.text,
-            startTime: entry.startTime
-          }))
-        );
-
-       setSubtitleUrl(vttContent);
-      } catch (error) {
-        console.error("Error creating subtitle URL:", error);
-      }
+  const subtitleUrl = useMemo(() => {
+    if (!transcriptContent) return null;
+    try {
+      const parsedEntries = parseVTT(transcriptContent);
+      const vttContent = formatTranscriptAsVTT(
+        parsedEntries.map((entry, index) => ({
+          id: index + 1,
+          timestamp: entry.startTime,
+          text: entry.text,
+          startTime: entry.startTime
+        }))
+      );
+      // Create a Blob URL from the VTT content
+      const blob = new Blob([vttContent], { type: 'text/vtt' });
+      return URL.createObjectURL(blob);
+    } catch (error) {
+      console.error("Error creating subtitle URL:", error);
+      return null;
     }
   }, [transcriptContent]);
+
+  // Clean up the Blob URL when component unmounts or when URL changes
+  useEffect(() => {
+    return () => {
+      if (subtitleUrl) {
+        URL.revokeObjectURL(subtitleUrl);
+      }
+    };
+  }, [subtitleUrl]);
 
   console.log("subtitleUrl", subtitleUrl);
 
