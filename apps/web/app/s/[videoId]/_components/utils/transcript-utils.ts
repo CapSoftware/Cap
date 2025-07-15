@@ -39,6 +39,102 @@ export const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
   return vttHeader + vttEntries.join("\n");
 };
 
+export const parseVTT = (vttContent: string): TranscriptEntry[] => {
+  const lines = vttContent.split("\n");
+  const entries: TranscriptEntry[] = [];
+  let currentEntry: Partial<TranscriptEntry & { startTime: number }> = {};
+  let currentId = 0;
+
+  const timeToSeconds = (timeStr: string): number | null => {
+    const parts = timeStr.split(":");
+    if (parts.length !== 3) return null;
+
+    const [hoursStr, minutesStr, secondsStr] = parts;
+    if (!hoursStr || !minutesStr || !secondsStr) return null;
+
+    const hours = parseInt(hoursStr, 10);
+    const minutes = parseInt(minutesStr, 10);
+    const seconds = parseInt(secondsStr, 10);
+
+    if (isNaN(hours) || isNaN(minutes) || isNaN(seconds)) return null;
+
+    return hours * 3600 + minutes * 60 + seconds;
+  };
+
+  const parseTimestamp = (
+    timestamp: string
+  ): { mm_ss: string; totalSeconds: number } | null => {
+    const parts = timestamp.split(":");
+    if (parts.length !== 3) return null;
+
+    const [hoursStr, minutesStr, secondsWithMs] = parts;
+    if (!hoursStr || !minutesStr || !secondsWithMs) return null;
+
+    const secondsPart = secondsWithMs.split(".")[0];
+    if (!secondsPart) return null;
+
+    const totalSeconds = timeToSeconds(
+      `${hoursStr}:${minutesStr}:${secondsPart}`
+    );
+    if (totalSeconds === null) return null;
+
+    return {
+      mm_ss: `${minutesStr}:${secondsPart}`,
+      totalSeconds,
+    };
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line?.trim()) continue;
+
+    const trimmedLine = line.trim();
+
+    if (trimmedLine === "WEBVTT") continue;
+
+    if (/^\d+$/.test(trimmedLine)) {
+      currentId = parseInt(trimmedLine, 10);
+      continue;
+    }
+
+    if (trimmedLine.includes("-->")) {
+      const [startTimeStr, endTimeStr] = trimmedLine.split(" --> ");
+      if (!startTimeStr || !endTimeStr) continue;
+
+      const startTimestamp = parseTimestamp(startTimeStr);
+      if (startTimestamp) {
+        currentEntry = {
+          id: currentId,
+          timestamp: startTimestamp.mm_ss,
+          startTime: startTimestamp.totalSeconds,
+        };
+      }
+      continue;
+    }
+
+    if (currentEntry.timestamp && !currentEntry.text) {
+      const textContent =
+        trimmedLine.startsWith('"') && trimmedLine.endsWith('"')
+          ? trimmedLine.slice(1, -1)
+          : trimmedLine;
+
+      currentEntry.text = textContent;
+      if (
+        currentEntry.id !== undefined &&
+        currentEntry.timestamp &&
+        currentEntry.text &&
+        currentEntry.startTime !== undefined
+      ) {
+        entries.push(currentEntry as TranscriptEntry);
+      }
+      currentEntry = {};
+    }
+  }
+
+  const sortedEntries = entries.sort((a, b) => a.startTime - b.startTime);
+  return sortedEntries;
+};
+
 /**
  * Formats transcript entries for clipboard copying
  */

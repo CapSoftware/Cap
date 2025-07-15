@@ -12,7 +12,7 @@ import { VideoJS } from "./VideoJs";
 import { useQuery } from "@tanstack/react-query";
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect, useMemo } from "react";
 import Player from "video.js/dist/types/player";
-import { formatTranscriptAsVTT } from "./utils/transcript-utils";
+import { formatTranscriptAsVTT, parseVTT } from "./utils/transcript-utils";
 
 declare global {
   interface Window {
@@ -90,13 +90,13 @@ export const ShareVideo = forwardRef<
       console.log("transcriptContent", transcriptContent);
       try {
         // Parse the transcript content to get the entries
-        const parsedEntries = fromVtt(transcriptContent);
+        const parsedEntries = parseVTT(transcriptContent);
 
         // Format the entries as VTT
         const vttContent = formatTranscriptAsVTT(
           parsedEntries.map((entry, index) => ({
             id: index + 1,
-            timestamp: entry.startTime, // This can now be a number
+            timestamp: entry.startTime,
             text: entry.text,
             startTime: entry.startTime
           }))
@@ -109,8 +109,6 @@ export const ShareVideo = forwardRef<
         const url = URL.createObjectURL(blob);
 
         setSubtitleUrl(url);
-
-        console.log("subtitleUrl", subtitleUrl);
 
         // Clean up the URL when component unmounts
         return () => {
