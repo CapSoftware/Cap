@@ -233,7 +233,7 @@ export const Caps = ({
       toast.success("Cap deleted successfully");
       refresh();
     } catch (error) {
-      console.error("Error deleting cap:", error);
+      toast.error("Failed to delete cap");
     }
   };
 
