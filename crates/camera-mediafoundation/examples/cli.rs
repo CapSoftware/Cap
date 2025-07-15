@@ -1,85 +1,22 @@
-use std::{
-    borrow::Cow,
-    ffi::{OsStr, OsString},
-    fmt::Display,
-    mem::MaybeUninit,
-    ops::{Deref, DerefMut},
-    os::windows::ffi::{OsStrExt, OsStringExt},
-    slice::{self, from_raw_parts},
-    time::Duration,
-};
+use std::{fmt::Display, time::Duration};
 
+use camera_mediafoundation::DeviceSourcesIterator;
 use tracing::warn;
 use windows::Win32::{Media::MediaFoundation::*, System::Com::CoInitialize};
-use windows_core::{GUID, Interface};
-use windows_core::{PCWSTR, PWSTR};
+use windows_core::GUID;
 
 pub fn main() {
     std::thread::spawn(|| unsafe {
         CoInitialize(None).unwrap();
 
-        let mut attributes = None;
-        MFCreateAttributes(&mut attributes, 1).unwrap();
-        let attributes = attributes.unwrap();
+        let device_sources = DeviceSourcesIterator::new().unwrap();
 
-        attributes
-            .SetGUID(
-                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE,
-                &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
-            )
-            .unwrap();
-
-        let mut count = 0;
-        let mut devices: MaybeUninit<*mut Option<IMFActivate>> = MaybeUninit::uninit();
-
-        MFEnumDeviceSources(&attributes, devices.as_mut_ptr(), &mut count).unwrap();
-
-        if count == 0 {
+        if device_sources.len() == 0 {
             warn!("No devices found");
             return;
         }
 
-        let devices = devices.assume_init();
-
-        let mut device_list = vec![];
-
-        for i in 0..count {
-            let Some(device) = &mut *devices.add(i as usize) else {
-                continue;
-            };
-
-            let mut name_raw = PWSTR(&mut 0);
-            let mut name_length = 0;
-            device
-                .GetAllocatedString(
-                    &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
-                    &mut name_raw,
-                    &mut name_length,
-                )
-                .unwrap();
-            let name = OsString::from_wide(from_raw_parts(name_raw.0, name_length as usize));
-
-            let mut id_raw = PWSTR(&mut 0);
-            let mut id_length = 0;
-            device
-                .GetAllocatedString(
-                    &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK,
-                    &mut id_raw,
-                    &mut id_length,
-                )
-                .unwrap();
-            let id = OsString::from_wide(from_raw_parts(id_raw.0, id_length as usize));
-
-            let device = device.ActivateObject::<IMFMediaSource>().unwrap();
-
-            device_list.push(Device {
-                device,
-                id_raw,
-                name_raw,
-                id,
-                name,
-            })
-        }
+        let mut device_list = device_sources.collect::<Vec<_>>();
 
         let selected = if device_list.len() > 1 {
             inquire::Select::new("Select a device", device_list)
@@ -89,19 +26,17 @@ pub fn main() {
             device_list.remove(0)
         };
 
-        let reader = MFCreateSourceReaderFromMediaSource(&selected.device, None).unwrap();
-        let mut stream_index = 0;
+        let Ok(reader) = selected.create_source_reader() else {
+            return;
+        };
 
-        let mut formats = vec![];
+        let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
 
-        while let Ok(typ) =
-            reader.GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, stream_index)
-        {
-            let format = Format::new(typ).unwrap();
-            formats.push(format);
-
-            stream_index += 1;
-        }
+        let mut formats = reader
+            .native_media_types(stream_index)
+            .into_iter()
+            .filter_map(|v| VideoFormat::new(v).ok())
+            .collect::<Vec<_>>();
 
         let mut selected_format = if formats.len() > 1 {
             inquire::Select::new("Select a format", formats)
@@ -112,18 +47,14 @@ pub fn main() {
         };
 
         reader
-            .SetCurrentMediaType(
+            .set_current_media_type(
                 MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                None,
                 &selected_format.inner,
             )
             .unwrap();
 
-        reader
-            .SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, true)
-            .unwrap();
+        reader.SetStreamSelection(stream_index, true).unwrap();
 
-        let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
         loop {
             let mut imf_sample = None;
             let mut stream_flags = 0;
@@ -150,7 +81,7 @@ pub fn main() {
                 == MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
             {
                 selected_format =
-                    Format::new(reader.GetCurrentMediaType(stream_index).unwrap()).unwrap();
+                    VideoFormat::new(reader.GetCurrentMediaType(stream_index).unwrap()).unwrap();
             }
 
             println!(
@@ -165,49 +96,7 @@ pub fn main() {
     std::thread::sleep(Duration::from_secs(10));
 }
 
-struct Device {
-    device: IMFMediaSource,
-    id_raw: PWSTR,
-    name_raw: PWSTR,
-    id: OsString,
-    name: OsString,
-}
-
-impl Device {
-    fn device_id(&self) -> String {
-        self.id.to_string_lossy().to_string()
-    }
-
-    fn display_name(&self) -> String {
-        self.name.to_string_lossy().to_string()
-    }
-
-    fn model_id(&self) -> String {
-        get_device_model_id(&self.device_id())
-    }
-}
-
-impl Deref for Device {
-    type Target = IMFMediaSource;
-
-    fn deref(&self) -> &Self::Target {
-        &self.device
-    }
-}
-
-impl DerefMut for Device {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.device
-    }
-}
-
-impl Display for Device {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_name())
-    }
-}
-
-struct Format {
+struct VideoFormat {
     inner: IMFMediaType,
     width: u32,
     height: u32,
@@ -216,7 +105,7 @@ struct Format {
     subtype: GUID,
 }
 
-impl Format {
+impl VideoFormat {
     fn new(inner: IMFMediaType) -> windows_core::Result<Self> {
         let size = unsafe { inner.GetUINT64(&MF_MT_FRAME_SIZE)? };
         let width = (size >> 32) as u32;
@@ -243,7 +132,7 @@ impl Format {
     }
 }
 
-impl Display for Format {
+impl Display for VideoFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}x{} {}fps", self.width, self.height, self.frame_rate)?;
         if self.frame_rate_ratio.1 != 1 {
