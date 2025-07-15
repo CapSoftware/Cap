@@ -17,7 +17,7 @@ fn main() {
     unsafe {
         CoInitialize(None).unwrap();
 
-        let devices = VideoInputDeviceEnumerator::new().unwrap().to_vec();
+        let devices = VideoInputDeviceIterator::new().unwrap().collect::<Vec<_>>();
 
         let mut devices = devices
             .iter()
@@ -36,11 +36,11 @@ fn main() {
 
         let property_data: IPropertyBag = moniker.BindToStorage(None, None).unwrap();
         let device_name = property_data
-            .read(windows_core::w!("FriendlyName"), None)
+            .read(windows_core::w!("FriendlyName"))
             .unwrap();
 
         let device_path = property_data
-            .read(windows_core::w!("DevicePath"), None)
+            .read(windows_core::w!("DevicePath"))
             .unwrap_or_default();
 
         let device_name = device_name.to_os_string().unwrap();
@@ -78,21 +78,11 @@ impl Display for Format {
     }
 }
 
-struct VideoDeviceSelectOption<'a>(&'a IMoniker);
+struct VideoDeviceSelectOption<'a>(&'a VideoInputDevice);
 
 impl<'a> Display for VideoDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let device_name = unsafe {
-            let property_data: IPropertyBag = self.0.BindToStorage(None, None).unwrap();
-
-            let device_name = property_data
-                .read(windows_core::w!("FriendlyName"), None)
-                .unwrap();
-
-            device_name.to_os_string().unwrap()
-        };
-
-        write!(f, "{:?}", device_name)
+        write!(f, "{:?}", self.0.name().unwrap())
     }
 }
 
@@ -106,7 +96,7 @@ unsafe fn chromium_main(capture_filter: IBaseFilter) {
     let stream_config = output_capture_pin.cast::<IAMStreamConfig>().unwrap();
     let video_control = output_capture_pin.cast::<IAMVideoControl>().ok();
 
-    let mut media_types_iter = stream_config.media_types();
+    let mut media_types_iter = stream_config.media_types().unwrap();
 
     // println!("Formats: {}", media_types_iter.count());
 
