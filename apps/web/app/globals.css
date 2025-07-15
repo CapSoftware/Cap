@@ -710,11 +710,12 @@ footer a {
   animation: slideUp 0.3s ease-out forwards;
 }
 
-.video-js {
-  @apply rounded-xl !important;
+.video-js,
+.video-js video {
+  @apply rounded-xl w-full h-full !important;
 }
 .vjs-cap .vjs-big-play-button {
-  @apply bg-blue-500 transition-all rounded-full border-0 size-24 !important;
+  @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
 }
 
 .vjs-cap .vjs-big-play-button:hover {
@@ -743,7 +744,7 @@ footer a {
 }
 
 .vjs-cap .vjs-control-bar {
-  @apply bg-blue-500/30 !important;
+  @apply bg-blue-500/30 rounded-b-xl !important;
 }
 
 /* Safari-specific styles using CSS hacks */

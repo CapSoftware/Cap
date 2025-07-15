@@ -1,3 +1,5 @@
+"use client";
+
 import { useRef, useEffect } from "react";
 import videojs from "video.js";
 import "video.js/dist/video-js.css";
@@ -21,6 +23,7 @@ export const VideoJS = ({ options, onReady }: Props) => {
   const videoRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
 
+
   useEffect(() => {
     if (!videoRef.current) return;
     if (!playerRef.current) {
@@ -30,7 +33,6 @@ export const VideoJS = ({ options, onReady }: Props) => {
       videoRef.current.appendChild(videoElement);
 
       const player = (playerRef.current = videojs(videoElement, options, () => {
-        videojs.log("player is ready");
         onReady && onReady(player);
       }));
 
@@ -53,9 +55,41 @@ export const VideoJS = ({ options, onReady }: Props) => {
     };
   }, [playerRef]);
 
+  useEffect(() => {
+    const player = playerRef.current;
+
+    if (!player) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement)?.tagName;
+      const isEditable =
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        tag === "BUTTON" ||
+        (event.target as HTMLElement)?.isContentEditable;
+
+      if (isEditable) return;
+      if (event.key === " ") {
+        event.preventDefault();
+        player.paused() ? player.play() : player.pause();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [playerRef]);
+
   return (
-    <div data-vjs-player>
-      <div ref={videoRef} />
+    <div style={{
+      height: "100%"
+    }} data-vjs-player>
+      <div style={{
+        height: "100%"
+      }} ref={videoRef} />
     </div>
   );
 };

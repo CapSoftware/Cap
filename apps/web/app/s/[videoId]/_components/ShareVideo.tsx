@@ -8,10 +8,9 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
-import { VideoPlayer } from "./VideoPlayer";
+import { VideoJS } from "./VideoJs";
 import { useQuery } from "@tanstack/react-query";
-import VideoJS from "./VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useEffect, useMemo } from "react";
 
 declare global {
   interface Window {
@@ -72,47 +71,53 @@ export const ShareVideo = forwardRef<
     data.transcriptionStatus
   );
 
-
   let videoSrc: string;
+  let videoType: string = "video/mp4";
 
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    videoType = "video/mp4";
   } else if (
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoType = "application/x-mpegURL";
   } else if (data.source.type === "MediaConvert") {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+    videoType = "application/x-mpegURL";
   } else {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+    videoType = "application/x-mpegURL";
   }
 
+  const videoJsOptions = useMemo(() => ({
+    autoplay: true,
+    playbackRates: [0.5, 1, 1.5, 2],
+    controls: true,
+    responsive: true,
+    fluid: false,
+    tracks: [
+      {
+        kind: "subtitles",
+        src: transcriptContent,
+        srclang: "en",
+        label: "English",
+      },
+    ],
+    sources: [
+      { src: videoSrc, type: videoType },
+    ]
+  }), [videoSrc, videoType, transcriptContent]);
 
   return (
     <>
       <div className="relative w-full h-full rounded-xl">
-        {data.source.type === "desktopMP4" ? (
-          <VideoJS
-            onReady={handlePlayerReady}
-            options={{
-              autoplay: true,
-              controls: true,
-              responsive: true,
-              fluid: true,
-              sources: [
-                {
-                  src: videoSrc,
-                  type: "video/mp4",
-                },
-              ],
-            }}
-
-          />
-        ) : (
-          <VideoPlayer ref={videoRef} videoSrc={videoSrc} />
-        )}
+        <VideoJS
+          onReady={handlePlayerReady}
+          options={videoJsOptions}
+        />
       </div>
 
       {user &&
@@ -233,4 +238,3 @@ const useTranscriptionProcessing = (
 
   return { isTranscriptionProcessing, subtitles };
 };
-
