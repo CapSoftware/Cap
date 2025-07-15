@@ -20,69 +20,6 @@ interface TranscriptEntry {
   startTime: number;
 }
 
-// Sample transcript data for testing
-const sampleTranscriptData: TranscriptEntry[] = [
-  {
-    id: 1,
-    timestamp: "00:00:05",
-    text: "Welcome to this video demonstration of our new screen recording tool.",
-    startTime: 5
-  },
-  {
-    id: 2,
-    timestamp: "00:00:12",
-    text: "Today we'll be exploring the key features that make our product stand out.",
-    startTime: 12
-  },
-  {
-    id: 3,
-    timestamp: "00:00:20",
-    text: "Let's start by looking at the user interface and how intuitive it is.",
-    startTime: 20
-  },
-  {
-    id: 4,
-    timestamp: "00:00:28",
-    text: "Notice how easy it is to start and stop recordings with just a single click.",
-    startTime: 28
-  },
-  {
-    id: 5,
-    timestamp: "00:00:35",
-    text: "The toolbar provides quick access to all the essential functions.",
-    startTime: 35
-  },
-  {
-    id: 6,
-    timestamp: "00:00:45",
-    text: "You can easily annotate your recordings in real-time.",
-    startTime: 45
-  },
-  {
-    id: 7,
-    timestamp: "00:00:55",
-    text: "Another great feature is the ability to highlight specific areas of the screen.",
-    startTime: 55
-  },
-  {
-    id: 8,
-    timestamp: "00:01:05",
-    text: "The export options allow you to save in various formats including MP4 and GIF.",
-    startTime: 65
-  },
-  {
-    id: 9,
-    timestamp: "00:01:15",
-    text: "Sharing is seamless with built-in integrations for popular platforms.",
-    startTime: 75
-  },
-  {
-    id: 10,
-    timestamp: "00:01:25",
-    text: "That concludes our quick overview. Thanks for watching!",
-    startTime: 85
-  }
-];
 
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
   const lines = vttContent.split("\n");
@@ -185,9 +122,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
   user,
   onSeek,
 }) => {
-  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>(
-    sampleTranscriptData
-  );
+  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
@@ -563,7 +498,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
       <div className="overflow-y-auto flex-1">
         <div className="p-4 space-y-3">
-          {sampleTranscriptData.map((entry) => (
+          {transcriptData.map((entry) => (
             <div
               key={entry.id}
               className={`group rounded-lg transition-colors ${editingEntry === entry.id

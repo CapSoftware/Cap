@@ -87,6 +87,7 @@ export const ShareVideo = forwardRef<
   // Create a Blob URL for the transcript VTT content
   useEffect(() => {
     if (transcriptContent) {
+      console.log("transcriptContent", transcriptContent);
       try {
         // Parse the transcript content to get the entries
         const parsedEntries = fromVtt(transcriptContent);
@@ -101,11 +102,15 @@ export const ShareVideo = forwardRef<
           }))
         );
 
+        console.log("vttContent", vttContent)
+
         // Create a Blob URL
         const blob = new Blob([vttContent], { type: 'text/vtt' });
         const url = URL.createObjectURL(blob);
 
         setSubtitleUrl(url);
+
+        console.log("subtitleUrl", subtitleUrl);
 
         // Clean up the URL when component unmounts
         return () => {
@@ -116,6 +121,8 @@ export const ShareVideo = forwardRef<
       }
     }
   }, [transcriptContent]);
+
+  console.log("subtitleUrl", subtitleUrl);
 
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
