@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { forwardRef, useRef, useEffect, MutableRefObject } from "react";
 import videojs from "video.js";
 import "video.js/dist/video-js.css";
 import Player from "video.js/dist/types/player";
@@ -19,10 +19,9 @@ interface Props {
   }
 }
 
-export const VideoJS = ({ options, onReady }: Props) => {
+export const VideoJS = forwardRef<Player | null, Props>(({ options, onReady }: Props, ref) => {
   const videoRef = useRef<HTMLDivElement>(null);
-  const playerRef = useRef<Player | null>(null);
-
+  const playerRef = ref as MutableRefObject<Player | null>;
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -92,6 +91,6 @@ export const VideoJS = ({ options, onReady }: Props) => {
       }} ref={videoRef} />
     </div>
   );
-};
+});
 
 export default VideoJS;

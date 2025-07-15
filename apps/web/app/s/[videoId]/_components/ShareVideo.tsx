@@ -11,6 +11,8 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { VideoJS } from "./VideoJs";
 import { useQuery } from "@tanstack/react-query";
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect, useMemo } from "react";
+import Player from "video.js/dist/types/player";
+import { formatTranscriptAsVTT } from "./utils/transcript-utils";
 
 declare global {
   interface Window {
@@ -23,7 +25,7 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 };
 
 export const ShareVideo = forwardRef<
-  HTMLVideoElement,
+  Player,
   {
     data: typeof videos.$inferSelect;
     user: typeof userSelectProps | null;
@@ -32,27 +34,18 @@ export const ShareVideo = forwardRef<
     aiProcessing?: boolean;
   }
 >(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
-  useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+  useImperativeHandle(ref, () => playerRef.current as Player);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 
-  const playerRef = useRef(null);
+  const playerRef = useRef<Player | null>(null);
 
-  const handlePlayerReady = (player: any) => {
+  const handlePlayerReady = (player: Player) => {
     playerRef.current = player;
-
-    // You can handle player events here, for example:
-    player.on("waiting", () => {
-      console.log("player is waiting");
-    });
-
-    player.on("dispose", () => {
-      console.log("player will dispose");
-    });
   };
-
 
   const isLargeScreen = useScreenSize();
 
@@ -61,7 +54,6 @@ export const ShareVideo = forwardRef<
     data,
     videoMetadataLoaded
   );
-
 
   const publicEnv = usePublicEnv();
   const apiClient = useApiClient();
@@ -92,24 +84,58 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
+  // Create a Blob URL for the transcript VTT content
+  useEffect(() => {
+    if (transcriptContent) {
+      try {
+        // Parse the transcript content to get the entries
+        const parsedEntries = fromVtt(transcriptContent);
+
+        // Format the entries as VTT
+        const vttContent = formatTranscriptAsVTT(
+          parsedEntries.map((entry, index) => ({
+            id: index + 1,
+            timestamp: entry.startTime,
+            text: entry.text,
+            startTime: parseFloat(entry.startTime)
+          }))
+        );
+
+        // Create a Blob URL
+        const blob = new Blob([vttContent], { type: 'text/vtt' });
+        const url = URL.createObjectURL(blob);
+
+        setSubtitleUrl(url);
+
+        // Clean up the URL when component unmounts
+        return () => {
+          URL.revokeObjectURL(url);
+        };
+      } catch (error) {
+        console.error("Error creating subtitle URL:", error);
+      }
+    }
+  }, [transcriptContent]);
+
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
     playbackRates: [0.5, 1, 1.5, 2],
     controls: true,
     responsive: true,
     fluid: false,
-    tracks: [
+    tracks: subtitleUrl ? [
       {
         kind: "subtitles",
-        src: transcriptContent,
+        src: subtitleUrl,
         srclang: "en",
         label: "English",
+        default: true
       },
-    ],
+    ] : [],
     sources: [
       { src: videoSrc, type: videoType },
     ]
-  }), [videoSrc, videoType, transcriptContent]);
+  }), [videoSrc, videoType, subtitleUrl]);
 
   return (
     <>
@@ -117,6 +143,7 @@ export const ShareVideo = forwardRef<
         <VideoJS
           onReady={handlePlayerReady}
           options={videoJsOptions}
+          ref={ref}
         />
       </div>
 

@@ -20,6 +20,70 @@ interface TranscriptEntry {
   startTime: number;
 }
 
+// Sample transcript data for testing
+const sampleTranscriptData: TranscriptEntry[] = [
+  {
+    id: 1,
+    timestamp: "00:00:05",
+    text: "Welcome to this video demonstration of our new screen recording tool.",
+    startTime: 5
+  },
+  {
+    id: 2,
+    timestamp: "00:00:12",
+    text: "Today we'll be exploring the key features that make our product stand out.",
+    startTime: 12
+  },
+  {
+    id: 3,
+    timestamp: "00:00:20",
+    text: "Let's start by looking at the user interface and how intuitive it is.",
+    startTime: 20
+  },
+  {
+    id: 4,
+    timestamp: "00:00:28",
+    text: "Notice how easy it is to start and stop recordings with just a single click.",
+    startTime: 28
+  },
+  {
+    id: 5,
+    timestamp: "00:00:35",
+    text: "The toolbar provides quick access to all the essential functions.",
+    startTime: 35
+  },
+  {
+    id: 6,
+    timestamp: "00:00:45",
+    text: "You can easily annotate your recordings in real-time.",
+    startTime: 45
+  },
+  {
+    id: 7,
+    timestamp: "00:00:55",
+    text: "Another great feature is the ability to highlight specific areas of the screen.",
+    startTime: 55
+  },
+  {
+    id: 8,
+    timestamp: "00:01:05",
+    text: "The export options allow you to save in various formats including MP4 and GIF.",
+    startTime: 65
+  },
+  {
+    id: 9,
+    timestamp: "00:01:15",
+    text: "Sharing is seamless with built-in integrations for popular platforms.",
+    startTime: 75
+  },
+  {
+    id: 10,
+    timestamp: "00:01:25",
+    text: "That concludes our quick overview. Thanks for watching!",
+    startTime: 85
+  }
+];
+
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
   const lines = vttContent.split("\n");
   const entries: TranscriptEntry[] = [];
@@ -118,10 +182,12 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 export const Transcript: React.FC<TranscriptProps> = ({
   data,
-  onSeek,
   user,
+  onSeek,
 }) => {
-  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
+  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>(
+    sampleTranscriptData
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
@@ -133,6 +199,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
   const [isCopying, setIsCopying] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [downloadPressed, setDownloadPressed] = useState(false);
+
 
   const {
     data: transcriptContent,
@@ -224,9 +291,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
     setSelectedEntry(entry.id);
 
-    if (onSeek) {
-      onSeek(entry.startTime);
-    }
+    onSeek?.(entry.startTime);
   };
 
   const startEditing = (entry: TranscriptEntry) => {
@@ -306,8 +371,8 @@ export const Transcript: React.FC<TranscriptProps> = ({
         return `${hours.toString().padStart(2, "0")}:${minutes
           .toString()
           .padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
-          .toString()
-          .padStart(3, "0")}`;
+            .toString()
+            .padStart(3, "0")}`;
       };
 
       return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
@@ -448,7 +513,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
             spinner={isCopying}
           >
             {!copyPressed ? (
-              <Copy className="w-3 h-3 mr-1" />
+              <Copy className="mr-1 w-3 h-3" />
             ) : (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -460,7 +525,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-3 h-3 mr-1 svgpathanimation"
+                className="mr-1 w-3 h-3 svgpathanimation"
               >
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -474,7 +539,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
             size="xs"
           >
             {!downloadPressed ? (
-              <Download className="w-3 h-3 mr-1" />
+              <Download className="mr-1 w-3 h-3" />
             ) : (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -486,7 +551,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-3 h-3 mr-1 svgpathanimation"
+                className="mr-1 w-3 h-3 svgpathanimation"
               >
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -498,20 +563,19 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
       <div className="overflow-y-auto flex-1">
         <div className="p-4 space-y-3">
-          {transcriptData.map((entry) => (
+          {sampleTranscriptData.map((entry) => (
             <div
               key={entry.id}
-              className={`group rounded-lg transition-colors ${
-                editingEntry === entry.id
-                  ? "bg-gray-1 border border-gray-4 p-3"
-                  : selectedEntry === entry.id
+              className={`group rounded-lg transition-colors ${editingEntry === entry.id
+                ? "bg-gray-1 border border-gray-4 p-3"
+                : selectedEntry === entry.id
                   ? "bg-gray-2 p-3"
                   : "hover:bg-gray-2 p-3"
-              } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
+                } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
               onClick={() => handleTranscriptClick(entry)}
             >
               <div className="flex justify-between items-start mb-2">
-                <div className="text-xs text-gray-8 font-medium">
+                <div className="text-xs font-medium text-gray-8">
                   {entry.timestamp}
                 </div>
                 {canEdit && editingEntry !== entry.id && (
@@ -530,11 +594,11 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
               {editingEntry === entry.id ? (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-gray-1 border border-gray-4 p-3">
+                  <div className="p-3 rounded-lg border bg-gray-1 border-gray-4">
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      className="w-full text-sm leading-relaxed text-gray-12 bg-transparent placeholder:text-gray-8 resize-none focus:outline-none"
+                      className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
                       rows={Math.max(2, Math.ceil(editText.length / 60))}
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
@@ -552,7 +616,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       size="xs"
                       className="min-w-[70px]"
                     >
-                      <X className="w-3 h-3 mr-1" />
+                      <X className="mr-1 w-3 h-3" />
                       Cancel
                     </Button>
                     <Button
@@ -566,7 +630,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       className="min-w-[70px]"
                       spinner={isSaving}
                     >
-                      <Check className="w-3 h-3 mr-1" />
+                      <Check className="mr-1 w-3 h-3" />
                       Save
                     </Button>
                   </div>
