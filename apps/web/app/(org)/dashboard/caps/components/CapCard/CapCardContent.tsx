@@ -229,6 +229,12 @@ export const CapCardContent: React.FC<CapContentProps> = ({
               {showFullDate
                 ? moment(effectiveDate).format("YYYY-MM-DD HH:mm:ss")
                 : moment(effectiveDate).fromNow()}
+
+              {cap.duration && (
+                <span className="ml-2">
+                  {moment.utc(cap.duration * 1000).format("m:ss")}
+                </span>
+              )}
             </p>
           </Tooltip>
         )}
