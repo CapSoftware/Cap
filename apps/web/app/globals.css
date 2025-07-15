@@ -718,6 +718,10 @@ footer a {
   @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
 }
 
+.vjs-cap .vjs-remaining-time-display {
+  @apply text-white text-[12px] !important;
+}
+
 .vjs-cap .vjs-big-play-button:hover {
   @apply bg-blue-600 scale-[1.1] transition-all !important;
 }

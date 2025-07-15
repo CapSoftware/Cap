@@ -2,7 +2,7 @@
 
 export interface TranscriptEntry {
   id: number;
-  timestamp: string;
+  timestamp: string | number; // Allow both string and number types
   text: string;
   startTime: number;
 }

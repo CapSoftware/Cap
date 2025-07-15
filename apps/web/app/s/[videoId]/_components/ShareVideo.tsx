@@ -95,9 +95,9 @@ export const ShareVideo = forwardRef<
         const vttContent = formatTranscriptAsVTT(
           parsedEntries.map((entry, index) => ({
             id: index + 1,
-            timestamp: entry.startTime,
+            timestamp: entry.startTime, // This can now be a number
             text: entry.text,
-            startTime: parseFloat(entry.startTime)
+            startTime: entry.startTime
           }))
         );
 
