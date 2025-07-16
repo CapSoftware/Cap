@@ -208,10 +208,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         surface.configure(&device, &config);
 
-        // Load FFmpeg
-        ffmpeg::init().expect("Failed to initialize FFmpeg");
-
-        // Create a default texture to render
         let texture_size = wgpu::Extent3d {
             width: 640, // Default size, will be updated with actual frame size
             height: 480,
@@ -220,22 +216,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Create a default texture with a visible pattern
         let mut default_texture_data = vec![0u8; (640 * 480 * 4) as usize];
-        
+
         // Create a simple checkerboard pattern for the default texture
         for y in 0..480 {
             for x in 0..640 {
                 let pixel_index = ((y * 640 + x) * 4) as usize;
                 let is_checker = ((x / 32) + (y / 32)) % 2 == 0;
-                
+
                 if is_checker {
                     // Light gray for checker squares
-                    default_texture_data[pixel_index] = 200;     // R
+                    default_texture_data[pixel_index] = 200; // R
                     default_texture_data[pixel_index + 1] = 200; // G
                     default_texture_data[pixel_index + 2] = 200; // B
                     default_texture_data[pixel_index + 3] = 255; // A
                 } else {
                     // Dark gray for checker squares
-                    default_texture_data[pixel_index] = 100;     // R
+                    default_texture_data[pixel_index] = 100; // R
                     default_texture_data[pixel_index + 1] = 100; // G
                     default_texture_data[pixel_index + 2] = 100; // B
                     default_texture_data[pixel_index + 3] = 255; // A
@@ -395,6 +391,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 }
             }
 
+            println!(
+                "Camera preview: Raw frame format: {}, mapped to {:?}",
+                unsafe { (*ptr).format },
+                format
+            );
+
             // Fallback to RGB24 if we get an unusual format
             let format = if format == Pixel::None {
                 Pixel::RGB24
@@ -426,23 +428,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Resize buffer and fill with a default pattern
                     let new_size = (width * height * 4) as usize;
                     texture_res.rgb_buffer.resize(new_size, 0);
-                    
+
                     // Fill with a default pattern so it's not black
                     for i in (0..new_size).step_by(4) {
                         let pixel_index = i / 4;
                         let x = (pixel_index % width as usize) as u32;
                         let y = (pixel_index / width as usize) as u32;
                         let is_checker = ((x / 16) + (y / 16)) % 2 == 0;
-                        
+
                         if is_checker {
-                            texture_res.rgb_buffer[i] = 150;     // R
+                            texture_res.rgb_buffer[i] = 150; // R
                             texture_res.rgb_buffer[i + 1] = 150; // G
                             texture_res.rgb_buffer[i + 2] = 150; // B
                             texture_res.rgb_buffer[i + 3] = 255; // A
                         } else {
-                            texture_res.rgb_buffer[i] = 50;      // R
-                            texture_res.rgb_buffer[i + 1] = 50;  // G
-                            texture_res.rgb_buffer[i + 2] = 50;  // B
+                            texture_res.rgb_buffer[i] = 50; // R
+                            texture_res.rgb_buffer[i + 1] = 50; // G
+                            texture_res.rgb_buffer[i + 2] = 50; // B
                             texture_res.rgb_buffer[i + 3] = 255; // A
                         }
                     }
@@ -487,7 +489,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     texture_res.texture = texture;
                     texture_res.texture_view = texture_view;
                     texture_res.bind_group = bind_group;
-                    
+
                     // Upload the default pattern to the new texture immediately
                     self.queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
@@ -510,11 +512,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     );
                 }
 
-                // Create a safer conversion process
+                // Try to convert the frame
                 let result = || -> Result<Vec<u8>, ffmpeg::Error> {
-                    // Create destination frame
-                    let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
-
                     // Check if we need to update the cache
                     let mut scaler_cache = self.scaler_cache.lock().unwrap();
                     let needs_cache_update = scaler_cache.last_format != Some(format)
@@ -522,11 +521,70 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         || scaler_cache.last_height != height;
 
                     if needs_cache_update {
-                        println!("Camera preview: Updating scaler cache for format {:?}, {}x{}", format, width, height);
+                        println!(
+                            "Camera preview: Updating scaler cache for format {:?}, {}x{}",
+                            format, width, height
+                        );
                         scaler_cache.last_format = Some(format);
                         scaler_cache.last_width = width;
                         scaler_cache.last_height = height;
                     }
+
+                    // Try direct access first for compatible formats
+                    // if format == Pixel::RGB24 || format == Pixel::RGBA {
+                    //     println!(
+                    //         "Camera preview: Attempting direct frame access for format {:?}",
+                    //         format
+                    //     );
+
+                    //     // Try to access the raw frame data directly
+                    //     unsafe {
+                    //         let frame_ptr = ff_video.as_ptr();
+                    //         let data_ptr = (*frame_ptr).data[0];
+                    //         let linesize = (*frame_ptr).linesize[0] as usize;
+
+                    //         if !data_ptr.is_null() {
+                    //             let mut output = Vec::with_capacity((width * height * 4) as usize);
+
+                    //             // Copy the raw data
+                    //             for y in 0..height {
+                    //                 let row_start = data_ptr.add(y * linesize);
+                    //                 for x in 0..width {
+                    //                     let pixel_offset = (y * width + x) * 4;
+
+                    //                     if format == Pixel::RGB24 {
+                    //                         // RGB24 -> RGBA
+                    //                         output.push(*row_start.add(x as usize * 3)); // R
+                    //                         output.push(*row_start.add(x as usize * 3 + 1)); // G
+                    //                         output.push(*row_start.add(x as usize * 3 + 2)); // B
+                    //                         output.push(255); // A
+                    //                     } else if format == Pixel::RGBA {
+                    //                         // RGBA -> RGBA (direct copy)
+                    //                         output.push(*row_start.add(x as usize * 4)); // R
+                    //                         output.push(*row_start.add(x as usize * 4 + 1)); // G
+                    //                         output.push(*row_start.add(x as usize * 4 + 2)); // B
+                    //                         output.push(*row_start.add(x as usize * 4 + 3));
+                    //                         // A
+                    //                     }
+                    //                 }
+                    //             }
+
+                    //             if output.len() == (width * height * 4) as usize {
+                    //                 println!("Camera preview: Direct frame access successful");
+                    //                 return Ok(output);
+                    //             }
+                    //         }
+                    //     }
+                    // }
+
+                    // Fallback to FFmpeg conversion
+                    println!(
+                        "Camera preview: Using FFmpeg conversion for format {:?}",
+                        format
+                    );
+
+                    // Create destination frame
+                    let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
 
                     // Create a new scaler for this frame (since ScalingContext is not Send)
                     let mut scaler = ScalingContext::get(
@@ -560,44 +618,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // Execute the conversion
                 match result() {
                     Ok(output_buffer) => {
-                        println!("Camera preview: Frame conversion successful, buffer size: {}", output_buffer.len());
+                        println!(
+                            "Camera preview: Frame conversion successful, buffer size: {}",
+                            output_buffer.len()
+                        );
                         // Ensure our buffer is the right size
                         let expected_size = (width * height * 4) as usize;
                         if output_buffer.len() == expected_size {
-                        // Store the buffer for future use
-                        texture_res.rgb_buffer = output_buffer;
+                            // Store the buffer for future use
+                            texture_res.rgb_buffer = output_buffer;
 
-                        // Calculate bytes per row
-                        let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
+                            // Calculate bytes per row
+                            let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
 
-                        // Copy the pixel data to the GPU texture
-                        self.queue.write_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &texture_res.texture,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            &texture_res.rgb_buffer,
-                            wgpu::TexelCopyBufferLayout {
-                                offset: 0,
-                                bytes_per_row: Some(bytes_per_row),
-                                rows_per_image: Some(height),
-                            },
-                            wgpu::Extent3d {
-                                width,
-                                height,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                    } else {
-                        println!("Camera preview: Buffer size mismatch. Expected: {}, got: {}", expected_size, output_buffer.len());
+                            // Copy the pixel data to the GPU texture
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &texture_res.texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                &texture_res.rgb_buffer,
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(bytes_per_row),
+                                    rows_per_image: Some(height),
+                                },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                        } else {
+                            println!(
+                                "Camera preview: Buffer size mismatch. Expected: {}, got: {}",
+                                expected_size,
+                                output_buffer.len()
+                            );
+                        }
                     }
-                },
-                Err(e) => {
-                    println!("Camera preview: Frame conversion failed: {:?}", e);
+                    Err(e) => {
+                        println!("Camera preview: Frame conversion failed: {:?}", e);
+                    }
                 }
-            }
 
                 // We need to drop the lock before starting the render pass
                 // Get a reference to the bind group
@@ -624,11 +689,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     render_pass.set_bind_group(0, bind_group, &[]);
                     render_pass.draw(0..3, 0..1);
                 }
-                            } else {
-                    println!("Camera preview: Invalid frame dimensions: {}x{}", width, height);
-                    // No valid frame dimensions, just render with default bind group
-                    let texture_res = self.texture_resources.lock().unwrap();
-                    let bind_group = &texture_res.bind_group;
+            } else {
+                println!(
+                    "Camera preview: Invalid frame dimensions: {}x{}",
+                    width, height
+                );
+                // No valid frame dimensions, just render with default bind group
+                let texture_res = self.texture_resources.lock().unwrap();
+                let bind_group = &texture_res.bind_group;
 
                 // Render with default texture
                 let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
