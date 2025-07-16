@@ -93,9 +93,9 @@ export const ShareVideo = forwardRef<
     player.on("loadedmetadata", () => {
       const chapterStartTimesAra: number[] = [];
 
-      const chapterTT: any[] = [].filter.call(
+      const chapterTT: TextTrack[] = [].filter.call(
         player.textTracks(),
-        (tt: any) => tt.kind === "chapters"
+        (tt: TextTrack) => tt.kind === "chapters"
       );
 
       if (chapterTT.length > 0) {
@@ -103,7 +103,7 @@ export const ShareVideo = forwardRef<
         const cues = chapterTT[0].cues;
         if (cues) {
           for (let i = 0; i < cues.length; i++) {
-            chapterStartTimesAra[i] = cues[i].startTime;
+            chapterStartTimesAra[i] = cues[i]?.startTime || 0;
           }
         }
 

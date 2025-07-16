@@ -718,6 +718,10 @@ footer a {
   @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
 }
 
+.video-js .vjs-load-progress div {
+  @apply bg-white/10 !important;
+}
+
 .vjs-cap .vjs-menu-content {
   @apply bg-gray-12 border border-[#313131] rounded-lg !important;
 }
@@ -740,7 +744,7 @@ footer a {
   height: 100%;
   transform: translateY(-50%);
   top: 50%;
-  background-color: #95d7fd;
+  background-color: white;
   z-index: 100;
 }
 
@@ -794,7 +798,7 @@ footer a {
 }
 
 .vjs-cap .vjs-load-progress {
-  @apply bg-white/80 !important;
+  @apply bg-white/50 !important;
 }
 
 .vjs-cap .vjs-icon-placeholder {
