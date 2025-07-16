@@ -12,7 +12,6 @@ import { VideoJS } from "./VideoJs";
 import { useQuery } from "@tanstack/react-query";
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect, useMemo } from "react";
 import Player from "video.js/dist/types/player";
-import { formatTranscriptAsVTT, parseVTT } from "./utils/transcript-utils";
 
 declare global {
   interface Window {
@@ -84,36 +83,8 @@ export const ShareVideo = forwardRef<
   }
 
   const subtitleUrl = useMemo(() => {
-    if (!transcriptContent) return null;
-    try {
-      const parsedEntries = parseVTT(transcriptContent);
-      const vttContent = formatTranscriptAsVTT(
-        parsedEntries.map((entry, index) => ({
-          id: index + 1,
-          timestamp: entry.startTime,
-          text: entry.text,
-          startTime: entry.startTime
-        }))
-      );
-      // Create a Blob URL from the VTT content
-      const blob = new Blob([vttContent], { type: 'text/vtt' });
-      return URL.createObjectURL(blob);
-    } catch (error) {
-      console.error("Error creating subtitle URL:", error);
-      return null;
-    }
-  }, [transcriptContent]);
-
-  // Clean up the Blob URL when component unmounts or when URL changes
-  useEffect(() => {
-    return () => {
-      if (subtitleUrl) {
-        URL.revokeObjectURL(subtitleUrl);
-      }
-    };
-  }, [subtitleUrl]);
-
-  console.log("subtitleUrl", subtitleUrl);
+    return data.transcriptionStatus === "COMPLETE" ? `/api/subtitles/${data.id}` : null;
+  }, [data.id, data.transcriptionStatus]);
 
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
