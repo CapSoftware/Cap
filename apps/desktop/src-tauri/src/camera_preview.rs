@@ -149,8 +149,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Calculate distance from center (normalized)
     let dist = length(adjusted_coords * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
 
-    // Circle mask with smooth edge
-    let radius = 1.0;
+    // Circle mask with smooth edge - make it smaller to fit properly
+    let radius = 0.8; // Reduced from 1.0 to 0.8 to make it smaller
     let edge_smoothness = 0.01;
     let circle_alpha = 1.0 - smoothstep(radius - edge_smoothness, radius, dist);
 
