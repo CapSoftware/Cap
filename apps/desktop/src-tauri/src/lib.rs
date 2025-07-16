@@ -92,8 +92,6 @@ pub struct App {
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
-    camera_frame: Arc<std::sync::RwLock<Option<RawCameraFrame>>>,
-    #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
     mic_samples_tx: AudioInputSamplesSender,
@@ -1935,7 +1933,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     handle: app.clone(),
                     camera_feed: None,
                     camera_tx,
-                    camera_frame,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
@@ -2083,7 +2080,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .build(tauri_context)
         .expect("error while running tauri application")
         .run({
-            let mut camera = CameraPreviewRenderer::init();
+            let mut camera = CameraPreviewRenderer::init(camera_frame);
 
             move |handle, event| match event {
                 #[cfg(target_os = "macos")]

@@ -3,23 +3,11 @@ use std::{
     sync::{Arc, Mutex, PoisonError, RwLock},
 };
 
-use ffmpeg::{
-    format::Pixel,
-    frame,
-    software::scaling::{self, Context as ScalingContext},
-};
+use ffmpeg::{format::Pixel, frame, software::scaling};
 
 use cap_media::feeds::RawCameraFrame;
 use tauri::{Manager, WebviewWindow};
 use tokio::sync::oneshot;
-
-struct TextureResources {
-    texture: wgpu::Texture,
-    texture_view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
-    // rgb_buffer: Vec<u8>,
-    dimensions: (u32, u32),
-}
 
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
@@ -29,13 +17,6 @@ pub struct CameraPreview {
     queue: wgpu::Queue,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
-
-    // Resources that can be modified during rendering
-    // TODO: Can these use a `RwLock` or share a mutex?
-    texture_resources: Arc<Mutex<TextureResources>>,
-    last_dimensions: Mutex<(u32, u32)>,
-    last_format: Mutex<Option<Pixel>>,
-    frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
 impl CameraPreview {
@@ -205,28 +186,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         surface.configure(&device, &config);
 
-        let texture_size = wgpu::Extent3d {
-            width: 640, // Default size, will be updated with actual frame size
-            height: 480,
-            depth_or_array_layers: 1,
-        };
-
-        // Create a default texture with a visible pattern
-        // let mut default_texture_data = vec![0u8; (640 * 480 * 4) as usize];
-
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Camera Texture"),
-            size: texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -237,53 +196,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ..Default::default()
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Texture Bind Group"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        // Upload the default texture data to the GPU
-        // queue.write_texture(
-        //     wgpu::TexelCopyTextureInfo {
-        //         texture: &texture,
-        //         mip_level: 0,
-        //         origin: wgpu::Origin3d::ZERO,
-        //         aspect: wgpu::TextureAspect::All,
-        //     },
-        //     &default_texture_data,
-        //     wgpu::TexelCopyBufferLayout {
-        //         offset: 0,
-        //         bytes_per_row: Some(640 * 4), // RGBA format (4 bytes per pixel)
-        //         rows_per_image: Some(480),
-        //     },
-        //     texture_size,
-        // );
-
-        let texture_resources = Arc::new(Mutex::new(TextureResources {
-            texture,
-            texture_view,
-            bind_group,
-            // rgb_buffer: default_texture_data,
-            dimensions: (640, 480),
-        }));
-
-        let frame = window
-            .state::<Arc<tokio::sync::RwLock<crate::App>>>()
-            .read()
-            .await
-            .camera_frame
-            .clone();
-
         Self {
             surface,
             surface_config: Mutex::new(config),
@@ -292,10 +204,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             queue,
             sampler,
             bind_group_layout: texture_bind_group_layout,
-            texture_resources,
-            last_dimensions: Mutex::new((0, 0)),
-            last_format: Mutex::new(None),
-            frame,
         }
     }
 
@@ -310,14 +218,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 // State that is only accessibly by `CameraPreview::render`.
 // This allows it to be mutable.
 pub struct CameraPreviewRenderer {
+    // The rescaler so the camera feed can be scaled to the window.
     scaler: scaling::Context,
-    frame: frame::Video,
+    // A frame used for the rescaler output.
+    // Avoids needing to realloc a new one each time.
+    rescaler_frame: frame::Video,
+    // Frame from the camera capture
+    camera_frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
 impl CameraPreviewRenderer {
-    pub fn init() -> Self {
+    pub fn init(camera_frame: Arc<RwLock<Option<RawCameraFrame>>>) -> Self {
         // We initialize a scaler with bogus frame information.
-        // Using `Context.cache` with override this when the frame changes.
+        // We use `Context.cache` later which will reinitialize the scaler with the correct frame information.
         let scaler = scaling::Context::get(
             Pixel::RGBA,
             1,
@@ -331,7 +244,8 @@ impl CameraPreviewRenderer {
 
         Self {
             scaler,
-            frame: frame::Video::empty(),
+            rescaler_frame: frame::Video::empty(),
+            camera_frame,
         }
     }
 
@@ -374,8 +288,8 @@ impl CameraPreviewRenderer {
                 }
             }
 
-            if let Some(frame) = preview
-                .frame
+            if let Some(frame) = self
+                .camera_frame
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
                 .as_ref()
@@ -393,9 +307,11 @@ impl CameraPreviewRenderer {
                 );
 
                 // let mut out = frame::Video::empty(); // TODO: Reusing this?
-                self.scaler.run(&frame.frame, &mut self.frame).unwrap();
+                self.scaler
+                    .run(&frame.frame, &mut self.rescaler_frame)
+                    .unwrap();
 
-                buffer = self.frame.data(0).to_vec();
+                buffer = self.rescaler_frame.data(0).to_vec();
             }
 
             let texture_size = wgpu::Extent3d {
