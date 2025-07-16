@@ -31,7 +31,7 @@ nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", 
 	"serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = "22.1.0"
+wgpu = "25.0.2"
 flume = "0.11.0"
 thiserror = "1.0"
 sentry = { version = "0.34.0", features = [

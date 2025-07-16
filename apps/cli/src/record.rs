@@ -1,7 +1,6 @@
 use std::{env::current_dir, path::PathBuf, sync::Arc};
 
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_recording::{RecordingMode, RecordingOptions};
 use clap::Args;
 use nokhwa::utils::{ApiBackend, CameraIndex};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
