@@ -34,8 +34,8 @@ pub struct CameraPreview {
 
     // Resources that can be modified during rendering
     texture_resources: Arc<Mutex<TextureResources>>,
-    scaler: Mutex<Option<ScalingContext>>,
     last_dimensions: Mutex<(u32, u32)>,
+    last_format: Mutex<Option<Pixel>>,
 
     // TODO: Document
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
@@ -281,8 +281,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             sampler,
             bind_group_layout: texture_bind_group_layout,
             texture_resources,
-            scaler: Mutex::new(None),
             last_dimensions: Mutex::new((0, 0)),
+            last_format: Mutex::new(None),
             frame,
             active: Mutex::new(None),
         }
@@ -339,25 +339,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Only process if we have valid dimensions
             if width > 0 && height > 0 {
-                // Update scaler if dimensions or format changed
+                // Check if dimensions or format changed
                 let mut dimensions = self.last_dimensions.lock().unwrap();
-                let mut scaler = self.scaler.lock().unwrap();
+                let mut last_format = self.last_format.lock().unwrap();
                 let mut texture_res = self.texture_resources.lock().unwrap();
 
-                if dimensions.0 != width || dimensions.1 != height || scaler.is_none() {
-                    // Create a new scaler to convert to RGB
-                    *scaler = Some(
-                        ScalingContext::get(
-                            format,      // source format
-                            width,       // source width
-                            height,      // source height
-                            Pixel::RGBA, // destination format
-                            width,       // destination width
-                            height,      // destination height,
-                            ffmpeg::software::scaling::flag::Flags::BILINEAR,
-                        )
-                        .expect("Failed to create video scaler"),
-                    );
+                let format_changed = match *last_format {
+                    Some(last_fmt) => last_fmt != format,
+                    None => true,
+                };
+
+                if dimensions.0 != width || dimensions.1 != height || format_changed {
+                    // Update format tracking
+                    *last_format = Some(format);
 
                     // Update dimensions
                     *dimensions = (width, height);
@@ -412,7 +406,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 // Convert frame to RGBA
                 let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
-                if let Some(scaler) = &mut *scaler {
+
+                // Create a scaler on-demand
+                let scaler_result = ScalingContext::get(
+                    format,      // source format
+                    width,       // source width
+                    height,      // source height
+                    Pixel::RGBA, // destination format
+                    width,       // destination width
+                    height,      // destination height
+                    ffmpeg::software::scaling::flag::Flags::BILINEAR,
+                );
+
+                if let Ok(mut scaler) = scaler_result {
                     // Create a wrapper frame to use with the scaler
                     let source_frame =
                         unsafe { ffmpeg::frame::Video::wrap(ff_video.as_ptr() as *mut _) };
