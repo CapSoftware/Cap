@@ -1,12 +1,16 @@
 use std::{
     borrow::Cow,
     sync::{Arc, Mutex, PoisonError, RwLock},
-    thread,
+    thread::JoinHandle,
 };
 
-use cap_media::feeds::{CameraFeed, RawCameraFrame};
+use cap_media::feeds::RawCameraFrame;
 use tauri::{Manager, WebviewWindow};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
+
+struct ActiveCameraPreview {
+    handle: JoinHandle<()>,
+}
 
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
@@ -14,10 +18,31 @@ pub struct CameraPreview {
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
     queue: wgpu::Queue,
+
+    // TODO: Document
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
+    active: Mutex<Option<ActiveCameraPreview>>,
 }
 
 impl CameraPreview {
+    // TODO: This isn't very efficient, but it's probaly good enough for now.
+    pub fn frame_sync_task() -> (
+        flume::Sender<RawCameraFrame>,
+        Arc<RwLock<Option<RawCameraFrame>>>,
+    ) {
+        let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+        let frame = Arc::new(RwLock::new(None));
+        let result = (camera_tx, frame.clone());
+
+        tokio::spawn(async move {
+            while let Ok(f) = camera_rx.recv_async().await {
+                *frame.write().unwrap_or_else(PoisonError::into_inner) = Some(f);
+            }
+        });
+
+        result
+    }
+
     pub async fn init(window: &WebviewWindow) -> Self {
         let size = window.inner_size().unwrap();
 
@@ -122,22 +147,12 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
 
         surface.configure(&device, &config);
 
-        let app = window.state::<Arc<tokio::sync::RwLock<crate::App>>>();
-        let frame = Arc::new(RwLock::new(None));
-
-        thread::spawn({
-            let frame = frame.clone();
-            let camera_feed_rx = app.read().await.camera_feed_rx.clone().unwrap();
-            move || {
-                while let Ok(f) = camera_feed_rx.recv() {
-                    println!("GOT FRAME");
-                    frame
-                        .write()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .replace(f);
-                }
-            }
-        });
+        let frame = window
+            .state::<Arc<tokio::sync::RwLock<crate::App>>>()
+            .read()
+            .await
+            .camera_frame
+            .clone();
 
         Self {
             surface,
@@ -146,6 +161,7 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             device,
             queue,
             frame,
+            active: Mutex::new(None),
         }
     }
 

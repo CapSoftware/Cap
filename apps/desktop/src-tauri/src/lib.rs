@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::thread::JoinHandle;
 use std::{
     fs::File,
     future::Future,
@@ -87,12 +88,10 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     #[serde(skip)]
     camera_tx: flume::Sender<RawCameraFrame>,
-    camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
-    // TODO: Should this be `Option` and or mutable?
-    camera_feed_rx: Option<flume::Receiver<RawCameraFrame>>,
+    camera_frame: Arc<std::sync::RwLock<Option<RawCameraFrame>>>,
     #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
@@ -202,7 +201,6 @@ async fn set_camera_input(
             Ok(true)
         }
         (Some(label), None) => {
-            let camera_tx = app.camera_tx.clone();
             drop(app);
 
             let init_rx = CameraFeed::init_async(label);
@@ -214,7 +212,7 @@ async fn set_camera_input(
                             Ok(Ok(feed)) => {
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
-                                    feed.attach(camera_tx);
+                                    feed.attach(app.camera_tx.clone());
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                                     return Ok(true);
                                 } else {
@@ -1846,11 +1844,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         )
         .expect("Failed to export typescript bindings");
 
-    // let (camera_tx, camera_ws_port, _shutdown) = create_camera_preview_ws().await;
-    // TODO: When nothing is listener this might be problematic.
-    // This also probs could go somewhere better????
-    let (camera_tx, mut camera_rx) = flume::bounded::<RawCameraFrame>(4);
-    let camera_ws_port = 42069; // TODO: Remove this
+    let (camera_tx, camera_frame) = CameraPreview::frame_sync_task();
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -1938,10 +1932,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             {
                 app.manage(Arc::new(RwLock::new(App {
                     handle: app.clone(),
-                    camera_tx,
-                    camera_ws_port,
                     camera_feed: None,
-                    camera_feed_rx: Some(camera_rx),
+                    camera_tx,
+                    camera_frame,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
