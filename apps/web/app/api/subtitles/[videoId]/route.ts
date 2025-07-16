@@ -12,7 +12,6 @@ export async function GET({ params }: { params: { videoId: string } }) {
   try {
     const { videoId } = params;
 
-    // Get video data to check if it exists
     const videoData = await db()
       .select({
         video: videos,
@@ -26,7 +25,6 @@ export async function GET({ params }: { params: { videoId: string } }) {
       return new NextResponse("Video not found", { status: 404 });
     }
 
-    // Get transcript content
     const transcriptResponse = await getTranscript(videoId);
 
     if (!transcriptResponse.success || !transcriptResponse.content) {
@@ -36,7 +34,6 @@ export async function GET({ params }: { params: { videoId: string } }) {
       );
     }
 
-    // Parse and format as VTT
     const parsedEntries = parseVTT(transcriptResponse.content);
     const vttContent = formatTranscriptAsVTT(
       parsedEntries.map((entry, index) => ({
@@ -47,12 +44,11 @@ export async function GET({ params }: { params: { videoId: string } }) {
       }))
     );
 
-    // Return the VTT content with appropriate headers
     return new NextResponse(vttContent, {
       headers: {
         "Content-Type": "text/vtt",
         "Content-Disposition": `inline; filename="transcript-${videoId}.vtt"`,
-        "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+        "Cache-Control": "public, max-age=3600",
       },
     });
   } catch (error) {

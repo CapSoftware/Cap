@@ -719,7 +719,7 @@ footer a {
 }
 
 .vjs-cap .vjs-text-track-cue > div {
-  @apply md:text-[1.5rem] text-[1.125rem] bg-black bg-opacity-75 px-3 py-2;
+  @apply md:text-[1.5rem] rounded-xl text-[1.125rem] bg-black bg-opacity-75 px-3 py-2 !important;
 }
 
 .vjs-cap .vjs-remaining-time-display {
