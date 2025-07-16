@@ -24,6 +24,7 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera_preview::CameraPreview;
+use camera_preview::CameraPreviewRenderer;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
@@ -2081,53 +2082,58 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(|handle, event| match event {
-            #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => {
-                let has_window = handle.webview_windows().iter().any(|(label, _)| {
-                    label.starts_with("editor-")
-                        || label.as_str() == "settings"
-                        || label.as_str() == "signin"
-                });
+        .run({
+            let mut camera = CameraPreviewRenderer::init();
 
-                if has_window {
-                    if let Some(window) = handle
-                        .webview_windows()
-                        .iter()
-                        .find(|(label, _)| {
-                            label.starts_with("editor-")
-                                || label.as_str() == "settings"
-                                || label.as_str() == "signin"
-                        })
-                        .map(|(_, window)| window.clone())
-                    {
-                        window.set_focus().ok();
+            move |handle, event| match event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                        label.starts_with("editor-")
+                            || label.as_str() == "settings"
+                            || label.as_str() == "signin"
+                    });
+
+                    if has_window {
+                        if let Some(window) = handle
+                            .webview_windows()
+                            .iter()
+                            .find(|(label, _)| {
+                                label.starts_with("editor-")
+                                    || label.as_str() == "settings"
+                                    || label.as_str() == "signin"
+                            })
+                            .map(|(_, window)| window.clone())
+                        {
+                            window.set_focus().ok();
+                        }
+                    } else {
+                        let handle = handle.clone();
+                        let _ =
+                            tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                     }
-                } else {
-                    let handle = handle.clone();
-                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                 }
-            }
-            tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if code.is_none() {
-                    api.prevent_exit();
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
-            }
-            tauri::RunEvent::WindowEvent {
-                label: _,
-                event: WindowEvent::Resized(size),
-                ..
-            } => {
-                if let Some(preview) = handle.try_state::<CameraPreview>() {
-                    preview.reconfigure(size.width, size.height);
+                tauri::RunEvent::WindowEvent {
+                    label: _,
+                    event: WindowEvent::Resized(size),
+                    ..
+                } => {
+                    if let Some(preview) = handle.try_state::<CameraPreview>() {
+                        preview.reconfigure(size.width, size.height);
+                    }
                 }
-            }
-            tauri::RunEvent::MainEventsCleared => {
-                if let Some(preview) = handle.try_state::<CameraPreview>() {
-                    preview.render();
+                tauri::RunEvent::MainEventsCleared => {
+                    if let Some(preview) = handle.try_state::<CameraPreview>() {
+                        camera.render(&preview);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         });
 }
 
