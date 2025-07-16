@@ -1,0 +1,22 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Crosshair cursor - higher quality with center dot -->
+  <defs>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0.5" dy="0.5" stdDeviation="0.5" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  
+  <!-- Horizontal line -->
+  <rect x="2" y="11" width="20" height="2" fill="#000000" filter="url(#shadow)"/>
+  
+  <!-- Vertical line -->
+  <rect x="11" y="2" width="2" height="20" fill="#000000" filter="url(#shadow)"/>
+  
+  <!-- Center dot for precise targeting -->
+  <circle cx="12" cy="12" r="2" fill="#000000" filter="url(#shadow)"/>
+  
+  <!-- White outline for better visibility on dark backgrounds -->
+  <rect x="1.5" y="10.5" width="21" height="3" fill="none" stroke="#FFFFFF" stroke-width="0.5" opacity="0.8"/>
+  <rect x="10.5" y="1.5" width="3" height="21" fill="none" stroke="#FFFFFF" stroke-width="0.5" opacity="0.8"/>
+  <circle cx="12" cy="12" r="2.5" fill="none" stroke="#FFFFFF" stroke-width="0.5" opacity="0.8"/>
+</svg>

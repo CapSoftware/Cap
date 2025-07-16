@@ -208,8 +208,8 @@ impl CursorLayer {
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
         let Some(cursor_texture) = constants
-            .cursor_textures
-            .get(&interpolated_cursor.cursor_id)
+            .cursor_texture_manager
+            .get_texture(&interpolated_cursor.cursor_id,!uniforms.project.cursor.raw && uniforms.project.cursor.use_svg)
         else {
             return;
         };
