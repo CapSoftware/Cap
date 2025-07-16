@@ -747,7 +747,7 @@ footer a {
 }
 
 .vjs-cap .vjs-menu-content .vjs-menu-title {
-  @apply bg-gray-11/50 mb-0 !important;
+  @apply bg-gray-11 bg-opacity-50 mb-0 !important;
 }
 
 .vjs-cap .vjs-text-track-cue > div {
