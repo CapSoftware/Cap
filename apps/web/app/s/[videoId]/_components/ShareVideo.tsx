@@ -23,6 +23,32 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
 
+
+const addMarkers = (cuePointsAra: number[], videoDuration: number, playerRef: React.RefObject<Player>) => {
+  const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
+  if (!playheadWell) {
+    console.warn("Progress control not found");
+    return;
+  }
+
+  const existingMarkers = playheadWell.querySelectorAll(".vjs-marker");
+  existingMarkers.forEach((marker) => marker.remove());
+
+  cuePointsAra.forEach((cuePoint, index) => {
+    const elem = document.createElement("div");
+    elem.className = "vjs-marker";
+    elem.onclick = (e: any) => {
+      e.stopPropagation();
+      playerRef.current?.currentTime(cuePoint);
+    };
+    elem.id = `cp${index}`;
+
+    elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
+    playheadWell.appendChild(elem);
+  });
+}
+
+
 export const ShareVideo = forwardRef<
   Player,
   {
@@ -63,7 +89,7 @@ export const ShareVideo = forwardRef<
 
         const videoDuration = player.duration();
         if (videoDuration) {
-          addMarkers(chapterStartTimesAra, videoDuration);
+          addMarkers(chapterStartTimesAra, videoDuration, playerRef);
         }
       }
     });
@@ -176,27 +202,6 @@ export const ShareVideo = forwardRef<
       }
     };
   }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
-
-  const addMarkers = (cuePointsAra: number[], videoDuration: number) => {
-    const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
-    if (!playheadWell) {
-      console.warn("Progress control not found");
-      return;
-    }
-
-    const existingMarkers = playheadWell.querySelectorAll(".vjs-marker");
-    existingMarkers.forEach((marker) => marker.remove());
-
-    cuePointsAra.forEach((cuePoint, index) => {
-      const elem = document.createElement("div");
-      elem.className = "vjs-marker";
-      elem.id = `cp${index}`;
-      elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
-      console.log("Marker position:", elem.style.left);
-      playheadWell.appendChild(elem);
-    });
-  }
-
 
   let videoSrc: string;
   let videoType: string = "video/mp4";

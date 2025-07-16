@@ -736,10 +736,11 @@ footer a {
 
 .vjs-marker {
   position: absolute;
-  top: 0;
-  width: 4px;
-  height: 100%;
-  background-color: #ff0000; /* Red markers, adjust as needed */
+  width: 5px;
+  height: 3px;
+  transform: translateY(-50%);
+  top: 50%;
+  background-color: #1696e0;
   z-index: 100;
 }
 
