@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
     sync::{Arc, Mutex, PoisonError, RwLock},
-    thread::JoinHandle,
 };
 
 use ffmpeg::{format::Pixel, software::scaling::Context as ScalingContext};
@@ -10,11 +9,17 @@ use cap_media::feeds::RawCameraFrame;
 use tauri::{Manager, WebviewWindow};
 use tokio::sync::oneshot;
 
-struct ActiveCameraPreview {
-    handle: JoinHandle<()>,
+// Disable camera fails for testing
+fn disable_camera_fails() {
+    #[cfg(debug_assertions)]
+    {
+        cap_fail::set_fail("media::feeds::camera::init", false);
+        cap_fail::set_fail("media::feeds::camera::switch_cameras", false);
+        cap_fail::set_fail("media::feeds::camera::run panic", false);
+        eprintln!("Camera preview: Disabled camera fails for testing");
+    }
 }
 
-// Texture resources that need to be modified in render
 struct TextureResources {
     texture: wgpu::Texture,
     texture_view: wgpu::TextureView,
@@ -33,13 +38,11 @@ pub struct CameraPreview {
     bind_group_layout: wgpu::BindGroupLayout,
 
     // Resources that can be modified during rendering
+    // TODO: Can these use a `RwLock` or share a mutex?
     texture_resources: Arc<Mutex<TextureResources>>,
     last_dimensions: Mutex<(u32, u32)>,
     last_format: Mutex<Option<Pixel>>,
-
-    // TODO: Document
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
-    active: Mutex<Option<ActiveCameraPreview>>,
 }
 
 impl CameraPreview {
@@ -62,6 +65,9 @@ impl CameraPreview {
     }
 
     pub async fn init(window: &WebviewWindow) -> Self {
+        // Disable camera fails for testing
+        disable_camera_fails();
+        
         let size = window.inner_size().unwrap();
 
         let (tx, rx) = oneshot::channel();
@@ -113,18 +119,32 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-    // Define a full-screen quad with proper texture coordinates
     var out: VertexOutput;
-
-    // Convert vertex_index (0, 1, 2) to screen position
-    let x = f32(i32(in_vertex_index) - 1);
-    let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-
-    // Generate texture coordinates from vertex positions
-    // Map from [-1, 1] to [0, 1] range
-    out.tex_coord = vec2<f32>(out.position.x * 0.5 + 0.5, 0.5 - out.position.y * 0.5);
-
+    
+    // Create a proper full-screen quad using two triangles
+    // Vertex positions for a full-screen quad
+    let positions = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),  // bottom-left
+        vec2<f32>( 1.0, -1.0),  // bottom-right
+        vec2<f32>(-1.0,  1.0),  // top-left
+        vec2<f32>(-1.0,  1.0),  // top-left
+        vec2<f32>( 1.0, -1.0),  // bottom-right
+        vec2<f32>( 1.0,  1.0)   // top-right
+    );
+    
+    // Texture coordinates (flip Y to match OpenGL convention)
+    let tex_coords = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 1.0),  // bottom-left
+        vec2<f32>(1.0, 1.0),  // bottom-right
+        vec2<f32>(0.0, 0.0),  // top-left
+        vec2<f32>(0.0, 0.0),  // top-left
+        vec2<f32>(1.0, 1.0),  // bottom-right
+        vec2<f32>(1.0, 0.0)   // top-right
+    );
+    
+    out.position = vec4<f32>(positions[in_vertex_index], 0.0, 1.0);
+    out.tex_coord = tex_coords[in_vertex_index];
+    
     return out;
 }
 
@@ -135,7 +155,9 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_diffuse, s_diffuse, in.tex_coord);
+    let color = textureSample(t_diffuse, s_diffuse, in.tex_coord);
+    // Ensure we're getting some color output for debugging
+    return color;
 }
 "#,
             )),
@@ -212,7 +234,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Load FFmpeg
         ffmpeg::init().expect("Failed to initialize FFmpeg");
 
-        // Create a default texture to render
+        // Create a default texture to render with a test pattern
         let texture_size = wgpu::Extent3d {
             width: 640, // Default size, will be updated with actual frame size
             height: 480,
@@ -257,13 +279,52 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ],
         });
 
+        // Create a test pattern for the default texture
+        let mut test_pattern = Vec::new();
+        for y in 0..480 {
+            for x in 0..640 {
+                // Create a more visible test pattern with bright colors
+                let r = if x < 320 { 255 } else { 0 };
+                let g = if y < 240 { 255 } else { 0 };
+                let b = if (x + y) % 100 < 50 { 255 } else { 0 };
+                let a = 255u8;
+                test_pattern.extend_from_slice(&[r, g, b, a]);
+            }
+        }
+
+        eprintln!("Camera preview: Created initial test pattern with {} bytes", test_pattern.len());
+
         let texture_resources = Arc::new(Mutex::new(TextureResources {
             texture,
             texture_view,
             bind_group,
-            rgb_buffer: Vec::new(),
+            rgb_buffer: test_pattern,
             dimensions: (640, 480),
         }));
+
+        // Upload the initial test pattern to the texture
+        let initial_texture = texture_resources.lock().unwrap().texture.clone();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &initial_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &texture_resources.lock().unwrap().rgb_buffer,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(640 * 4),
+                rows_per_image: Some(480),
+            },
+            wgpu::Extent3d {
+                width: 640,
+                height: 480,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        eprintln!("Camera preview: Uploaded initial test pattern to texture");
 
         let frame = window
             .state::<Arc<tokio::sync::RwLock<crate::App>>>()
@@ -284,7 +345,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             last_dimensions: Mutex::new((0, 0)),
             last_format: Mutex::new(None),
             frame,
-            active: Mutex::new(None),
         }
     }
 
@@ -314,6 +374,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
         {
+            eprintln!("Camera preview: Received camera frame");
             let ff_video = &camera_frame.frame;
 
             // Get frame info using the safer FFVideo API
@@ -346,6 +407,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     _ => Pixel::RGB24,
                 }
             }
+
+            eprintln!("Camera preview: Frame dimensions: {}x{}, format: {:?}", width, height, format);
 
             // Fallback to RGB24 if we get an unusual format
             let format = if format == Pixel::None {
@@ -421,7 +484,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     texture_res.bind_group = bind_group;
                 }
 
-                // Create a safer conversion process
+                // Try to convert the frame using FFmpeg
                 let result = || -> Result<Vec<u8>, ffmpeg::Error> {
                     // Create destination frame
                     let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
@@ -438,7 +501,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     )?;
 
                     // Create a new frame from the raw frame data
-                    // This approach avoids accessing private fields
                     let mut source_frame = ffmpeg::frame::Video::empty();
                     unsafe {
                         // Copy the frame pointer data for conversion
@@ -456,17 +518,98 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 };
 
                 // Execute the conversion
-                if let Ok(output_buffer) = result() {
-                    // Ensure our buffer is the right size
-                    let expected_size = (width * height * 4) as usize;
-                    if output_buffer.len() == expected_size {
-                        // Store the buffer for future use
-                        texture_res.rgb_buffer = output_buffer;
+                match result() {
+                    Ok(output_buffer) => {
+                        // Ensure our buffer is the right size
+                        let expected_size = (width * height * 4) as usize;
+                        if output_buffer.len() == expected_size {
+                            // Store the buffer for future use
+                            texture_res.rgb_buffer = output_buffer;
 
-                        // Calculate bytes per row
-                        let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
+                            // Calculate bytes per row
+                            let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
 
-                        // Copy the pixel data to the GPU texture
+                            eprintln!("Camera preview: Uploading texture {}x{} with {} bytes", width, height, texture_res.rgb_buffer.len());
+
+                            // Copy the pixel data to the GPU texture
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &texture_res.texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                &texture_res.rgb_buffer,
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(bytes_per_row),
+                                    rows_per_image: Some(height),
+                                },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                        } else {
+                            eprintln!("Camera preview: Buffer size mismatch. Expected: {}, Got: {}", expected_size, output_buffer.len());
+                            // If conversion failed, create a test pattern
+                            let mut test_pattern = Vec::new();
+                            for y in 0..height {
+                                for x in 0..width {
+                                    // Create a more visible test pattern with bright colors
+                                    let r = if x < width / 2 { 255 } else { 0 };
+                                    let g = if y < height / 2 { 255 } else { 0 };
+                                    let b = if (x + y) % 100 < 50 { 255 } else { 0 };
+                                    let a = 255u8;
+                                    test_pattern.extend_from_slice(&[r, g, b, a]);
+                                }
+                            }
+                            texture_res.rgb_buffer = test_pattern;
+
+                            // Copy the test pattern to the GPU texture
+                            let bytes_per_row = width * 4;
+                            eprintln!("Camera preview: Uploading test pattern {}x{} with {} bytes", width, height, texture_res.rgb_buffer.len());
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &texture_res.texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                &texture_res.rgb_buffer,
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(bytes_per_row),
+                                    rows_per_image: Some(height),
+                                },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Camera preview: Frame conversion failed: {:?}", e);
+                        // If conversion failed, create a test pattern
+                        let mut test_pattern = Vec::new();
+                        for y in 0..height {
+                            for x in 0..width {
+                                // Create a more visible test pattern with bright colors
+                                let r = if x < width / 2 { 255 } else { 0 };
+                                let g = if y < height / 2 { 255 } else { 0 };
+                                let b = if (x + y) % 100 < 50 { 255 } else { 0 };
+                                let a = 255u8;
+                                test_pattern.extend_from_slice(&[r, g, b, a]);
+                            }
+                        }
+                        texture_res.rgb_buffer = test_pattern;
+
+                        // Copy the test pattern to the GPU texture
+                        let bytes_per_row = width * 4;
+                        eprintln!("Camera preview: Uploading test pattern (conversion failed) {}x{} with {} bytes", width, height, texture_res.rgb_buffer.len());
                         self.queue.write_texture(
                             wgpu::TexelCopyTextureInfo {
                                 texture: &texture_res.texture,
@@ -495,6 +638,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 // Render the texture to the screen
                 {
+                    eprintln!("Camera preview: Starting render pass with camera frame");
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: None,
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -512,7 +656,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     render_pass.set_pipeline(&self.render_pipeline);
                     render_pass.set_bind_group(0, bind_group, &[]);
-                    render_pass.draw(0..3, 0..1);
+                    render_pass.draw(0..6, 0..1); // Draw 6 vertices for 2 triangles
                 }
             } else {
                 // No valid frame dimensions, just render with default bind group
@@ -535,12 +679,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     occlusion_query_set: None,
                 });
 
+                eprintln!("Camera preview: Starting render pass with default texture (no valid dimensions)");
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, bind_group, &[]);
-                render_pass.draw(0..3, 0..1);
+                render_pass.draw(0..6, 0..1); // Draw 6 vertices for 2 triangles
             }
         } else {
             // No frame available, just render with default bind group
+            eprintln!("Camera preview: No camera frame available");
             let texture_res = self.texture_resources.lock().unwrap();
             let bind_group = &texture_res.bind_group;
 
@@ -560,12 +706,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 occlusion_query_set: None,
             });
 
+            eprintln!("Camera preview: Starting render pass with default texture (no frame available)");
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw(0..6, 0..1); // Draw 6 vertices for 2 triangles
         }
 
         self.queue.submit(Some(encoder.finish()));
         surface_frame.present();
+        eprintln!("Camera preview: Submitted commands and presented frame");
     }
 }
