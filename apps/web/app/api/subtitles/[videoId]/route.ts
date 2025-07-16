@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@cap/database";
 import { videos, s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
@@ -8,10 +8,7 @@ import {
 } from "../../../s/[videoId]/_components/utils/transcript-utils";
 import { getTranscript } from "@/actions/videos/get-transcript";
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { videoId: string } }
-) {
+export async function GET({ params }: { params: { videoId: string } }) {
   try {
     const { videoId } = params;
 

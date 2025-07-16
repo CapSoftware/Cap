@@ -718,6 +718,10 @@ footer a {
   @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
 }
 
+.vjs-cap .vjs-text-track-cue > div {
+  @apply md:text-[1.5rem] text-[1.125rem] bg-black bg-opacity-75 px-3 py-2;
+}
+
 .vjs-cap .vjs-remaining-time-display {
   @apply text-white text-[12px] !important;
 }

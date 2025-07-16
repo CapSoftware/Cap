@@ -1,16 +1,12 @@
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
-import { useApiClient } from "@/utils/web-api";
-import { useTranscript } from "hooks/use-transcript";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
-import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { VideoJS } from "./VideoJs";
-import { useQuery } from "@tanstack/react-query";
-import { forwardRef, useImperativeHandle, useRef, useState, useEffect, useMemo } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useMemo } from "react";
 import Player from "video.js/dist/types/player";
 
 declare global {
@@ -35,8 +31,6 @@ export const ShareVideo = forwardRef<
 >(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
   useImperativeHandle(ref, () => playerRef.current as Player);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [videoMetadataLoaded, setVideoMetadataLoaded] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 
   const playerRef = useRef<Player | null>(null);
@@ -45,21 +39,8 @@ export const ShareVideo = forwardRef<
     playerRef.current = player;
   };
 
-  const isLargeScreen = useScreenSize();
-
   // Use TanStack Query for video source validation
-  const { data: videoSourceData } = useVideoSourceValidation(
-    data,
-    videoMetadataLoaded
-  );
-
   const publicEnv = usePublicEnv();
-  const apiClient = useApiClient();
-
-  const { data: transcriptContent, error: transcriptError } = useTranscript(
-    data.id,
-    data.transcriptionStatus
-  );
 
   let videoSrc: string;
   let videoType: string = "video/mp4";
@@ -149,88 +130,3 @@ export const ShareVideo = forwardRef<
     </>
   );
 });
-
-// Custom hook for video source validation using TanStack Query
-const useVideoSourceValidation = (
-  data: typeof videos.$inferSelect,
-  videoMetadataLoaded: boolean
-) => {
-  return useQuery({
-    queryKey: ["video-source-validation", data.id, data.source.type],
-    queryFn: async () => {
-      if (data.source.type !== "desktopMP4") {
-        return { isMP4Source: false };
-      }
-
-      const thumbUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&thumbnailTime=0`;
-
-      try {
-        const response = await fetch(thumbUrl, { method: "HEAD" });
-        return { isMP4Source: response.ok };
-      } catch (error) {
-        console.error("Error checking thumbnails:", error);
-        return { isMP4Source: false };
-      }
-    },
-    enabled: videoMetadataLoaded && data.source.type === "desktopMP4",
-    staleTime: 5 * 60 * 1000, // 5 minutes
-    gcTime: 10 * 60 * 1000, // 10 minutes
-  });
-};
-
-// Custom hook for screen size detection
-const useScreenSize = () => {
-  const [isLargeScreen, setIsLargeScreen] = useState(false);
-
-  useEffect(() => {
-    const checkScreenSize = () => {
-      setIsLargeScreen(window.innerWidth >= 1024);
-    };
-
-    checkScreenSize();
-    window.addEventListener("resize", checkScreenSize);
-
-    return () => window.removeEventListener("resize", checkScreenSize);
-  }, []);
-
-  return isLargeScreen;
-};
-
-// Custom hook for transcription processing
-const useTranscriptionProcessing = (
-  data: typeof videos.$inferSelect,
-  transcriptContent: string | undefined,
-  transcriptError: any
-) => {
-  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
-    data.transcriptionStatus === "PROCESSING"
-  );
-  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
-
-  useEffect(() => {
-    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
-      return setIsTranscriptionProcessing(false);
-    }
-    if (transcriptContent) {
-      const parsedSubtitles = fromVtt(transcriptContent);
-      setSubtitles(parsedSubtitles);
-      setIsTranscriptionProcessing(false);
-    } else if (transcriptError) {
-      console.error(
-        "[ShareVideo] Subtitle error from React Query:",
-        transcriptError.message
-      );
-      if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
-        setIsTranscriptionProcessing(true);
-      } else {
-        setIsTranscriptionProcessing(false);
-      }
-    } else if (data.transcriptionStatus === "PROCESSING") {
-      setIsTranscriptionProcessing(true);
-    } else if (data.transcriptionStatus === "ERROR") {
-      setIsTranscriptionProcessing(false);
-    }
-  }, [transcriptContent, transcriptError, data.transcriptionStatus]);
-
-  return { isTranscriptionProcessing, subtitles };
-};
