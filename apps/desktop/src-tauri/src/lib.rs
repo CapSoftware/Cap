@@ -53,7 +53,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
-use std::thread::JoinHandle;
 use std::{
     fs::File,
     future::Future,
