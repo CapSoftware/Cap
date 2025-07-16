@@ -21,6 +21,7 @@ pub struct CameraPreview {
     queue: wgpu::Queue,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
+    uniform_buffer: wgpu::Buffer,
 }
 
 impl CameraPreview {
@@ -125,6 +126,8 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1)
 var s_diffuse: sampler;
+@group(0) @binding(2)
+var<uniform> aspect_ratio: f32;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -132,8 +135,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let center = vec2<f32>(0.5, 0.5);
     let to_center = in.tex_coord - center;
 
+    // Adjust the coordinates to account for aspect ratio
+    let adjusted_coords = vec2<f32>(to_center.x * aspect_ratio, to_center.y);
+
     // Calculate distance from center (normalized)
-    let dist = length(to_center * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
+    let dist = length(adjusted_coords * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
 
     // Circle mask with smooth edge
     let radius = 1.0;
@@ -172,6 +178,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
                         count: None,
                     },
                 ],
@@ -244,6 +260,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ..Default::default()
         });
 
+        // Create uniform buffer for aspect ratio
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Aspect Ratio Uniform Buffer"),
+            size: std::mem::size_of::<f32>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         Self {
             surface,
             surface_config: Mutex::new(config),
@@ -252,6 +276,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             queue,
             sampler,
             bind_group_layout: texture_bind_group_layout,
+            uniform_buffer,
         }
     }
 
@@ -355,6 +380,12 @@ impl CameraPreviewRenderer {
 
             let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+            // Calculate aspect ratio (width / height)
+            let aspect_ratio = surface_config.width as f32 / surface_config.height as f32;
+            
+            // Update uniform buffer with aspect ratio
+            preview.queue.write_buffer(&preview.uniform_buffer, 0, bytemuck::cast_slice(&[aspect_ratio]));
+
             let bind_group = preview
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -368,6 +399,14 @@ impl CameraPreviewRenderer {
                         wgpu::BindGroupEntry {
                             binding: 1,
                             resource: wgpu::BindingResource::Sampler(&preview.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                buffer: &preview.uniform_buffer,
+                                offset: 0,
+                                size: None,
+                            }),
                         },
                     ],
                 });
