@@ -4,6 +4,8 @@ use std::{
     thread::JoinHandle,
 };
 
+use ffmpeg::{format::Pixel, software::scaling::Context as ScalingContext};
+
 use cap_media::feeds::RawCameraFrame;
 use tauri::{Manager, WebviewWindow};
 use tokio::sync::oneshot;
@@ -12,12 +14,28 @@ struct ActiveCameraPreview {
     handle: JoinHandle<()>,
 }
 
+// Texture resources that need to be modified in render
+struct TextureResources {
+    texture: wgpu::Texture,
+    texture_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    rgb_buffer: Vec<u8>,
+    dimensions: (u32, u32),
+}
+
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    sampler: wgpu::Sampler,
+    bind_group_layout: wgpu::BindGroupLayout,
+
+    // Resources that can be modified during rendering
+    texture_resources: Arc<Mutex<TextureResources>>,
+    scaler: Mutex<Option<ScalingContext>>,
+    last_dimensions: Mutex<(u32, u32)>,
 
     // TODO: Document
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
@@ -88,24 +106,68 @@ impl CameraPreview {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
                 r#"
-@vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
-let x = f32(i32(in_vertex_index) - 1);
-let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
-return vec4<f32>(x, y, 0.0, 1.0);
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) tex_coord: vec2<f32>,
 }
 
+@vertex
+fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+    // Define a full-screen quad with proper texture coordinates
+    var out: VertexOutput;
+
+    // Convert vertex_index (0, 1, 2) to screen position
+    let x = f32(i32(in_vertex_index) - 1);
+    let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+
+    // Generate texture coordinates from vertex positions
+    // Map from [-1, 1] to [0, 1] range
+    out.tex_coord = vec2<f32>(out.position.x * 0.5 + 0.5, 0.5 - out.position.y * 0.5);
+
+    return out;
+}
+
+@group(0) @binding(0)
+var t_diffuse: texture_2d<f32>;
+@group(0) @binding(1)
+var s_diffuse: sampler;
+
 @fragment
-fn fs_main() -> @location(0) vec4<f32> {
-return vec4<f32>(1.0, 0.0, 0.0, 1.0);
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_diffuse, s_diffuse, in.tex_coord);
 }
 "#,
             )),
         });
 
+        // Create a bind group layout for our texture
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Texture Bind Group Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -147,6 +209,62 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
 
         surface.configure(&device, &config);
 
+        // Load FFmpeg
+        ffmpeg::init().expect("Failed to initialize FFmpeg");
+
+        // Create a default texture to render
+        let texture_size = wgpu::Extent3d {
+            width: 640, // Default size, will be updated with actual frame size
+            height: 480,
+            depth_or_array_layers: 1,
+        };
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Camera Texture"),
+            size: texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Texture Bind Group"),
+            layout: &texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+
+        let texture_resources = Arc::new(Mutex::new(TextureResources {
+            texture,
+            texture_view,
+            bind_group,
+            rgb_buffer: Vec::new(),
+            dimensions: (640, 480),
+        }));
+
         let frame = window
             .state::<Arc<tokio::sync::RwLock<crate::App>>>()
             .read()
@@ -160,6 +278,11 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             render_pipeline,
             device,
             queue,
+            sampler,
+            bind_group_layout: texture_bind_group_layout,
+            texture_resources,
+            scaler: Mutex::new(None),
+            last_dimensions: Mutex::new((0, 0)),
             frame,
             active: Mutex::new(None),
         }
@@ -173,17 +296,215 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
     }
 
     pub fn render(&self) {
-        let frame = self
+        let surface_frame = self
             .surface
             .get_current_texture()
             .expect("Failed to acquire next swap chain texture");
-        let view = frame
+        let view = surface_frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        // Check if we have a new camera frame to render
+        if let Some(camera_frame) = self
+            .frame
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
         {
+            let ff_video = &camera_frame.frame;
+
+            // We need to use the FFmpeg API to get frame info
+            let width = unsafe { (*ff_video.as_ptr()).width as u32 };
+            let height = unsafe { (*ff_video.as_ptr()).height as u32 };
+            // Get format using a safe fallback approach
+            let format = unsafe {
+                // Map common formats, fallback to RGB24 for unknown formats
+                match (*ff_video.as_ptr()).format {
+                    0 => Pixel::YUV420P,
+                    1 => Pixel::YUYV422,
+                    2 => Pixel::RGB24,
+                    3 => Pixel::BGR24,
+                    4 => Pixel::YUV422P,
+                    5 => Pixel::YUV444P,
+                    8 => Pixel::GRAY8,
+                    13 => Pixel::YUVJ420P,
+                    24 => Pixel::RGBA,
+                    // Default to RGB24 for any other format
+                    _ => Pixel::RGB24,
+                }
+            };
+
+            // Only process if we have valid dimensions
+            if width > 0 && height > 0 {
+                // Update scaler if dimensions or format changed
+                let mut dimensions = self.last_dimensions.lock().unwrap();
+                let mut scaler = self.scaler.lock().unwrap();
+                let mut texture_res = self.texture_resources.lock().unwrap();
+
+                if dimensions.0 != width || dimensions.1 != height || scaler.is_none() {
+                    // Create a new scaler to convert to RGB
+                    *scaler = Some(
+                        ScalingContext::get(
+                            format,      // source format
+                            width,       // source width
+                            height,      // source height
+                            Pixel::RGBA, // destination format
+                            width,       // destination width
+                            height,      // destination height,
+                            ffmpeg::software::scaling::flag::Flags::BILINEAR,
+                        )
+                        .expect("Failed to create video scaler"),
+                    );
+
+                    // Update dimensions
+                    *dimensions = (width, height);
+                    texture_res.dimensions = (width, height);
+
+                    // Resize buffer
+                    texture_res
+                        .rgb_buffer
+                        .resize((width * height * 4) as usize, 0);
+
+                    // Recreate texture with new dimensions
+                    let texture_size = wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    };
+
+                    let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Camera Texture"),
+                        size: texture_size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    // Update texture binding
+                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Texture Bind Group"),
+                        layout: &self.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&texture_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.sampler),
+                            },
+                        ],
+                    });
+
+                    // Update texture resources
+                    texture_res.texture = texture;
+                    texture_res.texture_view = texture_view;
+                    texture_res.bind_group = bind_group;
+                }
+
+                // Convert frame to RGBA
+                let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+                if let Some(scaler) = &mut *scaler {
+                    // Create a wrapper frame to use with the scaler
+                    let source_frame =
+                        unsafe { ffmpeg::frame::Video::wrap(ff_video.as_ptr() as *mut _) };
+                    if unsafe { scaler.run(&source_frame, &mut dest_frame) }.is_ok() {
+                        // Copy data to our buffer
+                        let dest_data = dest_frame.data(0);
+                        if dest_data.len() <= texture_res.rgb_buffer.len() {
+                            texture_res.rgb_buffer[..dest_data.len()].copy_from_slice(dest_data);
+
+                            // Calculate bytes per row
+                            let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
+
+                            // Copy the pixel data to the GPU texture
+                            self.queue.write_texture(
+                                wgpu::TexelCopyTextureInfo {
+                                    texture: &texture_res.texture,
+                                    mip_level: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::TextureAspect::All,
+                                },
+                                &texture_res.rgb_buffer[..dest_data.len()],
+                                wgpu::TexelCopyBufferLayout {
+                                    offset: 0,
+                                    bytes_per_row: Some(bytes_per_row),
+                                    rows_per_image: Some(height),
+                                },
+                                wgpu::Extent3d {
+                                    width,
+                                    height,
+                                    depth_or_array_layers: 1,
+                                },
+                            );
+                        }
+                    }
+                }
+
+                // We need to drop the lock before starting the render pass
+                // Get a reference to the bind group
+                let bind_group = &texture_res.bind_group;
+
+                // Render the texture to the screen
+                {
+                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    render_pass.set_pipeline(&self.render_pipeline);
+                    render_pass.set_bind_group(0, bind_group, &[]);
+                    render_pass.draw(0..3, 0..1);
+                }
+            } else {
+                // No valid frame dimensions, just render with default bind group
+                let texture_res = self.texture_resources.lock().unwrap();
+                let bind_group = &texture_res.bind_group;
+
+                // Render with default texture
+                let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_bind_group(0, bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+        } else {
+            // No frame available, just render with default bind group
+            let texture_res = self.texture_resources.lock().unwrap();
+            let bind_group = &texture_res.bind_group;
+
+            // Render with default texture
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -198,20 +519,13 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
 
-        if let Some(frame) = self
-            .frame
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            println!("FRAME READY!"); // TODO
-        }
-
         self.queue.submit(Some(encoder.finish()));
-        frame.present();
+        surface_frame.present();
     }
 }
