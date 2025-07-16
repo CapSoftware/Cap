@@ -1,18 +1,24 @@
 "use client";
 
-import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
-import { Logo } from "@cap/ui";
-import { isUserOnProPlan } from "@cap/utils";
-import { VideoJS } from "@/app/s/[videoId]/_components/VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
-import Player from "video.js/dist/types/player";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import VideoJS from "@/app/s/[videoId]/_components/VideoJs";
+import Player from "video.js/dist/types/player";
+import { formatChaptersAsVTT, formatTranscriptAsVTT, parseVTT, TranscriptEntry } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { useTranscript } from "hooks/use-transcript";
-import { parseVTT, formatChaptersAsVTT, formatTranscriptAsVTT, TranscriptEntry } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { Avatar } from "@cap/ui";
+import { formatTime } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 
 declare global {
   interface Window {
@@ -71,237 +77,273 @@ const addMarkers = (cuePointsAra: number[], videoDuration: number, chapters: { t
 }
 
 export const EmbedVideo = forwardRef<
-  Player,
+  HTMLVideoElement,
   {
     data: typeof videos.$inferSelect;
     user: typeof userSelectProps | null;
-    comments: MaybePromise<CommentWithAuthor[]>;
+    comments: CommentWithAuthor[];
     chapters?: { title: string; start: number }[];
     aiProcessing?: boolean;
     ownerName?: string | null;
     autoplay?: boolean;
   }
->(({ data, user, comments, chapters = [], aiProcessing = false, ownerName = null, autoplay = false }, ref) => {
-  useImperativeHandle(ref, () => playerRef.current as Player);
+>(
+  (
+    {
+      data,
+      user,
+      comments,
+      chapters = [],
+      aiProcessing = false,
+      ownerName,
+      autoplay = false,
+    },
+    ref
+  ) => {
+    useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
-  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
-  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-  const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
-  const [chaptersBlobUrl, setChaptersBlobUrl] = useState<string | null>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const playerRef = useRef<Player | null>(null);
+    const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+    const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
+    const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
+    const [chaptersBlobUrl, setChaptersBlobUrl] = useState<string | null>(null);
+    const [longestDuration, setLongestDuration] = useState<number>(0);
 
-  const playerRef = useRef<Player | null>(null);
-
-  const handlePlayerReady = (player: Player) => {
-    playerRef.current = player;
-    player.on("loadedmetadata", () => {
-      const chapterStartTimesAra: number[] = [];
-
-      const chapterTT: TextTrack[] = [].filter.call(
-        player.textTracks(),
-        (tt: TextTrack) => tt.kind === "chapters"
-      );
-
-      if (chapterTT.length > 0) {
-        if (!chapterTT[0]) return;
-        const cues = chapterTT[0].cues;
-        if (cues) {
-          for (let i = 0; i < cues.length; i++) {
-            chapterStartTimesAra[i] = cues[i]?.startTime || 0;
-          }
-        }
-
+    const handlePlayerReady = (player: Player) => {
+      playerRef.current = player;
+      player.on("loadedmetadata", () => {
+        const chapterStartTimesAra: number[] = [];
         const videoDuration = player.duration();
         if (videoDuration) {
-          addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
+          setLongestDuration(videoDuration);
         }
+        const chapterTT: TextTrack[] = [].filter.call(
+          player.textTracks(),
+          (tt: TextTrack) => tt.kind === "chapters"
+        );
+
+        if (chapterTT.length > 0) {
+          if (!chapterTT[0]) return;
+          const cues = chapterTT[0].cues;
+          if (cues) {
+            for (let i = 0; i < cues.length; i++) {
+              chapterStartTimesAra[i] = cues[i]?.startTime || 0;
+            }
+          }
+
+          const videoDuration = player.duration();
+          if (videoDuration) {
+            addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
+          }
+        }
+      });
+    }
+
+    const { data: transcriptContent, error: transcriptError } = useTranscript(
+      data.id,
+      data.transcriptionStatus
+    );
+
+    useEffect(() => {
+      if (transcriptContent) {
+        const parsed = parseVTT(transcriptContent);
+        setTranscriptData(parsed);
+      } else if (transcriptError) {
+        console.error(
+          "[Transcript] Transcript error from React Query:",
+          transcriptError.message
+        );
       }
-    });
-  }
+    }, [transcriptContent, transcriptError]);
 
-  const publicEnv = usePublicEnv();
-
-
-  const { data: transcriptContent, error: transcriptError } = useTranscript(
-    data.id,
-    data.transcriptionStatus
-  );
-
-  useEffect(() => {
-    if (transcriptContent) {
-      const parsed = parseVTT(transcriptContent);
-      setTranscriptData(parsed);
-    } else if (transcriptError) {
-      console.error(
-        "[Transcript] Transcript error from React Query:",
-        transcriptError.message
-      );
-    }
-  }, [transcriptContent, transcriptError]);
-
-  const chaptersUrl = useMemo(() => {
-    if (chapters?.length > 0) {
-      const vttContent = formatChaptersAsVTT(chapters);
-      const blob = new Blob([vttContent], { type: "text/vtt" });
-      return URL.createObjectURL(blob);
-    }
-    return null;
-  }, [chapters]);
-
-  const subtitleUrl = useMemo(() => {
-    if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
-      const vttContent = formatTranscriptAsVTT(transcriptData);
-      const blob = new Blob([vttContent], { type: "text/vtt" });
-      const newUrl = URL.createObjectURL(blob);
-
-      return newUrl;
-    }
-    return null;
-  }, [data.transcriptionStatus, transcriptData]);
-
-  useEffect(() => {
-    if (!playerRef.current) return;
-    const tracks = playerRef.current.textTracks().tracks_;
-
-    if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
+    const chaptersUrl = useMemo(() => {
+      if (chapters?.length > 0) {
+        const vttContent = formatChaptersAsVTT(chapters);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        return URL.createObjectURL(blob);
       }
-      setSubtitleBlobUrl(subtitleUrl);
+      return null;
+    }, [chapters]);
 
-      if (playerRef.current && subtitleUrl) {
+    const subtitleUrl = useMemo(() => {
+      if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
+        const vttContent = formatTranscriptAsVTT(transcriptData);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        const newUrl = URL.createObjectURL(blob);
 
-        // subtitles
+        return newUrl;
+      }
+      return null;
+    }, [data.transcriptionStatus, transcriptData]);
+
+
+    useEffect(() => {
+      if (!playerRef.current) return;
+      const tracks = playerRef.current.textTracks().tracks_;
+
+      if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
+        if (subtitleBlobUrl) {
+          URL.revokeObjectURL(subtitleBlobUrl);
+        }
+        setSubtitleBlobUrl(subtitleUrl);
+
+        if (playerRef.current && subtitleUrl) {
+
+          // subtitles
+          playerRef.current.addRemoteTextTrack(
+            {
+              kind: "subtitles",
+              srclang: "en",
+              label: "English",
+              src: subtitleUrl,
+              default: true,
+            },
+            true
+          );
+
+          for (const track of tracks) {
+            if (track.kind === "subtitles" && track.language === "en") {
+              track.mode = "showing";
+            }
+          }
+
+        }
+
+      }
+
+      if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
+        if (chaptersBlobUrl) {
+          URL.revokeObjectURL(chaptersBlobUrl);
+        }
+        setChaptersBlobUrl(chaptersUrl);
+
         playerRef.current.addRemoteTextTrack(
           {
-            kind: "subtitles",
+            kind: "chapters",
             srclang: "en",
-            label: "English",
-            src: subtitleUrl,
-            default: true,
+            label: "Chapters",
+            src: chaptersUrl,
           },
           true
         );
 
         for (const track of tracks) {
-          if (track.kind === "subtitles" && track.language === "en") {
+          if (track.kind === "chapters") {
             track.mode = "showing";
           }
         }
-
       }
 
-    }
-
-    if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
-      if (chaptersBlobUrl) {
-        URL.revokeObjectURL(chaptersBlobUrl);
-      }
-      setChaptersBlobUrl(chaptersUrl);
-
-      playerRef.current.addRemoteTextTrack(
-        {
-          kind: "chapters",
-          srclang: "en",
-          label: "Chapters",
-          src: chaptersUrl,
-        },
-        true
-      );
-
-      for (const track of tracks) {
-        if (track.kind === "chapters") {
-          track.mode = "showing";
+      // Cleanup Blob URL on unmount or when subtitleUrl changes
+      return () => {
+        if (subtitleBlobUrl) {
+          URL.revokeObjectURL(subtitleBlobUrl);
         }
-      }
+        if (chaptersBlobUrl) {
+          URL.revokeObjectURL(chaptersBlobUrl);
+        }
+      };
+    }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+
+
+    const publicEnv = usePublicEnv();
+
+    let videoSrc: string;
+    let videoType: string = "video/mp4";
+    if (data.source.type === "desktopMP4") {
+      videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    } else if (
+      NODE_ENV === "development" ||
+      ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
+        data.source.type === "MediaConvert")
+    ) {
+      videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+      videoType = "application/x-mpegURL";
+    } else if (data.source.type === "MediaConvert") {
+      videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+      videoType = "application/x-mpegURL";
+    } else {
+      videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+      videoType = "application/x-mpegURL";
     }
 
-    // Cleanup Blob URL on unmount or when subtitleUrl changes
-    return () => {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
-      }
-      if (chaptersBlobUrl) {
-        URL.revokeObjectURL(chaptersBlobUrl);
-      }
-    };
-  }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+    const videoJsOptions = useMemo(() => ({
+      autoplay: true,
+      playbackRates: [0.5, 1, 1.5, 2],
+      controls: true,
+      responsive: true,
+      fluid: false,
+      sources: [
+        { src: videoSrc, type: videoType },
+      ]
+    }), [videoSrc, videoType, subtitleUrl]);
 
-  let videoSrc: string;
-  let videoType: string = "video/mp4";
 
-  if (data.source.type === "desktopMP4") {
-    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-    videoType = "video/mp4";
-  } else if (
-    NODE_ENV === "development" ||
-    ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
-      data.source.type === "MediaConvert")
-  ) {
-    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-    videoType = "application/x-mpegURL";
-  } else if (data.source.type === "MediaConvert") {
-    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
-    videoType = "application/x-mpegURL";
-  } else {
-    videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
-    videoType = "application/x-mpegURL";
-  }
+    if (data.jobStatus === "ERROR") {
+      return (
+        <div className="flex overflow-hidden justify-center items-center w-full h-screen bg-black">
+          <p className="text-xl text-white">
+            There was an error when processing the video. Please contact
+            support.
+          </p>
+        </div>
+      );
+    }
 
-  const videoJsOptions = useMemo(() => ({
-    autoplay: true,
-    playbackRates: [0.5, 1, 1.5, 2],
-    controls: true,
-    responsive: true,
-    fluid: false,
-    sources: [
-      { src: videoSrc, type: videoType },
-    ]
-  }), [videoSrc, videoType, subtitleUrl]);
+    return (
+      <>
+        <div className="relative w-screen h-screen rounded-xl">
+          <VideoJS
+            onReady={handlePlayerReady}
+            options={videoJsOptions}
+            ref={playerRef}
+          />
+        </div>
 
-  return (
-    <>
-      <div className="relative w-full h-full rounded-xl">
-        <VideoJS
-          onReady={handlePlayerReady}
-          options={videoJsOptions}
-          ref={ref}
-        />
-      </div>
-
-      {user &&
-        !isUserOnProPlan({
-          subscriptionStatus: user.stripeSubscriptionStatus,
-        }) && (
-          <div className="absolute top-4 left-4 z-30">
-            <div
-              className="block cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                setUpgradeModalOpen(true);
-              }}
-            >
-              <div className="relative">
-                <div className="opacity-50 transition-opacity hover:opacity-100 peer">
-                  <Logo className="w-auto h-4 sm:h-8" white={true} />
-                </div>
-
-                <div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
-                  <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-                    Remove watermark
+        <div className="bg-gradient-to-r absolute z-10 top-6 left-6 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
+          <div className="flex gap-2 items-center sm:gap-3">
+            {ownerName && (
+              <Avatar
+                name={ownerName}
+                className="hidden flex-shrink-0 xs:flex xs:size-10"
+                letterClass="xs:text-base font-medium"
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <a
+                href={`/s/${data.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h1 className="text-sm font-semibold leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
+                  {data.name}
+                </h1>
+              </a>
+              <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                {ownerName && (
+                  <p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
+                    {ownerName}
                   </p>
-                </div>
+                )}
+                {ownerName && longestDuration > 0 && (
+                  <span className="text-xs text-gray-400">•</span>
+                )}
+                {longestDuration > 0 && (
+                  <p className="text-xs text-gray-300 sm:text-sm">
+                    {formatTime(longestDuration)}
+                  </p>
+                )}
               </div>
             </div>
           </div>
-        )}
-      <UpgradeModal
-        open={upgradeModalOpen}
-        onOpenChange={setUpgradeModalOpen}
-      />
-    </>
-  );
-});
-
+        </div>
+      </>
+    );
+  }
+);
 
 const useTranscriptionProcessing = (
   data: typeof videos.$inferSelect,
@@ -314,16 +356,13 @@ const useTranscriptionProcessing = (
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
 
   useEffect(() => {
-    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
-      return setIsTranscriptionProcessing(false);
-    }
     if (transcriptContent) {
       const parsedSubtitles = fromVtt(transcriptContent);
       setSubtitles(parsedSubtitles);
       setIsTranscriptionProcessing(false);
     } else if (transcriptError) {
       console.error(
-        "[ShareVideo] Subtitle error from React Query:",
+        "[EmbedVideo] Subtitle error from React Query:",
         transcriptError.message
       );
       if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
