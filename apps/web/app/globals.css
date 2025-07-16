@@ -718,6 +718,26 @@ footer a {
   @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
 }
 
+.vjs-cap .vjs-menu-content {
+  @apply bg-gray-12 border border-[#313131] rounded-lg !important;
+}
+
+.vjs-menu li.vjs-selected {
+  @apply bg-[#373737] !important;
+}
+
+.vjs-menu li:hover {
+  @apply bg-[#434343] !important;
+}
+
+.vjs-cap .vjs-menu-item-text {
+  @apply text-gray-1 !important;
+}
+
+.vjs-cap .vjs-menu-content .vjs-menu-title {
+  @apply bg-gray-9 !important;
+}
+
 .vjs-cap .vjs-text-track-cue > div {
   @apply md:text-[1.5rem] rounded-xl text-[1.125rem] bg-black bg-opacity-75 px-3 py-2 !important;
 }
@@ -752,7 +772,7 @@ footer a {
 }
 
 .vjs-cap .vjs-control-bar {
-  @apply bg-blue-500/30 rounded-b-xl !important;
+  @apply bg-black/50 rounded-b-xl !important;
 }
 
 /* Safari-specific styles using CSS hacks */

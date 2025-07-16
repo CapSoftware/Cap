@@ -13,6 +13,7 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
 
+
 declare global {
   interface Window {
     MSStream: any;
@@ -71,7 +72,6 @@ export const ShareVideo = forwardRef<
   const chaptersUrl = useMemo(() => {
     if (chapters?.length > 0) {
       const vttContent = formatChaptersAsVTT(chapters);
-      console.log("Chapters VTT Content:", vttContent);
       const blob = new Blob([vttContent], { type: "text/vtt" });
       return URL.createObjectURL(blob);
     }
@@ -81,7 +81,6 @@ export const ShareVideo = forwardRef<
   const subtitleUrl = useMemo(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
       const vttContent = formatTranscriptAsVTT(transcriptData);
-      console.log("VTT Content:", vttContent.substring(0, 200));
 
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
@@ -127,7 +126,6 @@ export const ShareVideo = forwardRef<
           }
           setChaptersBlobUrl(chaptersUrl);
 
-          console.log("Adding chapters track:", chaptersUrl);
           playerRef.current.addRemoteTextTrack(
             {
               kind: "chapters",
@@ -141,7 +139,6 @@ export const ShareVideo = forwardRef<
           for (let i = 0; i < tracks.length; i++) {
             const track = tracks[i];
             if (track.kind === "chapters") {
-              console.log("Enabling chapters track:", track);
               track.mode = "showing";
             }
           }
