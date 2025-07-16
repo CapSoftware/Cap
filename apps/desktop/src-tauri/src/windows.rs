@@ -1,7 +1,10 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
+use crate::{
+    camera_preview::CameraPreview, fake_window, general_settings::AppTheme, permissions, App,
+    ArcLock,
+};
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::{executor::block_on, pin_mut};
@@ -344,117 +347,7 @@ impl ShowCapWindow {
                     .transparent(true);
 
                 let window = window_builder.build()?;
-
-                let size = window.inner_size()?;
-
-                let (tx, rx) = mpsc::channel();
-                window
-                    .run_on_main_thread({
-                        let window = window.clone();
-                        move || {
-                            let instance = wgpu::Instance::default();
-                            let surface = instance.create_surface(window.clone()).unwrap();
-                            tx.send((instance, surface)).unwrap();
-                        }
-                    })
-                    .unwrap();
-
-                let (instance, surface) = rx.recv().unwrap();
-
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::default(),
-                        force_fallback_adapter: false,
-                        compatible_surface: Some(&surface),
-                    })
-                    .await
-                    .expect("Failed to find an appropriate adapter");
-
-                // Create the logical device and command queue
-                let (device, queue) = adapter
-                    .request_device(&wgpu::DeviceDescriptor {
-                        label: None,
-                        required_features: wgpu::Features::empty(),
-                        // Make sure we use the texture resolution limits from the adapter, so we can support images the size of the swapchain.
-                        required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                            .using_resolution(adapter.limits()),
-                        memory_hints: Default::default(),
-                        trace: wgpu::Trace::Off,
-                    })
-                    .await
-                    .expect("Failed to create device");
-
-                // Load the shaders from disk
-                let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: None,
-                    source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
-                        r#"
-        @vertex
-        fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> @builtin(position) vec4<f32> {
-        let x = f32(i32(in_vertex_index) - 1);
-        let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
-        return vec4<f32>(x, y, 0.0, 1.0);
-        }
-
-        @fragment
-        fn fs_main() -> @location(0) vec4<f32> {
-        return vec4<f32>(1.0, 0.0, 0.0, 1.0);
-        }
-        "#,
-                    )),
-                });
-
-                let pipeline_layout =
-                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: None,
-                        bind_group_layouts: &[],
-                        push_constant_ranges: &[],
-                    });
-
-                let swapchain_capabilities = surface.get_capabilities(&adapter);
-                let swapchain_format = swapchain_capabilities.formats[0];
-
-                let render_pipeline =
-                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: None,
-                        layout: Some(&pipeline_layout),
-                        vertex: wgpu::VertexState {
-                            module: &shader,
-                            entry_point: Some("vs_main"),
-                            buffers: &[],
-                            compilation_options: Default::default(),
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: &shader,
-                            entry_point: Some("fs_main"),
-                            targets: &[Some(swapchain_format.into())],
-                            compilation_options: Default::default(),
-                        }),
-                        primitive: wgpu::PrimitiveState::default(),
-                        depth_stencil: None,
-                        multisample: wgpu::MultisampleState::default(),
-                        multiview: None,
-                        cache: None,
-                    });
-
-                let config = wgpu::SurfaceConfiguration {
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                    format: swapchain_format,
-                    width: size.width,
-                    height: size.height,
-                    present_mode: wgpu::PresentMode::Fifo,
-                    alpha_mode: swapchain_capabilities.alpha_modes[0],
-                    view_formats: vec![],
-                    desired_maximum_frame_latency: 2,
-                };
-
-                surface.configure(&device, &config);
-
-                window.manage(surface);
-                window.manage(render_pipeline);
-                window.manage(device);
-                window.manage(queue);
-                window.manage(Mutex::new(config));
+                window.manage(CameraPreview::init(&window).await);
 
                 #[cfg(target_os = "macos")]
                 {

@@ -2,6 +2,7 @@ mod audio;
 mod audio_meter;
 mod auth;
 mod camera;
+mod camera_preview;
 mod captions;
 mod deeplink_actions;
 mod editor_window;
@@ -23,6 +24,7 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::create_camera_preview_ws;
+use camera_preview::CameraPreview;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
@@ -2116,59 +2118,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 event: WindowEvent::Resized(size),
                 ..
             } => {
-                let config = handle.try_state::<std::sync::Mutex<wgpu::SurfaceConfiguration>>();
-                let surface = handle.try_state::<wgpu::Surface>();
-                let device = handle.try_state::<wgpu::Device>();
-
-                // TODO: Store these in one state var
-                if let (Some(config), Some(surface), Some(device)) = (config, surface, device) {
-                    let mut config = config.lock().unwrap();
-                    config.width = if size.width > 0 { size.width } else { 1 };
-                    config.height = if size.height > 0 { size.height } else { 1 };
-                    surface.configure(&device, &config);
+                if let Some(preview) = handle.try_state::<CameraPreview>() {
+                    preview.reconfigure(size.width, size.height);
                 }
-
-                // TODO: Request redraw on macos (not exposed in tauri yet).
             }
             tauri::RunEvent::MainEventsCleared => {
-                let surface = handle.try_state::<wgpu::Surface>();
-                let render_pipeline = handle.try_state::<wgpu::RenderPipeline>();
-                let device = handle.try_state::<wgpu::Device>();
-                let queue = handle.try_state::<wgpu::Queue>();
-
-                // TODO: Store together
-                if let (Some(surface), Some(render_pipeline), Some(device), Some(queue)) =
-                    (surface, render_pipeline, device, queue)
-                {
-                    let frame = surface
-                        .get_current_texture()
-                        .expect("Failed to acquire next swap chain texture");
-                    let view = frame
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
-                    let mut encoder = device
-                        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: None,
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &view,
-                                resolve_target: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        rpass.set_pipeline(&render_pipeline);
-                        rpass.draw(0..3, 0..1);
-                    }
-
-                    queue.submit(Some(encoder.finish()));
-                    frame.present();
+                if let Some(preview) = handle.try_state::<CameraPreview>() {
+                    preview.render();
                 }
             }
             _ => {}
