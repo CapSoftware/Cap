@@ -137,20 +137,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let center = vec2<f32>(0.5, 0.5);
     let to_center = in.tex_coord - center;
 
-    // Adjust the coordinates to account for aspect ratio
-    // For a perfect circle, we need to normalize the coordinates
-    // based on the aspect ratio of the window
-    // Use a mathematical approach that works for both cases
-    let adjusted_coords = vec2<f32>(
-        to_center.x / max(aspect_ratio, 1.0),
-        to_center.y * min(aspect_ratio, 1.0)
-    );
+    // Create a circle that fits within the window bounds
+    // The circle should be inscribed within the window rectangle
+    // For a perfect circle, we need to scale based on the smaller dimension
+    var scale_factor: f32;
+    if (aspect_ratio > 1.0) {
+        // Window is wider than tall - scale based on height
+        scale_factor = 1.0;
+    } else {
+        // Window is taller than wide - scale based on width
+        scale_factor = aspect_ratio;
+    }
 
-    // Calculate distance from center (normalized)
-    let dist = length(adjusted_coords * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
+    // Scale the coordinates to create a circle that fits
+    let scaled_coords = to_center * scale_factor;
+    
+    // Calculate distance from center
+    let dist = length(scaled_coords);
 
-    // Circle mask with smooth edge - make it smaller to fit properly
-    let radius = 0.8; // Reduced from 1.0 to 0.8 to make it smaller
+    // Circle mask with smooth edge
+    let radius = 0.45; // Half of 0.9 to ensure it fits within bounds
     let edge_smoothness = 0.01;
     let circle_alpha = 1.0 - smoothstep(radius - edge_smoothness, radius, dist);
 
