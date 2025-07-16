@@ -104,6 +104,7 @@ export const ShareVideo = forwardRef<
       }
 
       const vttContent = formatTranscriptAsVTT(transcriptData);
+      console.log("VTT Content:", vttContent.substring(0, 200)); // Show first 200 chars of VTT
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
 
@@ -121,13 +122,21 @@ export const ShareVideo = forwardRef<
     const player = playerRef.current;
     if (!player || !subtitleUrl) return;
 
-    player.addRemoteTextTrack({
+    const track = player.addRemoteTextTrack({
       kind: 'subtitles',
       srclang: 'en',
       label: 'English',
       src: subtitleUrl,
       default: true
     }, false);
+
+    track.addEventListener("load", () => {
+      console.log("Subtitle track loaded");
+    });
+
+    track.addEventListener("error", () => {
+      console.log("Subtitle track error");
+    });
 
   }, [subtitleUrl]);
 
