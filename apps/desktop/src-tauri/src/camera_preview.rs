@@ -17,12 +17,6 @@ struct TextureResources {
     dimensions: (u32, u32),
 }
 
-struct ScalerCache {
-    last_format: Option<Pixel>,
-    last_width: u32,
-    last_height: u32,
-}
-
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
@@ -37,7 +31,6 @@ pub struct CameraPreview {
     texture_resources: Arc<Mutex<TextureResources>>,
     last_dimensions: Mutex<(u32, u32)>,
     last_format: Mutex<Option<Pixel>>,
-    scaler_cache: Arc<Mutex<ScalerCache>>,
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
@@ -302,12 +295,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             dimensions: (640, 480),
         }));
 
-        let scaler_cache = Arc::new(Mutex::new(ScalerCache {
-            last_format: None,
-            last_width: 0,
-            last_height: 0,
-        }));
-
         let frame = window
             .state::<Arc<tokio::sync::RwLock<crate::App>>>()
             .read()
@@ -326,7 +313,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             texture_resources,
             last_dimensions: Mutex::new((0, 0)),
             last_format: Mutex::new(None),
-            scaler_cache,
             frame,
         }
     }
@@ -514,75 +500,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 // Try to convert the frame
                 let result = || -> Result<Vec<u8>, ffmpeg::Error> {
-                    // Check if we need to update the cache
-                    let mut scaler_cache = self.scaler_cache.lock().unwrap();
-                    let needs_cache_update = scaler_cache.last_format != Some(format)
-                        || scaler_cache.last_width != width
-                        || scaler_cache.last_height != height;
-
-                    if needs_cache_update {
-                        println!(
-                            "Camera preview: Updating scaler cache for format {:?}, {}x{}",
-                            format, width, height
-                        );
-                        scaler_cache.last_format = Some(format);
-                        scaler_cache.last_width = width;
-                        scaler_cache.last_height = height;
-                    }
-
-                    // Try direct access first for compatible formats
-                    // if format == Pixel::RGB24 || format == Pixel::RGBA {
-                    //     println!(
-                    //         "Camera preview: Attempting direct frame access for format {:?}",
-                    //         format
-                    //     );
-
-                    //     // Try to access the raw frame data directly
-                    //     unsafe {
-                    //         let frame_ptr = ff_video.as_ptr();
-                    //         let data_ptr = (*frame_ptr).data[0];
-                    //         let linesize = (*frame_ptr).linesize[0] as usize;
-
-                    //         if !data_ptr.is_null() {
-                    //             let mut output = Vec::with_capacity((width * height * 4) as usize);
-
-                    //             // Copy the raw data
-                    //             for y in 0..height {
-                    //                 let row_start = data_ptr.add(y * linesize);
-                    //                 for x in 0..width {
-                    //                     let pixel_offset = (y * width + x) * 4;
-
-                    //                     if format == Pixel::RGB24 {
-                    //                         // RGB24 -> RGBA
-                    //                         output.push(*row_start.add(x as usize * 3)); // R
-                    //                         output.push(*row_start.add(x as usize * 3 + 1)); // G
-                    //                         output.push(*row_start.add(x as usize * 3 + 2)); // B
-                    //                         output.push(255); // A
-                    //                     } else if format == Pixel::RGBA {
-                    //                         // RGBA -> RGBA (direct copy)
-                    //                         output.push(*row_start.add(x as usize * 4)); // R
-                    //                         output.push(*row_start.add(x as usize * 4 + 1)); // G
-                    //                         output.push(*row_start.add(x as usize * 4 + 2)); // B
-                    //                         output.push(*row_start.add(x as usize * 4 + 3));
-                    //                         // A
-                    //                     }
-                    //                 }
-                    //             }
-
-                    //             if output.len() == (width * height * 4) as usize {
-                    //                 println!("Camera preview: Direct frame access successful");
-                    //                 return Ok(output);
-                    //             }
-                    //         }
-                    //     }
-                    // }
-
-                    // Fallback to FFmpeg conversion
-                    println!(
-                        "Camera preview: Using FFmpeg conversion for format {:?}",
-                        format
-                    );
-
                     // Create destination frame
                     let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
 
