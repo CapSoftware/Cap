@@ -734,6 +734,15 @@ footer a {
   @apply bg-[#373737] !important;
 }
 
+.vjs-marker {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background-color: #ff0000; /* Red markers, adjust as needed */
+  z-index: 100;
+}
+
 .vjs-cap li.vjs-menu-title {
   @apply py-[0.5em] mb-0 !important;
 }
