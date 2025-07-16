@@ -1,6 +1,11 @@
-use std::{borrow::Cow, sync::Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex, PoisonError, RwLock},
+    thread,
+};
 
-use tauri::WebviewWindow;
+use cap_media::feeds::{CameraFeed, RawCameraFrame};
+use tauri::{Manager, WebviewWindow};
 use tokio::sync::{mpsc, oneshot};
 
 pub struct CameraPreview {
@@ -9,6 +14,7 @@ pub struct CameraPreview {
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
 impl CameraPreview {
@@ -116,12 +122,30 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
 
         surface.configure(&device, &config);
 
+        let app = window.state::<Arc<tokio::sync::RwLock<crate::App>>>();
+        let frame = Arc::new(RwLock::new(None));
+
+        thread::spawn({
+            let frame = frame.clone();
+            let camera_feed_rx = app.read().await.camera_feed_rx.clone().unwrap();
+            move || {
+                while let Ok(f) = camera_feed_rx.recv() {
+                    println!("GOT FRAME");
+                    frame
+                        .write()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .replace(f);
+                }
+            }
+        });
+
         Self {
             surface,
             surface_config: Mutex::new(config),
             render_pipeline,
             device,
             queue,
+            frame,
         }
     }
 
@@ -160,6 +184,15 @@ return vec4<f32>(1.0, 0.0, 0.0, 1.0);
             });
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.draw(0..3, 0..1);
+        }
+
+        if let Some(frame) = self
+            .frame
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            println!("FRAME READY!"); // TODO
         }
 
         self.queue.submit(Some(encoder.finish()));
