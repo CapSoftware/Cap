@@ -3,7 +3,11 @@ use std::{
     sync::{Arc, Mutex, PoisonError, RwLock},
 };
 
-use ffmpeg::{format::Pixel, frame, software::scaling};
+use ffmpeg::{
+    format::{self, Pixel},
+    frame,
+    software::scaling,
+};
 
 use cap_media::feeds::RawCameraFrame;
 use tauri::{Manager, WebviewWindow};
@@ -261,68 +265,42 @@ impl CameraPreviewRenderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+        if let Some(frame) = self
+            .camera_frame
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
         {
-            let height = 480;
-            let width = 640;
+            // TODO: This seems like a bottleneck
+            let surface_config = preview.surface_config.lock().unwrap();
 
-            let mut buffer = vec![0u8; (640 * 480 * 4) as usize];
-            // Create a simple checkerboard pattern for the default texture
-            for y in 0..480 {
-                for x in 0..640 {
-                    let pixel_index = ((y * 640 + x) * 4) as usize;
-                    let is_checker = ((x / 32) + (y / 32)) % 2 == 0;
-
-                    if is_checker {
-                        // Light gray for checker squares
-                        buffer[pixel_index] = 200; // R
-                        buffer[pixel_index + 1] = 200; // G
-                        buffer[pixel_index + 2] = 200; // B
-                        buffer[pixel_index + 3] = 255; // A
-                    } else {
-                        // Dark gray for checker squares
-                        buffer[pixel_index] = 100; // R
-                        buffer[pixel_index + 1] = 100; // G
-                        buffer[pixel_index + 2] = 100; // B
-                        buffer[pixel_index + 3] = 255; // A
-                    }
-                }
-            }
-
-            if let Some(frame) = self
-                .camera_frame
-                .read()
-                .unwrap_or_else(PoisonError::into_inner)
-                .as_ref()
-            {
+            // Rescale the frame to the correct output size
+            let buffer = {
                 // This will either reuse or reinialise the scaler
                 self.scaler.cached(
                     frame.frame.format(),
                     frame.frame.width(),
                     frame.frame.height(),
-                    // TODO: Don't hardcode these
-                    Pixel::RGBA,
-                    640,
-                    480,
+                    format::Pixel::RGBA, // frame.frame.format(),
+                    surface_config.height,
+                    surface_config.width,
                     scaling::Flags::empty(),
                 );
 
-                // let mut out = frame::Video::empty(); // TODO: Reusing this?
                 self.scaler
                     .run(&frame.frame, &mut self.rescaler_frame)
                     .unwrap();
 
-                buffer = self.rescaler_frame.data(0).to_vec();
-            }
-
-            let texture_size = wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
+                self.rescaler_frame.data(0).to_vec()
             };
 
             let texture = preview.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("Camera Texture"),
-                size: texture_size,
+                size: wgpu::Extent3d {
+                    width: surface_config.width,
+                    height: surface_config.height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -360,12 +338,12 @@ impl CameraPreviewRenderer {
                 &buffer,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(width * 4),
-                    rows_per_image: Some(height),
+                    bytes_per_row: Some(surface_config.width * 4),
+                    rows_per_image: Some(surface_config.height),
                 },
                 wgpu::Extent3d {
-                    width,
-                    height,
+                    width: surface_config.width,
+                    height: surface_config.height,
                     depth_or_array_layers: 1,
                 },
             );
@@ -389,6 +367,135 @@ impl CameraPreviewRenderer {
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
+
+        // {
+        //     let height = 480;
+        //     let width = 640;
+
+        //     let mut buffer = vec![0u8; (640 * 480 * 4) as usize];
+        //     // Create a simple checkerboard pattern for the default texture
+        //     for y in 0..480 {
+        //         for x in 0..640 {
+        //             let pixel_index = ((y * 640 + x) * 4) as usize;
+        //             let is_checker = ((x / 32) + (y / 32)) % 2 == 0;
+
+        //             if is_checker {
+        //                 // Light gray for checker squares
+        //                 buffer[pixel_index] = 200; // R
+        //                 buffer[pixel_index + 1] = 200; // G
+        //                 buffer[pixel_index + 2] = 200; // B
+        //                 buffer[pixel_index + 3] = 255; // A
+        //             } else {
+        //                 // Dark gray for checker squares
+        //                 buffer[pixel_index] = 100; // R
+        //                 buffer[pixel_index + 1] = 100; // G
+        //                 buffer[pixel_index + 2] = 100; // B
+        //                 buffer[pixel_index + 3] = 255; // A
+        //             }
+        //         }
+        //     }
+
+        //     if let Some(frame) = self
+        //         .camera_frame
+        //         .read()
+        //         .unwrap_or_else(PoisonError::into_inner)
+        //         .as_ref()
+        //     {
+        //         // This will either reuse or reinialise the scaler
+        //         self.scaler.cached(
+        //             frame.frame.format(),
+        //             frame.frame.width(),
+        //             frame.frame.height(),
+        //             // TODO: Don't hardcode these
+        //             Pixel::RGBA,
+        //             640,
+        //             480,
+        //             scaling::Flags::empty(),
+        //         );
+
+        //         // let mut out = frame::Video::empty(); // TODO: Reusing this?
+        //         self.scaler
+        //             .run(&frame.frame, &mut self.rescaler_frame)
+        //             .unwrap();
+
+        //         buffer = self.rescaler_frame.data(0).to_vec();
+        //     }
+
+        //     let texture_size = wgpu::Extent3d {
+        //         width,
+        //         height,
+        //         depth_or_array_layers: 1,
+        //     };
+
+        //     let texture = preview.device.create_texture(&wgpu::TextureDescriptor {
+        //         label: Some("Camera Texture"),
+        //         size: texture_size,
+        //         mip_level_count: 1,
+        //         sample_count: 1,
+        //         dimension: wgpu::TextureDimension::D2,
+        //         format: wgpu::TextureFormat::Rgba8Unorm,
+        //         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        //         view_formats: &[],
+        //     });
+
+        //     let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        //     let bind_group = preview
+        //         .device
+        //         .create_bind_group(&wgpu::BindGroupDescriptor {
+        //             label: Some("Texture Bind Group"),
+        //             layout: &preview.bind_group_layout,
+        //             entries: &[
+        //                 wgpu::BindGroupEntry {
+        //                     binding: 0,
+        //                     resource: wgpu::BindingResource::TextureView(&texture_view),
+        //                 },
+        //                 wgpu::BindGroupEntry {
+        //                     binding: 1,
+        //                     resource: wgpu::BindingResource::Sampler(&preview.sampler),
+        //                 },
+        //             ],
+        //         });
+
+        //     preview.queue.write_texture(
+        //         wgpu::TexelCopyTextureInfo {
+        //             texture: &texture,
+        //             mip_level: 0,
+        //             origin: wgpu::Origin3d::ZERO,
+        //             aspect: wgpu::TextureAspect::All,
+        //         },
+        //         &buffer,
+        //         wgpu::TexelCopyBufferLayout {
+        //             offset: 0,
+        //             bytes_per_row: Some(width * 4),
+        //             rows_per_image: Some(height),
+        //         },
+        //         wgpu::Extent3d {
+        //             width,
+        //             height,
+        //             depth_or_array_layers: 1,
+        //         },
+        //     );
+
+        //     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        //         label: None,
+        //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+        //             view: &view,
+        //             resolve_target: None,
+        //             ops: wgpu::Operations {
+        //                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        //                 store: wgpu::StoreOp::Store,
+        //             },
+        //         })],
+        //         depth_stencil_attachment: None,
+        //         timestamp_writes: None,
+        //         occlusion_query_set: None,
+        //     });
+
+        //     render_pass.set_pipeline(&preview.render_pipeline);
+        //     render_pass.set_bind_group(0, &bind_group, &[]);
+        //     render_pass.draw(0..3, 0..1);
+        // }
 
         preview.queue.submit(Some(encoder.finish()));
         surface_frame.present();
