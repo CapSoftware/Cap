@@ -392,10 +392,10 @@ impl CameraPreviewRenderer {
                     scaling::Flags::empty(),
                 );
 
-                let mut out = frame::Video::empty(); // TODO: Reusing this?
-                self.scaler.run(&frame.frame, &mut out).unwrap();
+                // let mut out = frame::Video::empty(); // TODO: Reusing this?
+                self.scaler.run(&frame.frame, &mut self.frame).unwrap();
 
-                buffer = out.data(0).to_vec();
+                buffer = self.frame.data(0).to_vec();
             }
 
             let texture_size = wgpu::Extent3d {
@@ -417,7 +417,6 @@ impl CameraPreviewRenderer {
 
             let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            // Update texture binding
             let bind_group = preview
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -434,11 +433,6 @@ impl CameraPreviewRenderer {
                         },
                     ],
                 });
-
-            // Update texture resources
-            // texture_res.texture = texture;
-            // texture_res.texture_view = texture_view;
-            // texture_res.bind_group = bind_group;
 
             preview.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -460,7 +454,6 @@ impl CameraPreviewRenderer {
                 },
             );
 
-            // Render with default texture
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -480,31 +473,6 @@ impl CameraPreviewRenderer {
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
-
-        // {
-        //     let texture_res = self.texture_resources.lock().unwrap(); // TODO: Mutex is bad
-        //     let bind_group = &texture_res.bind_group;
-
-        //     // Render with default texture
-        //     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        //         label: None,
-        //         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-        //             view: &view,
-        //             resolve_target: None,
-        //             ops: wgpu::Operations {
-        //                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-        //                 store: wgpu::StoreOp::Store,
-        //             },
-        //         })],
-        //         depth_stencil_attachment: None,
-        //         timestamp_writes: None,
-        //         occlusion_query_set: None,
-        //     });
-
-        //     render_pass.set_pipeline(&self.render_pipeline);
-        //     render_pass.set_bind_group(0, bind_group, &[]);
-        //     render_pass.draw(0..3, 0..1);
-        // }
 
         preview.queue.submit(Some(encoder.finish()));
         surface_frame.present();
