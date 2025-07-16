@@ -13,7 +13,6 @@ import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
 
-
 declare global {
   interface Window {
     MSStream: any;
@@ -44,7 +43,6 @@ export const ShareVideo = forwardRef<
   const playerRef = useRef<Player | null>(null);
 
   const handlePlayerReady = (player: Player) => {
-    console.log("Player ready");
     playerRef.current = player;
   };
 
@@ -80,7 +78,6 @@ export const ShareVideo = forwardRef<
   const subtitleUrl = useMemo(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
       const vttContent = formatTranscriptAsVTT(transcriptData);
-
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
 
@@ -90,49 +87,45 @@ export const ShareVideo = forwardRef<
   }, [data.transcriptionStatus, transcriptData]);
 
   useEffect(() => {
-    if (subtitleUrl && subtitleUrl !== subtitleBlobUrl && playerRef.current) {
+    if (!playerRef.current) return;
+    const tracks = playerRef.current.textTracks().tracks_;
+
+    if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
       if (subtitleBlobUrl) {
         URL.revokeObjectURL(subtitleBlobUrl);
       }
       setSubtitleBlobUrl(subtitleUrl);
 
-      // Add subtitles track
-      playerRef.current.addRemoteTextTrack(
-        {
-          kind: "subtitles",
-          srclang: "en",
-          label: "English",
-          src: subtitleUrl,
-          default: true,
-        },
-        true
-      );
+      if (playerRef.current && subtitleUrl) {
 
-      // Set subtitle track to showing
-      const tracks = playerRef.current.textTracks().tracks_;
-      for (const track of tracks) {
-        if (track.kind === "subtitles" && track.language === "en") {
-          track.mode = "showing";
+        // subtitles
+        playerRef.current.addRemoteTextTrack(
+          {
+            kind: "subtitles",
+            srclang: "en",
+            label: "English",
+            src: subtitleUrl,
+            default: true,
+          },
+          true
+        );
+
+        for (const track of tracks) {
+          if (track.kind === "subtitles" && track.language === "en") {
+            track.mode = "showing";
+          }
         }
+
       }
+
     }
 
-    // Cleanup subtitle Blob URL
-    return () => {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
-      }
-    };
-  }, [subtitleUrl, subtitleBlobUrl]);
-
-  useEffect(() => {
-    if (chaptersUrl && chaptersUrl !== chaptersBlobUrl && playerRef.current) {
+    if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
       if (chaptersBlobUrl) {
         URL.revokeObjectURL(chaptersBlobUrl);
       }
       setChaptersBlobUrl(chaptersUrl);
 
-      // Add chapters track
       playerRef.current.addRemoteTextTrack(
         {
           kind: "chapters",
@@ -143,22 +136,25 @@ export const ShareVideo = forwardRef<
         true
       );
 
-      // Set chapters track to showing
-      const tracks = playerRef.current.textTracks().tracks_;
-      for (const track of tracks) {
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
         if (track.kind === "chapters") {
           track.mode = "showing";
         }
       }
     }
 
-    // Cleanup chapters Blob URL
+    // Cleanup Blob URL on unmount or when subtitleUrl changes
     return () => {
+      if (subtitleBlobUrl) {
+        URL.revokeObjectURL(subtitleBlobUrl);
+      }
       if (chaptersBlobUrl) {
         URL.revokeObjectURL(chaptersBlobUrl);
       }
     };
-  }, [chaptersUrl, chaptersBlobUrl]);
+  }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+
 
   let videoSrc: string;
   let videoType: string = "video/mp4";
