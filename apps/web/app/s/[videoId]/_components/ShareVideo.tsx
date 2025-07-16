@@ -6,7 +6,7 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { VideoJS } from "./VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect, useCallback } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
 import Player from "video.js/dist/types/player";
 import { formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
@@ -67,6 +67,32 @@ export const ShareVideo = forwardRef<
     }
   }, [transcriptContent, transcriptError]);
 
+  // Create subtitle URL when transcript data changes
+  const subtitleUrl = useMemo(() => {
+    if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
+      const vttContent = formatTranscriptAsVTT(transcriptData);
+      console.log("VTT Content:", vttContent.substring(0, 200));
+
+      const blob = new Blob([vttContent], { type: "text/vtt" });
+      const newUrl = URL.createObjectURL(blob);
+
+      return newUrl;
+    }
+    return null;
+  }, [data.transcriptionStatus, transcriptData]);
+
+  // Clean up old blob URL and set new one when subtitleUrl changes
+  useEffect(() => {
+    if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
+      if (subtitleBlobUrl) {
+        URL.revokeObjectURL(subtitleBlobUrl);
+      }
+      setSubtitleBlobUrl(subtitleUrl);
+    }
+  }, [subtitleUrl, subtitleBlobUrl]);
+
+  console.log("subtitleUrl", subtitleUrl);
+
   // Clean up blob URL when component unmounts
   useEffect(() => {
     return () => {
@@ -97,28 +123,6 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
-  const subtitleUrl = useCallback(() => {
-    if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
-      }
-
-      const vttContent = formatTranscriptAsVTT(transcriptData);
-      console.log("VTT Content:", vttContent.substring(0, 200)); // Show first 200 chars of VTT
-      const blob = new Blob([vttContent], { type: "text/vtt" });
-      const newUrl = URL.createObjectURL(blob);
-
-      console.log("newUrl", newUrl);
-
-      setSubtitleBlobUrl(newUrl);
-
-      return newUrl;
-    }
-    return null;
-  }, [data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
-
-  console.log("subtitleUrl", subtitleUrl());
-
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
     playbackRates: [0.5, 1, 1.5, 2],
@@ -130,7 +134,7 @@ export const ShareVideo = forwardRef<
         kind: 'subtitles',
         srclang: 'en',
         label: 'English',
-        src: subtitleUrl(),
+        src: subtitleUrl,
         default: true
       }
     ],
