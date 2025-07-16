@@ -45,10 +45,25 @@ export const ShareVideo = forwardRef<
   const handlePlayerReady = (player: Player) => {
     playerRef.current = player;
     player.on("loadedmetadata", () => {
-      const tracks = player.textTracks().tracks_;
-      for (const track of tracks) {
-        if (track.kind === "chapters") {
-          console.log(track, 'chapters track');
+      const chapterStartTimesAra: number[] = [];
+
+      const chapterTT: any[] = [].filter.call(
+        player.textTracks(),
+        (tt: any) => tt.kind === "chapters"
+      );
+
+      if (chapterTT.length > 0) {
+        if (!chapterTT[0]) return;
+        const cues = chapterTT[0].cues;
+        if (cues) {
+          for (let i = 0; i < cues.length; i++) {
+            chapterStartTimesAra[i] = cues[i].startTime;
+          }
+        }
+
+        const videoDuration = player.duration();
+        if (videoDuration) {
+          addMarkers(chapterStartTimesAra, videoDuration);
         }
       }
     });
@@ -161,6 +176,26 @@ export const ShareVideo = forwardRef<
       }
     };
   }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+
+  const addMarkers = (cuePointsAra: number[], videoDuration: number) => {
+    const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
+    if (!playheadWell) {
+      console.warn("Progress control not found");
+      return;
+    }
+
+    const existingMarkers = playheadWell.querySelectorAll(".vjs-marker");
+    existingMarkers.forEach((marker) => marker.remove());
+
+    cuePointsAra.forEach((cuePoint, index) => {
+      const elem = document.createElement("div");
+      elem.className = "vjs-marker";
+      elem.id = `cp${index}`;
+      elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
+      console.log("Marker position:", elem.style.left);
+      playheadWell.appendChild(elem);
+    });
+  }
 
 
   let videoSrc: string;
