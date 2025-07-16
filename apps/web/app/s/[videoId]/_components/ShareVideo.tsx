@@ -42,6 +42,7 @@ export const ShareVideo = forwardRef<
   const playerRef = useRef<Player | null>(null);
 
   const handlePlayerReady = (player: Player) => {
+    console.log("Player ready");
     playerRef.current = player;
   };
 
@@ -98,17 +99,16 @@ export const ShareVideo = forwardRef<
 
   const subtitleUrl = useMemo(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
-      // Clean up previous blob URL if it exists
       if (subtitleBlobUrl) {
         URL.revokeObjectURL(subtitleBlobUrl);
       }
 
-      // Create new blob URL
       const vttContent = formatTranscriptAsVTT(transcriptData);
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
 
-      // Store for cleanup later
+      console.log("newUrl", newUrl);
+
       setSubtitleBlobUrl(newUrl);
 
       return newUrl;
@@ -116,7 +116,22 @@ export const ShareVideo = forwardRef<
     return null;
   }, [data.id, data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
 
-  const chaptersUrl = "";
+  // Add subtitles to player when URL changes
+  useEffect(() => {
+    const player = playerRef.current;
+    if (!player || !subtitleUrl) return;
+
+    player.addRemoteTextTrack({
+      kind: 'subtitles',
+      srclang: 'en',
+      label: 'English',
+      src: subtitleUrl,
+      default: true
+    }, false);
+
+  }, [subtitleUrl]);
+
+  console.log("subtitleUrl", subtitleUrl);
 
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
@@ -124,24 +139,10 @@ export const ShareVideo = forwardRef<
     controls: true,
     responsive: true,
     fluid: false,
-    tracks: subtitleUrl ? [
-      {
-        kind: "subtitles",
-        src: subtitleUrl,
-        srclang: "en",
-        label: "English",
-        default: true
-      },
-      {
-        kind: "chapters",
-        srclang: "en",
-        src: chaptersUrl,
-      }
-    ] : [],
     sources: [
       { src: videoSrc, type: videoType },
     ]
-  }), [videoSrc, videoType, subtitleUrl]);
+  }), [videoSrc, videoType]);
 
   return (
     <>
