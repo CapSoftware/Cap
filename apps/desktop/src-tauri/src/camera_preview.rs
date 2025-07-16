@@ -140,9 +140,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let edge_smoothness = 0.01;
     let circle_alpha = 1.0 - smoothstep(radius - edge_smoothness, radius, dist);
 
-    // Discard fragments outside the circle
+    // Return transparent for fragments outside the circle
     if (circle_alpha <= 0.0) {
-        discard;
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Sample texture and apply the circle mask
@@ -198,7 +198,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fs_main"),
-                targets: &[Some(swapchain_format.into())],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: swapchain_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
@@ -208,13 +212,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             cache: None,
         });
 
+        // Find the best alpha mode for transparency
+        let alpha_mode = if swapchain_capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+            wgpu::CompositeAlphaMode::PreMultiplied
+        } else if swapchain_capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+            wgpu::CompositeAlphaMode::PostMultiplied
+        } else {
+            swapchain_capabilities.alpha_modes[0]
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: swapchain_capabilities.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -385,7 +398,7 @@ impl CameraPreviewRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
