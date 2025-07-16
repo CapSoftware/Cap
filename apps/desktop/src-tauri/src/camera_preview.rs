@@ -136,7 +136,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let to_center = in.tex_coord - center;
 
     // Adjust the coordinates to account for aspect ratio
-    let adjusted_coords = vec2<f32>(to_center.x * aspect_ratio, to_center.y);
+    // For a perfect circle, we need to normalize the coordinates
+    // based on the aspect ratio of the window
+    let adjusted_coords = vec2<f32>(to_center.x / aspect_ratio, to_center.y);
 
     // Calculate distance from center (normalized)
     let dist = length(adjusted_coords * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
@@ -380,7 +382,8 @@ impl CameraPreviewRenderer {
 
             let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            // Calculate aspect ratio (width / height)
+            // Calculate aspect ratio to make a perfect circle
+            // We need to normalize the coordinates based on the window's aspect ratio
             let aspect_ratio = surface_config.width as f32 / surface_config.height as f32;
             
             // Update uniform buffer with aspect ratio
