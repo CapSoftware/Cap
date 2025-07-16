@@ -23,6 +23,23 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
 
+function showTooltip(index: number, cuePoint: number, videoDuration: number, chapters: { title: string; start: number }[], element: Element) {
+  if (!chapters[index]) return;
+  // Remove any existing tooltip first to avoid duplicates
+  const existingTooltip = element.querySelector('.vjs-tooltip');
+  if (existingTooltip) existingTooltip.remove();
+
+  const tooltip = document.createElement("div");
+  tooltip.className = "vjs-tooltip";
+  tooltip.textContent = chapters[index].title || "";
+  tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
+  element.appendChild(tooltip);
+}
+
+function hideTooltip(element: Element) {
+  const tooltip = element.querySelector(".vjs-tooltip");
+  if (tooltip) tooltip.remove();
+}
 
 const addMarkers = (cuePointsAra: number[], videoDuration: number, chapters: { title: string; start: number }[], playerRef: React.RefObject<Player>) => {
   const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
@@ -30,49 +47,27 @@ const addMarkers = (cuePointsAra: number[], videoDuration: number, chapters: { t
     console.warn("Progress control not found");
     return;
   }
+  const slider = playheadWell.querySelector('.vjs-slider');
+  if (!slider) {
+    console.warn("Slider not found");
+    return;
+  }
 
-  const existingMarkers = playheadWell.querySelectorAll(".vjs-marker");
+  const existingMarkers = slider.querySelectorAll(".vjs-marker");
   existingMarkers.forEach((marker) => marker.remove());
 
   cuePointsAra.forEach((cuePoint, index) => {
     const elem = document.createElement("div");
     elem.className = "vjs-marker";
     elem.id = `cp${index}`;
-    elem.ontouchstart = () => {
-      //tooltip with chapter name
-      const tooltip = document.createElement("div");
-      tooltip.className = "vjs-tooltip";
-      if (!chapters[index]) return;
-      tooltip.textContent = chapters[index].title || "";
-      tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
-      playheadWell.appendChild(tooltip);
-    };
-    elem.onmouseenter = () => {
-      //tooltip with chapter name
-      const tooltip = document.createElement("div");
-      tooltip.className = "vjs-tooltip";
-      if (!chapters[index]) return;
-      tooltip.textContent = chapters[index].title || "";
-      tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
-      playheadWell.appendChild(tooltip);
-    };
-    elem.onmouseleave = () => {
-      const tooltip = document.querySelector(".vjs-tooltip");
-      if (tooltip) {
-        tooltip.remove();
-      }
-    };
-    elem.ontouchend = () => {
-      const tooltip = document.querySelector(".vjs-tooltip");
-      if (tooltip) {
-        tooltip.remove();
-      }
-    };
+    elem.ontouchstart = () => showTooltip(index, cuePoint, videoDuration, chapters, slider);
+    elem.onmouseenter = () => showTooltip(index, cuePoint, videoDuration, chapters, slider);
+    elem.onmouseleave = () => hideTooltip(slider);
+    elem.ontouchend = () => hideTooltip(slider);
     elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
-    playheadWell.appendChild(elem);
+    slider.appendChild(elem);
   });
 }
-
 
 export const ShareVideo = forwardRef<
   Player,

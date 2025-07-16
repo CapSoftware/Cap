@@ -737,10 +737,10 @@ footer a {
 .vjs-marker {
   position: absolute;
   width: 5px;
-  height: 3px;
+  height: 100%;
   transform: translateY(-50%);
   top: 50%;
-  background-color: #1696e0;
+  background-color: #95d7fd;
   z-index: 100;
 }
 
@@ -751,6 +751,7 @@ footer a {
   transform: translateX(-50%);
   background-color: #313131;
   color: #fff;
+  font-size: 12px;
   padding: 5px 10px;
   border-radius: 5px;
   z-index: 101;
