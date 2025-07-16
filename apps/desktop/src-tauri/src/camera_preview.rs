@@ -97,14 +97,29 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     // Define a full-screen quad with proper texture coordinates
     var out: VertexOutput;
 
-    // Convert vertex_index (0, 1, 2) to screen position
-    let x = f32(i32(in_vertex_index) - 1);
-    let y = f32(i32(in_vertex_index & 1u) * 2 - 1);
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    // Create a full-screen quad using 6 vertices (2 triangles)
+    // Vertex positions for a full-screen quad
+    let positions = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),  // Bottom-left
+        vec2<f32>( 1.0, -1.0),  // Bottom-right
+        vec2<f32>(-1.0,  1.0),  // Top-left
+        vec2<f32>(-1.0,  1.0),  // Top-left (duplicate)
+        vec2<f32>( 1.0, -1.0),  // Bottom-right (duplicate)
+        vec2<f32>( 1.0,  1.0)   // Top-right
+    );
 
-    // Generate texture coordinates from vertex positions
-    // Map from [-1, 1] to [0, 1] range
-    out.tex_coord = vec2<f32>(out.position.x * 0.5 + 0.5, 0.5 - out.position.y * 0.5);
+    // Texture coordinates for the quad
+    let tex_coords = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 1.0),  // Bottom-left
+        vec2<f32>(1.0, 1.0),  // Bottom-right
+        vec2<f32>(0.0, 0.0),  // Top-left
+        vec2<f32>(0.0, 0.0),  // Top-left (duplicate)
+        vec2<f32>(1.0, 1.0),  // Bottom-right (duplicate)
+        vec2<f32>(1.0, 0.0)   // Top-right
+    );
+
+    out.position = vec4<f32>(positions[in_vertex_index], 0.0, 1.0);
+    out.tex_coord = tex_coords[in_vertex_index];
 
     return out;
 }
@@ -116,7 +131,26 @@ var s_diffuse: sampler;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(t_diffuse, s_diffuse, in.tex_coord);
+    // Calculate coordinates relative to center (0.5, 0.5)
+    let center = vec2<f32>(0.5, 0.5);
+    let to_center = in.tex_coord - center;
+
+    // Calculate distance from center (normalized)
+    let dist = length(to_center * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
+
+    // Circle mask with smooth edge
+    let radius = 1.0;
+    let edge_smoothness = 0.01;
+    let circle_alpha = 1.0 - smoothstep(radius - edge_smoothness, radius, dist);
+
+    // Discard fragments outside the circle
+    if (circle_alpha <= 0.0) {
+        discard;
+    }
+
+    // Sample texture and apply the circle mask
+    let color = textureSample(t_diffuse, s_diffuse, in.tex_coord);
+    return vec4<f32>(color.rgb, color.a * circle_alpha);
 }
 "#,
             )),
@@ -365,7 +399,7 @@ impl CameraPreviewRenderer {
 
             render_pass.set_pipeline(&preview.render_pipeline);
             render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
+            render_pass.draw(0..6, 0..1);
         }
 
         preview.queue.submit(Some(encoder.finish()));
