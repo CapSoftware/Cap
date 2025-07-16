@@ -15,7 +15,9 @@ use windows::{
         Foundation::*,
         Media::{
             DirectShow::*,
-            KernelStreaming::{IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER},
+            KernelStreaming::{
+                IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFO, KS_VIDEOINFOHEADER,
+            },
             MediaFoundation::*,
         },
         System::{
@@ -26,6 +28,10 @@ use windows::{
     core::Interface,
 };
 use windows_core::{ComObject, ComObjectInner, GUID, PWSTR, implement};
+
+pub fn initialize_directshow() -> windows_core::Result<()> {
+    unsafe { CoInitialize(None) }.ok()
+}
 
 pub trait IPinExt {
     unsafe fn matches_category(&self, category: GUID) -> bool;
@@ -60,44 +66,38 @@ impl IPinExt for IPin {
 }
 
 pub trait IBaseFilterExt {
-    unsafe fn get_pin(
-        &self,
-        direction: PIN_DIRECTION,
-        category: GUID,
-        major_type: GUID,
-    ) -> Option<IPin>;
+    fn get_pin(&self, direction: PIN_DIRECTION, category: GUID, major_type: GUID) -> Option<IPin>;
 
     unsafe fn get_pin_by_name(
         &self,
         direction: PIN_DIRECTION,
         name: Option<&PWSTR>,
-    ) -> Option<IPin>;
+    ) -> windows_core::Result<Option<IPin>>;
 }
 
 impl IBaseFilterExt for IBaseFilter {
-    unsafe fn get_pin(
-        &self,
-        direction: PIN_DIRECTION,
-        category: GUID,
-        major_type: GUID,
-    ) -> Option<IPin> {
-        let pin_enum = self.EnumPins().unwrap();
+    fn get_pin(&self, direction: PIN_DIRECTION, category: GUID, major_type: GUID) -> Option<IPin> {
+        unsafe {
+            let pin_enum = self.EnumPins().ok()?;
 
-        let _ = pin_enum.Reset();
+            let _ = pin_enum.Reset();
 
-        let mut pin = [None];
-        while pin_enum.Next(&mut pin, None) == S_OK {
-            let Some(pin) = pin[0].take() else {
-                break;
-            };
+            let mut pin = [None];
+            while pin_enum.Next(&mut pin, None) == S_OK {
+                let Some(pin) = pin[0].take() else {
+                    break;
+                };
 
-            let pin_dir = pin.QueryDirection().unwrap();
+                let Ok(pin_dir) = pin.QueryDirection() else {
+                    continue;
+                };
 
-            if pin_dir == direction {
-                if (category == GUID::zeroed() || pin.matches_category(category))
-                    && (major_type == GUID::zeroed() || pin.matches_major_type(major_type))
-                {
-                    return Some(pin);
+                if pin_dir == direction {
+                    if (category == GUID::zeroed() || pin.matches_category(category))
+                        && (major_type == GUID::zeroed() || pin.matches_major_type(major_type))
+                    {
+                        return Some(pin);
+                    }
                 }
             }
         }
@@ -109,8 +109,8 @@ impl IBaseFilterExt for IBaseFilter {
         &self,
         direction: PIN_DIRECTION,
         _name: Option<&PWSTR>,
-    ) -> Option<IPin> {
-        let pin_enum = self.EnumPins().unwrap();
+    ) -> windows_core::Result<Option<IPin>> {
+        let pin_enum = self.EnumPins()?;
 
         let _ = pin_enum.Reset();
 
@@ -123,22 +123,24 @@ impl IBaseFilterExt for IBaseFilter {
             let pin_dir = pin.QueryDirection().unwrap();
 
             if pin_dir == direction {
-                return Some(pin);
+                return Ok(Some(pin));
             }
         }
 
-        None
+        Ok(None)
     }
 }
 
 pub trait VARIANTExt {
-    unsafe fn to_os_string(&self) -> Option<OsString>;
+    fn to_os_string(&self) -> Option<OsString>;
 }
 
 impl VARIANTExt for VARIANT {
-    unsafe fn to_os_string(&self) -> Option<OsString> {
-        (self.Anonymous.Anonymous.vt == VT_BSTR)
-            .then(|| OsString::from_wide(self.Anonymous.Anonymous.Anonymous.bstrVal.deref()))
+    fn to_os_string(&self) -> Option<OsString> {
+        unsafe {
+            (self.Anonymous.Anonymous.vt == VT_BSTR)
+                .then(|| OsString::from_wide(self.Anonymous.Anonymous.Anonymous.bstrVal.deref()))
+        }
     }
 }
 
@@ -150,7 +152,7 @@ pub struct IAMStreamConfigMediaTypes<'a> {
 }
 
 impl<'a> IAMStreamConfigMediaTypes<'a> {
-    pub unsafe fn next(&mut self) -> Option<(&'a AM_MEDIA_TYPEVideo, i32)> {
+    pub fn next(&mut self) -> Option<(&'a AM_MEDIA_TYPEVideo, i32)> {
         let i = self.i;
 
         if i >= self.count as i32 {
@@ -161,15 +163,17 @@ impl<'a> IAMStreamConfigMediaTypes<'a> {
 
         let mut media_type = null_mut();
 
-        self.stream_config
-            .GetStreamCaps(i, &mut media_type, (&raw mut self.caps).cast::<u8>())
-            .unwrap();
+        unsafe {
+            self.stream_config
+                .GetStreamCaps(i, &mut media_type, (&raw mut self.caps).cast::<u8>())
+                .unwrap();
 
-        if media_type.is_null() {
-            return None;
+            if media_type.is_null() {
+                return None;
+            }
+
+            Some((&*media_type, i))
         }
-
-        Some((&*media_type, i))
     }
 
     pub fn count(&self) -> u32 {
@@ -178,20 +182,20 @@ impl<'a> IAMStreamConfigMediaTypes<'a> {
 }
 
 pub trait IAMStreamConfigExt {
-    unsafe fn media_types(&self) -> IAMStreamConfigMediaTypes;
+    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes>;
 }
 
 impl IAMStreamConfigExt for IAMStreamConfig {
-    unsafe fn media_types(&self) -> IAMStreamConfigMediaTypes {
+    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes> {
         let mut count = 0;
-        self.GetNumberOfCapabilities(&mut count, &mut 0).unwrap();
+        unsafe { self.GetNumberOfCapabilities(&mut count, &mut 0) }?;
 
-        IAMStreamConfigMediaTypes {
+        Ok(IAMStreamConfigMediaTypes {
             stream_config: &self,
             count: count as u32,
             caps: VIDEO_STREAM_CONFIG_CAPS::default(),
             i: 0,
-        }
+        })
     }
 }
 
@@ -252,67 +256,147 @@ impl IAMVideoControlExt for IAMVideoControl {
 }
 
 pub trait IPropertyBagExt {
-    unsafe fn read<P0, P2>(&self, pszpropname: P0, perrorlog: P2) -> windows_core::Result<VARIANT>
+    unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
-        P0: windows_core::Param<windows_core::PCWSTR>,
-        P2: windows_core::Param<IErrorLog>;
+        P0: windows_core::Param<windows_core::PCWSTR>;
 }
 
 impl IPropertyBagExt for IPropertyBag {
-    unsafe fn read<P0, P2>(&self, pszpropname: P0, perrorlog: P2) -> windows_core::Result<VARIANT>
+    unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
         P0: windows_core::Param<windows_core::PCWSTR>,
-        P2: windows_core::Param<IErrorLog>,
     {
         let mut ret = VARIANT::default();
-        self.Read(pszpropname, &mut ret, perrorlog)?;
+        self.Read(pszpropname, &mut ret, None)?;
         Ok(ret)
     }
 }
 
-type VideoInputDeviceIMoniker = IMoniker;
-
-pub struct VideoInputDeviceEnumerator {
+pub struct VideoInputDeviceIterator {
     enum_moniker: IEnumMoniker,
-    moniker: [Option<VideoInputDeviceIMoniker>; 1],
+    moniker: [Option<IMoniker>; 1],
 }
 
-impl VideoInputDeviceEnumerator {
-    pub unsafe fn new() -> windows_core::Result<Self> {
-        let create_device_enum: ICreateDevEnum = CoCreateInstance(
-            &CLSID_SystemDeviceEnum,
-            None::<&windows_core::IUnknown>,
-            CLSCTX_INPROC_SERVER,
-        )?;
+impl VideoInputDeviceIterator {
+    pub fn new() -> windows_core::Result<Self> {
+        let enum_moniker = unsafe {
+            let create_device_enum: ICreateDevEnum = CoCreateInstance(
+                &CLSID_SystemDeviceEnum,
+                None::<&windows_core::IUnknown>,
+                CLSCTX_INPROC_SERVER,
+            )?;
 
-        let mut enum_moniker = None;
+            let mut enum_moniker = None;
 
-        create_device_enum.CreateClassEnumerator(
-            &CLSID_VideoInputDeviceCategory,
-            &mut enum_moniker,
-            0,
-        )?;
+            create_device_enum.CreateClassEnumerator(
+                &CLSID_VideoInputDeviceCategory,
+                &mut enum_moniker,
+                0,
+            )?;
+
+            enum_moniker.expect("enum_moniker is None after create succeeded!")
+        };
 
         Ok(Self {
-            enum_moniker: enum_moniker.unwrap(),
+            enum_moniker,
             moniker: [None],
         })
     }
+}
 
-    pub unsafe fn next(&mut self) -> Option<VideoInputDeviceIMoniker> {
-        if self.enum_moniker.Next(&mut self.moniker, None) == S_OK {
-            return self.moniker[0].take();
+impl Iterator for VideoInputDeviceIterator {
+    type Item = VideoInputDevice;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while unsafe { self.enum_moniker.Next(&mut self.moniker, None) } == S_OK {
+            if let Some(device) = self.moniker[0]
+                .take()
+                .and_then(|moniker| VideoInputDevice::new(moniker).ok())
+            {
+                return Some(device);
+            }
         }
 
         None
     }
+}
 
-    pub unsafe fn to_vec(mut self) -> Vec<VideoInputDeviceIMoniker> {
-        let mut monikers = Vec::new();
-        while let Some(moniker) = self.next() {
-            monikers.push(moniker);
+#[derive(Clone)]
+pub struct VideoInputDevice {
+    moniker: IMoniker,
+    prop_bag: IPropertyBag,
+    filter: IBaseFilter,
+    stream_config: Option<IAMStreamConfig>,
+}
+
+impl VideoInputDevice {
+    fn new(moniker: IMoniker) -> windows_core::Result<Self> {
+        let prop_bag: IPropertyBag = unsafe { moniker.BindToStorage(None, None) }?;
+        let filter: IBaseFilter = unsafe { moniker.BindToObject(None, None) }?;
+
+        let stream_config = filter
+            .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
+            .and_then(|f| f.cast::<IAMStreamConfig>().ok());
+
+        Ok(Self {
+            moniker,
+            prop_bag,
+            filter,
+            stream_config,
+        })
+    }
+
+    pub fn name(&self) -> Option<OsString> {
+        unsafe {
+            self.prop_bag
+                .read(windows_core::w!("Description"))
+                .or_else(|_| self.prop_bag.read(windows_core::w!("FriendlyName")))
         }
-        monikers
+        .ok()?
+        .to_os_string()
+    }
+
+    pub fn id(&self) -> Option<OsString> {
+        unsafe { self.prop_bag.read(windows_core::w!("DevicePath")) }
+            .ok()
+            .and_then(|v| v.to_os_string())
+            .or_else(|| self.name())
+    }
+
+    pub fn model_id(&self) -> Option<String> {
+        self.id()
+            .and_then(|v| get_device_model_id(&v.to_string_lossy()))
+    }
+
+    pub fn media_types(&self) -> Option<VideoMediaTypesIterator> {
+        self.stream_config.as_ref().and_then(|stream_config| {
+            stream_config
+                .media_types()
+                .map(|inner| VideoMediaTypesIterator { inner })
+                .ok()
+        })
+    }
+}
+
+impl Deref for VideoInputDevice {
+    type Target = IMoniker;
+
+    fn deref(&self) -> &Self::Target {
+        &self.moniker
+    }
+}
+
+pub struct VideoMediaTypesIterator<'a> {
+    inner: IAMStreamConfigMediaTypes<'a>,
+}
+
+impl Iterator for VideoMediaTypesIterator<'_> {
+    type Item = AMMediaType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner
+            .next()
+            .map(|media_type| AMMediaType::new(media_type.0))
     }
 }
 
@@ -906,4 +990,22 @@ unsafe fn copy_media_type(src: &AM_MEDIA_TYPE) -> AM_MEDIA_TYPE {
     }
 
     dest
+}
+
+fn get_device_model_id(device_id: &str) -> Option<String> {
+    const VID_PID_SIZE: usize = 4;
+
+    let vid_location = device_id.find("vid_")?;
+    let pid_location = device_id.find("pid_")?;
+
+    if vid_location + "vid_".len() + 4 > device_id.len()
+        || pid_location + "pid_".len() + 4 > device_id.len()
+    {
+        return None;
+    }
+
+    let id_vendor = &device_id[vid_location + 4..vid_location + 8];
+    let id_product = &device_id[pid_location + 4..pid_location + 8];
+
+    Some(format!("{id_vendor}:{id_product}"))
 }

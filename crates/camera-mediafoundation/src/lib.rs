@@ -9,8 +9,12 @@ use std::{
     slice::from_raw_parts,
 };
 
-use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::{Media::MediaFoundation::*, System::Com::CoInitialize};
 use windows_core::PWSTR;
+
+pub fn initialize_mediafoundation() -> windows_core::Result<()> {
+    unsafe { CoInitialize(None) }.ok()
+}
 
 pub struct DeviceSourcesIterator {
     _attributes: IMFAttributes,
@@ -81,24 +85,24 @@ impl Iterator for DeviceSourcesIterator {
     }
 }
 
+#[derive(Clone)]
 pub struct Device {
     activate: IMFActivate,
     media_source: IMFMediaSource,
 }
 
 impl Device {
-    pub fn name(&self) -> Option<OsString> {
+    pub fn name(&self) -> windows_core::Result<OsString> {
         let mut raw = PWSTR(&mut 0);
         let mut length = 0;
         unsafe {
             self.activate
                 .GetAllocatedString(&MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME, &mut raw, &mut length)
                 .map(|_| OsString::from_wide(from_raw_parts(raw.0, length as usize)))
-                .ok()
         }
     }
 
-    pub fn id(&self) -> Option<OsString> {
+    pub fn id(&self) -> windows_core::Result<OsString> {
         let mut raw = PWSTR(&mut 0);
         let mut length = 0;
         unsafe {
@@ -109,8 +113,13 @@ impl Device {
                     &mut length,
                 )
                 .map(|_| OsString::from_wide(from_raw_parts(raw.0, length as usize)))
-                .ok()
         }
+    }
+
+    pub fn model_id(&self) -> Option<String> {
+        self.id()
+            .ok()
+            .and_then(|v| get_device_model_id(&*v.to_string_lossy()))
     }
 
     pub fn create_source_reader(&self) -> windows_core::Result<SourceReader> {
@@ -142,7 +151,7 @@ impl Display for Device {
             "{}",
             self.name()
                 .map(|v| v.to_string_lossy().to_string())
-                .unwrap_or_else(|| format!("Unknown device name"))
+                .unwrap_or_else(|_| format!("Unknown device name"))
         )
     }
 }
@@ -152,16 +161,11 @@ pub struct SourceReader {
 }
 
 impl SourceReader {
-    pub fn native_media_types(&self, stream_index: u32) -> Vec<IMFMediaType> {
-        let mut i = 0;
-        let mut ret = vec![];
-
-        while let Ok(typ) = unsafe { self.inner.GetNativeMediaType(stream_index, i) } {
-            i += 1;
-            ret.push(typ);
-        }
-
-        ret
+    pub fn native_media_types(
+        &self,
+        stream_index: u32,
+    ) -> windows_core::Result<NativeMediaTypesIterator> {
+        NativeMediaTypesIterator::new(&self.inner, stream_index)
     }
 
     pub fn set_current_media_type(
@@ -173,6 +177,36 @@ impl SourceReader {
             self.inner
                 .SetCurrentMediaType(stream_index, None, media_type)
         }
+    }
+}
+
+pub struct NativeMediaTypesIterator<'a> {
+    reader: &'a IMFSourceReader,
+    i: u32,
+    stream_index: u32,
+}
+
+impl<'a> NativeMediaTypesIterator<'a> {
+    fn new(reader: &'a IMFSourceReader, stream_index: u32) -> windows_core::Result<Self> {
+        unsafe { reader.GetNativeMediaType(stream_index, 0) }?;
+
+        Ok(Self {
+            reader,
+            i: 0,
+            stream_index,
+        })
+    }
+}
+
+impl Iterator for NativeMediaTypesIterator<'_> {
+    type Item = IMFMediaType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let ret = unsafe { self.reader.GetNativeMediaType(self.stream_index, self.i) }.ok()?;
+
+        self.i += 1;
+
+        Some(ret)
     }
 }
 
@@ -188,4 +222,22 @@ impl DerefMut for SourceReader {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
     }
+}
+
+fn get_device_model_id(device_id: &str) -> Option<String> {
+    const VID_PID_SIZE: usize = 4;
+
+    let vid_location = device_id.find("vid_")?;
+    let pid_location = device_id.find("pid_")?;
+
+    if vid_location + "vid_".len() + 4 > device_id.len()
+        || pid_location + "pid_".len() + 4 > device_id.len()
+    {
+        return None;
+    }
+
+    let id_vendor = &device_id[vid_location + 4..vid_location + 8];
+    let id_product = &device_id[pid_location + 4..pid_location + 8];
+
+    Some(format!("{id_vendor}:{id_product}"))
 }

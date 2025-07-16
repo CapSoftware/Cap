@@ -1,6 +1,6 @@
 use std::{fmt::Display, time::Duration};
 
-use camera_mediafoundation::DeviceSourcesIterator;
+use cap_camera_mediafoundation::DeviceSourcesIterator;
 use tracing::warn;
 use windows::Win32::{Media::MediaFoundation::*, System::Com::CoInitialize};
 use windows_core::GUID;
@@ -34,7 +34,7 @@ pub fn main() {
 
         let mut formats = reader
             .native_media_types(stream_index)
-            .into_iter()
+            .unwrap()
             .filter_map(|v| VideoFormat::new(v).ok())
             .collect::<Vec<_>>();
 
@@ -148,31 +148,6 @@ impl Display for VideoFormat {
             media_subtype_str(&self.subtype).unwrap_or("unknown format")
         )
     }
-}
-
-fn get_device_model_id(device_id: &str) -> String {
-    const VID_PID_SIZE: usize = 4;
-
-    let vid_location = device_id.find("vid_");
-    let pid_location = device_id.find("pid_");
-
-    let Some(vid_location) = vid_location else {
-        return String::new();
-    };
-    let Some(pid_location) = pid_location else {
-        return String::new();
-    };
-
-    if vid_location + "vid_".len() + 4 > device_id.len()
-        || pid_location + "pid_".len() + 4 > device_id.len()
-    {
-        return String::new();
-    }
-
-    let id_vendor = &device_id[vid_location + 4..vid_location + 8];
-    let id_product = &device_id[pid_location + 4..pid_location + 8];
-
-    format!("{id_vendor}:{id_product}")
 }
 
 fn media_subtype_str(subtype: &GUID) -> Option<&'static str> {
