@@ -1,3 +1,5 @@
+"use client";
+
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
 import { userSelectProps } from "@cap/database/auth/session";
@@ -76,8 +78,10 @@ export const EmbedVideo = forwardRef<
     comments: MaybePromise<CommentWithAuthor[]>;
     chapters?: { title: string; start: number }[];
     aiProcessing?: boolean;
+    ownerName?: string | null;
+    autoplay?: boolean;
   }
->(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
+>(({ data, user, comments, chapters = [], aiProcessing = false, ownerName = null, autoplay = false }, ref) => {
   useImperativeHandle(ref, () => playerRef.current as Player);
 
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
