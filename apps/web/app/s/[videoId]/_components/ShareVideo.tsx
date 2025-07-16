@@ -117,29 +117,6 @@ export const ShareVideo = forwardRef<
     return null;
   }, [data.id, data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
 
-  // Add subtitles to player when URL changes
-  useEffect(() => {
-    const player = playerRef.current;
-    if (!player || !subtitleUrl) return;
-
-    const track = player.addRemoteTextTrack({
-      kind: 'subtitles',
-      srclang: 'en',
-      label: 'English',
-      src: subtitleUrl,
-      default: true
-    }, false);
-
-    track.addEventListener("load", () => {
-      console.log("Subtitle track loaded");
-    });
-
-    track.addEventListener("error", () => {
-      console.log("Subtitle track error");
-    });
-
-  }, [subtitleUrl]);
-
   console.log("subtitleUrl", subtitleUrl);
 
   const videoJsOptions = useMemo(() => ({
@@ -148,10 +125,19 @@ export const ShareVideo = forwardRef<
     controls: true,
     responsive: true,
     fluid: false,
+    tracks: [
+      {
+        kind: 'subtitles',
+        srclang: 'en',
+        label: 'English',
+        src: subtitleUrl,
+        default: true
+      }
+    ],
     sources: [
       { src: videoSrc, type: videoType },
     ]
-  }), [videoSrc, videoType]);
+  }), [videoSrc, videoType, subtitleUrl]);
 
   return (
     <>
