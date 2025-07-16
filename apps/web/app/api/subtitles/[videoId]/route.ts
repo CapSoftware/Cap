@@ -8,7 +8,7 @@ import {
 } from "../../../s/[videoId]/_components/utils/transcript-utils";
 import { getTranscript } from "@/actions/videos/get-transcript";
 
-export async function GET({ params }: { params: { videoId: string } }) {
+export async function GET(_request: Request, params: { videoId: string }) {
   try {
     const { videoId } = params;
 

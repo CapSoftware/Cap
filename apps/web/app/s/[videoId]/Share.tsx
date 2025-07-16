@@ -146,27 +146,12 @@ export const Share = ({
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
 
-  const videoRef = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<Player | null>(null);
 
   const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
     transcriptionStatus: data.transcriptionStatus,
     aiData: initialAiData,
   });
-
-  // const { data: viewCount } = useVideoAnalytics(
-  //   data.id,
-  //   initialAnalytics.views
-  // );
-
-  // const analytics = useMemo(
-  //   () => ({
-  //     views: viewCount || 0,
-  //     comments: 0, // comments.filter((c) => c.type === "text").length,
-  //     reactions: 0, // comments.filter((c) => c.type === "emoji").length,
-  //   }),
-  //   [viewCount, comments]
-  // );
 
   const transcriptionStatus =
     videoStatus?.transcriptionStatus || data.transcriptionStatus;
@@ -217,11 +202,6 @@ export const Share = ({
       playerRef.current.currentTime(time);
     }
   };
-
-  const headerData =
-    aiData && aiData.title && !aiData.processing
-      ? { ...data, name: aiData.title, createdAt: effectiveDate }
-      : { ...data, createdAt: effectiveDate };
 
   return (
     <div className="mt-4">
