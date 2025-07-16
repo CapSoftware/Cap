@@ -81,14 +81,47 @@ export const ShareVideo = forwardRef<
     return null;
   }, [data.transcriptionStatus, transcriptData]);
 
-  // Clean up old blob URL and set new one when subtitleUrl changes
   useEffect(() => {
     if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
       if (subtitleBlobUrl) {
         URL.revokeObjectURL(subtitleBlobUrl);
       }
       setSubtitleBlobUrl(subtitleUrl);
+
+      // Dynamically add subtitle track to the player
+      if (playerRef.current && subtitleUrl) {
+        console.log("Adding subtitle track dynamically:", subtitleUrl);
+
+        // Add the remote text track
+        playerRef.current.addRemoteTextTrack(
+          {
+            kind: "subtitles",
+            srclang: "en",
+            label: "English",
+            src: subtitleUrl,
+            default: true,
+          },
+          true // Trigger manual track load
+        );
+
+        // Get all text tracks and enable the English subtitles track
+        const tracks = playerRef.current.textTracks().tracks_;
+
+        for (const track of tracks) {
+          if (track.kind === "subtitles" && track.language === "en") {
+            track.mode = "showing";
+          }
+        }
+      }
+
     }
+
+    // Cleanup Blob URL on unmount or when subtitleUrl changes
+    return () => {
+      if (subtitleBlobUrl) {
+        URL.revokeObjectURL(subtitleBlobUrl);
+      }
+    };
   }, [subtitleUrl, subtitleBlobUrl]);
 
   console.log("subtitleUrl", subtitleUrl);
@@ -129,15 +162,15 @@ export const ShareVideo = forwardRef<
     controls: true,
     responsive: true,
     fluid: false,
-    tracks: [
-      {
-        kind: 'subtitles',
-        srclang: 'en',
-        label: 'English',
-        src: subtitleUrl,
-        default: true
-      }
-    ],
+    // tracks: [
+    //   {
+    //     kind: 'subtitles',
+    //     srclang: 'en',
+    //     label: 'English',
+    //     src: subtitleUrl,
+    //     default: true
+    //   }
+    // ],
     sources: [
       { src: videoSrc, type: videoType },
     ]
