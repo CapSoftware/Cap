@@ -44,7 +44,15 @@ export const ShareVideo = forwardRef<
 
   const handlePlayerReady = (player: Player) => {
     playerRef.current = player;
-  };
+    player.on("loadedmetadata", () => {
+      const tracks = player.textTracks().tracks_;
+      for (const track of tracks) {
+        if (track.kind === "chapters") {
+          console.log(track, 'chapters track');
+        }
+      }
+    });
+  }
 
   const publicEnv = usePublicEnv();
 
@@ -136,8 +144,7 @@ export const ShareVideo = forwardRef<
         true
       );
 
-      for (let i = 0; i < tracks.length; i++) {
-        const track = tracks[i];
+      for (const track of tracks) {
         if (track.kind === "chapters") {
           track.mode = "showing";
         }
