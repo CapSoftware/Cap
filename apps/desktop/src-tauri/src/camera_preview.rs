@@ -46,6 +46,8 @@ impl CameraPreview {
     pub async fn init(window: &WebviewWindow) -> Self {
         let size = window.inner_size().unwrap();
 
+        println!("WINDOW SIZE DEBUG {:?}", size); // TODO
+
         let (tx, rx) = oneshot::channel();
         window
             .run_on_main_thread({
@@ -138,7 +140,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Adjust the coordinates to account for aspect ratio
     // For a perfect circle, we need to normalize the coordinates
     // based on the aspect ratio of the window
-    let adjusted_coords = vec2<f32>(to_center.x / aspect_ratio, to_center.y);
+    // Use a mathematical approach that works for both cases
+    let adjusted_coords = vec2<f32>(
+        to_center.x / max(aspect_ratio, 1.0),
+        to_center.y * min(aspect_ratio, 1.0)
+    );
 
     // Calculate distance from center (normalized)
     let dist = length(adjusted_coords * 2.0); // Multiplying by 2 makes radius 1.0 in normalized space
@@ -231,9 +237,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         });
 
         // Find the best alpha mode for transparency
-        let alpha_mode = if swapchain_capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied) {
+        let alpha_mode = if swapchain_capabilities
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+        {
             wgpu::CompositeAlphaMode::PreMultiplied
-        } else if swapchain_capabilities.alpha_modes.contains(&wgpu::CompositeAlphaMode::PostMultiplied) {
+        } else if swapchain_capabilities
+            .alpha_modes
+            .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+        {
             wgpu::CompositeAlphaMode::PostMultiplied
         } else {
             swapchain_capabilities.alpha_modes[0]
@@ -385,9 +397,13 @@ impl CameraPreviewRenderer {
             // Calculate aspect ratio to make a perfect circle
             // We need to normalize the coordinates based on the window's aspect ratio
             let aspect_ratio = surface_config.width as f32 / surface_config.height as f32;
-            
+
             // Update uniform buffer with aspect ratio
-            preview.queue.write_buffer(&preview.uniform_buffer, 0, bytemuck::cast_slice(&[aspect_ratio]));
+            preview.queue.write_buffer(
+                &preview.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&[aspect_ratio]),
+            );
 
             let bind_group = preview
                 .device
