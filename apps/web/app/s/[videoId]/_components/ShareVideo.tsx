@@ -6,7 +6,7 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { VideoJS } from "./VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect, useCallback } from "react";
 import Player from "video.js/dist/types/player";
 import { formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
@@ -97,7 +97,7 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
-  const subtitleUrl = useMemo(() => {
+  const subtitleUrl = useCallback(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
       if (subtitleBlobUrl) {
         URL.revokeObjectURL(subtitleBlobUrl);
@@ -115,9 +115,9 @@ export const ShareVideo = forwardRef<
       return newUrl;
     }
     return null;
-  }, [data.id, data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
+  }, [data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
 
-  console.log("subtitleUrl", subtitleUrl);
+  console.log("subtitleUrl", subtitleUrl());
 
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
@@ -130,7 +130,7 @@ export const ShareVideo = forwardRef<
         kind: 'subtitles',
         srclang: 'en',
         label: 'English',
-        src: subtitleUrl,
+        src: subtitleUrl(),
         default: true
       }
     ],
