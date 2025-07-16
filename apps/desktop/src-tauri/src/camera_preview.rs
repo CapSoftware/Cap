@@ -10,7 +10,7 @@ use ffmpeg::{
 };
 
 use cap_media::feeds::RawCameraFrame;
-use tauri::{Manager, WebviewWindow};
+use tauri::WebviewWindow;
 use tokio::sync::oneshot;
 
 pub struct CameraPreview {
@@ -68,12 +68,10 @@ impl CameraPreview {
             .await
             .expect("Failed to find an appropriate adapter");
 
-        // Create the logical device and command queue
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
                 required_features: wgpu::Features::empty(),
-                // Make sure we use the texture resolution limits from the adapter, so we can support images the size of the swapchain.
                 required_limits: wgpu::Limits::downlevel_webgl2_defaults()
                     .using_resolution(adapter.limits()),
                 memory_hints: Default::default(),
@@ -82,7 +80,6 @@ impl CameraPreview {
             .await
             .expect("Failed to create device");
 
-        // Load the shaders from disk
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
