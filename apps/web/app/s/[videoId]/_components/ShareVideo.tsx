@@ -6,8 +6,12 @@ import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { VideoJS } from "./VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useMemo } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
 import Player from "video.js/dist/types/player";
+import { formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
+import { fromVtt, Subtitle } from "subtitles-parser-vtt";
+import { useTranscript } from "hooks/use-transcript";
+import { parseVTT } from "./utils/transcript-utils";
 
 declare global {
   interface Window {
@@ -32,6 +36,8 @@ export const ShareVideo = forwardRef<
   useImperativeHandle(ref, () => playerRef.current as Player);
 
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
+  const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
 
   const playerRef = useRef<Player | null>(null);
 
@@ -41,6 +47,33 @@ export const ShareVideo = forwardRef<
 
   // Use TanStack Query for video source validation
   const publicEnv = usePublicEnv();
+
+
+  const { data: transcriptContent, error: transcriptError } = useTranscript(
+    data.id,
+    data.transcriptionStatus
+  );
+
+  useEffect(() => {
+    if (transcriptContent) {
+      const parsed = parseVTT(transcriptContent);
+      setTranscriptData(parsed);
+    } else if (transcriptError) {
+      console.error(
+        "[Transcript] Transcript error from React Query:",
+        transcriptError.message
+      );
+    }
+  }, [transcriptContent, transcriptError]);
+
+  // Clean up blob URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (subtitleBlobUrl) {
+        URL.revokeObjectURL(subtitleBlobUrl);
+      }
+    };
+  }, [subtitleBlobUrl]);
 
   let videoSrc: string;
   let videoType: string = "video/mp4";
@@ -64,8 +97,26 @@ export const ShareVideo = forwardRef<
   }
 
   const subtitleUrl = useMemo(() => {
-    return data.transcriptionStatus === "COMPLETE" ? `/api/subtitles?videoid=${data.id}` : null;
-  }, [data.id, data.transcriptionStatus]);
+    if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
+      // Clean up previous blob URL if it exists
+      if (subtitleBlobUrl) {
+        URL.revokeObjectURL(subtitleBlobUrl);
+      }
+
+      // Create new blob URL
+      const vttContent = formatTranscriptAsVTT(transcriptData);
+      const blob = new Blob([vttContent], { type: "text/vtt" });
+      const newUrl = URL.createObjectURL(blob);
+
+      // Store for cleanup later
+      setSubtitleBlobUrl(newUrl);
+
+      return newUrl;
+    }
+    return null;
+  }, [data.id, data.transcriptionStatus, transcriptData, subtitleBlobUrl]);
+
+  const chaptersUrl = "";
 
   const videoJsOptions = useMemo(() => ({
     autoplay: true,
@@ -81,6 +132,11 @@ export const ShareVideo = forwardRef<
         label: "English",
         default: true
       },
+      {
+        kind: "chapters",
+        srclang: "en",
+        src: chaptersUrl,
+      }
     ] : [],
     sources: [
       { src: videoSrc, type: videoType },
@@ -130,3 +186,42 @@ export const ShareVideo = forwardRef<
     </>
   );
 });
+
+
+const useTranscriptionProcessing = (
+  data: typeof videos.$inferSelect,
+  transcriptContent: string | undefined,
+  transcriptError: any
+) => {
+  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
+    data.transcriptionStatus === "PROCESSING"
+  );
+  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+
+  useEffect(() => {
+    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
+      return setIsTranscriptionProcessing(false);
+    }
+    if (transcriptContent) {
+      const parsedSubtitles = fromVtt(transcriptContent);
+      setSubtitles(parsedSubtitles);
+      setIsTranscriptionProcessing(false);
+    } else if (transcriptError) {
+      console.error(
+        "[ShareVideo] Subtitle error from React Query:",
+        transcriptError.message
+      );
+      if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
+        setIsTranscriptionProcessing(true);
+      } else {
+        setIsTranscriptionProcessing(false);
+      }
+    } else if (data.transcriptionStatus === "PROCESSING") {
+      setIsTranscriptionProcessing(true);
+    } else if (data.transcriptionStatus === "ERROR") {
+      setIsTranscriptionProcessing(false);
+    }
+  }, [transcriptContent, transcriptError, data.transcriptionStatus]);
+
+  return { isTranscriptionProcessing, subtitles };
+};
