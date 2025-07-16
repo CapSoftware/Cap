@@ -24,7 +24,7 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 };
 
 
-const addMarkers = (cuePointsAra: number[], videoDuration: number, playerRef: React.RefObject<Player>) => {
+const addMarkers = (cuePointsAra: number[], videoDuration: number, chapters: { title: string; start: number }[], playerRef: React.RefObject<Player>) => {
   const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
   if (!playheadWell) {
     console.warn("Progress control not found");
@@ -37,12 +37,37 @@ const addMarkers = (cuePointsAra: number[], videoDuration: number, playerRef: Re
   cuePointsAra.forEach((cuePoint, index) => {
     const elem = document.createElement("div");
     elem.className = "vjs-marker";
-    elem.onclick = (e: any) => {
-      e.stopPropagation();
-      playerRef.current?.currentTime(cuePoint);
-    };
     elem.id = `cp${index}`;
-
+    elem.ontouchstart = () => {
+      //tooltip with chapter name
+      const tooltip = document.createElement("div");
+      tooltip.className = "vjs-tooltip";
+      if (!chapters[index]) return;
+      tooltip.textContent = chapters[index].title || "";
+      tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
+      playheadWell.appendChild(tooltip);
+    };
+    elem.onmouseenter = () => {
+      //tooltip with chapter name
+      const tooltip = document.createElement("div");
+      tooltip.className = "vjs-tooltip";
+      if (!chapters[index]) return;
+      tooltip.textContent = chapters[index].title || "";
+      tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
+      playheadWell.appendChild(tooltip);
+    };
+    elem.onmouseleave = () => {
+      const tooltip = document.querySelector(".vjs-tooltip");
+      if (tooltip) {
+        tooltip.remove();
+      }
+    };
+    elem.ontouchend = () => {
+      const tooltip = document.querySelector(".vjs-tooltip");
+      if (tooltip) {
+        tooltip.remove();
+      }
+    };
     elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
     playheadWell.appendChild(elem);
   });
@@ -89,7 +114,7 @@ export const ShareVideo = forwardRef<
 
         const videoDuration = player.duration();
         if (videoDuration) {
-          addMarkers(chapterStartTimesAra, videoDuration, playerRef);
+          addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
         }
       }
     });

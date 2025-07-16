@@ -744,6 +744,18 @@ footer a {
   z-index: 100;
 }
 
+.vjs-tooltip {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: #313131;
+  color: #fff;
+  padding: 5px 10px;
+  border-radius: 5px;
+  z-index: 101;
+}
+
 .vjs-cap li.vjs-menu-title {
   @apply py-[0.5em] mb-0 !important;
 }
