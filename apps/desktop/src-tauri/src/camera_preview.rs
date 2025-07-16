@@ -17,6 +17,12 @@ struct TextureResources {
     dimensions: (u32, u32),
 }
 
+struct ScalerCache {
+    last_format: Option<Pixel>,
+    last_width: u32,
+    last_height: u32,
+}
+
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
     surface_config: Mutex<wgpu::SurfaceConfiguration>,
@@ -31,6 +37,7 @@ pub struct CameraPreview {
     texture_resources: Arc<Mutex<TextureResources>>,
     last_dimensions: Mutex<(u32, u32)>,
     last_format: Mutex<Option<Pixel>>,
+    scaler_cache: Arc<Mutex<ScalerCache>>,
     frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
@@ -299,6 +306,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             dimensions: (640, 480),
         }));
 
+        let scaler_cache = Arc::new(Mutex::new(ScalerCache {
+            last_format: None,
+            last_width: 0,
+            last_height: 0,
+        }));
+
         let frame = window
             .state::<Arc<tokio::sync::RwLock<crate::App>>>()
             .read()
@@ -317,6 +330,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             texture_resources,
             last_dimensions: Mutex::new((0, 0)),
             last_format: Mutex::new(None),
+            scaler_cache,
             frame,
         }
     }
@@ -501,7 +515,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Create destination frame
                     let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
 
-                    // Create a scaler on-demand
+                    // Check if we need to update the cache
+                    let mut scaler_cache = self.scaler_cache.lock().unwrap();
+                    let needs_cache_update = scaler_cache.last_format != Some(format)
+                        || scaler_cache.last_width != width
+                        || scaler_cache.last_height != height;
+
+                    if needs_cache_update {
+                        println!("Camera preview: Updating scaler cache for format {:?}, {}x{}", format, width, height);
+                        scaler_cache.last_format = Some(format);
+                        scaler_cache.last_width = width;
+                        scaler_cache.last_height = height;
+                    }
+
+                    // Create a new scaler for this frame (since ScalingContext is not Send)
                     let mut scaler = ScalingContext::get(
                         format,      // source format
                         width,       // source width
