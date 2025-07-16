@@ -64,7 +64,7 @@ export const ShareVideo = forwardRef<
   }
 
   const subtitleUrl = useMemo(() => {
-    return data.transcriptionStatus === "COMPLETE" ? `/api/subtitles/${data.id}` : null;
+    return data.transcriptionStatus === "COMPLETE" ? `/api/subtitles?videoid=${data.id}` : null;
   }, [data.id, data.transcriptionStatus]);
 
   const videoJsOptions = useMemo(() => ({

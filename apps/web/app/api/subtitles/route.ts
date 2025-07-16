@@ -1,16 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@cap/database";
 import { videos, s3Buckets } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import {
   formatTranscriptAsVTT,
   parseVTT,
-} from "../../../s/[videoId]/_components/utils/transcript-utils";
+} from "../../s/[videoId]/_components/utils/transcript-utils";
 import { getTranscript } from "@/actions/videos/get-transcript";
 
-export async function GET(_request: Request, params: { videoId: string }) {
+export async function GET(request: NextRequest) {
   try {
-    const { videoId } = params;
+    const videoId = request.nextUrl.searchParams.get("videoid");
+
+    if (!videoId) {
+      return new NextResponse("Video ID is required", { status: 400 });
+    }
 
     const videoData = await db()
       .select({
