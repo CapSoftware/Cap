@@ -8,7 +8,7 @@ import { isUserOnProPlan } from "@cap/utils";
 import { VideoJS } from "./VideoJs";
 import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
 import Player from "video.js/dist/types/player";
-import { formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
+import { formatChaptersAsVTT, formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
@@ -38,6 +38,7 @@ export const ShareVideo = forwardRef<
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
   const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
+  const [chaptersBlobUrl, setChaptersBlobUrl] = useState<string | null>(null);
 
   const playerRef = useRef<Player | null>(null);
 
@@ -67,7 +68,16 @@ export const ShareVideo = forwardRef<
     }
   }, [transcriptContent, transcriptError]);
 
-  // Create subtitle URL when transcript data changes
+  const chaptersUrl = useMemo(() => {
+    if (chapters?.length > 0) {
+      const vttContent = formatChaptersAsVTT(chapters);
+      console.log("Chapters VTT Content:", vttContent);
+      const blob = new Blob([vttContent], { type: "text/vtt" });
+      return URL.createObjectURL(blob);
+    }
+    return null;
+  }, [chapters]);
+
   const subtitleUrl = useMemo(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
       const vttContent = formatTranscriptAsVTT(transcriptData);
@@ -88,11 +98,9 @@ export const ShareVideo = forwardRef<
       }
       setSubtitleBlobUrl(subtitleUrl);
 
-      // Dynamically add subtitle track to the player
       if (playerRef.current && subtitleUrl) {
-        console.log("Adding subtitle track dynamically:", subtitleUrl);
 
-        // Add the remote text track
+        // subtitles
         playerRef.current.addRemoteTextTrack(
           {
             kind: "subtitles",
@@ -101,10 +109,10 @@ export const ShareVideo = forwardRef<
             src: subtitleUrl,
             default: true,
           },
-          true // Trigger manual track load
+          true
         );
 
-        // Get all text tracks and enable the English subtitles track
+        // subtitle tracks
         const tracks = playerRef.current.textTracks().tracks_;
 
         for (const track of tracks) {
@@ -112,6 +120,33 @@ export const ShareVideo = forwardRef<
             track.mode = "showing";
           }
         }
+
+        if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
+          if (chaptersBlobUrl) {
+            URL.revokeObjectURL(chaptersBlobUrl);
+          }
+          setChaptersBlobUrl(chaptersUrl);
+
+          console.log("Adding chapters track:", chaptersUrl);
+          playerRef.current.addRemoteTextTrack(
+            {
+              kind: "chapters",
+              srclang: "en",
+              label: "Chapters",
+              src: chaptersUrl,
+            },
+            true
+          );
+
+          for (let i = 0; i < tracks.length; i++) {
+            const track = tracks[i];
+            if (track.kind === "chapters") {
+              console.log("Enabling chapters track:", track);
+              track.mode = "showing";
+            }
+          }
+        }
+
       }
 
     }
@@ -123,8 +158,6 @@ export const ShareVideo = forwardRef<
       }
     };
   }, [subtitleUrl, subtitleBlobUrl]);
-
-  console.log("subtitleUrl", subtitleUrl);
 
   // Clean up blob URL when component unmounts
   useEffect(() => {
@@ -162,15 +195,6 @@ export const ShareVideo = forwardRef<
     controls: true,
     responsive: true,
     fluid: false,
-    // tracks: [
-    //   {
-    //     kind: 'subtitles',
-    //     srclang: 'en',
-    //     label: 'English',
-    //     src: subtitleUrl,
-    //     default: true
-    //   }
-    // ],
     sources: [
       { src: videoSrc, type: videoType },
     ]
