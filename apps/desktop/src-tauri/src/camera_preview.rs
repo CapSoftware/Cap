@@ -316,13 +316,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         {
             let ff_video = &camera_frame.frame;
 
-            // We need to use the FFmpeg API to get frame info
-            let width = unsafe { (*ff_video.as_ptr()).width as u32 };
-            let height = unsafe { (*ff_video.as_ptr()).height as u32 };
-            // Get format using a safe fallback approach
-            let format = unsafe {
+            // Get frame info using the safer FFVideo API
+            let ptr;
+            let width;
+            let height;
+            let format;
+
+            unsafe {
+                ptr = ff_video.as_ptr();
+            }
+
+            unsafe {
+                width = (*ptr).width as u32;
+                height = (*ptr).height as u32;
+                // Get format using a safe fallback approach
+                format =
                 // Map common formats, fallback to RGB24 for unknown formats
-                match (*ff_video.as_ptr()).format {
+                match (*ptr).format {
                     0 => Pixel::YUV420P,
                     1 => Pixel::YUYV422,
                     2 => Pixel::RGB24,
@@ -335,6 +345,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Default to RGB24 for any other format
                     _ => Pixel::RGB24,
                 }
+            }
+
+            // Fallback to RGB24 if we get an unusual format
+            let format = if format == Pixel::None {
+                Pixel::RGB24
+            } else {
+                format
             };
 
             // Only process if we have valid dimensions
@@ -404,54 +421,71 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     texture_res.bind_group = bind_group;
                 }
 
-                // Convert frame to RGBA
-                let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
+                // Create a safer conversion process
+                let result = || -> Result<Vec<u8>, ffmpeg::Error> {
+                    // Create destination frame
+                    let mut dest_frame = ffmpeg::frame::Video::new(Pixel::RGBA, width, height);
 
-                // Create a scaler on-demand
-                let scaler_result = ScalingContext::get(
-                    format,      // source format
-                    width,       // source width
-                    height,      // source height
-                    Pixel::RGBA, // destination format
-                    width,       // destination width
-                    height,      // destination height
-                    ffmpeg::software::scaling::flag::Flags::BILINEAR,
-                );
+                    // Create a scaler on-demand
+                    let mut scaler = ScalingContext::get(
+                        format,      // source format
+                        width,       // source width
+                        height,      // source height
+                        Pixel::RGBA, // destination format
+                        width,       // destination width
+                        height,      // destination height
+                        ffmpeg::software::scaling::flag::Flags::BILINEAR,
+                    )?;
 
-                if let Ok(mut scaler) = scaler_result {
-                    // Create a wrapper frame to use with the scaler
-                    let source_frame =
-                        unsafe { ffmpeg::frame::Video::wrap(ff_video.as_ptr() as *mut _) };
-                    if unsafe { scaler.run(&source_frame, &mut dest_frame) }.is_ok() {
-                        // Copy data to our buffer
-                        let dest_data = dest_frame.data(0);
-                        if dest_data.len() <= texture_res.rgb_buffer.len() {
-                            texture_res.rgb_buffer[..dest_data.len()].copy_from_slice(dest_data);
+                    // Create a new frame from the raw frame data
+                    // This approach avoids accessing private fields
+                    let mut source_frame = ffmpeg::frame::Video::empty();
+                    unsafe {
+                        // Copy the frame pointer data for conversion
+                        ffmpeg::ffi::av_frame_ref(source_frame.as_mut_ptr(), ff_video.as_ptr());
+                    }
 
-                            // Calculate bytes per row
-                            let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
+                    // Convert the frame
+                    scaler.run(&source_frame, &mut dest_frame)?;
 
-                            // Copy the pixel data to the GPU texture
-                            self.queue.write_texture(
-                                wgpu::TexelCopyTextureInfo {
-                                    texture: &texture_res.texture,
-                                    mip_level: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::TextureAspect::All,
-                                },
-                                &texture_res.rgb_buffer[..dest_data.len()],
-                                wgpu::TexelCopyBufferLayout {
-                                    offset: 0,
-                                    bytes_per_row: Some(bytes_per_row),
-                                    rows_per_image: Some(height),
-                                },
-                                wgpu::Extent3d {
-                                    width,
-                                    height,
-                                    depth_or_array_layers: 1,
-                                },
-                            );
-                        }
+                    // Create a new buffer with the converted data
+                    let dest_data = dest_frame.data(0);
+                    let output = dest_data.to_vec();
+
+                    Ok(output)
+                };
+
+                // Execute the conversion
+                if let Ok(output_buffer) = result() {
+                    // Ensure our buffer is the right size
+                    let expected_size = (width * height * 4) as usize;
+                    if output_buffer.len() == expected_size {
+                        // Store the buffer for future use
+                        texture_res.rgb_buffer = output_buffer;
+
+                        // Calculate bytes per row
+                        let bytes_per_row = width * 4; // RGBA format (4 bytes per pixel)
+
+                        // Copy the pixel data to the GPU texture
+                        self.queue.write_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &texture_res.texture,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            &texture_res.rgb_buffer,
+                            wgpu::TexelCopyBufferLayout {
+                                offset: 0,
+                                bytes_per_row: Some(bytes_per_row),
+                                rows_per_image: Some(height),
+                            },
+                            wgpu::Extent3d {
+                                width,
+                                height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
                     }
                 }
 
