@@ -475,23 +475,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             }
         } else {
             base
-        };
-        let total_height = window_height + TOOLBAR_HEIGHT;
+        } + TOOLBAR_HEIGHT;
 
         let monitor = self.window.current_monitor().unwrap().unwrap();
         let width = (monitor.size().width as f64 / monitor.scale_factor()
             - window_width as f64
             - 100.0) as u32;
         let height = (monitor.size().height as f64 / monitor.scale_factor()
-            - total_height as f64
+            - window_height as f64
             - 100.0) as u32;
 
-        println!(
-            "RESIZE WINDOW to ({}, {} or {})",
-            window_width, window_height, total_height
-        );
+        println!("RESIZE WINDOW to ({}, {})", window_width, window_height);
         self.window
-            .set_size(LogicalSize::new(window_width, total_height))
+            .set_size(LogicalSize::new(window_width, window_height))
             .unwrap();
         let monitor_offset: LogicalPosition<u32> =
             monitor.position().to_logical(monitor.scale_factor());
