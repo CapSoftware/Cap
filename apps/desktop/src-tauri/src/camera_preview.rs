@@ -228,18 +228,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Size constants: 0 = Sm, 1 = Lg
     let shape = uniforms.shape;
     let size = uniforms.size;
-    
+
     // For Full shape, just render the camera texture
     if (shape == 2u) {
         let camera_color = textureSample(t_camera, s_camera, in.uv);
         return vec4<f32>(camera_color.rgb, 1.0);
     }
-    
+
     // Convert UV coordinates to center-based coordinates [-1, 1]
     let center_uv = (in.uv - 0.5) * 2.0;
-    
+
     var mask = 1.0;
-    
+
     if (shape == 0u) {
         // Round shape - create circular mask (border-radius: 9999px equivalent)
         let distance = length(center_uv);
@@ -251,21 +251,21 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let base_size = select(230.0, 400.0, size == 1u); // sm vs lg base size
         let corner_radius = select(48.0, 64.0, size == 1u); // 3rem vs 4rem in pixels
         let radius_ratio = corner_radius / base_size; // Convert to ratio of quad size
-        
+
         // Calculate distance from corners for rounded rectangle
         let abs_uv = abs(center_uv);
         let corner_distance = abs_uv - (1.0 - radius_ratio);
         let corner_dist = length(max(corner_distance, vec2<f32>(0.0, 0.0)));
-        
+
         // Apply rounded corner mask
         mask = select(0.0, 1.0, corner_dist <= radius_ratio);
     }
-    
+
     // Apply the mask
     if (mask < 0.5) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
-    
+
     // Sample the camera texture
     let camera_color = textureSample(t_camera, s_camera, in.uv);
     return vec4<f32>(camera_color.rgb, 1.0);
@@ -391,7 +391,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         });
 
         // Initialize uniform buffer with initial values
-        let state = CameraWindowStateStore::init(&window).get().unwrap_or_default();
+        let state = CameraWindowStateStore::init(&window)
+            .get()
+            .unwrap_or_default();
         let shape_value = match state.shape {
             CameraPreviewShape::Round => 0.0,
             CameraPreviewShape::Square => 1.0,
@@ -524,12 +526,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 // State that is only accessibly by `CameraPreview::render`.
 // This allows it to be mutable.
 pub struct CameraPreviewRenderer {
-    // The rescaler so the camera feed can be scaled to the window.
     scaler: scaling::Context,
-    // A frame used for the rescaler output.
-    // Avoids needing to realloc a new one each time.
-    rescaler_frame: frame::Video,
-    // Frame from the camera capture
     camera_frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
@@ -550,7 +547,6 @@ impl CameraPreviewRenderer {
 
         Self {
             scaler,
-            rescaler_frame: frame::Video::empty(),
             camera_frame,
         }
     }
@@ -576,7 +572,7 @@ impl CameraPreviewRenderer {
             let surface_config = preview.surface_config.lock().unwrap();
 
             // Rescale the frame to the correct output size
-            let buffer = {
+            let (buffer, stride) = {
                 // This will either reuse or reinialise the scaler
                 self.scaler.cached(
                     frame.frame.format(),
@@ -588,11 +584,11 @@ impl CameraPreviewRenderer {
                     scaling::Flags::empty(),
                 );
 
-                self.scaler
-                    .run(&frame.frame, &mut self.rescaler_frame)
-                    .unwrap();
+                // TODO: We could probably reuse this frame but if the resolution changes it needs to get reset.
+                let mut out_frame = frame::Video::empty();
+                self.scaler.run(&frame.frame, &mut out_frame).unwrap();
 
-                self.rescaler_frame.data(0).to_vec()
+                (out_frame.data(0).to_vec(), out_frame.stride(0) as u32)
             };
 
             let texture = preview.device.create_texture(&wgpu::TextureDescriptor {
@@ -639,7 +635,7 @@ impl CameraPreviewRenderer {
                 &buffer,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.rescaler_frame.stride(0) as u32),
+                    bytes_per_row: Some(stride),
                     rows_per_image: Some(surface_config.height),
                 },
                 wgpu::Extent3d {
