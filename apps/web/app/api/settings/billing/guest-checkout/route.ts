@@ -22,7 +22,6 @@ export async function POST(request: NextRequest) {
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true&guest=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
-      customer_creation: "always", // This ensures Stripe creates a customer
       metadata: { 
         platform: "web", 
         guestCheckout: "true",
