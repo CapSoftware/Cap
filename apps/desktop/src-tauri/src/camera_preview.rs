@@ -200,8 +200,10 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     let scaled_y = pos[idx].y * scale_factor;
 
     // Position the scaled quad in the bottom portion of the screen
-    // The bottom of the available area is at -1.0, top is at (1.0 - offset_y)
-    let final_y = scaled_y - offset_y;
+    // Available space bottom: -1.0, top: (1.0 - offset_y)
+    // Map scaled_y from [-1,1] to the available space
+    let available_range = 2.0 - offset_y; // total height of available space
+    let final_y = -1.0 + (scaled_y + 1.0) * available_range / 2.0;
 
     let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
 
