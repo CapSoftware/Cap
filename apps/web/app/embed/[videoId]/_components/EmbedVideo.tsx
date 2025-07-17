@@ -12,12 +12,10 @@ import {
   useState
 } from "react";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
-import VideoJS from "@/app/s/[videoId]/_components/VideoJs";
 import Player from "video.js/dist/types/player";
 import { formatChaptersAsVTT, formatTranscriptAsVTT, parseVTT, TranscriptEntry } from "@/app/s/[videoId]/_components/utils/transcript-utils";
 import { useTranscript } from "hooks/use-transcript";
-import { Avatar, Logo } from "@cap/ui";
-import { AnimatePresence, motion } from "framer-motion";
+import { MediaPlayerSettingsDemo } from "@/app/s/[videoId]/_components/MediaPlayer";
 
 declare global {
   interface Window {
@@ -356,14 +354,16 @@ export const EmbedVideo = forwardRef<
     }
     return (
       <>
+
         <div className="relative w-screen h-screen rounded-xl">
-          <VideoJS
+          {/* <VideoJS
             onReady={handlePlayerReady}
             options={videoJsOptions}
             ref={playerRef}
-          />
+          /> */}
+          <MediaPlayerSettingsDemo videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} />
         </div>
-
+        {/* 
         <AnimatePresence>
           {!isPlaying && (
             <motion.button
@@ -431,7 +431,7 @@ export const EmbedVideo = forwardRef<
               </div>
             </motion.div>
           )}
-        </AnimatePresence>
+        </AnimatePresence> */}
       </>
     );
   }
