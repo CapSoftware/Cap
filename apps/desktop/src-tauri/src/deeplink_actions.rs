@@ -106,8 +106,7 @@ impl DeepLinkAction {
             } => {
                 let state = app.state::<ArcLock<App>>();
 
-                // TODO
-                // crate::set_camera_input(state.clone(), camera_label).await?;
+                crate::set_camera_input_inner(None, state.clone(), camera_label).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 use cap_media::sources::ScreenCaptureTarget;

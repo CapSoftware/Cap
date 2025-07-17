@@ -17,8 +17,7 @@ use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
 
-// If you change this you might also need to update the constant in `camera.tsx`
-static TOOLBAR_HEIGHT: f32 = 56.0 /* bar height */ + 16.0 /* inset */;
+static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */ + 16.0 /* camera preview inset */;
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]

@@ -182,8 +182,16 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
+    window: Window,
     state: MutableState<'_, App>,
-    preview: State<'_, CameraPreview>,
+    label: Option<String>,
+) -> Result<bool, String> {
+    set_camera_input_inner(Some(window), state, label).await
+}
+
+async fn set_camera_input_inner(
+    window: Option<Window>,
+    state: MutableState<'_, App>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -214,12 +222,20 @@ async fn set_camera_input(
                                     let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
 
-                                    preview.resize(video_info.width, video_info.height);
+                                    if let Some(window) = window {
+                                        if let Some(preview) = window.try_state::<CameraPreview>() {
+                                            preview.resize(video_info.width, video_info.height);
+                                        }
+                                    }
 
                                     return Ok(true);
                                 } else {
-                                    let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
-                                    preview.resize(video_info.width, video_info.height);
+                                    if let Some(window) = window {
+                                        if let Some(preview) = window.try_state::<CameraPreview>() {
+                                            let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
+                                            preview.resize(video_info.width, video_info.height);
+                                        }
+                                    }
 
                                     return Ok(false);
                                 }
