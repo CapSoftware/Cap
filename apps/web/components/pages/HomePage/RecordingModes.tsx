@@ -1,3 +1,5 @@
+"use client";
+
 import {
   getDownloadButtonText,
   getDownloadUrl,
@@ -97,7 +99,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap-web-git-rework-video-player-mc-ilroy.vercel.app/embed/8cq21vmz12tm1zf"
+                src="http://www.localhost:3000/embed/vz2tdacm9yjja65"
                 frameBorder="0"
                 allowFullScreen
                 style={{

@@ -24,13 +24,15 @@ interface Props {
   videoSrc: string;
   chaptersSrc: string;
   captionsSrc: string;
+  videoRef?: React.Ref<HTMLVideoElement>;
 }
 
-export function MediaPlayerSettingsDemo({ videoSrc, chaptersSrc, captionsSrc }: Props) {
+export function CapVideoPlayer({ videoSrc, chaptersSrc, captionsSrc, videoRef }: Props) {
   return (
-    <MediaPlayer autoHide>
+    <MediaPlayer className="w-full h-full" autoHide>
       <MediaPlayerVideo
         src={videoSrc}
+        ref={videoRef}
         crossOrigin=""
         muted
         playsInline

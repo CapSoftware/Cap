@@ -54,6 +54,7 @@ import {
 } from "media-chrome/react/media-store";
 import * as React from "react";
 import * as ReactDOM from "react-dom";
+import { forwardRef } from "react";
 
 const ROOT_NAME = "MediaPlayer";
 const SEEK_NAME = "MediaPlayerSeek";
@@ -803,13 +804,14 @@ interface MediaPlayerVideoProps extends React.ComponentProps<"video"> {
   asChild?: boolean;
 }
 
-function MediaPlayerVideo(props: MediaPlayerVideoProps) {
-  const { asChild, ref, ...videoProps } = props;
+const MediaPlayerVideo = forwardRef<HTMLVideoElement, MediaPlayerVideoProps>((props: MediaPlayerVideoProps, ref) => {
+  const { asChild, ...videoProps } = props;
 
   const context = useMediaPlayerContext("MediaPlayerVideo");
   const dispatch = useMediaDispatch();
   const mediaRefCallback = useMediaRef();
   const composedRef = useComposedRefs(ref, context.mediaRef, mediaRefCallback);
+
 
   const onPlayToggle = React.useCallback(
     (event: React.MouseEvent<HTMLVideoElement>) => {
@@ -842,7 +844,7 @@ function MediaPlayerVideo(props: MediaPlayerVideoProps) {
       onClick={onPlayToggle}
     />
   );
-}
+});
 
 interface MediaPlayerAudioProps extends React.ComponentProps<"audio"> {
   asChild?: boolean;
@@ -2029,7 +2031,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
           role="presentation"
           aria-hidden="true"
           data-slot="media-player-seek-chapter-separator"
-          className="absolute top-0 h-full bg-zinc-50 dark:bg-zinc-950"
+          className="absolute top-0 h-full bg-black"
           style={{
             width: ".1563rem",
             left: `${position}%`,
@@ -2095,7 +2097,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
         <SliderPrimitive.Track className="overflow-hidden relative w-full h-1 rounded-full grow bg-white/40">
           <div
             data-slot="media-player-seek-buffered"
-            className="absolute h-full bg-white/70 will-change-[width]"
+            className="absolute h-full bg-white/10 will-change-[width]"
             style={{
               width: `${bufferedProgress * 100}%`,
             }}
@@ -2113,7 +2115,7 @@ function MediaPlayerSeek(props: MediaPlayerSeekProps) {
           )}
           {chapterSeparators}
         </SliderPrimitive.Track>
-        <SliderPrimitive.Thumb className="relative z-10 block size-2.5 shrink-0 rounded-full bg-white shadow-sm ring-ring/50 transition-[color,box-shadow] will-change-transform hover:ring-4 focus-visible:outline-hidden focus-visible:ring-4 disabled:pointer-events-none disabled:opacity-50" />
+        <SliderPrimitive.Thumb className="relative z-10 block size-3 shrink-0 rounded-full bg-white shadow-sm  transition-[color,box-shadow] will-change-transform focus-visible:outline-hidden outline-0 disabled:pointer-events-none disabled:opacity-50" />
       </SliderPrimitive.Root>
       {!withoutTooltip &&
         !context.withoutTooltip &&
@@ -3104,7 +3106,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
       <TooltipContent
         container={context.portalContainer}
         sideOffset={tooltipSideOffset}
-        className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-foreground data-[side=top]:mb-3.5 dark:bg-zinc-900 [&>span]:hidden"
+        className="flex items-center gap-2 border bg-white px-2 py-1 font-medium text-black data-[side=top]:mb-3.5  [&>span]:hidden"
       >
         <p>{tooltip}</p>
         {Array.isArray(shortcut) ? (
@@ -3112,7 +3114,7 @@ function MediaPlayerTooltip(props: MediaPlayerTooltipProps) {
             {shortcut.map((shortcutKey) => (
               <kbd
                 key={shortcutKey}
-                className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-foreground shadow-xs"
+                className="select-none rounded border bg-white px-1.5 py-0.5 font-mono text-[11.2px] text-black shadow-xs"
               >
                 <abbr title={shortcutKey} className="no-underline">
                   {shortcutKey}
