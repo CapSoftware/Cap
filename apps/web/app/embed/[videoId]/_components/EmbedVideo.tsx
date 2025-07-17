@@ -146,6 +146,54 @@ export const EmbedVideo = forwardRef<
             addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
           }
         }
+
+        if (!playerRef.current) return;
+        const tracks = playerRef.current.textTracks().tracks_;
+
+        if (subtitleUrl) {
+
+          if (playerRef.current && subtitleUrl) {
+
+            // subtitles
+            playerRef.current.addRemoteTextTrack(
+              {
+                kind: "subtitles",
+                srclang: "en",
+                label: "English",
+                src: subtitleUrl,
+                default: true,
+              },
+              true
+            );
+
+            for (const track of tracks) {
+              if (track.kind === "subtitles" && track.language === "en") {
+                track.mode = "showing";
+              }
+            }
+
+          }
+
+        }
+
+        if (chaptersUrl) {
+
+          playerRef.current.addRemoteTextTrack(
+            {
+              kind: "chapters",
+              srclang: "en",
+              label: "Chapters",
+              src: chaptersUrl,
+            },
+            true
+          );
+
+          for (const track of tracks) {
+            if (track.kind === "chapters") {
+              track.mode = "showing";
+            }
+          }
+        }
       });
     }
 
@@ -188,53 +236,53 @@ export const EmbedVideo = forwardRef<
 
 
     useEffect(() => {
-      if (!playerRef.current) return;
-      const tracks = playerRef.current.textTracks().tracks_;
+      // if (!playerRef.current) return;
+      // const tracks = playerRef.current.textTracks().tracks_;
 
-      if (subtitleUrl) {
+      // if (subtitleUrl) {
 
-        if (playerRef.current && subtitleUrl) {
+      //   if (playerRef.current && subtitleUrl) {
 
-          // subtitles
-          playerRef.current.addRemoteTextTrack(
-            {
-              kind: "subtitles",
-              srclang: "en",
-              label: "English",
-              src: subtitleUrl,
-              default: true,
-            },
-            true
-          );
+      //     // subtitles
+      //     playerRef.current.addRemoteTextTrack(
+      //       {
+      //         kind: "subtitles",
+      //         srclang: "en",
+      //         label: "English",
+      //         src: subtitleUrl,
+      //         default: true,
+      //       },
+      //       true
+      //     );
 
-          for (const track of tracks) {
-            if (track.kind === "subtitles" && track.language === "en") {
-              track.mode = "showing";
-            }
-          }
+      //     for (const track of tracks) {
+      //       if (track.kind === "subtitles" && track.language === "en") {
+      //         track.mode = "showing";
+      //       }
+      //     }
 
-        }
+      //   }
 
-      }
+      // }
 
-      if (chaptersUrl) {
+      // if (chaptersUrl) {
 
-        playerRef.current.addRemoteTextTrack(
-          {
-            kind: "chapters",
-            srclang: "en",
-            label: "Chapters",
-            src: chaptersUrl,
-          },
-          true
-        );
+      //   playerRef.current.addRemoteTextTrack(
+      //     {
+      //       kind: "chapters",
+      //       srclang: "en",
+      //       label: "Chapters",
+      //       src: chaptersUrl,
+      //     },
+      //     true
+      //   );
 
-        for (const track of tracks) {
-          if (track.kind === "chapters") {
-            track.mode = "showing";
-          }
-        }
-      }
+      //   for (const track of tracks) {
+      //     if (track.kind === "chapters") {
+      //       track.mode = "showing";
+      //     }
+      //   }
+      // }
 
       // Cleanup Blob URL on unmount or when subtitleUrl changes
       return () => {

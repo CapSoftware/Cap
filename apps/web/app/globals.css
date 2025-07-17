@@ -750,7 +750,7 @@ footer a {
 
 .vjs-tooltip {
   position: absolute;
-  top: -30px;
+  top: -60px;
   left: 50%;
   transform: translateX(-50%);
   background-color: #313131;
