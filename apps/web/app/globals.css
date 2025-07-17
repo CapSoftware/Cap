@@ -711,16 +711,30 @@ footer a {
 }
 
 .media-player video::-webkit-media-text-track-display {
-  @apply !bottom-20 !top-auto !mb-0;
+  @apply !bottom-12 !top-auto !mb-0;
 }
 
 .media-player[data-controls-visible] video::-webkit-media-text-track-display {
-  @apply !bottom-32;
+  @apply !bottom-20;
 }
 
 .media-player[data-state="fullscreen"][data-controls-visible]
   video::-webkit-media-text-track-display {
-  @apply !bottom-24;
+  @apply !bottom-20;
+}
+
+/* Firefox support */
+.media-player video::cue {
+  position: relative !important;
+  bottom: 64px !important;
+}
+
+.media-player[data-controls-visible] video::cue {
+  bottom: 64px !important;
+}
+
+.media-player[data-state="fullscreen"][data-controls-visible] video::cue {
+  bottom: 64px !important;
 }
 
 /* Safari-specific styles using CSS hacks */
