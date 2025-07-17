@@ -343,7 +343,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         });
 
         // Initialize uniform buffer with initial values
-        let uniform_data = [height as f32, 100.0f32]; // window_height, offset_pixels
+        let uniform_data = [height as f32, BAR_HEIGHT]; // window_height, offset_pixels
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
         Self {
@@ -428,8 +428,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         self.surface.configure(&self.device, &c);
         
         // Update uniform buffer with new window height
-        let uniform_data = [c.height as f32, 100.0f32]; // window_height, offset_pixels
-        println!("DEBUG: Reconfiguring - window_height: {}, offset_pixels: 100.0", c.height);
+        let uniform_data = [c.height as f32, BAR_HEIGHT]; // window_height, offset_pixels
+        println!("DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}", c.height, BAR_HEIGHT);
         self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
     }
 
