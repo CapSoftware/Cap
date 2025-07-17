@@ -21,6 +21,7 @@ import {
 } from "./video/media-player";
 import { useRef, useEffect, useCallback } from "react";
 import Hls from "hls.js";
+import clsx from "clsx";
 
 interface Props {
   videoSrc: string;
@@ -147,11 +148,10 @@ export function CapVideoPlayer({
 
   return (
     <>
-      <MediaPlayer className={mediaPlayerClassName} autoHide>
+      <MediaPlayer className={clsx(mediaPlayerClassName, "media-player")} autoHide>
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
-          muted
           crossOrigin="anonymous"
           playsInline
           autoPlay={autoplay}

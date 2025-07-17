@@ -233,12 +233,12 @@ export const EmbedVideo = forwardRef<
                       </p>
                     )}
                     {ownerName && longestDuration > 0 && (
-                      <span className="text-xs text-gray-400">•</span>
-                    )}
-                    {longestDuration > 0 && (
-                      <p className="text-xs text-gray-300 sm:text-sm">
-                        {formatTime(longestDuration)}
-                      </p>
+                      <>
+                        <span className="text-xs text-gray-400">•</span>
+                        <p className="text-xs text-gray-300 sm:text-sm">
+                          {formatTime(longestDuration)}
+                        </p>
+                      </>
                     )}
                   </div>
                 </div>

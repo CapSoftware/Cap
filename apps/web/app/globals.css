@@ -710,136 +710,17 @@ footer a {
   animation: slideUp 0.3s ease-out forwards;
 }
 
-.video-js,
-.video-js video {
-  @apply rounded-xl w-full h-full !important;
-}
-.vjs-cap .vjs-big-play-button {
-  @apply bg-blue-500 transition-all top-[45%] rounded-full border-0 size-16 md:size-24 !important;
+.media-player video::-webkit-media-text-track-display {
+  @apply !bottom-20 !top-auto !mb-0;
 }
 
-.video-js .vjs-load-progress div {
-  @apply bg-white/10 !important;
+.media-player[data-controls-visible] video::-webkit-media-text-track-display {
+  @apply !bottom-32;
 }
 
-.vjs-cap .vjs-menu-content {
-  @apply bg-gray-12 border border-[#313131] rounded-lg !important;
-}
-
-.vjs-menu-button-popup .vjs-menu {
-  @apply w-[14em] !important;
-}
-
-.vjs-menu li {
-  @apply py-[0.2em] px-[0.5em] !important;
-}
-
-.vjs-menu li.vjs-selected {
-  @apply bg-[#373737] !important;
-}
-
-.vjs-marker {
-  position: absolute;
-  width: 5px;
-  height: 100%;
-  transform: translateY(-50%);
-  top: 50%;
-  background-color: white;
-  z-index: 100;
-}
-
-.vjs-tooltip {
-  position: absolute;
-  top: -65px;
-  left: 50%;
-  transform: translateX(-50%);
-  background-color: white;
-  color: black;
-  font-size: 12px;
-  padding: 8px 10px;
-  border-radius: 5px;
-  z-index: 101;
-}
-
-.vjs-cap li.vjs-menu-title {
-  @apply py-[0.5em] mb-0 !important;
-}
-
-.vjs-cap .vjs-menu li:hover {
-  @apply bg-[#434343] !important;
-}
-
-.vjs-cap .vjs-menu-item-text {
-  @apply text-gray-1 !important;
-}
-
-.vjs-cap .vjs-menu-content .vjs-menu-title {
-  @apply bg-gray-11 bg-opacity-50 mb-0 !important;
-}
-
-.vjs-cap .vjs-text-track-cue > div {
-  @apply md:text-[1.5rem] rounded-xl text-[1.125rem] bg-black bg-opacity-75 px-3 py-2 !important;
-}
-
-.vjs-cap .vjs-remaining-time-display {
-  @apply text-white text-[12px] !important;
-}
-
-.vjs-cap .vjs-big-play-button:hover {
-  @apply bg-blue-600 scale-[1.1] transition-all !important;
-}
-
-.vjs-cap .vjs-big-play-button .vjs-icon-placeholder {
-  @apply text-[40px] !important;
-}
-
-.vjs-cap .vjs-icon-placeholder:before {
-  @apply flex items-center justify-center w-full h-full !important;
-}
-
-/* Hide the captions menu */
-.video-js .vjs-captions-button .vjs-menu {
-  display: none !important;
-}
-
-/* Make the button look like a toggle */
-.video-js .vjs-captions-button.vjs-icon-captions:before {
-  content: "\f10d"; /* Default captions icon */
-}
-
-.video-js .vjs-captions-button.vjs-icon-captions.vjs-captions-enabled:before {
-  content: "\f10d"; /* Same icon but you can change this if needed */
-}
-
-/* Optional: Add visual feedback for enabled state */
-.video-js .vjs-captions-button.vjs-captions-enabled {
-  color: #fff;
-  background-color: rgba(255, 255, 255, 0.2);
-}
-
-.vjs-cap .vjs-load-progress {
-  @apply bg-white/50 !important;
-}
-
-.video-js .vjs-progress-holder {
-  @apply h-[5px] transition-all !important;
-}
-
-.vjs-progress-control:hover .vjs-progress-holder {
-  @apply h-[7px] transition-all !important;
-}
-
-.vjs-cap .vjs-icon-placeholder {
-  @apply text-white !important;
-}
-.vjs-cap .vjs-volume-level,
-.vjs-cap .vjs-play-progress,
-.vjs-cap .vjs-slider-bar {
-  @apply bg-blue-500 !important;
-}
-
-.vjs-cap .vjs-control-bar {
-  @apply bg-black/50 rounded-b-xl !important;
+.media-player[data-state="fullscreen"][data-controls-visible]
+  video::-webkit-media-text-track-display {
+  @apply !bottom-24;
 }
 
 /* Safari-specific styles using CSS hacks */
