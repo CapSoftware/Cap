@@ -2,8 +2,7 @@
 #![allow(unused_imports)]
 
 use crate::{
-    camera_preview::CameraPreview, fake_window, general_settings::AppTheme, permissions, App,
-    ArcLock,
+    camera::CameraPreview, fake_window, general_settings::AppTheme, permissions, App, ArcLock,
 };
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
