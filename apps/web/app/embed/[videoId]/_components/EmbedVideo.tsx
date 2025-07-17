@@ -173,7 +173,7 @@ export const EmbedVideo = forwardRef<
       <>
 
         <div className="relative w-screen h-screen rounded-xl">
-          <CapVideoPlayer videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
+          <CapVideoPlayer mediaPlayerClassName="w-full h-full" videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
         </div>
         <AnimatePresence>
           {!isPlaying && (

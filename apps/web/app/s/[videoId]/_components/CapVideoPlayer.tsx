@@ -25,11 +25,12 @@ interface Props {
   chaptersSrc: string;
   captionsSrc: string;
   videoRef?: React.Ref<HTMLVideoElement>;
+  mediaPlayerClassName?: string;
 }
 
-export function CapVideoPlayer({ videoSrc, chaptersSrc, captionsSrc, videoRef }: Props) {
+export function CapVideoPlayer({ videoSrc, chaptersSrc, captionsSrc, videoRef, mediaPlayerClassName }: Props) {
   return (
-    <MediaPlayer className="w-full h-full" autoHide>
+    <MediaPlayer className={mediaPlayerClassName} autoHide>
       <MediaPlayerVideo
         src={videoSrc}
         ref={videoRef}

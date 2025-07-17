@@ -134,8 +134,8 @@ export const ShareVideo = forwardRef<
   return (
     <>
 
-      <div className="relative w-screen h-screen rounded-xl">
-        <CapVideoPlayer videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
+      <div className="relative h-full">
+        <CapVideoPlayer mediaPlayerClassName="w-full rounded-xl h-full" videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
       </div>
 
       {user &&
