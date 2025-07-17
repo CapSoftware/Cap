@@ -743,14 +743,14 @@ footer a {
   width: 5px;
   height: 100%;
   transform: translateY(-50%);
-  top: -60%;
+  top: 50%;
   background-color: white;
   z-index: 100;
 }
 
 .vjs-tooltip {
   position: absolute;
-  top: 100%;
+  top: -50%;
   left: 50%;
   transform: translateX(-50%);
   background-color: #313131;
