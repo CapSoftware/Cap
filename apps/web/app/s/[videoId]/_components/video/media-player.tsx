@@ -12,7 +12,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from "./dropdown-menu";
+} from "@cap/ui";
 import {
   Tooltip,
   TooltipContent,

@@ -9,7 +9,6 @@ import { useMemo, useRef } from "react";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import Player from "video.js/dist/types/player";
 
 const formatTime = (time: number) => {
   const minutes = Math.floor(time / 60);
@@ -146,7 +145,7 @@ export const Share = ({
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
 
-  const playerRef = useRef<Player | null>(null);
+  const playerRef = useRef<HTMLVideoElement | null>(null);
 
   const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
     transcriptionStatus: data.transcriptionStatus,
@@ -199,7 +198,7 @@ export const Share = ({
 
   const handleSeek = (time: number) => {
     if (playerRef.current) {
-      playerRef.current.currentTime(time);
+      playerRef.current.currentTime = time;
     }
   };
 
