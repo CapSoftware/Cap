@@ -753,8 +753,8 @@ footer a {
   top: -65px;
   left: 50%;
   transform: translateX(-50%);
-  background-color: #313131;
-  color: #fff;
+  background-color: white;
+  color: black;
   font-size: 12px;
   padding: 8px 10px;
   border-radius: 5px;
