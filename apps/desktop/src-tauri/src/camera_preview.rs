@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
 
 // If you change this you might also need to update the constant in `camera.tsx`
-static BAR_HEIGHT: f32 = 56.0 /* bar height */ + 16.0 /* inset */;
+static TOOLBAR_HEIGHT: f32 = 56.0 /* bar height */ + 16.0 /* inset */;
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -422,7 +422,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
         let uniform_data = [
             height as f32,
-            BAR_HEIGHT,
+            TOOLBAR_HEIGHT,
             shape_value,
             size_value,
             mirrored_value,
@@ -476,7 +476,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         } else {
             base
         };
-        let total_height = window_height + BAR_HEIGHT;
+        let total_height = window_height + TOOLBAR_HEIGHT;
 
         let monitor = self.window.current_monitor().unwrap().unwrap();
         let width = (monitor.size().width as f64 / monitor.scale_factor()
@@ -486,9 +486,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             - total_height as f64
             - 100.0) as u32;
 
-        println!("RESIZE WINDOW to ({}, {})", width, height);
+        println!(
+            "RESIZE WINDOW to ({}, {} or {})",
+            window_width, window_height, total_height
+        );
         self.window
-            .set_size(LogicalSize::new(window_width, window_height))
+            .set_size(LogicalSize::new(window_width, total_height))
             .unwrap();
         let monitor_offset: LogicalPosition<u32> =
             monitor.position().to_logical(monitor.scale_factor());
@@ -525,7 +528,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
         let uniform_data = [
             c.height as f32,
-            BAR_HEIGHT,
+            TOOLBAR_HEIGHT,
             shape_value,
             size_value,
             mirrored_value,
@@ -533,7 +536,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         ]; // window_height, offset_pixels, shape, size, mirrored, padding
         println!(
             "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}, size: {}",
-            c.height, BAR_HEIGHT, shape_value, size_value
+            c.height, TOOLBAR_HEIGHT, shape_value, size_value
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
@@ -576,7 +579,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     pub fn update_uniforms(&self) {
         let surface_config = self.surface_config.lock().unwrap();
         let state = self.store.get().unwrap_or_default();
-        
+
         let shape_value = match state.shape {
             CameraPreviewShape::Round => 0.0,
             CameraPreviewShape::Square => 1.0,
@@ -587,21 +590,21 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             CameraPreviewSize::Lg => 1.0,
         };
         let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
-        
+
         println!(
             "DEBUG: update_uniforms - mirrored: {} -> {}, shape: {:?}, size: {:?}",
             state.mirrored, mirrored_value, state.shape, state.size
         );
-        
+
         let uniform_data = [
             surface_config.height as f32,
-            BAR_HEIGHT,
+            TOOLBAR_HEIGHT,
             shape_value,
             size_value,
             mirrored_value,
             0.0, // padding
         ];
-        
+
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
     }
