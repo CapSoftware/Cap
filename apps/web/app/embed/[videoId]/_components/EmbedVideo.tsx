@@ -191,11 +191,7 @@ export const EmbedVideo = forwardRef<
       if (!playerRef.current) return;
       const tracks = playerRef.current.textTracks().tracks_;
 
-      if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
-        if (subtitleBlobUrl) {
-          URL.revokeObjectURL(subtitleBlobUrl);
-        }
-        setSubtitleBlobUrl(subtitleUrl);
+      if (subtitleUrl) {
 
         if (playerRef.current && subtitleUrl) {
 
@@ -221,11 +217,7 @@ export const EmbedVideo = forwardRef<
 
       }
 
-      if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
-        if (chaptersBlobUrl) {
-          URL.revokeObjectURL(chaptersBlobUrl);
-        }
-        setChaptersBlobUrl(chaptersUrl);
+      if (chaptersUrl) {
 
         playerRef.current.addRemoteTextTrack(
           {
