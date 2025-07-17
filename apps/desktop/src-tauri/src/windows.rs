@@ -330,6 +330,7 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
+                    // .inner_size(230.0, 230.0)
                     .position(
                         100.0,
                         (monitor.size().height as f64) / monitor.scale_factor()

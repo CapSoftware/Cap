@@ -25,6 +25,8 @@ use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera_preview::CameraPreview;
 use camera_preview::CameraPreviewRenderer;
+use camera_preview::CameraWindowState;
+use camera_preview::CameraWindowStateStore;
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
@@ -90,6 +92,8 @@ pub struct App {
     camera_tx: flume::Sender<RawCameraFrame>,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    #[serde(skip)]
+    camera_config: CameraWindowStateStore,
     #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
@@ -1720,6 +1724,15 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 
 #[tauri::command]
 #[specta::specta]
+async fn set_camera_preview_state(
+    app: MutableState<'_, App>,
+    state: CameraWindowState,
+) -> Result<(), ()> {
+    app.read().await.camera_config.save(&state).map_err(|_| ())
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -1798,6 +1811,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             set_window_transparent,
             get_editor_meta,
             set_server_url,
+            set_camera_preview_state,
             captions::create_dir,
             captions::save_model_file,
             captions::transcribe_audio,
@@ -1932,6 +1946,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     handle: app.clone(),
                     camera_feed: None,
                     camera_tx,
+                    camera_config: CameraWindowStateStore::init(&app),
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,

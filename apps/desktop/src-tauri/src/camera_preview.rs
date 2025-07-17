@@ -10,8 +10,56 @@ use ffmpeg::{
 };
 
 use cap_media::feeds::RawCameraFrame;
-use tauri::WebviewWindow;
+use serde::{Deserialize, Serialize};
+use specta::Type;
+use tauri::{AppHandle, Manager, Runtime, WebviewWindow, Wry};
+use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
+
+#[derive(Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum CameraPreviewSize {
+    Sm,
+    Lg,
+}
+
+#[derive(Debug, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum CameraPreviewShape {
+    Round,
+    Square,
+    Full,
+}
+
+#[derive(Debug, Serialize, Deserialize, Type)]
+pub struct CameraWindowState {
+    size: CameraPreviewSize,
+    shape: CameraPreviewShape,
+    mirrored: bool,
+}
+
+pub struct CameraWindowStateStore(Arc<Store<Wry>>);
+
+impl CameraWindowStateStore {
+    pub fn init(manager: &impl Manager<Wry>) -> Self {
+        Self(
+            tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview")
+                .build()
+                .unwrap(),
+        )
+    }
+
+    pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
+        self.0.set("state", serde_json::to_value(&state).unwrap());
+        self.0.save()
+    }
+
+    pub fn get(&self) -> Option<CameraWindowState> {
+        self.0
+            .get("state")
+            .map(|v| serde_json::from_value(v).unwrap())
+    }
+}
 
 pub struct CameraPreview {
     surface: wgpu::Surface<'static>,
@@ -21,7 +69,6 @@ pub struct CameraPreview {
     queue: wgpu::Queue,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
-    uniform_buffer: wgpu::Buffer,
 }
 
 impl CameraPreview {
@@ -46,7 +93,14 @@ impl CameraPreview {
     pub async fn init(window: &WebviewWindow) -> Self {
         let size = window.inner_size().unwrap();
 
-        println!("WINDOW SIZE DEBUG {:?}", size); // TODO
+        // Ensure we have a valid size, fallback to 460x460 if needed
+        let width = if size.width > 0 { size.width } else { 460 };
+        let height = if size.height > 0 { size.height } else { 460 };
+
+        println!(
+            "WINDOW SIZE DEBUG {:?} -> using ({}, {})",
+            size, width, height
+        );
 
         let (tx, rx) = oneshot::channel();
         window
@@ -128,46 +182,12 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
 var t_diffuse: texture_2d<f32>;
 @group(0) @binding(1)
 var s_diffuse: sampler;
-@group(0) @binding(2)
-var<uniform> aspect_ratio: f32;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate coordinates relative to center (0.5, 0.5)
-    let center = vec2<f32>(0.5, 0.5);
-    let to_center = in.tex_coord - center;
-
-    // Create a circle that fits within the window bounds
-    // The circle should be inscribed within the window rectangle
-    // For a perfect circle, we need to scale based on the smaller dimension
-    var scale_factor: f32;
-    if (aspect_ratio > 1.0) {
-        // Window is wider than tall - scale based on height
-        scale_factor = 1.0;
-    } else {
-        // Window is taller than wide - scale based on width
-        scale_factor = aspect_ratio;
-    }
-
-    // Scale the coordinates to create a circle that fits
-    let scaled_coords = to_center * scale_factor;
-    
-    // Calculate distance from center
-    let dist = length(scaled_coords);
-
-    // Circle mask with smooth edge
-    let radius = 0.45; // Half of 0.9 to ensure it fits within bounds
-    let edge_smoothness = 0.01;
-    let circle_alpha = 1.0 - smoothstep(radius - edge_smoothness, radius, dist);
-
-    // Return transparent for fragments outside the circle
-    if (circle_alpha <= 0.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    // Sample texture and apply the circle mask
+    // Simply sample the texture and return the color
     let color = textureSample(t_diffuse, s_diffuse, in.tex_coord);
-    return vec4<f32>(color.rgb, color.a * circle_alpha);
+    return color;
 }
 "#,
             )),
@@ -192,16 +212,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
                         count: None,
                     },
                 ],
@@ -260,8 +270,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
-            width: size.width,
-            height: size.height,
+            width,
+            height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode,
             view_formats: vec![],
@@ -280,14 +290,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ..Default::default()
         });
 
-        // Create uniform buffer for aspect ratio
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Aspect Ratio Uniform Buffer"),
-            size: std::mem::size_of::<f32>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
             surface,
             surface_config: Mutex::new(config),
@@ -296,7 +298,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             queue,
             sampler,
             bind_group_layout: texture_bind_group_layout,
-            uniform_buffer,
         }
     }
 
@@ -304,6 +305,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let mut c = self.surface_config.lock().unwrap();
         c.width = if width > 0 { width } else { 1 };
         c.height = if height > 0 { height } else { 1 };
+
+        println!(
+            "RECONFIGURE WINDOW SIZE DEBUG using ({}, {})",
+            c.width, c.height
+        );
+
         self.surface.configure(&self.device, &c);
     }
 }
@@ -400,17 +407,6 @@ impl CameraPreviewRenderer {
 
             let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-            // Calculate aspect ratio to make a perfect circle
-            // We need to normalize the coordinates based on the window's aspect ratio
-            let aspect_ratio = surface_config.width as f32 / surface_config.height as f32;
-
-            // Update uniform buffer with aspect ratio
-            preview.queue.write_buffer(
-                &preview.uniform_buffer,
-                0,
-                bytemuck::cast_slice(&[aspect_ratio]),
-            );
-
             let bind_group = preview
                 .device
                 .create_bind_group(&wgpu::BindGroupDescriptor {
@@ -424,14 +420,6 @@ impl CameraPreviewRenderer {
                         wgpu::BindGroupEntry {
                             binding: 1,
                             resource: wgpu::BindingResource::Sampler(&preview.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                buffer: &preview.uniform_buffer,
-                                offset: 0,
-                                size: None,
-                            }),
                         },
                     ],
                 });
