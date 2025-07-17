@@ -75,6 +75,8 @@ pub struct CameraPreview {
     queue: wgpu::Queue,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bind_group: wgpu::BindGroup,
     window: tauri::WebviewWindow<Wry>,
     store: CameraWindowStateStore,
 }
@@ -149,6 +151,14 @@ impl CameraPreview {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
                 r#"
+struct Uniforms {
+    window_height: f32,
+    offset_pixels: f32,
+}
+
+@group(1) @binding(0)
+var<uniform> uniforms: Uniforms;
+
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -173,7 +183,15 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
         vec2<f32>(1.0, 0.0),
     );
     var out: VertexOut;
-    out.position = vec4<f32>(pos[idx], 0.0, 1.0);
+    
+    // Calculate offset in normalized coordinates
+    // In NDC, Y goes from -1 (bottom) to +1 (top)
+    // To offset down, we subtract the normalized offset
+    // The full height in NDC is 2.0 (-1 to +1), so we need to scale accordingly
+    let offset_y = (uniforms.offset_pixels / uniforms.window_height) * 2.0;
+    let adjusted_pos = vec2<f32>(pos[idx].x, pos[idx].y - offset_y);
+    
+    out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
     return out;
 }
@@ -189,6 +207,23 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 }
 "#,
             )),
+        });
+
+        // Create uniform buffer layout
+        let uniform_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Uniform Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         // Create a bind group layout for our texture
@@ -215,9 +250,29 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 ],
             });
 
+        // Create uniform buffer
+        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<[f32; 2]>() as u64, // window_height, offset_pixels
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Create uniform bind group
+        let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Uniform Bind Group"),
+            layout: &uniform_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&texture_bind_group_layout],
+            bind_group_layouts: &[&texture_bind_group_layout, &uniform_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -273,6 +328,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             ..Default::default()
         });
 
+        // Initialize uniform buffer with initial values
+        let uniform_data = [height as f32, 100.0f32]; // window_height, offset_pixels
+        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
+
         Self {
             surface,
             surface_config: Mutex::new(config),
@@ -281,6 +340,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             queue,
             sampler,
             bind_group_layout: texture_bind_group_layout,
+            uniform_buffer,
+            uniform_bind_group,
             store: CameraWindowStateStore::init(&window),
             window,
         }
@@ -351,6 +412,22 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         c.height = if height > 0 { height } else { 1 };
 
         self.surface.configure(&self.device, &c);
+        
+        // Update uniform buffer with new window height
+        let uniform_data = [c.height as f32, 100.0f32]; // window_height, offset_pixels
+        println!("DEBUG: Reconfiguring - window_height: {}, offset_pixels: 100.0", c.height);
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
+    }
+
+    /// Updates the vertical offset of the camera preview from the top of the window.
+    /// 
+    /// # Arguments
+    /// * `offset_pixels` - The offset in pixels from the top of the window (default: 100px)
+    pub fn update_offset(&self, offset_pixels: f32) {
+        let surface_config = self.surface_config.lock().unwrap();
+        let uniform_data = [surface_config.height as f32, offset_pixels];
+        println!("DEBUG: Updating offset - window_height: {}, offset_pixels: {}", surface_config.height, offset_pixels);
+        self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
     }
 }
 
@@ -504,6 +581,7 @@ impl CameraPreviewRenderer {
 
             render_pass.set_pipeline(&preview.render_pipeline);
             render_pass.set_bind_group(0, &bind_group, &[]);
+            render_pass.set_bind_group(1, &preview.uniform_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
         }
 
