@@ -5,13 +5,12 @@ import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
-import { VideoJS } from "./VideoJs";
-import { forwardRef, useImperativeHandle, useRef, useState, useMemo, useEffect } from "react";
-import Player from "video.js/dist/types/player";
+import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { formatChaptersAsVTT, formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
 import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
+import { CapVideoPlayer } from "./CapVideoPlayer";
 
 declare global {
   interface Window {
@@ -23,54 +22,8 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
 };
 
-function showTooltip(index: number, cuePoint: number, videoDuration: number, chapters: { title: string; start: number }[], element: Element) {
-  if (!chapters[index]) return;
-  // Remove any existing tooltip first to avoid duplicates
-  const existingTooltip = element.querySelector('.vjs-tooltip');
-  if (existingTooltip) existingTooltip.remove();
-
-  const tooltip = document.createElement("div");
-  tooltip.className = "vjs-tooltip";
-  tooltip.textContent = chapters[index].title || "";
-  tooltip.style.left = `${(cuePoint / videoDuration) * 100}%`;
-  element.appendChild(tooltip);
-}
-
-function hideTooltip(element: Element) {
-  const tooltip = element.querySelector(".vjs-tooltip");
-  if (tooltip) tooltip.remove();
-}
-
-const addMarkers = (cuePointsAra: number[], videoDuration: number, chapters: { title: string; start: number }[], playerRef: React.RefObject<Player>) => {
-  const playheadWell = document.querySelector(".vjs-progress-control.vjs-control");
-  if (!playheadWell) {
-    console.warn("Progress control not found");
-    return;
-  }
-  const slider = playheadWell.querySelector('.vjs-slider');
-  if (!slider) {
-    console.warn("Slider not found");
-    return;
-  }
-
-  const existingMarkers = slider.querySelectorAll(".vjs-marker");
-  existingMarkers.forEach((marker) => marker.remove());
-
-  cuePointsAra.forEach((cuePoint, index) => {
-    const elem = document.createElement("div");
-    elem.className = "vjs-marker";
-    elem.id = `cp${index}`;
-    elem.ontouchstart = () => showTooltip(index, cuePoint, videoDuration, chapters, slider);
-    elem.onmouseenter = () => showTooltip(index, cuePoint, videoDuration, chapters, slider);
-    elem.onmouseleave = () => hideTooltip(slider);
-    elem.ontouchend = () => hideTooltip(slider);
-    elem.style.left = `${(cuePoint / videoDuration) * 100}%`;
-    slider.appendChild(elem);
-  });
-}
-
 export const ShareVideo = forwardRef<
-  Player,
+  HTMLVideoElement,
   {
     data: typeof videos.$inferSelect;
     user: typeof userSelectProps | null;
@@ -79,13 +32,12 @@ export const ShareVideo = forwardRef<
     aiProcessing?: boolean;
   }
 >(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
-  useImperativeHandle(ref, () => playerRef.current as Player);
 
-  const playerRef = useRef<Player | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-  const [longestDuration, setLongestDuration] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
   const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 
@@ -179,110 +131,11 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
-  const videoJsOptions = useMemo(() => ({
-    autoplay: true,
-    playbackRates: [0.5, 1, 1.5, 2],
-    controls: true,
-    responsive: true,
-    fluid: false,
-    sources: [
-      { src: videoSrc, type: videoType },
-    ],
-  }), [videoSrc, videoType]);
-
-  const handlePlayerReady = (player: Player) => {
-    playerRef.current = player;
-
-    player.on("loadedmetadata", () => {
-      const videoDuration = player.duration();
-      if (videoDuration) {
-        setLongestDuration(videoDuration);
-        if (chapters && chapters.length > 0) {
-          const chapterStartTimesAra = chapters.map(chapter => chapter.start);
-          addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
-        }
-      }
-    });
-  };
-
-  useEffect(() => {
-    if (!playerRef.current || (!subtitleUrl && !chaptersUrl)) return;
-
-    const player = playerRef.current;
-
-    const addTracks = () => {
-      if (subtitleUrl) {
-        const tracks = player.textTracks().tracks_
-        let hasSubtitleTrack = false;
-        for (let i = 0; i < tracks.length; i++) {
-          if (tracks[i].kind === "subtitles" && tracks[i].language === "en") {
-            tracks[i].mode = "showing";
-            hasSubtitleTrack = true;
-            break;
-          }
-        }
-
-        if (!hasSubtitleTrack) {
-          player.addRemoteTextTrack({
-            kind: "subtitles",
-            srclang: "en",
-            label: "English",
-            src: subtitleUrl,
-            default: true,
-          }, false);
-
-        }
-      }
-
-      if (chaptersUrl) {
-        const tracks = player.textTracks().tracks_;
-        let hasChaptersTrack = false;
-        for (let i = 0; i < tracks.length; i++) {
-          if (tracks[i].kind === "chapters") {
-            tracks[i].mode = "showing";
-            hasChaptersTrack = true;
-            break;
-          }
-        }
-
-        if (!hasChaptersTrack) {
-          player.addRemoteTextTrack({
-            kind: "chapters",
-            srclang: "en",
-            label: "Chapters",
-            src: chaptersUrl,
-          }, false);
-        }
-      }
-    };
-
-    if (player.readyState() >= 1) {
-      addTracks();
-    } else {
-      player.one('loadedmetadata', addTracks);
-    }
-
-  }, [subtitleUrl, chaptersUrl]);
-
-  useEffect(() => {
-    if (!playerRef.current) return;
-    const player = playerRef.current;
-    player.on("pause", () => {
-      setIsPlaying(false);
-    });
-    player.on("play", () => {
-      setIsPlaying(true);
-    });
-  }, [playerRef]);
-
   return (
     <>
-      <div className="relative w-full h-full rounded-xl">
-        <VideoJS
-          onReady={handlePlayerReady}
-          options={videoJsOptions}
-          ref={ref}
-        />
+
+      <div className="relative w-screen h-screen rounded-xl">
+        <CapVideoPlayer videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
       </div>
 
       {user &&

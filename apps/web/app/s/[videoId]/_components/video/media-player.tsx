@@ -1,7 +1,8 @@
 "use client";
 
 import { Badge } from "./badge";
-import { Button } from "./button";
+import { Button } from "@cap/ui";
+import { Button as PlayerButton } from "./button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1103,26 +1104,26 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
     >
       {children ?? (
         <div className="flex flex-col gap-4 items-center px-6 py-8 max-w-md text-center">
-          <AlertTriangleIcon className="size-12 text-destructive" />
+          <AlertTriangleIcon className="text-red-500 size-12" />
           <div className="flex flex-col gap-px text-center">
             <h3 className="text-xl font-semibold tracking-tight">
               {errorLabel}
             </h3>
-            <p className="text-sm leading-relaxed text-balance text-muted-foreground">
+            <p className="text-sm leading-relaxed text-balance text-gray-11">
               {errorDescription}
             </p>
           </div>
           <div className="flex gap-2 items-center">
             <Button
-              variant="secondary"
+              variant="primary"
               size="sm"
               onClick={onRetry}
               disabled={actionState.retryPending}
             >
               {actionState.retryPending ? (
-                <Loader2Icon className="animate-spin" />
+                <Loader2Icon className="animate-spin size-3.5" />
               ) : (
-                <RefreshCcwIcon />
+                <RefreshCcwIcon className="size-3.5" />
               )}
               Try again
             </Button>
@@ -1133,9 +1134,9 @@ function MediaPlayerError(props: MediaPlayerErrorProps) {
               disabled={actionState.reloadPending}
             >
               {actionState.reloadPending ? (
-                <Loader2Icon className="animate-spin" />
+                <Loader2Icon className="animate-spin size-3.5" />
               ) : (
-                <RotateCcwIcon />
+                <RotateCcwIcon className="size-3.5" />
               )}
               Reload page
             </Button>
@@ -1277,7 +1278,7 @@ function MediaPlayerPlay(props: MediaPlayerPlayProps) {
       tooltip={mediaPaused ? "Play" : "Pause"}
       shortcut="Space"
     >
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={mediaPaused ? "Play" : "Pause"}
@@ -1296,7 +1297,7 @@ function MediaPlayerPlay(props: MediaPlayerPlayProps) {
         onClick={onPlayToggle}
       >
         {children ?? (mediaPaused ? <PlayIcon /> : <PauseIcon />)}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -1343,7 +1344,7 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
       tooltip={`Back ${seconds}s`}
       shortcut={context.isVideo ? ["←"] : ["Shift ←"]}
     >
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={`Back ${seconds} seconds`}
@@ -1357,7 +1358,7 @@ function MediaPlayerSeekBackward(props: MediaPlayerSeekBackwardProps) {
         onClick={onSeekBackward}
       >
         {children ?? <RewindIcon />}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -1409,7 +1410,7 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
       tooltip={`Forward ${seconds}s`}
       shortcut={context.isVideo ? ["→"] : ["Shift →"]}
     >
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={`Forward ${seconds} seconds`}
@@ -1423,7 +1424,7 @@ function MediaPlayerSeekForward(props: MediaPlayerSeekForwardProps) {
         onClick={onSeekForward}
       >
         {children ?? <FastForwardIcon />}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2285,7 +2286,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
       )}
     >
       <MediaPlayerTooltip tooltip="Volume" shortcut="M">
-        <Button
+        <PlayerButton
           id={volumeTriggerId}
           type="button"
           aria-controls={`${context.mediaId} ${sliderId}`}
@@ -2306,7 +2307,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
           ) : (
             <Volume1Icon />
           )}
-        </Button>
+        </PlayerButton>
       </MediaPlayerTooltip>
       <SliderPrimitive.Root
         id={sliderId}
@@ -2470,7 +2471,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
     >
       <MediaPlayerTooltip tooltip="Playback speed" shortcut={["<", ">"]}>
         <DropdownMenuTrigger asChild>
-          <Button
+          <PlayerButton
             type="button"
             aria-controls={context.mediaId}
             disabled={isDisabled}
@@ -2483,7 +2484,7 @@ function MediaPlayerPlaybackSpeed(props: MediaPlayerPlaybackSpeedProps) {
             )}
           >
             {mediaPlaybackRate}x
-          </Button>
+          </PlayerButton>
         </DropdownMenuTrigger>
       </MediaPlayerTooltip>
       <DropdownMenuContent
@@ -2555,7 +2556,7 @@ function MediaPlayerLoop(props: MediaPlayerLoopProps) {
       tooltip={isLooping ? "Disable loop" : "Enable loop"}
       shortcut="R"
     >
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={isLooping ? "Disable loop" : "Enable loop"}
@@ -2576,7 +2577,7 @@ function MediaPlayerLoop(props: MediaPlayerLoopProps) {
           ) : (
             <RepeatIcon />
           ))}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2612,7 +2613,7 @@ function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
 
   return (
     <MediaPlayerTooltip tooltip="Fullscreen" shortcut="F">
-      <Button
+      <PlayerButton
         type="button"
         aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
         data-disabled={isDisabled ? "" : undefined}
@@ -2626,7 +2627,7 @@ function MediaPlayerFullscreen(props: MediaPlayerFullscreenProps) {
         onClick={onFullscreen}
       >
         {children ?? (isFullscreen ? <Minimize2Icon /> : <Maximize2Icon />)}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2678,7 +2679,7 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
 
   return (
     <MediaPlayerTooltip tooltip="Picture in picture" shortcut="P">
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={isPictureInPicture ? "Exit pip" : "Enter pip"}
@@ -2697,7 +2698,7 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
         ) : (
           <PictureInPictureIcon />
         )}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2730,7 +2731,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 
   return (
     <MediaPlayerTooltip tooltip="Captions" shortcut="C">
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label={isSubtitlesActive ? "Disable captions" : "Enable captions"}
@@ -2747,7 +2748,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
       >
         {children ??
           (isSubtitlesActive ? <SubtitlesIcon /> : <CaptionsOffIcon />)}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2784,7 +2785,7 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
 
   return (
     <MediaPlayerTooltip tooltip="Download" shortcut="D">
-      <Button
+      <PlayerButton
         type="button"
         aria-controls={context.mediaId}
         aria-label="Download"
@@ -2798,7 +2799,7 @@ function MediaPlayerDownload(props: MediaPlayerDownloadProps) {
         onClick={onDownload}
       >
         {children ?? <DownloadIcon />}
-      </Button>
+      </PlayerButton>
     </MediaPlayerTooltip>
   );
 }
@@ -2921,7 +2922,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
     >
       <MediaPlayerTooltip tooltip="Settings">
         <DropdownMenuTrigger asChild>
-          <Button
+          <PlayerButton
             type="button"
             aria-controls={context.mediaId}
             aria-label="Settings"
@@ -2937,7 +2938,7 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
             )}
           >
             <SettingsIcon />
-          </Button>
+          </PlayerButton>
         </DropdownMenuTrigger>
       </MediaPlayerTooltip>
       <DropdownMenuContent

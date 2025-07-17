@@ -61,7 +61,6 @@ export const EmbedVideo = forwardRef<
     const videoRef = useRef<HTMLVideoElement>(null);
     useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
-    const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
     const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
     const [longestDuration, setLongestDuration] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState(false);
