@@ -214,14 +214,15 @@ async fn set_camera_input(
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
                                     feed.attach(app.camera_tx.clone());
+                                    let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
 
-                                    let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
                                     preview.reconfigure(video_info.width, video_info.height);
 
                                     return Ok(true);
                                 } else {
-                                    // TODO: Also reconfigure here???
+                                    let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
+                                    preview.reconfigure(video_info.width, video_info.height);
 
                                     return Ok(false);
                                 }

@@ -77,6 +77,7 @@ pub struct CameraPreview {
     bind_group_layout: wgpu::BindGroupLayout,
     window: tauri::WebviewWindow<Wry>,
     store: CameraWindowStateStore,
+    render_lock: Mutex<()>, // Add render lock to prevent race conditions
 }
 
 impl CameraPreview {
@@ -283,10 +284,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             bind_group_layout: texture_bind_group_layout,
             store: CameraWindowStateStore::init(&window),
             window,
+            render_lock: Mutex::new(()), // Initialize the render lock
         }
     }
 
     pub fn reconfigure(&self, width: u32, height: u32) {
+        // Acquire the render lock to prevent any rendering during reconfiguration
+        let _render_guard = self.render_lock.lock().unwrap();
+        
         let state = self.store.get().unwrap_or_default();
 
         let base: f32 = if state.size == CameraPreviewSize::Sm {
@@ -375,6 +380,15 @@ impl CameraPreviewRenderer {
     }
 
     pub fn render(&mut self, preview: &CameraPreview) {
+        // Try to acquire the render lock, skip rendering if reconfiguration is happening
+        let _render_guard = match preview.render_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                // Reconfiguration is happening, skip this frame
+                return;
+            }
+        };
+        
         let surface_frame = preview
             .surface
             .get_current_texture()
