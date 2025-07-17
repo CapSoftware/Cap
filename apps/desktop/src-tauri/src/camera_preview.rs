@@ -154,6 +154,7 @@ impl CameraPreview {
 struct Uniforms {
     window_height: f32,
     offset_pixels: f32,
+    shape: u32,
 }
 
 @group(1) @binding(0)
@@ -222,7 +223,36 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Otherwise, sample the camera texture with solid black background
+    // Shape constants: 0 = Round, 1 = Square, 2 = Full
+    let shape = uniforms.shape;
+    
+    // For Full shape, just render the camera texture
+    if (shape == 2u) {
+        let camera_color = textureSample(t_camera, s_camera, in.uv);
+        return vec4<f32>(camera_color.rgb, 1.0);
+    }
+    
+    // For Round and Square shapes, apply masking
+    // Convert UV coordinates to center-based coordinates [-1, 1]
+    let center_uv = (in.uv - 0.5) * 2.0;
+    
+    var mask = 1.0;
+    
+    if (shape == 0u) {
+        // Round shape - create circular mask
+        let distance = length(center_uv);
+        mask = select(0.0, 1.0, distance <= 1.0);
+    } else if (shape == 1u) {
+        // Square shape - no additional masking needed beyond the quad
+        mask = 1.0;
+    }
+    
+    // Apply the mask
+    if (mask < 0.5) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    
+    // Sample the camera texture
     let camera_color = textureSample(t_camera, s_camera, in.uv);
     return vec4<f32>(camera_color.rgb, 1.0);
 }
@@ -236,7 +266,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 label: Some("Uniform Bind Group Layout"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -273,7 +303,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // Create uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 2]>() as u64, // window_height, offset_pixels
+            size: std::mem::size_of::<[f32; 3]>() as u64, // window_height, offset_pixels, shape
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -347,7 +377,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         });
 
         // Initialize uniform buffer with initial values
-        let uniform_data = [height as f32, BAR_HEIGHT]; // window_height, offset_pixels
+        let state = CameraWindowStateStore::init(&window).get().unwrap_or_default();
+        let shape_value = match state.shape {
+            CameraPreviewShape::Round => 0.0,
+            CameraPreviewShape::Square => 1.0,
+            CameraPreviewShape::Full => 2.0,
+        };
+        let uniform_data = [height as f32, BAR_HEIGHT, shape_value]; // window_height, offset_pixels, shape
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
         Self {
@@ -432,10 +468,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         self.surface.configure(&self.device, &c);
 
         // Update uniform buffer with new window height
-        let uniform_data = [c.height as f32, BAR_HEIGHT]; // window_height, offset_pixels
+        let state = self.store.get().unwrap_or_default();
+        let shape_value = match state.shape {
+            CameraPreviewShape::Round => 0.0,
+            CameraPreviewShape::Square => 1.0,
+            CameraPreviewShape::Full => 2.0,
+        };
+        let uniform_data = [c.height as f32, BAR_HEIGHT, shape_value]; // window_height, offset_pixels, shape
         println!(
-            "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}",
-            c.height, BAR_HEIGHT
+            "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}",
+            c.height, BAR_HEIGHT, shape_value
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
