@@ -115,6 +115,8 @@ export const EmbedVideo = forwardRef<
     const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
     const [longestDuration, setLongestDuration] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState(false);
+    const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
+    const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 
     const { data: transcriptContent, error: transcriptError } = useTranscript(
       data.id,
@@ -133,116 +135,57 @@ export const EmbedVideo = forwardRef<
       }
     }, [transcriptContent, transcriptError]);
 
-    const chaptersUrl = useMemo(() => {
-      if (chapters?.length > 0) {
-        const vttContent = formatChaptersAsVTT(chapters);
-        const blob = new Blob([vttContent], { type: "text/vtt" });
-        return URL.createObjectURL(blob);
-      }
-      return null;
-    }, [chapters]);
-
-    const subtitleUrl = useMemo(() => {
+    // Handle subtitle URL creation
+    useEffect(() => {
       if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
         const vttContent = formatTranscriptAsVTT(transcriptData);
         const blob = new Blob([vttContent], { type: "text/vtt" });
         const newUrl = URL.createObjectURL(blob);
 
-        return newUrl;
+        // Clean up previous URL
+        if (subtitleUrl) {
+          URL.revokeObjectURL(subtitleUrl);
+        }
+
+        setSubtitleUrl(newUrl);
+
+        return () => {
+          URL.revokeObjectURL(newUrl);
+        };
+      } else {
+        // Clean up if no longer needed
+        if (subtitleUrl) {
+          URL.revokeObjectURL(subtitleUrl);
+          setSubtitleUrl(null);
+        }
       }
-      return null;
     }, [data.transcriptionStatus, transcriptData]);
 
-    const handlePlayerReady = (player: Player) => {
-      playerRef.current = player;
-      player.on("loadedmetadata", () => {
-        const chapterStartTimesAra: number[] = [];
-        const videoDuration = player.duration();
-        if (videoDuration) {
-          setLongestDuration(videoDuration);
+    // Handle chapters URL creation
+    useEffect(() => {
+      if (chapters?.length > 0) {
+        const vttContent = formatChaptersAsVTT(chapters);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        const newUrl = URL.createObjectURL(blob);
+
+        // Clean up previous URL
+        if (chaptersUrl) {
+          URL.revokeObjectURL(chaptersUrl);
         }
-        const chapterTT: TextTrack[] = [].filter.call(
-          player.textTracks(),
-          (tt: TextTrack) => tt.kind === "chapters"
-        );
 
-        if (chapterTT.length > 0) {
-          if (!chapterTT[0]) return;
-          const cues = chapterTT[0].cues;
-          if (cues) {
-            for (let i = 0; i < cues.length; i++) {
-              chapterStartTimesAra[i] = cues[i]?.startTime || 0;
-            }
-          }
+        setChaptersUrl(newUrl);
 
-          const videoDuration = player.duration();
-          if (videoDuration) {
-            addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
-          }
+        return () => {
+          URL.revokeObjectURL(newUrl);
+        };
+      } else {
+        // Clean up if no longer needed
+        if (chaptersUrl) {
+          URL.revokeObjectURL(chaptersUrl);
+          setChaptersUrl(null);
         }
-      });
-    }
-
-
-    // useEffect(() => {
-    //   if (!playerRef.current) return;
-    //   const tracks = playerRef.current.textTracks().tracks_;
-
-    //   if (subtitleUrl) {
-
-    //     if (playerRef.current && subtitleUrl) {
-
-    //       // subtitles
-    //       playerRef.current.addRemoteTextTrack(
-    //         {
-    //           kind: "subtitles",
-    //           srclang: "en",
-    //           label: "English",
-    //           src: subtitleUrl,
-    //           default: true,
-    //         },
-    //         true
-    //       );
-
-    //       for (const track of tracks) {
-    //         if (track.kind === "subtitles" && track.language === "en") {
-    //           track.mode = "showing";
-    //         }
-    //       }
-
-    //     }
-
-    //   }
-
-    //   if (chaptersUrl) {
-
-    //     playerRef.current.addRemoteTextTrack(
-    //       {
-    //         kind: "chapters",
-    //         srclang: "en",
-    //         label: "Chapters",
-    //         src: chaptersUrl,
-    //       },
-    //       true
-    //     );
-
-    //     for (const track of tracks) {
-    //       if (track.kind === "chapters") {
-    //         track.mode = "showing";
-    //       }
-    //     }
-    //   }
-
-    //   return () => {
-    //     if (subtitleUrl) {
-    //       URL.revokeObjectURL(subtitleUrl);
-    //     }
-    //     if (chaptersUrl) {
-    //       URL.revokeObjectURL(chaptersUrl);
-    //     }
-    //   };
-    // }, [subtitleUrl, chaptersUrl]);
-
+      }
+    }, [chapters]);
 
     const publicEnv = usePublicEnv();
 
@@ -265,45 +208,115 @@ export const EmbedVideo = forwardRef<
       videoType = "application/x-mpegURL";
     }
 
-    const videoJsOptions = useMemo(() => {
-      const tracks = [];
+    // Stable videoJsOptions - only recreate when video source changes
+    const videoJsOptions = useMemo(() => ({
+      autoplay: false,
+      playbackRates: [0.5, 1, 1.5, 2],
+      controls: true,
+      responsive: true,
+      fluid: false,
+      sources: [
+        { src: videoSrc, type: videoType },
+      ],
+    }), [videoSrc, videoType]);
 
-      // Add subtitle track if available
-      if (subtitleUrl) {
-        tracks.push({
-          kind: "subtitles",
-          srclang: "en",
-          label: "English",
-          src: subtitleUrl,
-          default: true,
-          enabled: true
-        });
-      }
+    const handlePlayerReady = (player: Player) => {
+      playerRef.current = player;
 
-      // Add chapters track if available
-      if (chaptersUrl) {
-        tracks.push({
-          kind: "chapters",
-          srclang: "en",
-          label: "Chapters",
-          src: chaptersUrl,
-          default: true,
-          enabled: true
-        });
-      }
+      player.on("loadedmetadata", () => {
+        const chapterStartTimesAra: number[] = [];
+        const videoDuration = player.duration();
+        if (videoDuration) {
+          setLongestDuration(videoDuration);
+        }
 
-      return {
-        autoplay: false,
-        playbackRates: [0.5, 1, 1.5, 2],
-        controls: true,
-        responsive: true,
-        fluid: false,
-        sources: [
-          { src: videoSrc, type: videoType },
-        ],
-        tracks: tracks
+        // Handle chapter markers
+        const chapterTT: TextTrack[] = [].filter.call(
+          player.textTracks(),
+          (tt: TextTrack) => tt.kind === "chapters"
+        );
+
+        if (chapterTT.length > 0) {
+          if (!chapterTT[0]) return;
+          const cues = chapterTT[0].cues;
+          if (cues) {
+            for (let i = 0; i < cues.length; i++) {
+              chapterStartTimesAra[i] = cues[i]?.startTime || 0;
+            }
+          }
+
+          const videoDuration = player.duration();
+          if (videoDuration) {
+            addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
+          }
+        }
+      });
+    };
+
+    // Add tracks when URLs are ready and player exists
+    useEffect(() => {
+      if (!playerRef.current || (!subtitleUrl && !chaptersUrl)) return;
+
+      const player = playerRef.current;
+
+      // Function to add tracks
+      const addTracks = () => {
+        if (subtitleUrl) {
+          // Check if subtitle track already exists
+          const tracks = player.textTracks().tracks_
+          let hasSubtitleTrack = false;
+          for (let i = 0; i < tracks.length; i++) {
+            if (tracks[i].kind === "subtitles" && tracks[i].language === "en") {
+              tracks[i].mode = "showing";
+              hasSubtitleTrack = true;
+              break;
+            }
+          }
+
+          if (!hasSubtitleTrack) {
+            player.addRemoteTextTrack({
+              kind: "subtitles",
+              srclang: "en",
+              label: "English",
+              src: subtitleUrl,
+              default: true,
+            }, false);
+
+          }
+        }
+
+        if (chaptersUrl) {
+          // Check if chapters track already exists
+          const tracks = player.textTracks().tracks_;
+          let hasChaptersTrack = false;
+          for (let i = 0; i < tracks.length; i++) {
+            if (tracks[i].kind === "chapters") {
+              tracks[i].mode = "showing";
+              hasChaptersTrack = true;
+              break;
+            }
+          }
+
+          if (!hasChaptersTrack) {
+            player.addRemoteTextTrack({
+              kind: "chapters",
+              srclang: "en",
+              label: "Chapters",
+              src: chaptersUrl,
+            }, false);
+          }
+        }
       };
-    }, [videoSrc, videoType, subtitleUrl, chaptersUrl]);
+
+      // Add tracks immediately if player is ready
+      if (player.readyState() >= 1) {
+        addTracks();
+      } else {
+        // Wait for player to be ready
+        player.one('loadedmetadata', addTracks);
+      }
+
+    }, [subtitleUrl, chaptersUrl]);
 
     useEffect(() => {
       if (!playerRef.current) return;
@@ -316,7 +329,6 @@ export const EmbedVideo = forwardRef<
       });
     }, [playerRef]);
 
-
     if (data.jobStatus === "ERROR") {
       return (
         <div className="flex overflow-hidden justify-center items-center w-full h-screen bg-black">
@@ -327,7 +339,6 @@ export const EmbedVideo = forwardRef<
         </div>
       );
     }
-
     return (
       <>
         <div className="relative w-screen h-screen rounded-xl">
