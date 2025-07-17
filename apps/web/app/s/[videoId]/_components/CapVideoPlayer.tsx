@@ -19,7 +19,7 @@ import {
   MediaPlayerVolume,
   MediaPlayerVolumeIndicator,
 } from "./video/media-player";
-import { useRef, useEffect, useCallback } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
 import Hls from "hls.js";
 import clsx from "clsx";
 
@@ -43,7 +43,8 @@ export function CapVideoPlayer({
   hlsVideo = false
 }: Props) {
   const hlsInstance = useRef<Hls | null>(null);
-
+  const [currentCue, setCurrentCue] = useState<string>('');
+  const [controlsVisible, setControlsVisible] = useState(false);
 
   useEffect(() => {
     if (!videoRef.current || !hlsVideo) return;
@@ -146,14 +147,54 @@ export function CapVideoPlayer({
     }
   }, []);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleCueChange = () => {
+      const track = video.textTracks[0];
+      if (track && track.activeCues && track.activeCues.length > 0) {
+        const cue = track.activeCues[0] as VTTCue;
+        setCurrentCue(cue.text);
+      } else {
+        setCurrentCue('');
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      // Hide native captions
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const track = video.textTracks[i];
+        if (track && (track.kind === 'captions' || track.kind === 'subtitles')) {
+          track.mode = 'hidden'; // Load but don't display
+          track.addEventListener('cuechange', handleCueChange);
+        }
+      }
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      for (let i = 0; i < video.textTracks.length; i++) {
+        const track = video.textTracks[i];
+        if (track && (track.kind === 'captions' || track.kind === 'subtitles')) {
+          track.removeEventListener('cuechange', handleCueChange);
+        }
+      }
+    };
+  }, []);
+
   return (
     <>
-      <MediaPlayer className={clsx(mediaPlayerClassName, "media-player")} autoHide>
+      <MediaPlayer className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
           crossOrigin="anonymous"
           playsInline
+          onMouseEnter={() => setControlsVisible(true)}
+          onMouseLeave={() => setControlsVisible(false)}
           autoPlay={autoplay}
         >
           <track
@@ -169,6 +210,15 @@ export function CapVideoPlayer({
             default
           />
         </MediaPlayerVideo>
+        {currentCue && (
+          <div
+            className={clsx(
+              "absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
+              controlsVisible ? 'bottom-20' : 'bottom-12'
+            )}
+            dangerouslySetInnerHTML={{ __html: currentCue }}
+          />
+        )}
         <MediaPlayerLoading />
         <MediaPlayerError />
         <MediaPlayerVolumeIndicator />
