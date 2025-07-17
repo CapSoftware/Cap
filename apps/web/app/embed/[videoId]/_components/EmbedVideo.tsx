@@ -6,6 +6,7 @@ import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -154,7 +155,7 @@ export const EmbedVideo = forwardRef<
       return null;
     }, [data.transcriptionStatus, transcriptData]);
 
-    const handlePlayerReady = (player: Player) => {
+    const handlePlayerReady = useCallback((player: Player) => {
       playerRef.current = player;
       player.on("loadedmetadata", () => {
         const chapterStartTimesAra: number[] = [];
@@ -230,7 +231,7 @@ export const EmbedVideo = forwardRef<
           }
         }
       });
-    }
+    }, [playerRef, subtitleUrl, chaptersUrl]);
 
 
     useEffect(() => {
