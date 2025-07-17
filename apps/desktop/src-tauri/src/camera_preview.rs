@@ -233,12 +233,24 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let shape = uniforms.shape;
     let size = uniforms.size;
 
-    // For Full shape, just render the camera texture
+    // For Full shape, render with subtle rounded corners
     if (shape == 2.0) {
         // Apply mirroring if enabled
         var final_uv = in.uv;
         if (uniforms.mirrored == 1.0) {
             final_uv.x = 1.0 - final_uv.x;
+        }
+
+        // Apply subtle rounded corners for Full shape
+        let center_uv = (in.uv - 0.5) * 2.0;
+        let corner_radius = 0.05; // Small radius for subtle corners
+        let abs_uv = abs(center_uv);
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
+        let mask = select(0.0, 1.0, corner_dist <= corner_radius);
+
+        if (mask < 0.5) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
 
         let camera_color = textureSample(t_camera, s_camera, final_uv);
@@ -256,19 +268,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         mask = select(0.0, 1.0, distance <= 1.0);
     } else if (shape == 1.0) {
         // Square shape - apply rounded corners based on size
-        // TypeScript: sm = 3rem (48px), lg = 4rem (64px)
-        // We need to convert this to UV space relative to the quad size
-        let base_size = select(230.0, 400.0, size == 1.0); // sm vs lg base size
-        let corner_radius = select(48.0, 64.0, size == 1.0); // 3rem vs 4rem in pixels
-        let radius_ratio = corner_radius / base_size; // Convert to ratio of quad size
-
+        // Use a reasonable corner radius for the square shape
+        let corner_radius = select(0.1, 0.12, size == 1.0); // radius in UV space (0.1 = 10% of quad size)
+        
         // Calculate distance from corners for rounded rectangle
         let abs_uv = abs(center_uv);
-        let corner_distance = abs_uv - (1.0 - radius_ratio);
-        let corner_dist = length(max(corner_distance, vec2<f32>(0.0, 0.0)));
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
 
         // Apply rounded corner mask
-        mask = select(0.0, 1.0, corner_dist <= radius_ratio);
+        mask = select(0.0, 1.0, corner_dist <= corner_radius);
+    } else {
+        // For any other shape, default to no masking (rectangular)
+        mask = 1.0;
     }
 
     // Apply the mask
