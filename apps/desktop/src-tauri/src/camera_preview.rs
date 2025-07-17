@@ -319,14 +319,13 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         };
         let total_height = window_height + BAR_HEIGHT;
 
-        let size = self.window.outer_size().unwrap();
         let monitor = self.window.current_monitor().unwrap().unwrap();
-        let width =
-            (size.width as f64 / monitor.scale_factor() - window_width as f64 - 100.0) as u32;
-        let height =
-            (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
-
-        // println!("{:?} {:?} {:?}", monitor.scale_factor(), size.width, size.height)
+        let width = (monitor.size().width as f64 / monitor.scale_factor()
+            - window_width as f64
+            - 100.0) as u32;
+        let height = (monitor.size().height as f64 / monitor.scale_factor()
+            - total_height as f64
+            - 100.0) as u32;
 
         println!("RESIZE WINDOW to ({}, {})", width, height);
         self.window
