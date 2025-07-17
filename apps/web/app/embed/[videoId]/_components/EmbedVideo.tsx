@@ -276,6 +276,7 @@ export const EmbedVideo = forwardRef<
           label: "English",
           src: subtitleUrl,
           default: true,
+          enabled: true
         });
       }
 
@@ -286,6 +287,8 @@ export const EmbedVideo = forwardRef<
           srclang: "en",
           label: "Chapters",
           src: chaptersUrl,
+          default: true,
+          enabled: true
         });
       }
 
