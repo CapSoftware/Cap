@@ -165,7 +165,7 @@ export function CapVideoPlayer({
       // Hide native captions
       for (let i = 0; i < video.textTracks.length; i++) {
         const track = video.textTracks[i];
-        if (track && (track.kind === 'captions' || track.kind === 'subtitles')) {
+        if (track && track.kind === 'subtitles') {
           track.mode = 'hidden'; // Load but don't display
           track.addEventListener('cuechange', handleCueChange);
         }
@@ -178,7 +178,7 @@ export function CapVideoPlayer({
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       for (let i = 0; i < video.textTracks.length; i++) {
         const track = video.textTracks[i];
-        if (track && (track.kind === 'captions' || track.kind === 'subtitles')) {
+        if (track && track.kind === 'subtitles') {
           track.removeEventListener('cuechange', handleCueChange);
         }
       }
@@ -187,14 +187,15 @@ export function CapVideoPlayer({
 
   return (
     <>
-      <MediaPlayer className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
+      <MediaPlayer
+        onMouseEnter={() => setControlsVisible(true)}
+        onMouseLeave={() => setControlsVisible(false)}
+        className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
           crossOrigin="anonymous"
           playsInline
-          onMouseEnter={() => setControlsVisible(true)}
-          onMouseLeave={() => setControlsVisible(false)}
           autoPlay={autoplay}
         >
           <track
@@ -216,8 +217,9 @@ export function CapVideoPlayer({
               "absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
               controlsVisible ? 'bottom-20' : 'bottom-12'
             )}
-            dangerouslySetInnerHTML={{ __html: currentCue }}
-          />
+          >
+            {currentCue}
+          </div>
         )}
         <MediaPlayerLoading />
         <MediaPlayerError />
