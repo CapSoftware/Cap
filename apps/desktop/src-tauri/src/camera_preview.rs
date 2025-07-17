@@ -155,6 +155,7 @@ struct Uniforms {
     window_height: f32,
     offset_pixels: f32,
     shape: u32,
+    size: u32,
 }
 
 @group(1) @binding(0)
@@ -224,7 +225,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     }
 
     // Shape constants: 0 = Round, 1 = Square, 2 = Full
+    // Size constants: 0 = Sm, 1 = Lg
     let shape = uniforms.shape;
+    let size = uniforms.size;
     
     // For Full shape, just render the camera texture
     if (shape == 2u) {
@@ -232,19 +235,30 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(camera_color.rgb, 1.0);
     }
     
-    // For Round and Square shapes, apply masking
     // Convert UV coordinates to center-based coordinates [-1, 1]
     let center_uv = (in.uv - 0.5) * 2.0;
     
     var mask = 1.0;
     
     if (shape == 0u) {
-        // Round shape - create circular mask
+        // Round shape - create circular mask (border-radius: 9999px equivalent)
         let distance = length(center_uv);
         mask = select(0.0, 1.0, distance <= 1.0);
     } else if (shape == 1u) {
-        // Square shape - no additional masking needed beyond the quad
-        mask = 1.0;
+        // Square shape - apply rounded corners based on size
+        // TypeScript: sm = 3rem (48px), lg = 4rem (64px)
+        // We need to convert this to UV space relative to the quad size
+        let base_size = select(230.0, 400.0, size == 1u); // sm vs lg base size
+        let corner_radius = select(48.0, 64.0, size == 1u); // 3rem vs 4rem in pixels
+        let radius_ratio = corner_radius / base_size; // Convert to ratio of quad size
+        
+        // Calculate distance from corners for rounded rectangle
+        let abs_uv = abs(center_uv);
+        let corner_distance = abs_uv - (1.0 - radius_ratio);
+        let corner_dist = length(max(corner_distance, vec2<f32>(0.0, 0.0)));
+        
+        // Apply rounded corner mask
+        mask = select(0.0, 1.0, corner_dist <= radius_ratio);
     }
     
     // Apply the mask
@@ -303,7 +317,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // Create uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 3]>() as u64, // window_height, offset_pixels, shape
+            size: std::mem::size_of::<[f32; 4]>() as u64, // window_height, offset_pixels, shape, size
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -383,7 +397,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             CameraPreviewShape::Square => 1.0,
             CameraPreviewShape::Full => 2.0,
         };
-        let uniform_data = [height as f32, BAR_HEIGHT, shape_value]; // window_height, offset_pixels, shape
+        let size_value = match state.size {
+            CameraPreviewSize::Sm => 0.0,
+            CameraPreviewSize::Lg => 1.0,
+        };
+        let uniform_data = [height as f32, BAR_HEIGHT, shape_value, size_value]; // window_height, offset_pixels, shape, size
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
         Self {
@@ -474,10 +492,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             CameraPreviewShape::Square => 1.0,
             CameraPreviewShape::Full => 2.0,
         };
-        let uniform_data = [c.height as f32, BAR_HEIGHT, shape_value]; // window_height, offset_pixels, shape
+        let size_value = match state.size {
+            CameraPreviewSize::Sm => 0.0,
+            CameraPreviewSize::Lg => 1.0,
+        };
+        let uniform_data = [c.height as f32, BAR_HEIGHT, shape_value, size_value]; // window_height, offset_pixels, shape, size
         println!(
-            "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}",
-            c.height, BAR_HEIGHT, shape_value
+            "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}, size: {}",
+            c.height, BAR_HEIGHT, shape_value, size_value
         );
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
