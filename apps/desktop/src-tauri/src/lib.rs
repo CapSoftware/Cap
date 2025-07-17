@@ -1738,6 +1738,9 @@ async fn set_camera_preview_state(
 ) -> Result<(), ()> {
     store.save(&state).map_err(|_| ())?;
 
+    // Update uniform buffer with new state
+    preview.update_uniforms();
+
     let app = app.read().await;
     if let Some(camera_feed) = app.camera_feed.as_ref() {
         let video_info = camera_feed.lock().await.video_info();

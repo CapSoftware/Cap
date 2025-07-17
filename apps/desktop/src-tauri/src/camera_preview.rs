@@ -18,7 +18,7 @@ use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
 
 // If you change this you might also need to update the constant in `camera.tsx`
-static BAR_HEIGHT: f32 = 56.0;
+static BAR_HEIGHT: f32 = 56.0 /* bar height */ + 16.0 /* inset */;
 
 #[derive(Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -154,8 +154,10 @@ impl CameraPreview {
 struct Uniforms {
     window_height: f32,
     offset_pixels: f32,
-    shape: u32,
-    size: u32,
+    shape: f32,
+    size: f32,
+    mirrored: f32,
+    _padding: f32,
 }
 
 @group(1) @binding(0)
@@ -230,8 +232,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let size = uniforms.size;
 
     // For Full shape, just render the camera texture
-    if (shape == 2u) {
-        let camera_color = textureSample(t_camera, s_camera, in.uv);
+    if (shape == 2.0) {
+        // Apply mirroring if enabled
+        var final_uv = in.uv;
+        if (uniforms.mirrored == 1.0) {
+            final_uv.x = 1.0 - final_uv.x;
+        }
+
+        let camera_color = textureSample(t_camera, s_camera, final_uv);
         return vec4<f32>(camera_color.rgb, 1.0);
     }
 
@@ -240,16 +248,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     var mask = 1.0;
 
-    if (shape == 0u) {
+    if (shape == 0.0) {
         // Round shape - create circular mask (border-radius: 9999px equivalent)
         let distance = length(center_uv);
         mask = select(0.0, 1.0, distance <= 1.0);
-    } else if (shape == 1u) {
+    } else if (shape == 1.0) {
         // Square shape - apply rounded corners based on size
         // TypeScript: sm = 3rem (48px), lg = 4rem (64px)
         // We need to convert this to UV space relative to the quad size
-        let base_size = select(230.0, 400.0, size == 1u); // sm vs lg base size
-        let corner_radius = select(48.0, 64.0, size == 1u); // 3rem vs 4rem in pixels
+        let base_size = select(230.0, 400.0, size == 1.0); // sm vs lg base size
+        let corner_radius = select(48.0, 64.0, size == 1.0); // 3rem vs 4rem in pixels
         let radius_ratio = corner_radius / base_size; // Convert to ratio of quad size
 
         // Calculate distance from corners for rounded rectangle
@@ -266,8 +274,14 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
+    // Apply mirroring if enabled
+    var final_uv = in.uv;
+    if (uniforms.mirrored == 1.0) {
+        final_uv.x = 1.0 - final_uv.x;
+    }
+
     // Sample the camera texture
-    let camera_color = textureSample(t_camera, s_camera, in.uv);
+    let camera_color = textureSample(t_camera, s_camera, final_uv);
     return vec4<f32>(camera_color.rgb, 1.0);
 }
 "#,
@@ -317,7 +331,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         // Create uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 4]>() as u64, // window_height, offset_pixels, shape, size
+            size: std::mem::size_of::<[f32; 6]>() as u64, // window_height, offset_pixels, shape, size, mirrored, padding
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -403,7 +417,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             CameraPreviewSize::Sm => 0.0,
             CameraPreviewSize::Lg => 1.0,
         };
-        let uniform_data = [height as f32, BAR_HEIGHT, shape_value, size_value]; // window_height, offset_pixels, shape, size
+        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
+        let uniform_data = [
+            height as f32,
+            BAR_HEIGHT,
+            shape_value,
+            size_value,
+            mirrored_value,
+            0.0, // padding
+        ]; // window_height, offset_pixels, shape, size, mirrored, padding
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
 
         Self {
@@ -498,7 +520,15 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             CameraPreviewSize::Sm => 0.0,
             CameraPreviewSize::Lg => 1.0,
         };
-        let uniform_data = [c.height as f32, BAR_HEIGHT, shape_value, size_value]; // window_height, offset_pixels, shape, size
+        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
+        let uniform_data = [
+            c.height as f32,
+            BAR_HEIGHT,
+            shape_value,
+            size_value,
+            mirrored_value,
+            0.0, // padding
+        ]; // window_height, offset_pixels, shape, size, mirrored, padding
         println!(
             "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}, size: {}",
             c.height, BAR_HEIGHT, shape_value, size_value
@@ -513,11 +543,63 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     /// * `offset_pixels` - The offset in pixels from the top of the window (default: 100px)
     pub fn update_offset(&self, offset_pixels: f32) {
         let surface_config = self.surface_config.lock().unwrap();
-        let uniform_data = [surface_config.height as f32, offset_pixels];
+        let state = self.store.get().unwrap_or_default();
+        let shape_value = match state.shape {
+            CameraPreviewShape::Round => 0.0,
+            CameraPreviewShape::Square => 1.0,
+            CameraPreviewShape::Full => 2.0,
+        };
+        let size_value = match state.size {
+            CameraPreviewSize::Sm => 0.0,
+            CameraPreviewSize::Lg => 1.0,
+        };
+        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
+        let uniform_data = [
+            surface_config.height as f32,
+            offset_pixels,
+            shape_value,
+            size_value,
+            mirrored_value,
+            0.0, // padding
+        ];
         println!(
             "DEBUG: Updating offset - window_height: {}, offset_pixels: {}",
             surface_config.height, offset_pixels
         );
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
+    }
+
+    /// Updates the uniform buffer with current camera window state
+    pub fn update_uniforms(&self) {
+        let surface_config = self.surface_config.lock().unwrap();
+        let state = self.store.get().unwrap_or_default();
+        
+        let shape_value = match state.shape {
+            CameraPreviewShape::Round => 0.0,
+            CameraPreviewShape::Square => 1.0,
+            CameraPreviewShape::Full => 2.0,
+        };
+        let size_value = match state.size {
+            CameraPreviewSize::Sm => 0.0,
+            CameraPreviewSize::Lg => 1.0,
+        };
+        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
+        
+        println!(
+            "DEBUG: update_uniforms - mirrored: {} -> {}, shape: {:?}, size: {:?}",
+            state.mirrored, mirrored_value, state.shape, state.size
+        );
+        
+        let uniform_data = [
+            surface_config.height as f32,
+            BAR_HEIGHT,
+            shape_value,
+            size_value,
+            mirrored_value,
+            0.0, // padding
+        ];
+        
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
     }
