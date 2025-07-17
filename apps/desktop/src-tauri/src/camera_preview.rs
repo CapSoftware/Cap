@@ -658,6 +658,13 @@ impl CameraPreviewRenderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
+        // Check if we have a camera frame available
+        let has_frame = self
+            .camera_frame
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some();
+
         if let Some(frame) = self
             .camera_frame
             .read()
@@ -764,6 +771,28 @@ impl CameraPreviewRenderer {
             render_pass.set_bind_group(0, &bind_group, &[]);
             render_pass.set_bind_group(1, &preview.uniform_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
+        } else {
+            // When no camera frame is available, create a transparent render pass
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0, // Fully transparent
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            // Don't draw anything - just clear to transparent
         }
 
         preview.queue.submit(Some(encoder.finish()));
