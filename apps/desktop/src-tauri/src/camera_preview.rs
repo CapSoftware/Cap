@@ -186,16 +186,23 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     var out: VertexOut;
     
     // Calculate offset in normalized coordinates
-    // In NDC, Y goes from -1 (bottom) to +1 (top)
-    // To offset down, we subtract the normalized offset
-    // The full height in NDC is 2.0 (-1 to +1), so we need to scale accordingly
     let offset_y = (uniforms.offset_pixels / uniforms.window_height) * 2.0;
-    let adjusted_pos = vec2<f32>(pos[idx].x, pos[idx].y - offset_y);
     
-    // Calculate if this vertex is in the offset area (top of screen)
-    // If the original position is above the offset threshold, mark it as offset area
-    let offset_threshold = 1.0 - offset_y;
-    let is_offset_area = select(0.0, 1.0, pos[idx].y > offset_threshold);
+    // Calculate the available height for the camera content
+    let available_height = uniforms.window_height - uniforms.offset_pixels;
+    let scale_factor = available_height / uniforms.window_height;
+    
+    // Scale the Y coordinate to fit the available space
+    let scaled_y = pos[idx].y * scale_factor;
+    
+    // Position the scaled quad in the bottom portion of the screen
+    // The bottom of the available area is at -1.0, top is at (1.0 - offset_y)
+    let final_y = scaled_y - offset_y;
+    
+    let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
+    
+    // Mark pixels in the offset area as transparent
+    let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - offset_y));
     
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
