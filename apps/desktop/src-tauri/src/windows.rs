@@ -330,7 +330,6 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
-                    // .inner_size(230.0, 230.0)
                     .position(
                         100.0,
                         (monitor.size().height as f64) / monitor.scale_factor()
@@ -340,7 +339,7 @@ impl ShowCapWindow {
                     .transparent(true);
 
                 let window = window_builder.build()?;
-                window.manage(CameraPreview::init(&window).await);
+                window.manage(CameraPreview::init(window.clone()).await);
 
                 #[cfg(target_os = "macos")]
                 {

@@ -93,8 +93,6 @@ pub struct App {
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
-    camera_config: CameraWindowStateStore,
-    #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
     mic_samples_tx: AudioInputSamplesSender,
@@ -188,6 +186,7 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[specta::specta]
 async fn set_camera_input(
     state: MutableState<'_, App>,
+    preview: State<'_, CameraPreview>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -216,8 +215,14 @@ async fn set_camera_input(
                                 if app.camera_feed.is_none() {
                                     feed.attach(app.camera_tx.clone());
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
+
+                                    let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
+                                    preview.reconfigure(video_info.width, video_info.height);
+
                                     return Ok(true);
                                 } else {
+                                    // TODO: Also reconfigure here???
+
                                     return Ok(false);
                                 }
                             }
@@ -1725,10 +1730,10 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_preview_state(
-    app: MutableState<'_, App>,
+    store: State<'_, CameraWindowStateStore>,
     state: CameraWindowState,
 ) -> Result<(), ()> {
-    app.read().await.camera_config.save(&state).map_err(|_| ())
+    store.save(&state).map_err(|_| ())
 }
 
 #[tauri::command]
@@ -1946,7 +1951,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     handle: app.clone(),
                     camera_feed: None,
                     camera_tx,
-                    camera_config: CameraWindowStateStore::init(&app),
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
@@ -1961,6 +1965,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 .to_string()
                         }),
                 })));
+
+                app.manage(CameraWindowStateStore::init(&app));
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -2134,9 +2140,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     event: WindowEvent::Resized(size),
                     ..
                 } => {
-                    if let Some(preview) = handle.try_state::<CameraPreview>() {
-                        preview.reconfigure(size.width, size.height);
-                    }
+                    // TODO
+                    // if let Some(preview) = handle.try_state::<CameraPreview>() {
+                    //     let app = handle.state::<CameraWindowStateStore>();
+                    //     preview.reconfigure(
+                    //         &app.get().unwrap_or_default(),
+                    //         size.width,
+                    //         size.height,
+                    //     );
+                    // }
                 }
                 tauri::RunEvent::MainEventsCleared => {
                     if let Some(preview) = handle.try_state::<CameraPreview>() {

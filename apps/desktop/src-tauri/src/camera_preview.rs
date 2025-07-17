@@ -12,26 +12,32 @@ use ffmpeg::{
 use cap_media::feeds::RawCameraFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, Manager, Runtime, WebviewWindow, Wry};
+use tauri::{LogicalSize, Manager, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
+use wgpu::CompositeAlphaMode;
 
-#[derive(Debug, Serialize, Deserialize, Type)]
+// If you change this you might also need to update the constant in `camera.tsx`
+static BAR_HEIGHT: f32 = 56.0;
+
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum CameraPreviewSize {
+    #[default]
     Sm,
     Lg,
 }
 
-#[derive(Debug, Serialize, Deserialize, Type)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum CameraPreviewShape {
+    #[default]
     Round,
     Square,
     Full,
 }
 
-#[derive(Debug, Serialize, Deserialize, Type)]
+#[derive(Debug, Default, Serialize, Deserialize, Type)]
 pub struct CameraWindowState {
     size: CameraPreviewSize,
     shape: CameraPreviewShape,
@@ -69,6 +75,8 @@ pub struct CameraPreview {
     queue: wgpu::Queue,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
+    window: tauri::WebviewWindow<Wry>,
+    store: CameraWindowStateStore,
 }
 
 impl CameraPreview {
@@ -90,7 +98,7 @@ impl CameraPreview {
         result
     }
 
-    pub async fn init(window: &WebviewWindow) -> Self {
+    pub async fn init(window: WebviewWindow) -> Self {
         let size = window.inner_size().unwrap();
 
         // Ensure we have a valid size, fallback to 460x460 if needed
@@ -141,53 +149,43 @@ impl CameraPreview {
             label: None,
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
                 r#"
-struct VertexOutput {
+struct VertexOut {
     @builtin(position) position: vec4<f32>,
-    @location(0) tex_coord: vec2<f32>,
-}
+    @location(0) uv: vec2<f32>,
+};
 
 @vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-    // Define a full-screen quad with proper texture coordinates
-    var out: VertexOutput;
-
-    // Create a full-screen quad using 6 vertices (2 triangles)
-    // Vertex positions for a full-screen quad
-    let positions = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0),  // Bottom-left
-        vec2<f32>( 1.0, -1.0),  // Bottom-right
-        vec2<f32>(-1.0,  1.0),  // Top-left
-        vec2<f32>(-1.0,  1.0),  // Top-left (duplicate)
-        vec2<f32>( 1.0, -1.0),  // Bottom-right (duplicate)
-        vec2<f32>( 1.0,  1.0)   // Top-right
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
+    var pos = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), // bottom left
+        vec2<f32>( 1.0, -1.0), // bottom right
+        vec2<f32>(-1.0,  1.0), // top left
+        vec2<f32>(-1.0,  1.0), // top left
+        vec2<f32>( 1.0, -1.0), // bottom right
+        vec2<f32>( 1.0,  1.0), // top right
     );
-
-    // Texture coordinates for the quad
-    let tex_coords = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 1.0),  // Bottom-left
-        vec2<f32>(1.0, 1.0),  // Bottom-right
-        vec2<f32>(0.0, 0.0),  // Top-left
-        vec2<f32>(0.0, 0.0),  // Top-left (duplicate)
-        vec2<f32>(1.0, 1.0),  // Bottom-right (duplicate)
-        vec2<f32>(1.0, 0.0)   // Top-right
+    var uv = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(1.0, 0.0),
     );
-
-    out.position = vec4<f32>(positions[in_vertex_index], 0.0, 1.0);
-    out.tex_coord = tex_coords[in_vertex_index];
-
+    var out: VertexOut;
+    out.position = vec4<f32>(pos[idx], 0.0, 1.0);
+    out.uv = uv[idx];
     return out;
 }
 
 @group(0) @binding(0)
-var t_diffuse: texture_2d<f32>;
+var t_camera: texture_2d<f32>;
 @group(0) @binding(1)
-var s_diffuse: sampler;
+var s_camera: sampler;
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Simply sample the texture and return the color
-    let color = textureSample(t_diffuse, s_diffuse, in.tex_coord);
-    return color;
+fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    return textureSample(t_camera, s_camera, in.uv);
 }
 "#,
             )),
@@ -240,7 +238,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: swapchain_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    blend: None, // No alpha blending
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -252,28 +250,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             cache: None,
         });
 
-        // Find the best alpha mode for transparency
-        let alpha_mode = if swapchain_capabilities
-            .alpha_modes
-            .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-        {
-            wgpu::CompositeAlphaMode::PreMultiplied
-        } else if swapchain_capabilities
-            .alpha_modes
-            .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
-        {
-            wgpu::CompositeAlphaMode::PostMultiplied
-        } else {
-            swapchain_capabilities.alpha_modes[0]
-        };
-
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode,
+            alpha_mode: CompositeAlphaMode::Opaque, // TODO: Fix this???
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -298,13 +281,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             queue,
             sampler,
             bind_group_layout: texture_bind_group_layout,
+            store: CameraWindowStateStore::init(&window),
+            window,
         }
     }
 
     pub fn reconfigure(&self, width: u32, height: u32) {
+        let state = self.store.get().unwrap_or_default();
+
+        let base: f32 = if state.size == CameraPreviewSize::Sm {
+            230.0
+        } else {
+            400.0
+        };
+        let aspect = width as f32 / height as f32;
+        let window_width = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base * aspect
+            } else {
+                base
+            }
+        } else {
+            base
+        };
+        let window_height = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base
+            } else {
+                base / aspect
+            }
+        } else {
+            base
+        };
+        let total_height = window_height + BAR_HEIGHT;
+
+        let size = self.window.outer_size().unwrap();
+        let monitor = self.window.current_monitor().unwrap().unwrap();
+        let width =
+            (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
+        let height =
+            (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
+
+        self.window
+            .set_size(LogicalSize::new(width, height))
+            .unwrap();
+        // TODO: Reposition the window
+
         let mut c = self.surface_config.lock().unwrap();
-        c.width = if width > 0 { width } else { 1 };
-        c.height = if height > 0 { height } else { 1 };
+        c.width = width; // if width > 0 { width } else { 1 };
+        c.height = height; // if height > 0 { height } else { 1 };
 
         println!(
             "RECONFIGURE WINDOW SIZE DEBUG using ({}, {})",
@@ -367,7 +392,6 @@ impl CameraPreviewRenderer {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
         {
-            // TODO: This seems like a bottleneck
             let surface_config = preview.surface_config.lock().unwrap();
 
             // Rescale the frame to the correct output size
@@ -377,7 +401,7 @@ impl CameraPreviewRenderer {
                     frame.frame.format(),
                     frame.frame.width(),
                     frame.frame.height(),
-                    format::Pixel::RGBA, // frame.frame.format(),
+                    format::Pixel::RGBA,
                     surface_config.height,
                     surface_config.width,
                     scaling::Flags::empty(),
@@ -450,7 +474,12 @@ impl CameraPreviewRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
