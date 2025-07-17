@@ -12,7 +12,7 @@ use ffmpeg::{
 use cap_media::feeds::RawCameraFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{LogicalSize, Manager, WebviewWindow, Wry};
+use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
@@ -288,9 +288,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Called to resize the window to the video feed
     pub fn resize(&self, width: u32, height: u32) {
-        println!("RESIZE WINDOW ({}, {})", width, height);
+        println!("RESIZE WINDOW source ({}, {})", width, height);
 
         let state = self.store.get().unwrap_or_default();
+        println!("WITH STATE {:?}", state);
 
         let base: f32 = if state.size == CameraPreviewSize::Sm {
             230.0
@@ -321,18 +322,24 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let size = self.window.outer_size().unwrap();
         let monitor = self.window.current_monitor().unwrap().unwrap();
         let width =
-            (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
+            (size.width as f64 / monitor.scale_factor() - window_width as f64 - 100.0) as u32;
         let height =
             (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
 
-        // TODO
-        let width = 300;
-        let height = 300;
+        // println!("{:?} {:?} {:?}", monitor.scale_factor(), size.width, size.height)
 
+        println!("RESIZE WINDOW to ({}, {})", width, height);
         self.window
-            .set_size(LogicalSize::new(width, height))
+            .set_size(LogicalSize::new(window_width, window_height))
             .unwrap();
-        // TODO: Reposition the window
+        let monitor_offset: LogicalPosition<u32> =
+            monitor.position().to_logical(monitor.scale_factor());
+        self.window
+            .set_position(LogicalPosition::new(
+                width + monitor_offset.x,
+                height + monitor_offset.y,
+            ))
+            .unwrap();
     }
 
     // Called by the Window resize events to reconfigure the texture.

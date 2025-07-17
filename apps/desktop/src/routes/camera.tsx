@@ -102,25 +102,9 @@ function Page() {
       </div>
 
       {/* The camera preview is rendered in Rust by wgpu */}
-      {/* class="h-[286px] w-[230px] bg-blue-500" */}
-      {/* <div
-        class={cx(
-          "flex flex-col flex-1 relative overflow-hidden pointer-events-none border-none shadow-lg bg-blue-500",
-          state.shape === "round" ? "rounded-full" : "rounded-3xl"
-        )}
-        data-tauri-drag-region
-      /> */}
-
-      <p class="bg-red-500 w-[100px] h-[100px]" data-tauri-drag-region />
     </div>
   );
 }
-
-// function cameraBorderRadius(state: CameraWindow.State) {
-//   if (state.shape === "round") return "9999px";
-//   if (state.size === "sm") return "3rem";
-//   return "4rem";
-// }
 
 function ControlButton(
   props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {

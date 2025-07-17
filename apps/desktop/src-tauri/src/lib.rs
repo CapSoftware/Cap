@@ -1731,10 +1731,20 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_preview_state(
+    app: MutableState<'_, App>,
+    preview: State<'_, CameraPreview>,
     store: State<'_, CameraWindowStateStore>,
     state: CameraWindowState,
 ) -> Result<(), ()> {
-    store.save(&state).map_err(|_| ())
+    store.save(&state).map_err(|_| ())?;
+
+    let app = app.read().await;
+    if let Some(camera_feed) = app.camera_feed.as_ref() {
+        let video_info = camera_feed.lock().await.video_info();
+        preview.resize(video_info.width, video_info.height);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
