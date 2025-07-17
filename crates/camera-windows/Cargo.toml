@@ -11,6 +11,7 @@ cap-camera-directshow = { path = "../camera-directshow" }
 windows = { version = "0.60", features = ["Win32_Media_MediaFoundation"] }
 windows-core = { version = "0.60" }
 thiserror.workspace = true
+inquire = "0.7.5"
 
 [lints]
 workspace = true

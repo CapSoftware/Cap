@@ -1,23 +1,124 @@
 #![cfg(windows)]
 
-use cap_camera_directshow::{AM_MEDIA_TYPEVideoExt, AMMediaType};
+use cap_camera_directshow::{AM_MEDIA_TYPEExt, AM_MEDIA_TYPEVideoExt, AMMediaType, SinkFilter};
+use cap_camera_mediafoundation::{IMFMediaBufferExt, SourceReader};
+use ffmpeg::format::Pixel;
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fmt::{Debug, Display},
+    ops::Deref,
+    ptr::null_mut,
+    time::Duration,
 };
-use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::Media::{DirectShow::*, MediaFoundation::*};
 use windows_core::GUID;
 
 #[derive(Clone)]
-pub struct DeviceInfo {
+pub struct VideoDeviceInfo {
     id: OsString,
     name: OsString,
     model_id: Option<String>,
     formats: Vec<VideoFormat>,
-    inner: DeviceInfoInner,
+    inner: VideoDeviceInfoInner,
 }
 
-impl Debug for DeviceInfo {
+impl VideoDeviceInfo {
+    pub fn id(&self) -> &OsStr {
+        &self.id
+    }
+
+    pub fn name(&self) -> &OsStr {
+        &self.name
+    }
+
+    pub fn formats(&self) -> &Vec<VideoFormat> {
+        &self.formats
+    }
+
+    pub fn is_mf(&self) -> bool {
+        matches!(self.inner, VideoDeviceInfoInner::MediaFoundation { .. })
+    }
+
+    fn name_and_model(&self) -> String {
+        if let Some(model_id) = &self.model_id {
+            format!("{} ({model_id})", self.name.to_string_lossy())
+        } else {
+            self.name.to_string_lossy().to_string()
+        }
+    }
+
+    pub fn start_capturing<'a>(
+        self,
+        format: &VideoFormat,
+    ) -> windows_core::Result<CaptureIterator> {
+        let res = match (self.inner, &format.inner) {
+            (
+                VideoDeviceInfoInner::MediaFoundation { device, reader },
+                VideoFormatInner::MediaFoundation(mf_format),
+            ) => {
+                let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+                let pixel_format = format.pixel_format;
+
+                reader
+                    .set_current_media_type(stream_index, &mf_format)
+                    .unwrap();
+                unsafe {
+                    reader.SetStreamSelection(stream_index, true).unwrap();
+                }
+
+                Box::new(std::iter::from_fn(move || {
+                    let sample = match reader.try_read_sample(stream_index) {
+                        Ok(v) => v?,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    let bytes = match sample.bytes() {
+                        Ok(v) => v,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    Some(Ok(Frame {
+                        bytes,
+                        pixel_format: pixel_format,
+                    }))
+                })) as CaptureIterator
+            }
+            (
+                VideoDeviceInfoInner::DirectShow(mut device),
+                VideoFormatInner::DirectShow(format),
+            ) => {
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+
+                device.set_format(format)?;
+
+                let _ = device.run(Box::new(move |buffer, media_type, time_delta| {
+                    let Some(format) = DSPixelFormat::new(media_type).map(|v| v.format) else {
+                        return;
+                    };
+
+                    let _ = tx.try_send(Frame {
+                        bytes: buffer.to_vec(),
+                        pixel_format: format,
+                    });
+                }));
+
+                Box::new(std::iter::from_fn(move || {
+                    match rx.recv_timeout(Duration::from_secs(5)) {
+                        Ok(buffer) => Some(Ok(buffer)),
+                        Err(e) => None,
+                    }
+                })) as CaptureIterator
+            }
+            _ => todo!(),
+        };
+
+        Ok(res)
+    }
+}
+
+type CaptureIterator<'a> = Box<dyn Iterator<Item = windows_core::Result<Frame>> + 'a>;
+
+impl Debug for VideoDeviceInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeviceInfo")
             .field("id", &self.id)
@@ -28,31 +129,50 @@ impl Debug for DeviceInfo {
     }
 }
 
-impl DeviceInfo {
-    fn is_mf(&self) -> bool {
-        matches!(self.inner, DeviceInfoInner::MediaFoundation(_))
-    }
+pub struct Frame {
+    pub bytes: Vec<u8>,
+    pub pixel_format: PixelFormat,
+}
 
-    fn name_and_model(&self) -> String {
-        if let Some(model_id) = &self.model_id {
-            format!("{} ({model_id})", self.name.to_string_lossy())
-        } else {
-            self.name.to_string_lossy().to_string()
+#[derive(Debug, Clone, Copy)]
+pub enum PixelFormat {
+    ARGB,
+    RGB24,
+    RGB32,
+    YUV420P,
+    YUYV422,
+    UYVY422,
+    NV12,
+}
+
+impl PixelFormat {
+    pub fn as_ffmpeg(&self) -> ffmpeg::format::Pixel {
+        match self {
+            PixelFormat::YUV420P => Pixel::YUV420P,
+            PixelFormat::RGB24 => Pixel::RGB24,
+            PixelFormat::RGB32 => Pixel::RGB32,
+            PixelFormat::YUYV422 => Pixel::YUYV422,
+            PixelFormat::UYVY422 => Pixel::UYVY422,
+            PixelFormat::ARGB => Pixel::ARGB,
+            PixelFormat::NV12 => Pixel::NV12,
         }
     }
 }
 
 #[derive(Clone)]
-enum DeviceInfoInner {
-    MediaFoundation(cap_camera_mediafoundation::Device),
+enum VideoDeviceInfoInner {
+    MediaFoundation {
+        device: cap_camera_mediafoundation::Device,
+        reader: cap_camera_mediafoundation::SourceReader,
+    },
     DirectShow(cap_camera_directshow::VideoInputDevice),
 }
 
-impl Debug for DeviceInfoInner {
+impl Debug for VideoDeviceInfoInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DirectShow(_) => write!(f, "DirectShow"),
-            Self::MediaFoundation(_) => write!(f, "MediaFoundation"),
+            Self::MediaFoundation { .. } => write!(f, "MediaFoundation"),
         }
     }
 }
@@ -63,7 +183,7 @@ pub enum GetDevicesError {
     DSDeviceEnumerationFailed(windows_core::Error),
 }
 
-pub fn get_devices() -> Result<Vec<DeviceInfo>, GetDevicesError> {
+pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
     let _ = cap_camera_directshow::initialize_directshow();
     let _ = cap_camera_mediafoundation::initialize_mediafoundation();
 
@@ -79,15 +199,15 @@ pub fn get_devices() -> Result<Vec<DeviceInfo>, GetDevicesError> {
 
             let formats = reader
                 .native_media_types(stream_index)?
-                .filter_map(|t| VideoFormat::new_mf(&t).ok())
+                .filter_map(|t| VideoFormat::new_mf(t).ok())
                 .collect::<Vec<_>>();
 
-            Ok::<_, windows_core::Error>(DeviceInfo {
+            Ok::<_, windows_core::Error>(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
                 formats,
-                inner: DeviceInfoInner::MediaFoundation(device),
+                inner: VideoDeviceInfoInner::MediaFoundation { device, reader },
             })
         })
         .filter_map(|result| match result {
@@ -110,15 +230,15 @@ pub fn get_devices() -> Result<Vec<DeviceInfo>, GetDevicesError> {
                 .media_types()
                 .into_iter()
                 .flatten()
-                .filter_map(|media_type| VideoFormat::new_ds(&media_type).ok())
+                .filter_map(|media_type| VideoFormat::new_ds(media_type).ok())
                 .collect::<Vec<_>>();
 
-            Some(DeviceInfo {
+            Some(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
                 formats,
-                inner: DeviceInfoInner::DirectShow(device),
+                inner: VideoDeviceInfoInner::DirectShow(device),
             })
         })
         .filter_map(|result| {
@@ -133,7 +253,6 @@ pub fn get_devices() -> Result<Vec<DeviceInfo>, GetDevicesError> {
 
     for dshow_device in dshow_devices {
         let name_and_model = dshow_device.name_and_model();
-        // dbg!(&name_and_model);
 
         let mf_device = devices
             .iter()
@@ -155,11 +274,32 @@ pub fn get_devices() -> Result<Vec<DeviceInfo>, GetDevicesError> {
 }
 
 #[derive(Debug, Clone)]
-struct VideoFormat {
+pub struct VideoFormat {
     width: u32,
     height: u32,
     frame_rate: f32,
-    pixel_format: ffmpeg::format::Pixel,
+    pixel_format: PixelFormat,
+    inner: VideoFormatInner,
+}
+
+#[derive(Clone)]
+pub enum VideoFormatInner {
+    MediaFoundation(IMFMediaType),
+    DirectShow(AMMediaType),
+}
+
+impl Debug for VideoFormatInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VideoFormatInner")
+            .field(
+                "variant",
+                &match self {
+                    VideoFormatInner::MediaFoundation(_) => "MediaFoundation",
+                    VideoFormatInner::DirectShow(_) => "DirectShow",
+                },
+            )
+            .finish()
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -173,7 +313,7 @@ pub enum VideoFormatError {
 }
 
 impl VideoFormat {
-    fn new_mf(inner: &IMFMediaType) -> Result<Self, VideoFormatError> {
+    fn new_mf(inner: IMFMediaType) -> Result<Self, VideoFormatError> {
         if unsafe { inner.GetMajorType()? } != MFMediaType_Video {
             return Err(VideoFormatError::NotVideo);
         }
@@ -198,11 +338,12 @@ impl VideoFormat {
             frame_rate,
             pixel_format: MFPixelFormat::new(subtype)
                 .ok_or(VideoFormatError::InvalidPixelFormat(subtype))?
-                .as_ffmpeg(),
+                .format,
+            inner: VideoFormatInner::MediaFoundation(inner),
         })
     }
 
-    fn new_ds(inner: &AMMediaType) -> Result<Self, VideoFormatError> {
+    fn new_ds(inner: AMMediaType) -> Result<Self, VideoFormatError> {
         if inner.majortype != MFMediaType_Video {
             return Err(VideoFormatError::NotVideo);
         }
@@ -214,9 +355,10 @@ impl VideoFormat {
             height: video_info.bmiHeader.biHeight as u32,
             frame_rate: ((10_000_000.0 / video_info.AvgTimePerFrame as f32) * 100.0).round()
                 / 100.0,
-            pixel_format: DSPixelFormat::new(inner)
+            pixel_format: DSPixelFormat::new(&inner)
                 .ok_or(VideoFormatError::InvalidPixelFormat(inner.subtype))?
-                .as_ffmpeg(),
+                .format,
+            inner: VideoFormatInner::DirectShow(inner),
         })
     }
 }
@@ -229,69 +371,73 @@ impl Display for VideoFormat {
 }
 
 struct MFPixelFormat {
-    ffmpeg: ffmpeg::format::Pixel,
+    format: PixelFormat,
     mf: GUID,
 }
 
 impl MFPixelFormat {
     fn new(subtype: GUID) -> Option<Self> {
-        use ffmpeg::format::Pixel;
-
-        let get_ffmpeg = || {
+        let get_format = || {
             Some(match subtype {
-                t if t == MFVideoFormat_I420 || t == MFVideoFormat_IYUV => Pixel::YUV420P,
-                t if t == MFVideoFormat_RGB24 => Pixel::RGB24,
-                t if t == MFVideoFormat_RGB32 => Pixel::RGB32,
-                t if t == MFVideoFormat_YUY2 => Pixel::YUYV422,
-                t if t == MFVideoFormat_UYVY => Pixel::UYVY422,
-                t if t == MFVideoFormat_ARGB32 => Pixel::ARGB,
-                t if t == MFVideoFormat_NV12 => Pixel::NV12,
+                t if t == MFVideoFormat_I420 || t == MFVideoFormat_IYUV => PixelFormat::YUV420P,
+                t if t == MFVideoFormat_RGB24 => PixelFormat::RGB24,
+                t if t == MFVideoFormat_RGB32 => PixelFormat::RGB32,
+                t if t == MFVideoFormat_YUY2 => PixelFormat::YUYV422,
+                t if t == MFVideoFormat_UYVY => PixelFormat::UYVY422,
+                t if t == MFVideoFormat_ARGB32 => PixelFormat::ARGB,
+                t if t == MFVideoFormat_NV12 => PixelFormat::NV12,
                 _ => return None,
             })
         };
 
         Some(Self {
-            ffmpeg: get_ffmpeg()?,
+            format: get_format()?,
             mf: subtype,
         })
     }
+}
 
-    pub fn as_ffmpeg(&self) -> ffmpeg::format::Pixel {
-        self.ffmpeg
+impl Deref for MFPixelFormat {
+    type Target = PixelFormat;
+
+    fn deref(&self) -> &Self::Target {
+        &self.format
     }
 }
 
 struct DSPixelFormat {
-    ffmpeg: ffmpeg::format::Pixel,
+    format: PixelFormat,
     ds: GUID,
+}
+
+impl Deref for DSPixelFormat {
+    type Target = PixelFormat;
+
+    fn deref(&self) -> &Self::Target {
+        &self.format
+    }
 }
 
 impl DSPixelFormat {
     fn new(major_type: &AM_MEDIA_TYPE) -> Option<Self> {
-        use ffmpeg::format::Pixel;
-
         let subtype = major_type.subtype;
 
         let get_ffmpeg = || {
             Some(match subtype {
-                t if t == MEDIASUBTYPE_I420 || t == MEDIASUBTYPE_IYUV => Pixel::YUV420P,
-                t if t == MEDIASUBTYPE_RGB24 => Pixel::RGB24,
-                t if t == MEDIASUBTYPE_RGB32 => Pixel::RGB32,
-                t if t == MEDIASUBTYPE_YUY2 => Pixel::YUYV422,
-                t if t == MEDIASUBTYPE_UYVY => Pixel::UYVY422,
-                t if t == MEDIASUBTYPE_ARGB32 => Pixel::ARGB,
-                t if t == MEDIASUBTYPE_NV12 => Pixel::NV12,
+                t if t == MEDIASUBTYPE_I420 || t == MEDIASUBTYPE_IYUV => PixelFormat::YUV420P,
+                t if t == MEDIASUBTYPE_RGB24 => PixelFormat::RGB24,
+                t if t == MEDIASUBTYPE_RGB32 => PixelFormat::RGB32,
+                t if t == MEDIASUBTYPE_YUY2 => PixelFormat::YUYV422,
+                t if t == MEDIASUBTYPE_UYVY => PixelFormat::UYVY422,
+                t if t == MEDIASUBTYPE_ARGB32 => PixelFormat::ARGB,
+                t if t == MEDIASUBTYPE_NV12 => PixelFormat::NV12,
                 _ => return None,
             })
         };
 
         Some(Self {
-            ffmpeg: get_ffmpeg()?,
+            format: get_ffmpeg()?,
             ds: subtype,
         })
-    }
-
-    pub fn as_ffmpeg(&self) -> ffmpeg::format::Pixel {
-        self.ffmpeg
     }
 }

@@ -326,7 +326,8 @@ pub struct VideoInputDevice {
     moniker: IMoniker,
     prop_bag: IPropertyBag,
     filter: IBaseFilter,
-    stream_config: Option<IAMStreamConfig>,
+    output_pin: IPin,
+    stream_config: IAMStreamConfig,
 }
 
 impl VideoInputDevice {
@@ -334,14 +335,16 @@ impl VideoInputDevice {
         let prop_bag: IPropertyBag = unsafe { moniker.BindToStorage(None, None) }?;
         let filter: IBaseFilter = unsafe { moniker.BindToObject(None, None) }?;
 
-        let stream_config = filter
+        let output_pin = filter
             .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
-            .and_then(|f| f.cast::<IAMStreamConfig>().ok());
+            .ok_or(E_FAIL)?;
+        let stream_config = output_pin.cast::<IAMStreamConfig>().ok().ok_or(E_FAIL)?;
 
         Ok(Self {
             moniker,
             prop_bag,
             filter,
+            output_pin,
             stream_config,
         })
     }
@@ -369,13 +372,88 @@ impl VideoInputDevice {
     }
 
     pub fn media_types(&self) -> Option<VideoMediaTypesIterator> {
-        self.stream_config.as_ref().and_then(|stream_config| {
-            stream_config
-                .media_types()
-                .map(|inner| VideoMediaTypesIterator { inner })
-                .ok()
-        })
+        self.stream_config
+            .media_types()
+            .map(|inner| VideoMediaTypesIterator { inner })
+            .ok()
     }
+
+    pub fn filter(&self) -> &IBaseFilter {
+        &self.filter
+    }
+
+    pub fn stream_config(&self) -> &IAMStreamConfig {
+        &self.stream_config
+    }
+
+    pub fn set_format(&mut self, format: &AMMediaType) -> windows_core::Result<()> {
+        unsafe { self.stream_config.SetFormat(&**format) }
+    }
+
+    pub fn run(self, callback: SinkCallback) -> Result<RunHandle, RunError> {
+        unsafe {
+            let sink_filter = SinkFilter::new(callback);
+
+            let input_sink_pin = sink_filter.get_pin(0).ok_or(RunError::NoInputPin)?;
+
+            let graph_builder: IGraphBuilder =
+                CoCreateInstance(&CLSID_FilterGraph, None, CLSCTX_INPROC_SERVER)
+                    .map_err(RunError::CreateGraph)?;
+
+            let capture_graph_builder: ICaptureGraphBuilder2 =
+                CoCreateInstance(&CLSID_CaptureGraphBuilder2, None, CLSCTX_INPROC_SERVER)
+                    .map_err(RunError::CreateGraph)?;
+
+            let media_control = graph_builder
+                .cast::<IMediaControl>()
+                .expect("Failed to cast IGraphBuilder to IMediaControl");
+
+            capture_graph_builder
+                .SetFiltergraph(&graph_builder)
+                .map_err(RunError::ConfigureGraph)?;
+            graph_builder
+                .AddFilter(&self.filter, None)
+                .map_err(RunError::ConfigureGraph)?;
+
+            let sink_filter: IBaseFilter = sink_filter
+                .cast()
+                .expect("Failed to cast SinkFilter to IBaseFilter");
+
+            graph_builder
+                .AddFilter(&sink_filter, None)
+                .map_err(RunError::ConfigureGraph)?;
+
+            let mut stream_config = null_mut();
+            capture_graph_builder
+                .FindInterface(
+                    Some(&PIN_CATEGORY_CAPTURE),
+                    Some(&MEDIATYPE_Video),
+                    &self.filter,
+                    &IAMStreamConfig::IID,
+                    &mut stream_config,
+                )
+                .map_err(RunError::ConfigureGraph)?;
+
+            graph_builder
+                .ConnectDirect(&self.output_pin, &input_sink_pin, None)
+                .map_err(RunError::ConfigureGraph)?;
+
+            media_control.Run().map_err(RunError::Run)?;
+
+            Ok(RunHandle { media_control })
+        }
+    }
+}
+
+pub struct RunHandle {
+    media_control: IMediaControl,
+}
+
+pub enum RunError {
+    NoInputPin,
+    CreateGraph(windows_core::Error),
+    ConfigureGraph(windows_core::Error),
+    Run(windows_core::Error),
 }
 
 impl Deref for VideoInputDevice {
@@ -840,12 +918,12 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         let video_info =
             unsafe { &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER) };
 
-        println!(
-            "New frame: {}x{}, {pts}pts, {bytes} bytes, {}",
-            video_info.bmiHeader.biWidth,
-            video_info.bmiHeader.biHeight,
-            format_str.unwrap_or("unknown format")
-        );
+        // println!(
+        //     "New frame: {}x{}, {pts}pts, {bytes} bytes, {}",
+        //     video_info.bmiHeader.biWidth,
+        //     video_info.bmiHeader.biHeight,
+        //     format_str.unwrap_or("unknown format")
+        // );
 
         let length = unsafe { psample.GetActualDataLength() };
 
