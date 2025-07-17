@@ -338,7 +338,9 @@ impl ShowCapWindow {
                     .transparent(true);
 
                 let window = window_builder.build()?;
-                window.manage(CameraPreview::init(window.clone()).await);
+                let size = window.inner_size()?;
+
+                window.manage(CameraPreview::init(window.clone(), size).await?);
 
                 #[cfg(target_os = "macos")]
                 {

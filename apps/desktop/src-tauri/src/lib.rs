@@ -224,7 +224,8 @@ async fn set_camera_input_inner(
 
                                     if let Some(window) = window {
                                         if let Some(preview) = window.try_state::<CameraPreview>() {
-                                            preview.resize(video_info.width, video_info.height);
+                                            preview.resize(video_info.width, video_info.height)
+                                                .map_err(|err| format!("Error resizing camera preview: {err}"))?;
                                         }
                                     }
 
@@ -233,7 +234,8 @@ async fn set_camera_input_inner(
                                     if let Some(window) = window {
                                         if let Some(preview) = window.try_state::<CameraPreview>() {
                                             let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
-                                            preview.resize(video_info.width, video_info.height);
+                                            preview.resize(video_info.width, video_info.height)
+                                                .map_err(|err| format!("Error resizing camera preview: {err}"))?;
                                         }
                                     }
 
@@ -1751,13 +1753,15 @@ async fn set_camera_preview_state(
 ) -> Result<(), ()> {
     store.save(&state).map_err(|_| ())?;
 
-    // Update uniform buffer with new state
-    preview.update_uniforms();
-
     let app = app.read().await;
     if let Some(camera_feed) = app.camera_feed.as_ref() {
         let video_info = camera_feed.lock().await.video_info();
-        preview.resize(video_info.width, video_info.height);
+        preview
+            .resize(video_info.width, video_info.height)
+            .map_err(|err| {
+                error!("Error resizing camera preview: {}", err);
+                ()
+            })?;
     }
 
     Ok(())
@@ -2127,7 +2131,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .build(tauri_context)
         .expect("error while running tauri application")
         .run({
-            let mut camera = CameraPreviewRenderer::init(camera_frame);
+            let mut camera = CameraPreviewRenderer::init(camera_frame)
+                .map_err(|err| error!("Error initializing camera preview renderer: {err:?}"))
+                .ok();
 
             move |handle, event| match event {
                 #[cfg(target_os = "macos")]
@@ -2173,7 +2179,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
                 tauri::RunEvent::MainEventsCleared => {
                     if let Some(preview) = handle.try_state::<CameraPreview>() {
-                        camera.render(&preview);
+                        if let Some(camera) = camera.as_mut() {
+                            if let Err(err) = camera.render(&preview) {
+                                error!("Error rendering camera preview: {err}");
+                            }
+                        }
                     }
                 }
                 _ => {}

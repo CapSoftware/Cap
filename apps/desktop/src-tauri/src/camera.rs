@@ -1,8 +1,6 @@
-use std::{
-    borrow::Cow,
-    sync::{Arc, Mutex, PoisonError, RwLock},
-};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
+use anyhow::Context;
 use ffmpeg::{
     format::{self, Pixel},
     frame,
@@ -12,7 +10,7 @@ use ffmpeg::{
 use cap_media::feeds::RawCameraFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
@@ -46,23 +44,21 @@ pub struct CameraWindowState {
 pub struct CameraWindowStateStore(Arc<Store<Wry>>);
 
 impl CameraWindowStateStore {
-    pub fn init(manager: &impl Manager<Wry>) -> Self {
-        Self(
-            tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview")
-                .build()
-                .unwrap(),
-        )
+    pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
+        Ok(Self(
+            tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
+        ))
     }
 
     pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
-        self.0.set("state", serde_json::to_value(&state).unwrap());
+        self.0.set("state", serde_json::to_value(&state)?);
         self.0.save()
     }
 
     pub fn get(&self) -> Option<CameraWindowState> {
         self.0
             .get("state")
-            .map(|v| serde_json::from_value(v).unwrap())
+            .and_then(|v| serde_json::from_value(v).ok())
     }
 }
 
@@ -81,7 +77,7 @@ pub struct CameraPreview {
 }
 
 impl CameraPreview {
-    // TODO: This isn't very efficient, but it's probaly good enough for now.
+    // TODO: This isn't as efficient as it could be, but it's probably good enough for now.
     pub fn frame_sync_task() -> (
         flume::Sender<RawCameraFrame>,
         Arc<RwLock<Option<RawCameraFrame>>>,
@@ -99,31 +95,23 @@ impl CameraPreview {
         result
     }
 
-    pub async fn init(window: WebviewWindow) -> Self {
-        let size = window.inner_size().unwrap();
-
-        // Ensure we have a valid size, fallback to 460x460 if needed
-        let width = if size.width > 0 { size.width } else { 460 };
-        let height = if size.height > 0 { size.height } else { 460 };
-
-        println!(
-            "WINDOW SIZE DEBUG {:?} -> using ({}, {})",
-            size, width, height
-        );
-
+    pub async fn init(window: WebviewWindow, size: PhysicalSize<u32>) -> anyhow::Result<Self> {
         let (tx, rx) = oneshot::channel();
         window
             .run_on_main_thread({
                 let window = window.clone();
                 move || {
                     let instance = wgpu::Instance::default();
-                    let surface = instance.create_surface(window.clone()).unwrap();
+                    let surface = instance.create_surface(window.clone());
                     tx.send((instance, surface)).ok();
                 }
             })
-            .unwrap();
+            .with_context(|| "Failed to initialize wgpu instance")?;
 
-        let (instance, surface) = rx.await.unwrap();
+        let (instance, surface) = rx
+            .await
+            .with_context(|| "Failed to receive initialized wgpu instance and surface")?;
+        let surface = surface.with_context(|| "Failed to initialize wgpu surface")?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -132,7 +120,7 @@ impl CameraPreview {
                 compatible_surface: Some(&surface),
             })
             .await
-            .expect("Failed to find an appropriate adapter");
+            .with_context(|| "Failed to find an appropriate wgpu adapter")?;
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -144,164 +132,15 @@ impl CameraPreview {
                 trace: wgpu::Trace::Off,
             })
             .await
-            .expect("Failed to create device");
+            .with_context(|| "Failed to create wgpu device")?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(
-                r#"
-struct Uniforms {
-    window_height: f32,
-    offset_pixels: f32,
-    shape: f32,
-    size: f32,
-    mirrored: f32,
-    _padding: f32,
-}
-
-@group(1) @binding(0)
-var<uniform> uniforms: Uniforms;
-
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) offset_area: f32,
-};
-
-@vertex
-fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
-    var pos = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0), // bottom left
-        vec2<f32>( 1.0, -1.0), // bottom right
-        vec2<f32>(-1.0,  1.0), // top left
-        vec2<f32>(-1.0,  1.0), // top left
-        vec2<f32>( 1.0, -1.0), // bottom right
-        vec2<f32>( 1.0,  1.0), // top right
-    );
-    var uv = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 1.0),
-        vec2<f32>(1.0, 0.0),
-    );
-    var out: VertexOut;
-
-    // Calculate offset in normalized coordinates
-    let offset_y = (uniforms.offset_pixels / uniforms.window_height) * 2.0;
-
-    // Calculate the available height for the camera content
-    let available_height = uniforms.window_height - uniforms.offset_pixels;
-    let scale_factor = available_height / uniforms.window_height;
-
-    // Scale the Y coordinate to fit the available space
-    let scaled_y = pos[idx].y * scale_factor;
-
-    // Position the scaled quad in the bottom portion of the screen
-    // Available space bottom: -1.0, top: (1.0 - offset_y)
-    // Map scaled_y from [-1,1] to the available space
-    let available_range = 2.0 - offset_y; // total height of available space
-    let final_y = -1.0 + (scaled_y + 1.0) * available_range / 2.0;
-
-    let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
-
-    // Mark pixels in the offset area as transparent
-    let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - offset_y));
-
-    out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
-    out.uv = uv[idx];
-    out.offset_area = is_offset_area;
-    return out;
-}
-
-@group(0) @binding(0)
-var t_camera: texture_2d<f32>;
-@group(0) @binding(1)
-var s_camera: sampler;
-
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // If we're in the offset area, return transparent
-    if (in.offset_area > 0.5) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    // Shape constants: 0 = Round, 1 = Square, 2 = Full
-    // Size constants: 0 = Sm, 1 = Lg
-    let shape = uniforms.shape;
-    let size = uniforms.size;
-
-    // For Full shape, render with subtle rounded corners
-    if (shape == 2.0) {
-        // Apply mirroring if enabled
-        var final_uv = in.uv;
-        if (uniforms.mirrored == 1.0) {
-            final_uv.x = 1.0 - final_uv.x;
-        }
-
-        // Apply subtle rounded corners for Full shape
-        let center_uv = (in.uv - 0.5) * 2.0;
-        let corner_radius = 0.05; // Small radius for subtle corners
-        let abs_uv = abs(center_uv);
-        let corner_pos = abs_uv - (1.0 - corner_radius);
-        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
-        let mask = select(0.0, 1.0, corner_dist <= corner_radius);
-
-        if (mask < 0.5) {
-            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        }
-
-        let camera_color = textureSample(t_camera, s_camera, final_uv);
-        return vec4<f32>(camera_color.rgb, 1.0);
-    }
-
-    // Convert UV coordinates to center-based coordinates [-1, 1]
-    let center_uv = (in.uv - 0.5) * 2.0;
-
-    var mask = 1.0;
-
-    if (shape == 0.0) {
-        // Round shape - create circular mask (border-radius: 9999px equivalent)
-        let distance = length(center_uv);
-        mask = select(0.0, 1.0, distance <= 1.0);
-    } else if (shape == 1.0) {
-        // Square shape - apply rounded corners based on size
-        // Use a reasonable corner radius for the square shape
-        let corner_radius = select(0.1, 0.12, size == 1.0); // radius in UV space (0.1 = 10% of quad size)
-
-        // Calculate distance from corners for rounded rectangle
-        let abs_uv = abs(center_uv);
-        let corner_pos = abs_uv - (1.0 - corner_radius);
-        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
-
-        // Apply rounded corner mask
-        mask = select(0.0, 1.0, corner_dist <= corner_radius);
-    } else {
-        // For any other shape, default to no masking (rectangular)
-        mask = 1.0;
-    }
-
-    // Apply the mask
-    if (mask < 0.5) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    // Apply mirroring if enabled
-    var final_uv = in.uv;
-    if (uniforms.mirrored == 1.0) {
-        final_uv.x = 1.0 - final_uv.x;
-    }
-
-    // Sample the camera texture
-    let camera_color = textureSample(t_camera, s_camera, final_uv);
-    return vec4<f32>(camera_color.rgb, 1.0);
-}
-"#,
-            )),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "./camera.wgsl"
+            ))),
         });
 
-        // Create uniform buffer layout
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Uniform Bind Group Layout"),
@@ -317,7 +156,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 }],
             });
 
-        // Create a bind group layout for our texture
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Texture Bind Group Layout"),
@@ -341,7 +179,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 ],
             });
 
-        // Create uniform buffer
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
             size: std::mem::size_of::<[f32; 6]>() as u64, // window_height, offset_pixels, shape, size, mirrored, padding
@@ -349,7 +186,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             mapped_at_creation: false,
         });
 
-        // Create uniform bind group
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Uniform Bind Group"),
             layout: &uniform_bind_group_layout,
@@ -365,9 +201,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             push_constant_ranges: &[],
         });
 
-        let swapchain_capabilities = surface.get_capabilities(&adapter);
-        let swapchain_format = swapchain_capabilities.formats[0];
-
+        let swapchain_format = wgpu::TextureFormat::Bgra8Unorm;
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&pipeline_layout),
@@ -397,8 +231,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
-            width,
-            height,
+            width: size.width,
+            height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: CompositeAlphaMode::PostMultiplied,
             view_formats: vec![],
@@ -417,31 +251,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             ..Default::default()
         });
 
-        // Initialize uniform buffer with initial values
-        let state = CameraWindowStateStore::init(&window)
-            .get()
-            .unwrap_or_default();
-        let shape_value = match state.shape {
-            CameraPreviewShape::Round => 0.0,
-            CameraPreviewShape::Square => 1.0,
-            CameraPreviewShape::Full => 2.0,
-        };
-        let size_value = match state.size {
-            CameraPreviewSize::Sm => 0.0,
-            CameraPreviewSize::Lg => 1.0,
-        };
-        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
-        let uniform_data = [
-            height as f32,
-            TOOLBAR_HEIGHT,
-            shape_value,
-            size_value,
-            mirrored_value,
-            0.0, // padding
-        ]; // window_height, offset_pixels, shape, size, mirrored, padding
-        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
+        let store = CameraWindowStateStore::init(&window)
+            .with_context(|| "Failed to initialize camera window state store")?;
 
-        Self {
+        Ok(Self {
             surface,
             surface_config: Mutex::new(config),
             render_pipeline,
@@ -451,17 +264,18 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             bind_group_layout: texture_bind_group_layout,
             uniform_buffer,
             uniform_bind_group,
-            store: CameraWindowStateStore::init(&window),
+            store,
             window,
-        }
+        })
     }
 
-    // Called to resize the window to the video feed
-    pub fn resize(&self, width: u32, height: u32) {
-        println!("RESIZE WINDOW source ({}, {})", width, height);
-
+    // Called with the size of the video feed.
+    //
+    // This should be called when:
+    //  - Video feed changes size
+    //  - Window configuration changes
+    pub fn resize(&self, width: u32, height: u32) -> tauri::Result<()> {
         let state = self.store.get().unwrap_or_default();
-        println!("WITH STATE {:?}", state);
 
         let base: f32 = if state.size == CameraPreviewSize::Sm {
             230.0
@@ -488,132 +302,67 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             base
         } + TOOLBAR_HEIGHT;
 
-        let monitor = self.window.current_monitor().unwrap().unwrap();
-        let width = (monitor.size().width as f64 / monitor.scale_factor()
-            - window_width as f64
-            - 100.0) as u32;
-        let height = (monitor.size().height as f64 / monitor.scale_factor()
-            - window_height as f64
-            - 100.0) as u32;
+        let (monitor_size, monitor_offset, monitor_scale_factor): (
+            PhysicalSize<u32>,
+            LogicalPosition<u32>,
+            _,
+        ) = if let Some(monitor) = self.window.current_monitor()? {
+            let size = monitor.position().to_logical(monitor.scale_factor());
+            (monitor.size().clone(), size, monitor.scale_factor())
+        } else {
+            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+        };
 
-        println!("RESIZE WINDOW to ({}, {})", window_width, window_height);
+        let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
+            as u32
+            + monitor_offset.x;
+        let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
+            as u32
+            + monitor_offset.y;
+
+        // This will implicitly trigger `Self::reconfigure`
         self.window
-            .set_size(LogicalSize::new(window_width, window_height))
-            .unwrap();
-        let monitor_offset: LogicalPosition<u32> =
-            monitor.position().to_logical(monitor.scale_factor());
-        self.window
-            .set_position(LogicalPosition::new(
-                width + monitor_offset.x,
-                height + monitor_offset.y,
-            ))
-            .unwrap();
+            .set_size(LogicalSize::new(window_width, window_height))?;
+        self.window.set_position(LogicalPosition::new(x, y))?;
+
+        Ok(())
     }
 
-    // Called by the Window resize events to reconfigure the texture.
-    // We do this in the event-loop (not `resize`) so we don't need to lock the surface.
+    // Called by the Tauri window resize events on the main event loop to reconfigure the GPU texture and uniforms.
+    //
+    // We do this in the event-loop (as opposed to `resize`) so we don't need to lock the surface.
     pub fn reconfigure(&self, width: u32, height: u32) {
-        println!("RECONFIGURE WINDOW SIZE ({}, {})", width, height);
-
-        let mut c = self.surface_config.lock().unwrap();
-        c.width = if width > 0 { width } else { 1 };
-        c.height = if height > 0 { height } else { 1 };
-
-        self.surface.configure(&self.device, &c);
-
-        // Update uniform buffer with new window height
-        let state = self.store.get().unwrap_or_default();
-        let shape_value = match state.shape {
-            CameraPreviewShape::Round => 0.0,
-            CameraPreviewShape::Square => 1.0,
-            CameraPreviewShape::Full => 2.0,
-        };
-        let size_value = match state.size {
-            CameraPreviewSize::Sm => 0.0,
-            CameraPreviewSize::Lg => 1.0,
-        };
-        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
-        let uniform_data = [
-            c.height as f32,
-            TOOLBAR_HEIGHT,
-            shape_value,
-            size_value,
-            mirrored_value,
-            0.0, // padding
-        ]; // window_height, offset_pixels, shape, size, mirrored, padding
-        println!(
-            "DEBUG: Reconfiguring - window_height: {}, offset_pixels: {}, shape: {}, size: {}",
-            c.height, TOOLBAR_HEIGHT, shape_value, size_value
-        );
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
-    }
-
-    /// Updates the vertical offset of the camera preview from the top of the window.
-    ///
-    /// # Arguments
-    /// * `offset_pixels` - The offset in pixels from the top of the window (default: 100px)
-    pub fn update_offset(&self, offset_pixels: f32) {
-        let surface_config = self.surface_config.lock().unwrap();
-        let state = self.store.get().unwrap_or_default();
-        let shape_value = match state.shape {
-            CameraPreviewShape::Round => 0.0,
-            CameraPreviewShape::Square => 1.0,
-            CameraPreviewShape::Full => 2.0,
-        };
-        let size_value = match state.size {
-            CameraPreviewSize::Sm => 0.0,
-            CameraPreviewSize::Lg => 1.0,
-        };
-        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
-        let uniform_data = [
-            surface_config.height as f32,
-            offset_pixels,
-            shape_value,
-            size_value,
-            mirrored_value,
-            0.0, // padding
-        ];
-        println!(
-            "DEBUG: Updating offset - window_height: {}, offset_pixels: {}",
-            surface_config.height, offset_pixels
-        );
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
-    }
-
-    /// Updates the uniform buffer with current camera window state
-    pub fn update_uniforms(&self) {
-        let surface_config = self.surface_config.lock().unwrap();
+        let mut s = self
+            .surface_config
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let state = self.store.get().unwrap_or_default();
 
-        let shape_value = match state.shape {
-            CameraPreviewShape::Round => 0.0,
-            CameraPreviewShape::Square => 1.0,
-            CameraPreviewShape::Full => 2.0,
-        };
-        let size_value = match state.size {
-            CameraPreviewSize::Sm => 0.0,
-            CameraPreviewSize::Lg => 1.0,
-        };
-        let mirrored_value = if state.mirrored { 1.0 } else { 0.0 };
+        // Update surface
+        s.width = if width > 0 { width } else { 1 };
+        s.height = if height > 0 { height } else { 1 };
+        self.surface.configure(&self.device, &s);
 
-        println!(
-            "DEBUG: update_uniforms - mirrored: {} -> {}, shape: {:?}, size: {:?}",
-            state.mirrored, mirrored_value, state.shape, state.size
+        // Update uniforms
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[
+                s.height as f32,
+                TOOLBAR_HEIGHT,
+                match state.shape {
+                    CameraPreviewShape::Round => 0.0,
+                    CameraPreviewShape::Square => 1.0,
+                    CameraPreviewShape::Full => 2.0,
+                },
+                match state.size {
+                    CameraPreviewSize::Sm => 0.0,
+                    CameraPreviewSize::Lg => 1.0,
+                },
+                if state.mirrored { 1.0 } else { 0.0 },
+                0.0, // padding
+            ]),
         );
-
-        let uniform_data = [
-            surface_config.height as f32,
-            TOOLBAR_HEIGHT,
-            shape_value,
-            size_value,
-            mirrored_value,
-            0.0, // padding
-        ];
-
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&uniform_data));
     }
 }
 
@@ -625,7 +374,7 @@ pub struct CameraPreviewRenderer {
 }
 
 impl CameraPreviewRenderer {
-    pub fn init(camera_frame: Arc<RwLock<Option<RawCameraFrame>>>) -> Self {
+    pub fn init(camera_frame: Arc<RwLock<Option<RawCameraFrame>>>) -> Result<Self, ffmpeg::Error> {
         // We initialize a scaler with bogus frame information.
         // We use `Context.cache` later which will reinitialize the scaler with the correct frame information.
         let scaler = scaling::Context::get(
@@ -636,20 +385,19 @@ impl CameraPreviewRenderer {
             1,
             1,
             scaling::Flags::empty(),
-        )
-        .unwrap();
+        )?;
 
-        Self {
+        Ok(Self {
             scaler,
             camera_frame,
-        }
+        })
     }
 
-    pub fn render(&mut self, preview: &CameraPreview) {
+    pub fn render(&mut self, preview: &CameraPreview) -> Result<(), anyhow::Error> {
         let surface_frame = preview
             .surface
             .get_current_texture()
-            .expect("Failed to acquire next swap chain texture");
+            .with_context(|| "Error getting surface current texture")?;
         let view = surface_frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -657,95 +405,7 @@ impl CameraPreviewRenderer {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
-        // Check if we have a camera frame available
-        let has_frame = self
-            .camera_frame
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .is_some();
-
-        if let Some(frame) = self
-            .camera_frame
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
         {
-            let surface_config = preview.surface_config.lock().unwrap();
-
-            // Rescale the frame to the correct output size
-            let (buffer, stride) = {
-                // This will either reuse or reinialise the scaler
-                self.scaler.cached(
-                    frame.frame.format(),
-                    frame.frame.width(),
-                    frame.frame.height(),
-                    format::Pixel::RGBA,
-                    surface_config.width,
-                    surface_config.height,
-                    scaling::Flags::empty(),
-                );
-
-                // TODO: We could probably reuse this frame but if the resolution changes it needs to get reset.
-                let mut out_frame = frame::Video::empty();
-                self.scaler.run(&frame.frame, &mut out_frame).unwrap();
-
-                (out_frame.data(0).to_vec(), out_frame.stride(0) as u32)
-            };
-
-            let texture = preview.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("Camera Texture"),
-                size: wgpu::Extent3d {
-                    width: surface_config.width,
-                    height: surface_config.height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-
-            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            let bind_group = preview
-                .device
-                .create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Texture Bind Group"),
-                    layout: &preview.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&preview.sampler),
-                        },
-                    ],
-                });
-
-            preview.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &buffer,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(surface_config.height),
-                },
-                wgpu::Extent3d {
-                    width: surface_config.width,
-                    height: surface_config.height,
-                    depth_or_array_layers: 1,
-                },
-            );
-
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -766,35 +426,104 @@ impl CameraPreviewRenderer {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&preview.render_pipeline);
-            render_pass.set_bind_group(0, &bind_group, &[]);
-            render_pass.set_bind_group(1, &preview.uniform_bind_group, &[]);
-            render_pass.draw(0..6, 0..1);
-        } else {
-            // When no camera frame is available, create a transparent render pass
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 0.0, // Fully transparent
-                        }),
-                        store: wgpu::StoreOp::Store,
+            // if no frame is available the render pass will clear the window
+            if let Some(frame) = self
+                .camera_frame
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+            {
+                let surface_config = preview
+                    .surface_config
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+
+                // Rescale the frame to the correct output size
+                let (buffer, stride) = {
+                    // This will either reuse or reinialise the scaler
+                    self.scaler.cached(
+                        frame.frame.format(),
+                        frame.frame.width(),
+                        frame.frame.height(),
+                        format::Pixel::RGBA,
+                        surface_config.width,
+                        surface_config.height,
+                        scaling::Flags::empty(),
+                    );
+
+                    // TODO: We could probably reuse this frame but if the resolution changes it needs to get reset.
+                    let mut out_frame = frame::Video::empty();
+                    self.scaler
+                        .run(&frame.frame, &mut out_frame)
+                        .with_context(|| "Error rescaling frame with ffmpeg")?;
+
+                    (out_frame.data(0).to_vec(), out_frame.stride(0) as u32)
+                };
+
+                let texture = preview.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("Camera Texture"),
+                    size: wgpu::Extent3d {
+                        width: surface_config.width,
+                        height: surface_config.height,
+                        depth_or_array_layers: 1,
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            // Don't draw anything - just clear to transparent
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+
+                let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                let bind_group = preview
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Texture Bind Group"),
+                        layout: &preview.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&texture_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&preview.sampler),
+                            },
+                        ],
+                    });
+
+                preview.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &buffer,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: Some(surface_config.height),
+                    },
+                    wgpu::Extent3d {
+                        width: surface_config.width,
+                        height: surface_config.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+
+                render_pass.set_pipeline(&preview.render_pipeline);
+                render_pass.set_bind_group(0, &bind_group, &[]);
+                render_pass.set_bind_group(1, &preview.uniform_bind_group, &[]);
+                render_pass.draw(0..6, 0..1);
+            }
         }
 
         preview.queue.submit(Some(encoder.finish()));
         surface_frame.present();
+
+        Ok(())
     }
 }
