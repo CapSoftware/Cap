@@ -19,24 +19,114 @@ import {
   MediaPlayerVolume,
   MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+import { useRef, useEffect } from "react";
+import Hls from "hls.js";
 
 interface Props {
   videoSrc: string;
   chaptersSrc: string;
   captionsSrc: string;
-  videoRef?: React.Ref<HTMLVideoElement>;
+  videoRef: React.RefObject<HTMLVideoElement>;
   mediaPlayerClassName?: string;
+  autoplay?: boolean;
+  hlsVideo?: boolean;
 }
 
-export function CapVideoPlayer({ videoSrc, chaptersSrc, captionsSrc, videoRef, mediaPlayerClassName }: Props) {
+export function CapVideoPlayer({
+  videoSrc,
+  chaptersSrc,
+  captionsSrc,
+  videoRef,
+  mediaPlayerClassName,
+  autoplay = false,
+  hlsVideo = false
+}: Props) {
+  const hlsInstance = useRef<Hls | null>(null);
+
+  useEffect(() => {
+    if (!videoRef.current || !hlsVideo) return;
+
+    const videoElement = videoRef.current;
+
+    if (!Hls.isSupported()) {
+      console.warn("HLS is not supported in this browser");
+      return;
+    }
+    const isHlsStream = videoSrc.includes('.m3u8');
+
+    if (!isHlsStream) {
+      console.warn("Video source doesn't appear to be an HLS stream");
+      return;
+    }
+
+    if (hlsInstance.current) {
+      hlsInstance.current.destroy();
+      hlsInstance.current = null;
+    }
+
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      backBufferLength: 90,
+    });
+    const currentTime = videoElement.currentTime;
+    const wasPaused = videoElement.paused;
+
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      console.error("HLS error:", data);
+
+      if (data.fatal) {
+        switch (data.type) {
+          case Hls.ErrorTypes.NETWORK_ERROR:
+            console.log("Network error, trying to recover...");
+            hls.startLoad();
+            break;
+          case Hls.ErrorTypes.MEDIA_ERROR:
+            console.log("Media error, trying to recover...");
+            hls.recoverMediaError();
+            break;
+          default:
+            console.error("Fatal error, destroying HLS instance");
+            hls.destroy();
+            break;
+        }
+      }
+    });
+
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      console.log("HLS manifest parsed successfully");
+
+      if (currentTime > 0) {
+        videoElement.currentTime = currentTime;
+      }
+
+      if (!wasPaused && autoplay) {
+        videoElement.play().catch(err =>
+          console.error("Error resuming playback:", err)
+        );
+      }
+    });
+
+    hls.loadSource(videoSrc);
+    hls.attachMedia(videoElement);
+
+    hlsInstance.current = hls;
+    return () => {
+      if (hlsInstance.current) {
+        hlsInstance.current.destroy();
+        hlsInstance.current = null;
+      }
+    };
+  }, [videoSrc, hlsVideo, autoplay]);
+
   return (
     <MediaPlayer className={mediaPlayerClassName} autoHide>
       <MediaPlayerVideo
-        src={videoSrc}
+        src={hlsVideo ? undefined : videoSrc}
         ref={videoRef}
-        crossOrigin=""
         muted
         playsInline
+        autoPlay={autoplay}
       >
         <track
           default

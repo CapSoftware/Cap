@@ -7,7 +7,6 @@ import { Logo } from "@cap/ui";
 import { isUserOnProPlan } from "@cap/utils";
 import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
 import { formatChaptersAsVTT, formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
-import { fromVtt, Subtitle } from "subtitles-parser-vtt";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -135,7 +134,8 @@ export const ShareVideo = forwardRef<
     <>
 
       <div className="relative h-full">
-        <CapVideoPlayer mediaPlayerClassName="w-full rounded-xl h-full" videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
+        <CapVideoPlayer autoplay={true} hlsVideo={videoType === "application/x-mpegURL"} mediaPlayerClassName="w-full rounded-xl h-full"
+          videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
       </div>
 
       {user &&
@@ -171,42 +171,3 @@ export const ShareVideo = forwardRef<
     </>
   );
 });
-
-
-const useTranscriptionProcessing = (
-  data: typeof videos.$inferSelect,
-  transcriptContent: string | undefined,
-  transcriptError: any
-) => {
-  const [isTranscriptionProcessing, setIsTranscriptionProcessing] = useState(
-    data.transcriptionStatus === "PROCESSING"
-  );
-  const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
-
-  useEffect(() => {
-    if (!transcriptContent && data.transcriptionStatus === "PROCESSING") {
-      return setIsTranscriptionProcessing(false);
-    }
-    if (transcriptContent) {
-      const parsedSubtitles = fromVtt(transcriptContent);
-      setSubtitles(parsedSubtitles);
-      setIsTranscriptionProcessing(false);
-    } else if (transcriptError) {
-      console.error(
-        "[ShareVideo] Subtitle error from React Query:",
-        transcriptError.message
-      );
-      if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
-        setIsTranscriptionProcessing(true);
-      } else {
-        setIsTranscriptionProcessing(false);
-      }
-    } else if (data.transcriptionStatus === "PROCESSING") {
-      setIsTranscriptionProcessing(true);
-    } else if (data.transcriptionStatus === "ERROR") {
-      setIsTranscriptionProcessing(false);
-    }
-  }, [transcriptContent, transcriptError, data.transcriptionStatus]);
-
-  return { isTranscriptionProcessing, subtitles };
-};
