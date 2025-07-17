@@ -77,7 +77,6 @@ pub struct CameraPreview {
     bind_group_layout: wgpu::BindGroupLayout,
     window: tauri::WebviewWindow<Wry>,
     store: CameraWindowStateStore,
-    render_lock: Mutex<()>, // Add render lock to prevent race conditions
 }
 
 impl CameraPreview {
@@ -284,49 +283,49 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             bind_group_layout: texture_bind_group_layout,
             store: CameraWindowStateStore::init(&window),
             window,
-            render_lock: Mutex::new(()), // Initialize the render lock
         }
     }
 
-    pub fn reconfigure(&self, width: u32, height: u32) {
-        // Acquire the render lock to prevent any rendering during reconfiguration
-        let _render_guard = self.render_lock.lock().unwrap();
+    // Called to resize the window to the video feed
+    pub fn resize(&self, width: u32, height: u32) {
+        println!("RESIZE WINDOW ({}, {})", width, height);
 
-        // let state = self.store.get().unwrap_or_default();
+        let state = self.store.get().unwrap_or_default();
 
-        // let base: f32 = if state.size == CameraPreviewSize::Sm {
-        //     230.0
-        // } else {
-        //     400.0
-        // };
-        // let aspect = width as f32 / height as f32;
-        // let window_width = if state.shape == CameraPreviewShape::Full {
-        //     if aspect >= 1.0 {
-        //         base * aspect
-        //     } else {
-        //         base
-        //     }
-        // } else {
-        //     base
-        // };
-        // let window_height = if state.shape == CameraPreviewShape::Full {
-        //     if aspect >= 1.0 {
-        //         base
-        //     } else {
-        //         base / aspect
-        //     }
-        // } else {
-        //     base
-        // };
-        // let total_height = window_height + BAR_HEIGHT;
+        let base: f32 = if state.size == CameraPreviewSize::Sm {
+            230.0
+        } else {
+            400.0
+        };
+        let aspect = width as f32 / height as f32;
+        let window_width = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base * aspect
+            } else {
+                base
+            }
+        } else {
+            base
+        };
+        let window_height = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base
+            } else {
+                base / aspect
+            }
+        } else {
+            base
+        };
+        let total_height = window_height + BAR_HEIGHT;
 
-        // let size = self.window.outer_size().unwrap();
-        // let monitor = self.window.current_monitor().unwrap().unwrap();
-        // let width =
-        //     (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
-        // let height =
-        //     (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
+        let size = self.window.outer_size().unwrap();
+        let monitor = self.window.current_monitor().unwrap().unwrap();
+        let width =
+            (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
+        let height =
+            (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
 
+        // TODO
         let width = 300;
         let height = 300;
 
@@ -334,15 +333,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             .set_size(LogicalSize::new(width, height))
             .unwrap();
         // TODO: Reposition the window
+    }
+
+    // Called by the Window resize events to reconfigure the texture.
+    // We do this in the event-loop (not `resize`) so we don't need to lock the surface.
+    pub fn reconfigure(&self, width: u32, height: u32) {
+        println!("RECONFIGURE WINDOW SIZE ({}, {})", width, height);
 
         let mut c = self.surface_config.lock().unwrap();
-        c.width = width; // if width > 0 { width } else { 1 };
-        c.height = height; // if height > 0 { height } else { 1 };
-
-        println!(
-            "RECONFIGURE WINDOW SIZE DEBUG using ({}, {})",
-            c.width, c.height
-        );
+        c.width = if width > 0 { width } else { 1 };
+        c.height = if height > 0 { height } else { 1 };
 
         self.surface.configure(&self.device, &c);
     }
@@ -383,15 +383,6 @@ impl CameraPreviewRenderer {
     }
 
     pub fn render(&mut self, preview: &CameraPreview) {
-        // Try to acquire the render lock, skip rendering if reconfiguration is happening
-        let _render_guard = match preview.render_lock.try_lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                // Reconfiguration is happening, skip this frame
-                return;
-            }
-        };
-
         let surface_frame = preview
             .surface
             .get_current_texture()

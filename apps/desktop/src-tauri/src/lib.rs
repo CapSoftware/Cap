@@ -217,12 +217,12 @@ async fn set_camera_input(
                                     let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
 
-                                    preview.reconfigure(video_info.width, video_info.height);
+                                    preview.resize(video_info.width, video_info.height);
 
                                     return Ok(true);
                                 } else {
                                     let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
-                                    preview.reconfigure(video_info.width, video_info.height);
+                                    preview.resize(video_info.width, video_info.height);
 
                                     return Ok(false);
                                 }
@@ -2141,15 +2141,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     event: WindowEvent::Resized(size),
                     ..
                 } => {
-                    // TODO
-                    // if let Some(preview) = handle.try_state::<CameraPreview>() {
-                    //     let app = handle.state::<CameraWindowStateStore>();
-                    //     preview.reconfigure(
-                    //         &app.get().unwrap_or_default(),
-                    //         size.width,
-                    //         size.height,
-                    //     );
-                    // }
+                    if let Some(preview) = handle.try_state::<CameraPreview>() {
+                        preview.reconfigure(size.width, size.height);
+                    }
                 }
                 tauri::RunEvent::MainEventsCleared => {
                     if let Some(preview) = handle.try_state::<CameraPreview>() {
