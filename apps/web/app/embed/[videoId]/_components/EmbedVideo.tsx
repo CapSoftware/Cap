@@ -208,7 +208,6 @@ export const EmbedVideo = forwardRef<
       videoType = "application/x-mpegURL";
     }
 
-    // Stable videoJsOptions - only recreate when video source changes
     const videoJsOptions = useMemo(() => ({
       autoplay: false,
       playbackRates: [0.5, 1, 1.5, 2],
@@ -224,45 +223,24 @@ export const EmbedVideo = forwardRef<
       playerRef.current = player;
 
       player.on("loadedmetadata", () => {
-        const chapterStartTimesAra: number[] = [];
         const videoDuration = player.duration();
         if (videoDuration) {
           setLongestDuration(videoDuration);
-        }
-
-        // Handle chapter markers
-        const chapterTT: TextTrack[] = [].filter.call(
-          player.textTracks(),
-          (tt: TextTrack) => tt.kind === "chapters"
-        );
-
-        if (chapterTT.length > 0) {
-          if (!chapterTT[0]) return;
-          const cues = chapterTT[0].cues;
-          if (cues) {
-            for (let i = 0; i < cues.length; i++) {
-              chapterStartTimesAra[i] = cues[i]?.startTime || 0;
-            }
-          }
-
-          const videoDuration = player.duration();
-          if (videoDuration) {
+          if (chapters && chapters.length > 0) {
+            const chapterStartTimesAra = chapters.map(chapter => chapter.start);
             addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
           }
         }
       });
     };
 
-    // Add tracks when URLs are ready and player exists
     useEffect(() => {
       if (!playerRef.current || (!subtitleUrl && !chaptersUrl)) return;
 
       const player = playerRef.current;
 
-      // Function to add tracks
       const addTracks = () => {
         if (subtitleUrl) {
-          // Check if subtitle track already exists
           const tracks = player.textTracks().tracks_
           let hasSubtitleTrack = false;
           for (let i = 0; i < tracks.length; i++) {
@@ -286,7 +264,6 @@ export const EmbedVideo = forwardRef<
         }
 
         if (chaptersUrl) {
-          // Check if chapters track already exists
           const tracks = player.textTracks().tracks_;
           let hasChaptersTrack = false;
           for (let i = 0; i < tracks.length; i++) {
@@ -308,11 +285,9 @@ export const EmbedVideo = forwardRef<
         }
       };
 
-      // Add tracks immediately if player is ready
       if (player.readyState() >= 1) {
         addTracks();
       } else {
-        // Wait for player to be ready
         player.one('loadedmetadata', addTracks);
       }
 

@@ -81,42 +81,13 @@ export const ShareVideo = forwardRef<
 >(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
   useImperativeHandle(ref, () => playerRef.current as Player);
 
+  const playerRef = useRef<Player | null>(null);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-  const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
-  const [chaptersBlobUrl, setChaptersBlobUrl] = useState<string | null>(null);
-
-  const playerRef = useRef<Player | null>(null);
-
-  const handlePlayerReady = (player: Player) => {
-    playerRef.current = player;
-    player.on("loadedmetadata", () => {
-      const chapterStartTimesAra: number[] = [];
-
-      const chapterTT: TextTrack[] = [].filter.call(
-        player.textTracks(),
-        (tt: TextTrack) => tt.kind === "chapters"
-      );
-
-      if (chapterTT.length > 0) {
-        if (!chapterTT[0]) return;
-        const cues = chapterTT[0].cues;
-        if (cues) {
-          for (let i = 0; i < cues.length; i++) {
-            chapterStartTimesAra[i] = cues[i]?.startTime || 0;
-          }
-        }
-
-        const videoDuration = player.duration();
-        if (videoDuration) {
-          addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
-        }
-      }
-    });
-  }
-
-  const publicEnv = usePublicEnv();
-
+  const [longestDuration, setLongestDuration] = useState<number>(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
+  const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 
   const { data: transcriptContent, error: transcriptError } = useTranscript(
     data.id,
@@ -135,100 +106,64 @@ export const ShareVideo = forwardRef<
     }
   }, [transcriptContent, transcriptError]);
 
-  const chaptersUrl = useMemo(() => {
-    if (chapters?.length > 0) {
-      const vttContent = formatChaptersAsVTT(chapters);
-      const blob = new Blob([vttContent], { type: "text/vtt" });
-      return URL.createObjectURL(blob);
-    }
-    return null;
-  }, [chapters]);
-
-  const subtitleUrl = useMemo(() => {
+  // Handle subtitle URL creation
+  useEffect(() => {
     if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
       const vttContent = formatTranscriptAsVTT(transcriptData);
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
 
-      return newUrl;
+      // Clean up previous URL
+      if (subtitleUrl) {
+        URL.revokeObjectURL(subtitleUrl);
+      }
+
+      setSubtitleUrl(newUrl);
+
+      return () => {
+        URL.revokeObjectURL(newUrl);
+      };
+    } else {
+      // Clean up if no longer needed
+      if (subtitleUrl) {
+        URL.revokeObjectURL(subtitleUrl);
+        setSubtitleUrl(null);
+      }
     }
-    return null;
   }, [data.transcriptionStatus, transcriptData]);
 
+  // Handle chapters URL creation
   useEffect(() => {
-    if (!playerRef.current) return;
-    const tracks = playerRef.current.textTracks().tracks_;
+    if (chapters?.length > 0) {
+      const vttContent = formatChaptersAsVTT(chapters);
+      const blob = new Blob([vttContent], { type: "text/vtt" });
+      const newUrl = URL.createObjectURL(blob);
 
-    if (subtitleUrl && subtitleUrl !== subtitleBlobUrl) {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
-      }
-      setSubtitleBlobUrl(subtitleUrl);
-
-      if (playerRef.current && subtitleUrl) {
-
-        // subtitles
-        playerRef.current.addRemoteTextTrack(
-          {
-            kind: "subtitles",
-            srclang: "en",
-            label: "English",
-            src: subtitleUrl,
-            default: true,
-          },
-          true
-        );
-
-        for (const track of tracks) {
-          if (track.kind === "subtitles" && track.language === "en") {
-            track.mode = "showing";
-          }
-        }
-
+      // Clean up previous URL
+      if (chaptersUrl) {
+        URL.revokeObjectURL(chaptersUrl);
       }
 
-    }
+      setChaptersUrl(newUrl);
 
-    if (chaptersUrl && chaptersUrl !== chaptersBlobUrl) {
-      if (chaptersBlobUrl) {
-        URL.revokeObjectURL(chaptersBlobUrl);
-      }
-      setChaptersBlobUrl(chaptersUrl);
-
-      playerRef.current.addRemoteTextTrack(
-        {
-          kind: "chapters",
-          srclang: "en",
-          label: "Chapters",
-          src: chaptersUrl,
-        },
-        true
-      );
-
-      for (const track of tracks) {
-        if (track.kind === "chapters") {
-          track.mode = "showing";
-        }
+      return () => {
+        URL.revokeObjectURL(newUrl);
+      };
+    } else {
+      // Clean up if no longer needed
+      if (chaptersUrl) {
+        URL.revokeObjectURL(chaptersUrl);
+        setChaptersUrl(null);
       }
     }
+  }, [chapters]);
 
-    // Cleanup Blob URL on unmount or when subtitleUrl changes
-    return () => {
-      if (subtitleBlobUrl) {
-        URL.revokeObjectURL(subtitleBlobUrl);
-      }
-      if (chaptersBlobUrl) {
-        URL.revokeObjectURL(chaptersBlobUrl);
-      }
-    };
-  }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+  const publicEnv = usePublicEnv();
 
   let videoSrc: string;
   let videoType: string = "video/mp4";
-
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-    videoType = "video/mp4";
   } else if (
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
@@ -252,8 +187,93 @@ export const ShareVideo = forwardRef<
     fluid: false,
     sources: [
       { src: videoSrc, type: videoType },
-    ]
-  }), [videoSrc, videoType, subtitleUrl]);
+    ],
+  }), [videoSrc, videoType]);
+
+  const handlePlayerReady = (player: Player) => {
+    playerRef.current = player;
+
+    player.on("loadedmetadata", () => {
+      const videoDuration = player.duration();
+      if (videoDuration) {
+        setLongestDuration(videoDuration);
+        if (chapters && chapters.length > 0) {
+          const chapterStartTimesAra = chapters.map(chapter => chapter.start);
+          addMarkers(chapterStartTimesAra, videoDuration, chapters, playerRef);
+        }
+      }
+    });
+  };
+
+  useEffect(() => {
+    if (!playerRef.current || (!subtitleUrl && !chaptersUrl)) return;
+
+    const player = playerRef.current;
+
+    const addTracks = () => {
+      if (subtitleUrl) {
+        const tracks = player.textTracks().tracks_
+        let hasSubtitleTrack = false;
+        for (let i = 0; i < tracks.length; i++) {
+          if (tracks[i].kind === "subtitles" && tracks[i].language === "en") {
+            tracks[i].mode = "showing";
+            hasSubtitleTrack = true;
+            break;
+          }
+        }
+
+        if (!hasSubtitleTrack) {
+          player.addRemoteTextTrack({
+            kind: "subtitles",
+            srclang: "en",
+            label: "English",
+            src: subtitleUrl,
+            default: true,
+          }, false);
+
+        }
+      }
+
+      if (chaptersUrl) {
+        const tracks = player.textTracks().tracks_;
+        let hasChaptersTrack = false;
+        for (let i = 0; i < tracks.length; i++) {
+          if (tracks[i].kind === "chapters") {
+            tracks[i].mode = "showing";
+            hasChaptersTrack = true;
+            break;
+          }
+        }
+
+        if (!hasChaptersTrack) {
+          player.addRemoteTextTrack({
+            kind: "chapters",
+            srclang: "en",
+            label: "Chapters",
+            src: chaptersUrl,
+          }, false);
+        }
+      }
+    };
+
+    if (player.readyState() >= 1) {
+      addTracks();
+    } else {
+      player.one('loadedmetadata', addTracks);
+    }
+
+  }, [subtitleUrl, chaptersUrl]);
+
+  useEffect(() => {
+    if (!playerRef.current) return;
+    const player = playerRef.current;
+    player.on("pause", () => {
+      setIsPlaying(false);
+    });
+    player.on("play", () => {
+      setIsPlaying(true);
+    });
+  }, [playerRef]);
 
   return (
     <>
