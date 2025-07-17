@@ -222,6 +222,46 @@ export const EmbedVideo = forwardRef<
     const handlePlayerReady = (player: Player) => {
       playerRef.current = player;
 
+      player.ready(() => {
+        const captionsButton = player.contentEl().querySelector('.vjs-subs-caps-button');
+
+        if (captionsButton) {
+          captionsButton.addEventListener('click', () => {
+            const textTracks = player.textTracks().tracks_;
+            let captionTrack = null;
+
+            for (let i = 0; i < textTracks.length; i++) {
+              if (textTracks[i].kind === 'subtitles' || textTracks[i].kind === 'captions') {
+                captionTrack = textTracks[i];
+                break;
+              }
+            }
+
+            if (captionTrack) {
+              if (captionTrack.mode === 'showing') {
+                captionTrack.mode = 'disabled';
+                captionsButton.classList.remove('vjs-captions-enabled');
+              } else {
+                captionTrack.mode = 'showing';
+                captionsButton.classList.add('vjs-captions-enabled');
+              }
+            }
+          });
+
+          setTimeout(() => {
+            const textTracks = player.textTracks().tracks_;
+            for (let i = 0; i < textTracks.length; i++) {
+              if (textTracks[i].kind === 'subtitles' || textTracks[i].kind === 'captions') {
+                if (textTracks[i].mode === 'showing') {
+                  captionsButton.classList.add('vjs-captions-enabled');
+                }
+                break;
+              }
+            }
+          }, 100);
+        }
+      })
+
       player.on("loadedmetadata", () => {
         const videoDuration = player.duration();
         if (videoDuration) {

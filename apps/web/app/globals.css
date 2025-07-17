@@ -797,8 +797,36 @@ footer a {
   @apply flex items-center justify-center w-full h-full !important;
 }
 
+/* Hide the captions menu */
+.video-js .vjs-captions-button .vjs-menu {
+  display: none !important;
+}
+
+/* Make the button look like a toggle */
+.video-js .vjs-captions-button.vjs-icon-captions:before {
+  content: "\f10d"; /* Default captions icon */
+}
+
+.video-js .vjs-captions-button.vjs-icon-captions.vjs-captions-enabled:before {
+  content: "\f10d"; /* Same icon but you can change this if needed */
+}
+
+/* Optional: Add visual feedback for enabled state */
+.video-js .vjs-captions-button.vjs-captions-enabled {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
 .vjs-cap .vjs-load-progress {
   @apply bg-white/50 !important;
+}
+
+.video-js .vjs-progress-holder {
+  @apply h-[5px] transition-all !important;
+}
+
+.vjs-progress-control:hover .vjs-progress-holder {
+  @apply h-[7px] transition-all !important;
 }
 
 .vjs-cap .vjs-icon-placeholder {
