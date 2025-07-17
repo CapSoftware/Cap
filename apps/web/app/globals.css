@@ -743,7 +743,7 @@ footer a {
   width: 5px;
   height: 100%;
   transform: translateY(-50%);
-  top: 50%;
+  top: -60%;
   background-color: white;
   z-index: 100;
 }
