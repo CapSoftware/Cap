@@ -160,12 +160,16 @@ export const EmbedVideo = forwardRef<
     useEffect(() => {
       if (!videoRef.current) return;
       const player = videoRef.current;
-      player.addEventListener("play", () => {
-        setIsPlaying(true);
-      });
-      player.addEventListener("pause", () => {
-        setIsPlaying(false);
-      });
+      setLongestDuration(player.duration);
+      const listener = (arg: boolean) => {
+        setIsPlaying(arg);
+      };
+      player.addEventListener("play", () => listener(true));
+      player.addEventListener("pause", () => listener(false));
+      return () => {
+        player.removeEventListener("play", () => listener(true));
+        player.removeEventListener("pause", () => listener(false));
+      };
     }, []);
 
     return (
