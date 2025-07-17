@@ -162,6 +162,7 @@ var<uniform> uniforms: Uniforms;
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) offset_area: f32,
 };
 
 @vertex
@@ -191,8 +192,14 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     let offset_y = (uniforms.offset_pixels / uniforms.window_height) * 2.0;
     let adjusted_pos = vec2<f32>(pos[idx].x, pos[idx].y - offset_y);
     
+    // Calculate if this vertex is in the offset area (top of screen)
+    // If the original position is above the offset threshold, mark it as offset area
+    let offset_threshold = 1.0 - offset_y;
+    let is_offset_area = select(0.0, 1.0, pos[idx].y > offset_threshold);
+    
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
+    out.offset_area = is_offset_area;
     return out;
 }
 
@@ -203,7 +210,14 @@ var s_camera: sampler;
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(t_camera, s_camera, in.uv);
+    // If we're in the offset area, return transparent
+    if (in.offset_area > 0.5) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    
+    // Otherwise, sample the camera texture with solid black background
+    let camera_color = textureSample(t_camera, s_camera, in.uv);
+    return vec4<f32>(camera_color.rgb, 1.0);
 }
 "#,
             )),
@@ -293,7 +307,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: swapchain_format,
-                    blend: None, // No alpha blending
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -311,7 +325,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
             width,
             height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: CompositeAlphaMode::Opaque, // TODO: Fix this???
+            alpha_mode: CompositeAlphaMode::PostMultiplied,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -569,7 +583,7 @@ impl CameraPreviewRenderer {
                             r: 0.0,
                             g: 0.0,
                             b: 0.0,
-                            a: 1.0,
+                            a: 0.0,
                         }),
                         store: wgpu::StoreOp::Store,
                     },
