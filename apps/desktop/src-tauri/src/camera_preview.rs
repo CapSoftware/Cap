@@ -166,12 +166,12 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
         vec2<f32>( 1.0,  1.0), // top right
     );
     var uv = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(1.0, 0.0),
         vec2<f32>(0.0, 1.0),
-        vec2<f32>(0.0, 1.0),
-        vec2<f32>(1.0, 0.0),
         vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(1.0, 0.0),
     );
     var out: VertexOut;
     out.position = vec4<f32>(pos[idx], 0.0, 1.0);
@@ -291,41 +291,44 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     pub fn reconfigure(&self, width: u32, height: u32) {
         // Acquire the render lock to prevent any rendering during reconfiguration
         let _render_guard = self.render_lock.lock().unwrap();
-        
-        let state = self.store.get().unwrap_or_default();
 
-        let base: f32 = if state.size == CameraPreviewSize::Sm {
-            230.0
-        } else {
-            400.0
-        };
-        let aspect = width as f32 / height as f32;
-        let window_width = if state.shape == CameraPreviewShape::Full {
-            if aspect >= 1.0 {
-                base * aspect
-            } else {
-                base
-            }
-        } else {
-            base
-        };
-        let window_height = if state.shape == CameraPreviewShape::Full {
-            if aspect >= 1.0 {
-                base
-            } else {
-                base / aspect
-            }
-        } else {
-            base
-        };
-        let total_height = window_height + BAR_HEIGHT;
+        // let state = self.store.get().unwrap_or_default();
 
-        let size = self.window.outer_size().unwrap();
-        let monitor = self.window.current_monitor().unwrap().unwrap();
-        let width =
-            (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
-        let height =
-            (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
+        // let base: f32 = if state.size == CameraPreviewSize::Sm {
+        //     230.0
+        // } else {
+        //     400.0
+        // };
+        // let aspect = width as f32 / height as f32;
+        // let window_width = if state.shape == CameraPreviewShape::Full {
+        //     if aspect >= 1.0 {
+        //         base * aspect
+        //     } else {
+        //         base
+        //     }
+        // } else {
+        //     base
+        // };
+        // let window_height = if state.shape == CameraPreviewShape::Full {
+        //     if aspect >= 1.0 {
+        //         base
+        //     } else {
+        //         base / aspect
+        //     }
+        // } else {
+        //     base
+        // };
+        // let total_height = window_height + BAR_HEIGHT;
+
+        // let size = self.window.outer_size().unwrap();
+        // let monitor = self.window.current_monitor().unwrap().unwrap();
+        // let width =
+        //     (size.width as f64 / monitor.scale_factor() - window_height as f64 - 100.0) as u32;
+        // let height =
+        //     (size.height as f64 / monitor.scale_factor() - total_height as f64 - 100.0) as u32;
+
+        let width = 300;
+        let height = 300;
 
         self.window
             .set_size(LogicalSize::new(width, height))
@@ -388,7 +391,7 @@ impl CameraPreviewRenderer {
                 return;
             }
         };
-        
+
         let surface_frame = preview
             .surface
             .get_current_texture()
@@ -416,8 +419,8 @@ impl CameraPreviewRenderer {
                     frame.frame.width(),
                     frame.frame.height(),
                     format::Pixel::RGBA,
-                    surface_config.height,
                     surface_config.width,
+                    surface_config.height,
                     scaling::Flags::empty(),
                 );
 
@@ -472,7 +475,7 @@ impl CameraPreviewRenderer {
                 &buffer,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(surface_config.width * 4),
+                    bytes_per_row: Some(self.rescaler_frame.stride(0) as u32),
                     rows_per_image: Some(surface_config.height),
                 },
                 wgpu::Extent3d {
