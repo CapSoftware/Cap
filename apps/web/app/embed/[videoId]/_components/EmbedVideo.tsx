@@ -114,10 +114,45 @@ export const EmbedVideo = forwardRef<
     const playerRef = useRef<Player | null>(null);
     const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
     const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
-    const [subtitleBlobUrl, setSubtitleBlobUrl] = useState<string | null>(null);
-    const [chaptersBlobUrl, setChaptersBlobUrl] = useState<string | null>(null);
     const [longestDuration, setLongestDuration] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState(false);
+
+    const { data: transcriptContent, error: transcriptError } = useTranscript(
+      data.id,
+      data.transcriptionStatus
+    );
+
+    useEffect(() => {
+      if (transcriptContent) {
+        const parsed = parseVTT(transcriptContent);
+        setTranscriptData(parsed);
+      } else if (transcriptError) {
+        console.error(
+          "[Transcript] Transcript error from React Query:",
+          transcriptError.message
+        );
+      }
+    }, [transcriptContent, transcriptError]);
+
+    const chaptersUrl = useMemo(() => {
+      if (chapters?.length > 0) {
+        const vttContent = formatChaptersAsVTT(chapters);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        return URL.createObjectURL(blob);
+      }
+      return null;
+    }, [chapters]);
+
+    const subtitleUrl = useMemo(() => {
+      if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
+        const vttContent = formatTranscriptAsVTT(transcriptData);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        const newUrl = URL.createObjectURL(blob);
+
+        return newUrl;
+      }
+      return null;
+    }, [data.transcriptionStatus, transcriptData]);
 
     const handlePlayerReady = (player: Player) => {
       playerRef.current = player;
@@ -197,43 +232,6 @@ export const EmbedVideo = forwardRef<
       });
     }
 
-    const { data: transcriptContent, error: transcriptError } = useTranscript(
-      data.id,
-      data.transcriptionStatus
-    );
-
-    useEffect(() => {
-      if (transcriptContent) {
-        const parsed = parseVTT(transcriptContent);
-        setTranscriptData(parsed);
-      } else if (transcriptError) {
-        console.error(
-          "[Transcript] Transcript error from React Query:",
-          transcriptError.message
-        );
-      }
-    }, [transcriptContent, transcriptError]);
-
-    const chaptersUrl = useMemo(() => {
-      if (chapters?.length > 0) {
-        const vttContent = formatChaptersAsVTT(chapters);
-        const blob = new Blob([vttContent], { type: "text/vtt" });
-        return URL.createObjectURL(blob);
-      }
-      return null;
-    }, [chapters]);
-
-    const subtitleUrl = useMemo(() => {
-      if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
-        const vttContent = formatTranscriptAsVTT(transcriptData);
-        const blob = new Blob([vttContent], { type: "text/vtt" });
-        const newUrl = URL.createObjectURL(blob);
-
-        return newUrl;
-      }
-      return null;
-    }, [data.transcriptionStatus, transcriptData]);
-
 
     useEffect(() => {
       // if (!playerRef.current) return;
@@ -286,14 +284,14 @@ export const EmbedVideo = forwardRef<
 
       // Cleanup Blob URL on unmount or when subtitleUrl changes
       return () => {
-        if (subtitleBlobUrl) {
-          URL.revokeObjectURL(subtitleBlobUrl);
+        if (subtitleUrl) {
+          URL.revokeObjectURL(subtitleUrl);
         }
-        if (chaptersBlobUrl) {
-          URL.revokeObjectURL(chaptersBlobUrl);
+        if (chaptersUrl) {
+          URL.revokeObjectURL(chaptersUrl);
         }
       };
-    }, [subtitleUrl, subtitleBlobUrl, chaptersUrl, chaptersBlobUrl]);
+    }, [subtitleUrl, chaptersUrl]);
 
 
     const publicEnv = usePublicEnv();
