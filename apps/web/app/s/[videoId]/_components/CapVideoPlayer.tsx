@@ -302,6 +302,7 @@ export function CapVideoPlayer({
           )}
         </AnimatePresence>
         <MediaPlayerVideo
+          className="object-cover w-full h-full rounded-xl"
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
           onPlay={() => {
