@@ -151,40 +151,55 @@ export function CapVideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
-    const handleCueChange = () => {
-      const track = video.textTracks[0];
-      if (track && track.activeCues && track.activeCues.length > 0) {
-        const cue = track.activeCues[0] as VTTCue;
-        setCurrentCue(cue.text);
+    let captionTrack: TextTrack | null = null;
+
+    const handleCueChange = (): void => {
+      if (captionTrack && captionTrack.activeCues && captionTrack.activeCues.length > 0) {
+        const cue = captionTrack.activeCues[0] as VTTCue;
+        const plainText = cue.text.replace(/<[^>]*>/g, '');
+        setCurrentCue(plainText);
       } else {
         setCurrentCue('');
       }
     };
 
-    const handleLoadedMetadata = () => {
-      // Hide native captions
-      for (let i = 0; i < video.textTracks.length; i++) {
-        const track = video.textTracks[i];
-        if (track && (track.kind === 'subtitles' || track.kind === 'captions')) {
-          track.mode = 'hidden'; // Load but don't display
+    const setupTracks = (): void => {
+      const tracks = Array.from(video.textTracks);
+      console.log('All tracks:', tracks.map(t => ({ kind: t.kind, label: t.label, language: t.language })));
+
+      for (const track of tracks) {
+        if (track.kind === 'captions' || track.kind === 'subtitles') {
+          captionTrack = track;
+          track.mode = 'hidden';
           track.addEventListener('cuechange', handleCueChange);
+          console.log('Caption track set up:', track.label);
+          break;
         }
       }
+
+      if (!captionTrack) {
+        console.log('No caption track found!');
+      }
+    };
+
+    const handleLoadedMetadata = (): void => {
+      setupTracks();
     };
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
 
+    // Also try immediately if metadata is already loaded
+    if (video.readyState >= 1) {
+      setupTracks();
+    }
+
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      for (let i = 0; i < video.textTracks.length; i++) {
-        const track = video.textTracks[i];
-        if (track && (track.kind === 'subtitles' || track.kind === 'captions')) {
-          track.removeEventListener('cuechange', handleCueChange);
-        }
+      if (captionTrack) {
+        captionTrack.removeEventListener('cuechange', handleCueChange);
       }
     };
   }, []);
-
   return (
     <>
       <MediaPlayer
@@ -215,7 +230,7 @@ export function CapVideoPlayer({
           <div
             className={clsx(
               "absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
-              controlsVisible ? 'bottom-20' : 'bottom-12'
+              controlsVisible || videoRef.current?.paused ? 'bottom-20' : 'bottom-12'
             )}
           >
             {currentCue}
