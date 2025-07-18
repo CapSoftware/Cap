@@ -333,8 +333,8 @@ export function CapVideoPlayer({
         {currentCue && toggleCaptions && (
           <div
             className={clsx(
-              "absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
-              controlsVisible || videoRef.current?.paused ? 'bottom-16 sm:bottom-20' : 'bottom-6 sm:bottom-12'
+              "absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center w-full max-w-[300px] transition-all duration-300 ease-in-out",
+              controlsVisible || videoRef.current?.paused ? 'bottom-16 sm:bottom-20' : 'bottom-2 sm:bottom-12'
             )}
           >
             {currentCue}
