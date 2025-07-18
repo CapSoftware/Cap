@@ -2710,10 +2710,6 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
   const { children, className, disabled, toggleCaptions, setToggleCaptions, ...captionsProps } = props;
 
   const context = useMediaPlayerContext("MediaPlayerCaptions");
-  const dispatch = useMediaDispatch();
-  const isSubtitlesActive = useMediaSelector(
-    (state) => (state.mediaSubtitlesShowing ?? []).length > 0,
-  );
 
   const isDisabled = disabled || context.disabled;
   const onCaptionsToggle = React.useCallback(
