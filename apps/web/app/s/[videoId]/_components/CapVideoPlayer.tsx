@@ -126,8 +126,7 @@ export function CapVideoPlayer({
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
     if (!video || video.readyState < 2) {
-      // Fallback while video is loading
-      return `https://via.placeholder.com/224x128/1f2937/ffffff?text=${Math.floor(time)}s`;
+      return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
     }
 
     const canvas = document.createElement('canvas');
@@ -136,7 +135,7 @@ export function CapVideoPlayer({
     const ctx = canvas.getContext('2d');
 
     if (!ctx) {
-      return `https://via.placeholder.com/224x128/dc2626/ffffff?text=Error`;
+      return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
     }
 
     try {
@@ -144,7 +143,7 @@ export function CapVideoPlayer({
       return canvas.toDataURL('image/jpeg', 0.8);
     } catch (error) {
       console.error('Error capturing video frame:', error);
-      return `https://via.placeholder.com/224x128/dc2626/ffffff?text=Error`;
+      return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
     }
   }, []);
 
