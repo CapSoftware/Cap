@@ -2720,7 +2720,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
   );
 
   return (
-    <MediaPlayerTooltip tooltip="Captions" shortcut="C">
+    <MediaPlayerTooltip tooltip="Captions">
       <PlayerButton
         type="button"
         aria-controls={context.mediaId}
