@@ -108,10 +108,15 @@ export const CapCard = ({
 
   const confirmRemoveCap = async () => {
     if (!onDelete) return;
-    setRemoving(true);
-    await onDelete();
-    setRemoving(false);
-    setConfirmOpen(false);
+    try {
+      setRemoving(true);
+      await onDelete();
+    } catch (error) {
+      console.error("Error deleting cap:", error);
+    } finally {
+      setRemoving(false);
+      setConfirmOpen(false);
+    }
   };
 
   const handleSharingUpdated = () => {
@@ -345,7 +350,7 @@ export const CapCard = ({
                   <FontAwesomeIcon
                     className="size-3"
                     icon={faCopy}
-                  />
+                  />f
                   <p className="text-sm text-gray-12">Duplicate</p>
                 </DropdownMenuItem>
                 <DropdownMenuItem

@@ -20,6 +20,7 @@ interface TranscriptEntry {
   startTime: number;
 }
 
+
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
   const lines = vttContent.split("\n");
   const entries: TranscriptEntry[] = [];
@@ -118,8 +119,8 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 export const Transcript: React.FC<TranscriptProps> = ({
   data,
-  onSeek,
   user,
+  onSeek,
 }) => {
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -133,6 +134,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
   const [isCopying, setIsCopying] = useState(false);
   const [copyPressed, setCopyPressed] = useState(false);
   const [downloadPressed, setDownloadPressed] = useState(false);
+
 
   const {
     data: transcriptContent,
@@ -224,9 +226,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
     setSelectedEntry(entry.id);
 
-    if (onSeek) {
-      onSeek(entry.startTime);
-    }
+    onSeek?.(entry.startTime);
   };
 
   const startEditing = (entry: TranscriptEntry) => {
@@ -306,8 +306,8 @@ export const Transcript: React.FC<TranscriptProps> = ({
         return `${hours.toString().padStart(2, "0")}:${minutes
           .toString()
           .padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
-          .toString()
-          .padStart(3, "0")}`;
+            .toString()
+            .padStart(3, "0")}`;
       };
 
       return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
@@ -448,7 +448,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
             spinner={isCopying}
           >
             {!copyPressed ? (
-              <Copy className="w-3 h-3 mr-1" />
+              <Copy className="mr-1 w-3 h-3" />
             ) : (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -460,7 +460,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-3 h-3 mr-1 svgpathanimation"
+                className="mr-1 w-3 h-3 svgpathanimation"
               >
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -474,7 +474,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
             size="xs"
           >
             {!downloadPressed ? (
-              <Download className="w-3 h-3 mr-1" />
+              <Download className="mr-1 w-3 h-3" />
             ) : (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -486,7 +486,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                 strokeWidth="2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                className="w-3 h-3 mr-1 svgpathanimation"
+                className="mr-1 w-3 h-3 svgpathanimation"
               >
                 <path d="M20 6 9 17l-5-5" />
               </svg>
@@ -501,17 +501,16 @@ export const Transcript: React.FC<TranscriptProps> = ({
           {transcriptData.map((entry) => (
             <div
               key={entry.id}
-              className={`group rounded-lg transition-colors ${
-                editingEntry === entry.id
-                  ? "bg-gray-1 border border-gray-4 p-3"
-                  : selectedEntry === entry.id
+              className={`group rounded-lg transition-colors ${editingEntry === entry.id
+                ? "bg-gray-1 border border-gray-4 p-3"
+                : selectedEntry === entry.id
                   ? "bg-gray-2 p-3"
                   : "hover:bg-gray-2 p-3"
-              } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
+                } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
               onClick={() => handleTranscriptClick(entry)}
             >
               <div className="flex justify-between items-start mb-2">
-                <div className="text-xs text-gray-8 font-medium">
+                <div className="text-xs font-medium text-gray-8">
                   {entry.timestamp}
                 </div>
                 {canEdit && editingEntry !== entry.id && (
@@ -530,11 +529,11 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
               {editingEntry === entry.id ? (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-gray-1 border border-gray-4 p-3">
+                  <div className="p-3 rounded-lg border bg-gray-1 border-gray-4">
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      className="w-full text-sm leading-relaxed text-gray-12 bg-transparent placeholder:text-gray-8 resize-none focus:outline-none"
+                      className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
                       rows={Math.max(2, Math.ceil(editText.length / 60))}
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
@@ -552,7 +551,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       size="xs"
                       className="min-w-[70px]"
                     >
-                      <X className="w-3 h-3 mr-1" />
+                      <X className="mr-1 w-3 h-3" />
                       Cancel
                     </Button>
                     <Button
@@ -566,7 +565,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       className="min-w-[70px]"
                       spinner={isSaving}
                     >
-                      <Check className="w-3 h-3 mr-1" />
+                      <Check className="mr-1 w-3 h-3" />
                       Save
                     </Button>
                   </div>

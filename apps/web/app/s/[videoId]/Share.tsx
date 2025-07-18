@@ -6,7 +6,6 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useRef } from "react";
-import { ShareHeader } from "./_components/ShareHeader";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
@@ -67,17 +66,17 @@ const useVideoStatus = (
     },
     initialData: initialData
       ? {
-          transcriptionStatus: initialData.transcriptionStatus as
-            | "PROCESSING"
-            | "COMPLETE"
-            | "ERROR"
-            | null,
-          aiProcessing: initialData.aiData?.processing || false,
-          aiTitle: initialData.aiData?.title || null,
-          summary: initialData.aiData?.summary || null,
-          chapters: initialData.aiData?.chapters || null,
-          generationError: null,
-        }
+        transcriptionStatus: initialData.transcriptionStatus as
+          | "PROCESSING"
+          | "COMPLETE"
+          | "ERROR"
+          | null,
+        aiProcessing: initialData.aiData?.processing || false,
+        aiTitle: initialData.aiData?.title || null,
+        summary: initialData.aiData?.summary || null,
+        chapters: initialData.aiData?.chapters || null,
+        generationError: null,
+      }
       : undefined,
     refetchInterval: (query) => {
       const data = query.state.data;
@@ -146,26 +145,12 @@ export const Share = ({
     ? new Date(data.metadata.customCreatedAt)
     : data.createdAt;
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const playerRef = useRef<HTMLVideoElement | null>(null);
 
   const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
     transcriptionStatus: data.transcriptionStatus,
     aiData: initialAiData,
   });
-
-  // const { data: viewCount } = useVideoAnalytics(
-  //   data.id,
-  //   initialAnalytics.views
-  // );
-
-  // const analytics = useMemo(
-  //   () => ({
-  //     views: viewCount || 0,
-  //     comments: 0, // comments.filter((c) => c.type === "text").length,
-  //     reactions: 0, // comments.filter((c) => c.type === "emoji").length,
-  //   }),
-  //   [viewCount, comments]
-  // );
 
   const transcriptionStatus =
     videoStatus?.transcriptionStatus || data.transcriptionStatus;
@@ -212,28 +197,23 @@ export const Share = ({
   const aiLoading = shouldShowLoading();
 
   const handleSeek = (time: number) => {
-    if (videoRef.current) {
-      videoRef.current.currentTime = time;
+    if (playerRef.current) {
+      playerRef.current.currentTime = time;
     }
   };
-
-  const headerData =
-    aiData && aiData.title && !aiData.processing
-      ? { ...data, name: aiData.title, createdAt: effectiveDate }
-      : { ...data, createdAt: effectiveDate };
 
   return (
     <div className="mt-4">
       <div className="flex flex-col gap-4 lg:flex-row">
         <div className="flex-1">
-          <div className="overflow-hidden relative p-3 aspect-video new-card-style">
+          <div className="relative p-3 aspect-video new-card-style">
             <ShareVideo
               data={{ ...data, transcriptionStatus }}
               user={user}
               comments={comments}
               chapters={aiData?.chapters || []}
               aiProcessing={aiData?.processing || false}
-              ref={videoRef}
+              ref={playerRef}
             />
           </div>
           <div className="mt-4 lg:hidden">
@@ -263,31 +243,31 @@ export const Share = ({
         <Toolbar data={data} user={user} />
       </div>
 
-      <div className="mt-4 hidden lg:block">
+      <div className="hidden mt-4 lg:block">
         {aiLoading &&
           (transcriptionStatus === "PROCESSING" ||
             transcriptionStatus === "COMPLETE") && (
-            <div className="p-4 new-card-style animate-pulse">
+            <div className="p-4 animate-pulse new-card-style">
               <div className="space-y-6">
                 <div>
-                  <div className="h-6 w-24 bg-gray-200 rounded mb-3"></div>
-                  <div className="h-3 w-32 bg-gray-100 rounded mb-4"></div>
+                  <div className="mb-3 w-24 h-6 bg-gray-200 rounded"></div>
+                  <div className="mb-4 w-32 h-3 bg-gray-100 rounded"></div>
                   <div className="space-y-3">
-                    <div className="h-4 bg-gray-200 rounded w-full"></div>
-                    <div className="h-4 bg-gray-200 rounded w-5/6"></div>
-                    <div className="h-4 bg-gray-200 rounded w-4/5"></div>
-                    <div className="h-4 bg-gray-200 rounded w-full"></div>
-                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                    <div className="w-full h-4 bg-gray-200 rounded"></div>
+                    <div className="w-5/6 h-4 bg-gray-200 rounded"></div>
+                    <div className="w-4/5 h-4 bg-gray-200 rounded"></div>
+                    <div className="w-full h-4 bg-gray-200 rounded"></div>
+                    <div className="w-3/4 h-4 bg-gray-200 rounded"></div>
                   </div>
                 </div>
 
                 <div>
-                  <div className="h-6 w-24 bg-gray-200 rounded mb-4"></div>
+                  <div className="mb-4 w-24 h-6 bg-gray-200 rounded"></div>
                   <div className="space-y-2">
                     {[1, 2, 3, 4].map((i) => (
                       <div key={i} className="flex items-center p-2">
-                        <div className="h-4 w-12 bg-gray-200 rounded mr-3"></div>
-                        <div className="h-4 bg-gray-200 rounded flex-1"></div>
+                        <div className="mr-3 w-12 h-4 bg-gray-200 rounded"></div>
+                        <div className="flex-1 h-4 bg-gray-200 rounded"></div>
                       </div>
                     ))}
                   </div>
@@ -321,10 +301,10 @@ export const Share = ({
                     {aiData.chapters.map((chapter) => (
                       <div
                         key={chapter.start}
-                        className="p-2 cursor-pointer hover:bg-gray-100 rounded transition-colors flex items-center"
+                        className="flex items-center p-2 rounded transition-colors cursor-pointer hover:bg-gray-100"
                         onClick={() => handleSeek(chapter.start)}
                       >
-                        <span className="text-xs text-gray-500 w-16">
+                        <span className="w-16 text-xs text-gray-500">
                           {formatTime(chapter.start)}
                         </span>
                         <span className="ml-2 text-sm">{chapter.title}</span>
