@@ -22,8 +22,9 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
-use camera::camera_frame_sync_task;
-use camera::{CameraPreviewMutableState, CameraWindowConfig, CameraWindowState};
+use camera::{
+    camera_frame_sync_task, CameraPreviewMutableState, CameraWindowConfig, CameraWindowState,
+};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
