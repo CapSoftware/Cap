@@ -334,11 +334,7 @@ export function CapVideoPlayer({
           <div
             className={clsx(
               "absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center transition-all duration-300 ease-in-out",
-              "w-[90%] max-w-[280px]",
-              "sm:w-[85%] sm:max-w-[480px]",
-              "md:w-[80%] md:max-w-[600px]",
-              "lg:w-[75%] lg:max-w-[720px]",
-              "xl:w-[70%] xl:max-w-[800px]",
+              "max-w-[85%] sm:max-w-[480px] md:max-w-[600px]",
               controlsVisible || videoRef.current?.paused ? 'bottom-16 sm:bottom-20' : 'bottom-2 sm:bottom-12'
             )}
           >
