@@ -68,7 +68,6 @@ export function CapVideoPlayer({
     };
 
     const handleCanPlay = () => {
-      console.log('Video canplay event fired');
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -76,7 +75,6 @@ export function CapVideoPlayer({
     };
 
     const handleLoadedMetadata = () => {
-      console.log('Video loadedmetadata event fired');
       if (!hlsVideo) {
         setVideoLoaded(true);
         if (!hasPlayedOnce) {
@@ -86,7 +84,6 @@ export function CapVideoPlayer({
     };
 
     const handleLoad = () => {
-      console.log('Video load event fired');
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -94,7 +91,6 @@ export function CapVideoPlayer({
     };
 
     const handlePlay = () => {
-      console.log('Video started playing');
       setShowPlayButton(false);
       setHasPlayedOnce(true);
     };

@@ -160,15 +160,26 @@ export const EmbedVideo = forwardRef<
     useEffect(() => {
       if (!videoRef.current) return;
       const player = videoRef.current;
-      setLongestDuration(player.duration);
+      const handleLoadedMetadata = () => {
+        setLongestDuration(player.duration);
+      };
+
+      if (player.readyState >= 1) {
+        setLongestDuration(player.duration);
+      } else {
+        player.addEventListener('loadedmetadata', handleLoadedMetadata);
+      }
+
       const listener = (arg: boolean) => {
         setIsPlaying(arg);
       };
       player.addEventListener("play", () => listener(true));
       player.addEventListener("pause", () => listener(false));
+      player.addEventListener('loadedmetadata', handleLoadedMetadata);
       return () => {
         player.removeEventListener("play", () => listener(true));
         player.removeEventListener("pause", () => listener(false));
+        player.removeEventListener('loadedmetadata', handleLoadedMetadata);
       };
     }, []);
 
