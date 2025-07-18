@@ -523,14 +523,14 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
           break;
         }
 
-        case "c":
-          event.preventDefault();
-          if (isVideo && mediaElement.textTracks.length > 0) {
-            dispatch({
-              type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
-            });
-          }
-          break;
+        // case "c":
+        //   event.preventDefault();
+        //   if (isVideo && mediaElement.textTracks.length > 0) {
+        //     dispatch({
+        //       type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
+        //     });
+        //   }
+        //   break;
 
         case "d": {
           const hasDownload = mediaElement.querySelector(
@@ -2400,15 +2400,15 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
       dir={context.dir}
       {...timeProps}
       className={cn(
-        "flex gap-1 items-center text-sm text-white",
+        "flex gap-1 items-center text-sm text-white min-w-fit",
         className,
       )}
     >
-      <span className="tabular-nums text-white">{times.current}</span>
-      <span role="separator" aria-hidden="true" tabIndex={-1}>
+      <span className="text-xs tabular-nums text-white min-w-fit md:text-base">{times.current}</span>
+      <span className="text-xs tabular-nums text-gray-11" role="separator" aria-hidden="true" tabIndex={-1}>
         /
       </span>
-      <span className="tabular-nums text-white">{times.duration}</span>
+      <span className="text-xs tabular-nums text-white min-w-fit md:text-base">{times.duration}</span>
     </TimePrimitive>
   );
 }

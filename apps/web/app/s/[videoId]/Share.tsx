@@ -206,15 +206,19 @@ export const Share = ({
     <div className="mt-4">
       <div className="flex flex-col gap-4 lg:flex-row">
         <div className="flex-1">
-          <div className="relative p-3 aspect-video new-card-style">
-            <ShareVideo
-              data={{ ...data, transcriptionStatus }}
-              user={user}
-              comments={comments}
-              chapters={aiData?.chapters || []}
-              aiProcessing={aiData?.processing || false}
-              ref={playerRef}
-            />
+          <div className="overflow-hidden relative p-3 aspect-video new-card-style">
+            <div
+              className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-hidden rounded-xl"
+            >
+              <ShareVideo
+                data={{ ...data, transcriptionStatus }}
+                user={user}
+                comments={comments}
+                chapters={aiData?.chapters || []}
+                aiProcessing={aiData?.processing || false}
+                ref={playerRef}
+              />
+            </div>
           </div>
           <div className="mt-4 lg:hidden">
             <Toolbar data={data} user={user} />
