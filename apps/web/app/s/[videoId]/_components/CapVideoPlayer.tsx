@@ -52,7 +52,9 @@ export function CapVideoPlayer({
   const [toggleCaptions, setToggleCaptions] = useState(true);
   const [showPlayButton, setShowPlayButton] = useState(false);
   const [videoLoaded, setVideoLoaded] = useState(false);
+  const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
 
+  // Set up video event listeners for better loading detection
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -60,35 +62,55 @@ export function CapVideoPlayer({
     const handleLoadedData = () => {
       console.log('Video loadeddata event fired');
       setVideoLoaded(true);
+      if (!hasPlayedOnce) {
+        setShowPlayButton(true);
+      }
     };
 
     const handleCanPlay = () => {
       console.log('Video canplay event fired');
       setVideoLoaded(true);
+      if (!hasPlayedOnce) {
+        setShowPlayButton(true);
+      }
     };
 
     const handleLoadedMetadata = () => {
       console.log('Video loadedmetadata event fired');
       if (!hlsVideo) {
         setVideoLoaded(true);
+        if (!hasPlayedOnce) {
+          setShowPlayButton(true);
+        }
       }
     };
 
     const handleLoad = () => {
       console.log('Video load event fired');
       setVideoLoaded(true);
-      setShowPlayButton(true);
+      if (!hasPlayedOnce) {
+        setShowPlayButton(true);
+      }
+    };
+
+    const handlePlay = () => {
+      console.log('Video started playing');
+      setShowPlayButton(false);
+      setHasPlayedOnce(true);
     };
 
     video.addEventListener('loadeddata', handleLoadedData);
     video.addEventListener('canplay', handleCanPlay);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     video.addEventListener('load', handleLoad);
+    video.addEventListener('play', handlePlay);
 
     if (video.readyState >= 2) {
       console.log('Video already loaded, readyState:', video.readyState);
       setVideoLoaded(true);
-      setShowPlayButton(true);
+      if (!hasPlayedOnce) {
+        setShowPlayButton(true);
+      }
     }
 
     return () => {
@@ -96,8 +118,9 @@ export function CapVideoPlayer({
       video.removeEventListener('canplay', handleCanPlay);
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       video.removeEventListener('load', handleLoad);
+      video.removeEventListener('play', handlePlay);
     };
-  }, [hlsVideo]);
+  }, [hlsVideo, hasPlayedOnce]);
 
   useEffect(() => {
     if (!videoRef.current || !hlsVideo) return;
@@ -165,10 +188,13 @@ export function CapVideoPlayer({
 
     // HLS specific events for better loading detection
     hls.on(Hls.Events.FRAG_LOADED, () => {
+      console.log("HLS fragment loaded");
       // Set video as loaded when first fragment is loaded
       if (!videoLoaded) {
         setVideoLoaded(true);
-        setShowPlayButton(true);
+        if (!hasPlayedOnce) {
+          setShowPlayButton(true);
+        }
       }
     });
 
@@ -182,7 +208,7 @@ export function CapVideoPlayer({
         hlsInstance.current = null;
       }
     };
-  }, [videoSrc, hlsVideo, autoplay, videoLoaded]);
+  }, [videoSrc, hlsVideo, autoplay, videoLoaded, hasPlayedOnce]);
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
@@ -255,6 +281,7 @@ export function CapVideoPlayer({
     };
   }, []);
 
+
   return (
     <>
       <MediaPlayer
@@ -269,7 +296,7 @@ export function CapVideoPlayer({
           <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
         </div>
         <AnimatePresence>
-          {showPlayButton && videoLoaded && (
+          {showPlayButton && videoLoaded && !hasPlayedOnce && (
             <motion.div
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
@@ -288,6 +315,7 @@ export function CapVideoPlayer({
           ref={videoRef}
           onPlay={() => {
             setShowPlayButton(false);
+            setHasPlayedOnce(true);
           }}
           crossOrigin="anonymous"
           playsInline
