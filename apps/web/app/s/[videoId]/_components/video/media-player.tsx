@@ -523,14 +523,14 @@ function MediaPlayerRootImpl(props: MediaPlayerRootProps) {
           break;
         }
 
-        case "c":
-          event.preventDefault();
-          if (isVideo && mediaElement.textTracks.length > 0) {
-            dispatch({
-              type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
-            });
-          }
-          break;
+        // case "c":
+        //   event.preventDefault();
+        //   if (isVideo && mediaElement.textTracks.length > 0) {
+        //     dispatch({
+        //       type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
+        //     });
+        //   }
+        //   break;
 
         case "d": {
           const hasDownload = mediaElement.querySelector(
