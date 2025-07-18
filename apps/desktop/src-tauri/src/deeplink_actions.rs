@@ -2,7 +2,10 @@ use cap_recording::RecordingMode;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 
-use crate::{recording::StartRecordingInputs, windows::ShowCapWindow, App, ArcLock};
+use crate::{
+    camera::CameraWindowState, recording::StartRecordingInputs, windows::ShowCapWindow, App,
+    ArcLock,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -105,8 +108,9 @@ impl DeepLinkAction {
                 mode,
             } => {
                 let state = app.state::<ArcLock<App>>();
+                let store = app.state::<CameraWindowState>();
 
-                crate::set_camera_input_inner(None, state.clone(), camera_label).await?;
+                crate::set_camera_input(state.clone(), store, camera_label).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 use cap_media::sources::ScreenCaptureTarget;

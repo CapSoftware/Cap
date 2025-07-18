@@ -22,8 +22,8 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
-use camera::CameraPreview;
-use camera::{CameraPreviewRenderer, CameraWindowState, CameraWindowStateStore};
+use camera::camera_frame_sync_task;
+use camera::{CameraPreviewMutableState, CameraWindowConfig, CameraWindowState};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
@@ -182,16 +182,8 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
-    window: Window,
     state: MutableState<'_, App>,
-    label: Option<String>,
-) -> Result<bool, String> {
-    set_camera_input_inner(Some(window), state, label).await
-}
-
-async fn set_camera_input_inner(
-    window: Option<Window>,
-    state: MutableState<'_, App>,
+    store: State<'_, CameraWindowState>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -222,22 +214,14 @@ async fn set_camera_input_inner(
                                     let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
 
-                                    if let Some(window) = window {
-                                        if let Some(preview) = window.try_state::<CameraPreview>() {
-                                            preview.resize(video_info.width, video_info.height)
-                                                .map_err(|err| format!("Error resizing camera preview: {err}"))?;
-                                        }
-                                    }
+                                    store.resize(video_info.width, video_info.height)
+                                        .map_err(|err| format!("Error resizing camera preview: {err}"))?;
 
                                     return Ok(true);
                                 } else {
-                                    if let Some(window) = window {
-                                        if let Some(preview) = window.try_state::<CameraPreview>() {
-                                            let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
-                                            preview.resize(video_info.width, video_info.height)
-                                                .map_err(|err| format!("Error resizing camera preview: {err}"))?;
-                                        }
-                                    }
+                                    let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
+                                    store.resize(video_info.width, video_info.height)
+                                        .map_err(|err| format!("Error resizing camera preview: {err}"))?;
 
                                     return Ok(false);
                                 }
@@ -1746,23 +1730,13 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_preview_state(
-    app: MutableState<'_, App>,
-    preview: State<'_, CameraPreview>,
-    store: State<'_, CameraWindowStateStore>,
-    state: CameraWindowState,
+    store: State<'_, CameraWindowState>,
+    state: CameraWindowConfig,
 ) -> Result<(), ()> {
-    store.save(&state).map_err(|_| ())?;
-
-    let app = app.read().await;
-    if let Some(camera_feed) = app.camera_feed.as_ref() {
-        let video_info = camera_feed.lock().await.video_info();
-        preview
-            .resize(video_info.width, video_info.height)
-            .map_err(|err| {
-                error!("Error resizing camera preview: {}", err);
-                ()
-            })?;
-    }
+    store.save(&state).map_err(|err| {
+        error!("Error saving camera window state: {err}");
+        ()
+    })?;
 
     Ok(())
 }
@@ -1892,7 +1866,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_frame) = CameraPreview::frame_sync_task();
+    let (camera_tx, camera_frame) = camera_frame_sync_task();
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -1997,7 +1971,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }),
                 })));
 
-                app.manage(CameraWindowStateStore::init(&app));
+                if let Ok(camera_window_state) = CameraWindowState::init(&app)
+                    .map_err(|err| error!("Error initializing window state: {err}"))
+                {
+                    app.manage(camera_window_state);
+                }
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -2093,6 +2071,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 }
                                 return;
                             }
+                            CapWindowId::Camera => {
+                                app.state::<CameraWindowState>().close_window();
+                            }
                             _ => {}
                         };
                     }
@@ -2131,7 +2112,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .build(tauri_context)
         .expect("error while running tauri application")
         .run({
-            let mut camera = CameraPreviewRenderer::init(camera_frame)
+            let mut camera = CameraPreviewMutableState::init(camera_frame)
                 .map_err(|err| error!("Error initializing camera preview renderer: {err:?}"))
                 .ok();
 
@@ -2173,16 +2154,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     event: WindowEvent::Resized(size),
                     ..
                 } => {
-                    if let Some(preview) = handle.try_state::<CameraPreview>() {
-                        preview.reconfigure(size.width, size.height);
-                    }
+                    handle
+                        .state::<CameraWindowState>()
+                        .on_window_resize(size.width, size.height);
                 }
                 tauri::RunEvent::MainEventsCleared => {
-                    if let Some(preview) = handle.try_state::<CameraPreview>() {
-                        if let Some(camera) = camera.as_mut() {
-                            if let Err(err) = camera.render(&preview) {
-                                error!("Error rendering camera preview: {err}");
-                            }
+                    if let Some(camera) = camera.as_mut() {
+                        if let Err(err) = handle.state::<CameraWindowState>().render(camera) {
+                            error!("Error rendering camera preview: {err}");
                         }
                     }
                 }
