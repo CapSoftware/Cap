@@ -7,10 +7,10 @@ use ffmpeg::{
     software::scaling,
 };
 
-use cap_media::{feeds::RawCameraFrame, platform::Window};
+use cap_media::feeds::RawCameraFrame;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{AppHandle, LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::oneshot;
 use wgpu::CompositeAlphaMode;
@@ -88,7 +88,7 @@ pub struct CameraWindowState {
 }
 
 impl CameraWindowState {
-    // Initialize the global state for the managing the camera preview.
+    /// Initialize the global state for the managing the camera preview.
     pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             window: Arc::new(RwLock::new(None)),
@@ -96,12 +96,9 @@ impl CameraWindowState {
         })
     }
 
+    /// Initialize the state when the camera preview window is created.
+    /// Currently we only support a single camera preview window at a time!
     pub async fn init_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
-        let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
-        if state.is_some() {
-            return Err(anyhow!("Camera preview window already initialized"));
-        }
-
         let size = window
             .inner_size()
             .with_context(|| "Error getting the window size")?;
@@ -282,13 +279,22 @@ impl CameraWindowState {
         //     this.update_uniforms(&s, &this.store.get().unwrap_or_default());
         // }
 
+        println!("ATTEMPTING TO GET WRITE LOCK");
+
+        let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
+        // We bail out really late which kinda sucks but:
+        //  - it shouldn't happen
+        //  - we can't hold the mutex over the wgpu `await` so we wouldn't be able to enforce it anyway.
+        if state.is_some() {
+            return Err(anyhow!("Camera preview window already initialized"));
+        }
         *state = Some(window);
 
         Ok(())
     }
 
-    // When the window is closed, we cleanup the state.
-    // This prevents us attempting to resize/reposition the window and Tauri erroring out.
+    /// Triggered by Tauri when the camera preview window is closed.
+    /// We drop the handle we have to the `tauri::Window` + wgpu stuff, to prevent us attempting to accessing something that's no longer valid.
     pub fn close_window(&self) {
         self.window
             .write()
@@ -296,23 +302,35 @@ impl CameraWindowState {
             .take();
     }
 
+    /// Save the current state of the camera window.
     pub fn save(&self, state: &CameraWindowConfig) -> tauri_plugin_store::Result<()> {
         self.store.set("state", serde_json::to_value(&state)?);
-        self.store.save()
-        // TODO: Update uniforms
+        self.store.save()?;
+        if let Some(window) = self
+            .window
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            let s = window
+                .surface_config
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+
+            update_uniforms(window, &s, state);
+        }
+        Ok(())
     }
 
+    /// Get the current state of the camera window.
+    /// Get the current state of the camera window.
     pub fn get(&self) -> Option<CameraWindowConfig> {
         self.store
             .get("state")
             .and_then(|v| serde_json::from_value(v).ok())
     }
 
-    // Called with the size of the video feed.
-    //
-    // This should be called when:
-    //  - Video feed changes size
-    //  - Window configuration changes
+    /// Called to update the preview based on the new size of the video feed.
     pub fn resize(&self, width: u32, height: u32) -> tauri::Result<()> {
         let state = self.get().unwrap_or_default();
 
@@ -347,80 +365,39 @@ impl CameraWindowState {
             .unwrap_or_else(PoisonError::into_inner)
             .as_ref()
         {
-            // let (monitor_size, monitor_offset, monitor_scale_factor): (
-            //     PhysicalSize<u32>,
-            //     LogicalPosition<u32>,
-            //     _,
-            // ) = if let Some(monitor) = window.window.current_monitor()? {
-            //     let size = monitor.position().to_logical(monitor.scale_factor());
-            //     (monitor.size().clone(), size, monitor.scale_factor())
-            // } else {
-            //     (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
-            // };
+            let (monitor_size, monitor_offset, monitor_scale_factor): (
+                PhysicalSize<u32>,
+                LogicalPosition<u32>,
+                _,
+            ) = if let Some(monitor) = window.window.current_monitor()? {
+                let size = monitor.position().to_logical(monitor.scale_factor());
+                (monitor.size().clone(), size, monitor.scale_factor())
+            } else {
+                (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+            };
 
-            // let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
-            //     as u32
-            //     + monitor_offset.x;
-            // let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
-            //     as u32
-            //     + monitor_offset.y;
+            let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
+                as u32
+                + monitor_offset.x;
+            let y = (monitor_size.height as f64 / monitor_scale_factor
+                - window_height as f64
+                - 100.0) as u32
+                + monitor_offset.y;
 
-            // // This will implicitly trigger `Self::reconfigure`
-            // self.window
-            //     .set_size(LogicalSize::new(window_width, window_height))?;
-            // self.window.set_position(LogicalPosition::new(x, y))?;
-
-            // let s = self
-            //     .surface_config
-            //     .lock()
-            //     .unwrap_or_else(PoisonError::into_inner);
-            // self.update_uniforms(&s, &state);
+            window
+                .window
+                .set_size(LogicalSize::new(window_width, window_height))?;
+            window.window.set_position(LogicalPosition::new(x, y))?;
         }
 
         Ok(())
-    }
-
-    fn update_uniforms(&self, s: &wgpu::SurfaceConfiguration, state: &CameraWindowState) {
-        println!("UPDATE UNIFORMS"); // TODO
-
-        if let Some(window) = self
-            .window
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            // let todo = window.
-            todo!();
-        }
-
-        // let surface_width = surface_frame.texture.width();
-        // let surface_height = surface_frame.texture.height();
-
-        // self.queue.write_buffer(
-        //     &self.uniform_buffer,
-        //     0,
-        //     bytemuck::cast_slice(&[
-        //         s.height as f32,
-        //         TOOLBAR_HEIGHT,
-        //         match state.shape {
-        //             CameraPreviewShape::Round => 0.0,
-        //             CameraPreviewShape::Square => 1.0,
-        //             CameraPreviewShape::Full => 2.0,
-        //         },
-        //         match state.size {
-        //             CameraPreviewSize::Sm => 0.0,
-        //             CameraPreviewSize::Lg => 1.0,
-        //         },
-        //         if state.mirrored { 1.0 } else { 0.0 },
-        //         0.0, // padding
-        //     ]),
-        // );
     }
 
     /// Called by the Tauri event loop on window resize events to reconfigure the GPU texture and uniforms.
     ///
     /// We do this in the event-loop (as opposed to `resize`) so we don't need to lock the surface.
     pub fn on_window_resize(&self, width: u32, height: u32) {
+        let state = self.get().unwrap_or_default();
         if let Some(window) = self
             .window
             .read()
@@ -434,6 +411,7 @@ impl CameraWindowState {
             s.width = if width > 0 { width } else { 1 };
             s.height = if height > 0 { height } else { 1 };
             window.surface.configure(&window.device, &s);
+            update_uniforms(window, &s, &state);
         }
     }
 
@@ -593,4 +571,30 @@ pub fn camera_frame_sync_task() -> (
     });
 
     result
+}
+
+fn update_uniforms(
+    window: &WindowState,
+    s: &wgpu::SurfaceConfiguration,
+    state: &CameraWindowConfig,
+) {
+    window.queue.write_buffer(
+        &window.uniform_buffer,
+        0,
+        bytemuck::cast_slice(&[
+            s.height as f32,
+            TOOLBAR_HEIGHT,
+            match state.shape {
+                CameraPreviewShape::Round => 0.0,
+                CameraPreviewShape::Square => 1.0,
+                CameraPreviewShape::Full => 2.0,
+            },
+            match state.size {
+                CameraPreviewSize::Sm => 0.0,
+                CameraPreviewSize::Lg => 1.0,
+            },
+            if state.mirrored { 1.0 } else { 0.0 },
+            0.0, // padding
+        ]),
+    );
 }
