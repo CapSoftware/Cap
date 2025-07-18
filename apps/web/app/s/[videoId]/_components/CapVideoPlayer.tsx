@@ -134,8 +134,6 @@ export function CapVideoPlayer({
       return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
     }
 
-    if (!video) return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-
     const canvas = document.createElement('canvas');
     canvas.width = 224;
     canvas.height = 128;
