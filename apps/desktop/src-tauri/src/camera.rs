@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, TryLockError};
 
 use anyhow::{anyhow, Context};
 use ffmpeg::{
@@ -433,7 +433,12 @@ impl CameraWindowState {
     /// Called by the Tauri event loop on window resize events to reconfigure the GPU texture and uniforms.
     ///
     /// We do this in the event-loop (as opposed to `resize`) so we don't need to lock the surface.
-    pub fn on_window_resize(&self, width: u32, height: u32, mutable_state: &mut CameraPreviewMutableState) {
+    pub fn on_window_resize(
+        &self,
+        width: u32,
+        height: u32,
+        mutable_state: &mut CameraPreviewMutableState,
+    ) {
         let state = self.get().unwrap_or_default();
         if let Some(window) = self
             .window
@@ -448,10 +453,10 @@ impl CameraWindowState {
             s.width = if width > 0 { width } else { 1 };
             s.height = if height > 0 { height } else { 1 };
             window.surface.configure(&window.device, &s);
-            
+
             // Invalidate cached texture on window resize
             mutable_state.invalidate_texture_cache();
-            
+
             update_uniforms(window, &s, &state);
         }
     }
@@ -529,11 +534,15 @@ impl CameraWindowState {
                     };
 
                     let should_create_new = match state.cached_texture.as_ref() {
-                        Some(cached_tex) => cached_tex.width != surface_width || cached_tex.height != surface_height,
+                        Some(cached_tex) => {
+                            cached_tex.width != surface_width || cached_tex.height != surface_height
+                        }
                         None => true,
                     };
-                    
+
                     if should_create_new {
+                        println!("SHOULD CREATE NEW TEXTURE1");
+
                         let texture = window.device.create_texture(&wgpu::TextureDescriptor {
                             label: Some("Camera Texture"),
                             size: wgpu::Extent3d {
@@ -545,27 +554,30 @@ impl CameraWindowState {
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::Rgba8Unorm,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
                             view_formats: &[],
                         });
-                        
-                        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                        
-                        let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("Texture Bind Group"),
-                            layout: &window.bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&window.sampler),
-                                },
-                            ],
-                        });
-                        
+
+                        let texture_view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let bind_group =
+                            window.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("Texture Bind Group"),
+                                layout: &window.bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&window.sampler),
+                                    },
+                                ],
+                            });
+
                         state.cached_texture = Some(CachedTexture {
                             texture,
                             texture_view,
@@ -574,7 +586,7 @@ impl CameraWindowState {
                             height: surface_height,
                         });
                     }
-                    
+
                     let cached_tex = state.cached_texture.as_ref().unwrap();
 
                     window.queue.write_texture(
@@ -606,11 +618,15 @@ impl CameraWindowState {
                     let surface_height = surface_frame.texture.height();
 
                     let should_create_new = match state.cached_texture.as_ref() {
-                        Some(cached_tex) => cached_tex.width != surface_width || cached_tex.height != surface_height,
+                        Some(cached_tex) => {
+                            cached_tex.width != surface_width || cached_tex.height != surface_height
+                        }
                         None => true,
                     };
-                    
+
                     if should_create_new {
+                        println!("SHOULD CREATE NEW TEXTURE1");
+
                         let texture = window.device.create_texture(&wgpu::TextureDescriptor {
                             label: Some("Camera Texture"),
                             size: wgpu::Extent3d {
@@ -622,27 +638,30 @@ impl CameraWindowState {
                             sample_count: 1,
                             dimension: wgpu::TextureDimension::D2,
                             format: wgpu::TextureFormat::Rgba8Unorm,
-                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
                             view_formats: &[],
                         });
-                        
-                        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-                        
-                        let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("Texture Bind Group"),
-                            layout: &window.bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(&texture_view),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(&window.sampler),
-                                },
-                            ],
-                        });
-                        
+
+                        let texture_view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let bind_group =
+                            window.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("Texture Bind Group"),
+                                layout: &window.bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&window.sampler),
+                                    },
+                                ],
+                            });
+
                         state.cached_texture = Some(CachedTexture {
                             texture,
                             texture_view,
@@ -651,7 +670,7 @@ impl CameraWindowState {
                             height: surface_height,
                         });
                     }
-                    
+
                     let cached_tex = state.cached_texture.as_ref().unwrap();
 
                     // Create color data for #111111 (RGBA format)
@@ -704,13 +723,20 @@ pub fn camera_frame_sync_task() -> (
     flume::Sender<RawCameraFrame>,
     Arc<RwLock<Option<RawCameraFrame>>>,
 ) {
-    let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+    let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(2); // TODO: Make this 4???
     let frame = Arc::new(RwLock::new(None));
     let result = (camera_tx, frame.clone());
 
     tokio::spawn(async move {
         while let Ok(f) = camera_rx.recv_async().await {
-            *frame.write().unwrap_or_else(PoisonError::into_inner) = Some(f);
+            let mut lock = match frame.try_write() {
+                Ok(v) => v,
+                Err(TryLockError::Poisoned(v)) => v.into_inner(),
+                // We don't lock to try and reduce lag
+                Err(TryLockError::WouldBlock) => continue,
+            };
+
+            *lock = Some(f);
         }
     });
 
