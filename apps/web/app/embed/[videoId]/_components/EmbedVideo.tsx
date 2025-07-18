@@ -192,7 +192,7 @@ export const EmbedVideo = forwardRef<
               className="flex absolute left-6 top-16 z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 md:top-28 min-w-fit border-white/10 w-fit xs:flex text-white/80 hover:text-white bg-black/50"
               aria-label="Powered by Cap"
             >
-              <span className="text-sm text-white/80">Powered by</span>
+              <span className="text-xs md:text-sm text-white/80">Powered by</span>
               <Logo className="w-auto h-4" white={true} />
             </motion.button>
           )}
