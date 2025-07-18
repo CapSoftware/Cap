@@ -134,7 +134,8 @@ export const ShareVideo = forwardRef<
     <>
 
       <div className="relative h-full">
-        <CapVideoPlayer hlsVideo={videoType === "application/x-mpegURL"} mediaPlayerClassName="w-full rounded-xl h-full"
+        <CapVideoPlayer hlsVideo={videoType === "application/x-mpegURL"} mediaPlayerClassName="w-full h-full max-w-full max-h-full object-contain"
+
           videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
       </div>
 
