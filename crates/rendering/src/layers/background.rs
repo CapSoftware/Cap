@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
 use cap_project::BackgroundSource;
 use image::GenericImageView;
@@ -144,14 +142,14 @@ impl BackgroundLayer {
                                 });
 
                                 queue.write_texture(
-                                    wgpu::ImageCopyTexture {
+                                    wgpu::TexelCopyTextureInfo {
                                         texture: &texture,
                                         mip_level: 0,
                                         origin: wgpu::Origin3d::ZERO,
                                         aspect: wgpu::TextureAspect::All,
                                     },
                                     &rgba,
-                                    wgpu::ImageDataLayout {
+                                    wgpu::TexelCopyBufferLayout {
                                         offset: 0,
                                         bytes_per_row: Some(4 * dimensions.0),
                                         rows_per_image: Some(dimensions.1),
@@ -316,8 +314,6 @@ impl ImageBackgroundPipeline {
         });
         let shader = device.create_shader_module(include_wgsl!("../shaders/image-background.wgsl"));
 
-        let empty_constants: HashMap<String, f64> = HashMap::new();
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("ImageBackgroundPipeline"),
             layout: Some(
@@ -329,26 +325,24 @@ impl ImageBackgroundPipeline {
             ),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             }),
             primitive: wgpu::PrimitiveState {

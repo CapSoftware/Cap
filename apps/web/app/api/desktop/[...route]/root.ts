@@ -182,7 +182,7 @@ app.post(
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
-      metadata: { platform: "desktop" },
+      metadata: { platform: "desktop", dubCustomerId: user.id },
     });
 
     if (checkoutSession.url) {

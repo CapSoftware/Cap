@@ -191,6 +191,32 @@ export const organizationInvites = mysqlTable(
   })
 );
 
+export const folders = mysqlTable(
+  "folders",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    name: varchar("name", { length: 255 }).notNull(),
+    color: varchar("color", {
+      length: 16,
+      enum: ["normal", "blue", "red", "yellow"],
+    })
+      .notNull()
+      .default("normal"),
+    organizationId: nanoId("organizationId").notNull(),
+    createdById: nanoId("createdById").notNull(),
+    parentId: nanoIdNullable("parentId"),
+    spaceId: nanoIdNullable("spaceId"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    organizationIdIndex: index("organization_id_idx").on(table.organizationId),
+    createdByIdIndex: index("created_by_id_idx").on(table.createdById),
+    parentIdIndex: index("parent_id_idx").on(table.parentId),
+    spaceIdIndex: index("space_id_idx").on(table.spaceId),
+  })
+);
+
 export const videos = mysqlTable(
   "videos",
   {
@@ -220,11 +246,13 @@ export const videos = mysqlTable(
       >()
       .notNull()
       .default({ type: "MediaConvert" }),
+    folderId: nanoIdNullable("folderId"),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),
     ownerIdIndex: index("owner_id_idx").on(table.ownerId),
     publicIndex: index("is_public_idx").on(table.public),
+    folderIdIndex: index("folder_id_idx").on(table.folderId),
   })
 );
 
@@ -394,6 +422,10 @@ export const videosRelations = relations(videos, ({ one, many }) => ({
   }),
   sharedVideos: many(sharedVideos),
   spaceVideos: many(spaceVideos),
+  folder: one(folders, {
+    fields: [videos.folderId],
+    references: [folders.id],
+  }),
 }));
 
 export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
@@ -458,12 +490,14 @@ export const spaceVideos = mysqlTable(
   {
     id: nanoId("id").notNull().primaryKey().unique(),
     spaceId: nanoId("spaceId").notNull(),
+    folderId: nanoIdNullable("folderId"),
     videoId: nanoId("videoId").notNull(),
     addedById: nanoId("addedById").notNull(),
     addedAt: timestamp("addedAt").notNull().defaultNow(),
   },
   (table) => ({
     spaceIdIndex: index("space_id_idx").on(table.spaceId),
+    folderIdIndex: index("folder_id_idx").on(table.folderId),
     videoIdIndex: index("video_id_idx").on(table.videoId),
     addedByIdIndex: index("added_by_id_idx").on(table.addedById),
     spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
@@ -510,4 +544,22 @@ export const spaceVideosRelations = relations(spaceVideos, ({ one }) => ({
     fields: [spaceVideos.addedById],
     references: [users.id],
   }),
+}));
+
+export const foldersRelations = relations(folders, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [folders.organizationId],
+    references: [organizations.id],
+  }),
+  createdBy: one(users, {
+    fields: [folders.createdById],
+    references: [users.id],
+  }),
+  parentFolder: one(folders, {
+    fields: [folders.parentId],
+    references: [folders.id],
+    relationName: "parentChild",
+  }),
+  childFolders: many(folders, { relationName: "parentChild" }),
+  videos: many(videos),
 }));

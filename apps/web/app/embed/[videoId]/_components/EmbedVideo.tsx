@@ -502,6 +502,8 @@ export const EmbedVideo = forwardRef<
       const percentage = Math.max(0, Math.min(1, clickX / rect.width));
       const seekTime = percentage * longestDuration;
 
+      console.log(seekTime, 'seek time')
+
       videoRef.current.currentTime = seekTime;
       setCurrentTime(seekTime);
     };
@@ -512,24 +514,28 @@ export const EmbedVideo = forwardRef<
       handleSeek(e);
     };
 
-    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (isDragging) {
-        handleSeek(e);
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-    };
-
+    // Global timeline scrubbing
     useEffect(() => {
-      if (isDragging) {
-        const handleGlobalMouseUp = () => setIsDragging(false);
-        document.addEventListener("mouseup", handleGlobalMouseUp);
-        return () =>
-          document.removeEventListener("mouseup", handleGlobalMouseUp);
-      }
-    }, [isDragging]);
+      if (!isDragging) return;
+      const handleGlobalMouseMove = (e: MouseEvent) => {
+        if (!timelineRef.current || !videoRef.current || longestDuration === 0) return;
+        const rect = timelineRef.current.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const percentage = Math.max(0, Math.min(1, x / rect.width));
+        const seekTime = percentage * longestDuration;
+        videoRef.current.currentTime = seekTime;
+        setCurrentTime(seekTime);
+      };
+      const handleGlobalMouseUp = () => {
+        setIsDragging(false);
+      };
+      document.addEventListener("mousemove", handleGlobalMouseMove);
+      document.addEventListener("mouseup", handleGlobalMouseUp);
+      return () => {
+        document.removeEventListener("mousemove", handleGlobalMouseMove);
+        document.removeEventListener("mouseup", handleGlobalMouseUp);
+      };
+    }, [isDragging, longestDuration]);
 
     const handleChapterSeek = (chapterStart: number) => {
       if (!videoRef.current) return;
@@ -583,12 +589,11 @@ export const EmbedVideo = forwardRef<
     return (
       <div
         id="embed-video-container"
-        className="relative w-screen h-screen bg-black overflow-hidden group"
+        className="overflow-hidden relative w-screen h-screen bg-black group"
       >
         <div
-          className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
-            isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-          }`}
+          className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+            }`}
         >
           <LogoSpinner className="w-8 h-auto animate-spin xs:w-10" />
         </div>
@@ -602,13 +607,12 @@ export const EmbedVideo = forwardRef<
           </div>
           {!isLoading && (
             <div
-              className={`absolute inset-0 z-20 flex flex-col items-center justify-center transition-opacity duration-300 ${
-                (overlayVisible && isPlaying) ||
+              className={`absolute inset-0 z-20 flex flex-col items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) ||
                 tempOverlayVisible ||
                 !isPlaying
-                  ? "opacity-100"
-                  : "opacity-0"
-              }`}
+                ? "opacity-100"
+                : "opacity-0"
+                }`}
             >
               <button
                 aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -621,12 +625,12 @@ export const EmbedVideo = forwardRef<
                   }
                 }}
               >
-                <div className="flex flex-col items-center gap-4">
+                <div className="flex flex-col gap-4 items-center">
                   <AnimatePresence initial={false} mode="popLayout">
                     {isPlaying ? (
                       <motion.div
                         key="pause-button"
-                        className="flex relative z-30 justify-center items-center size-16 xs:size-20 md:size-24 bg-black bg-opacity-60 rounded-full"
+                        className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-16 xs:size-20 md:size-24"
                         initial={{ opacity: 0, scale: 0 }}
                         animate={{
                           scale: 1,
@@ -640,7 +644,7 @@ export const EmbedVideo = forwardRef<
                     ) : (
                       <motion.div
                         key="play-button"
-                        className="flex relative z-30 justify-center items-center size-16 xs:size-20 md:size-24 bg-black bg-opacity-60 rounded-full"
+                        className="flex relative z-30 justify-center items-center bg-black bg-opacity-60 rounded-full size-16 xs:size-20 md:size-24"
                         initial={{ opacity: 0, scale: 0 }}
                         animate={{
                           scale: 1,
@@ -664,7 +668,7 @@ export const EmbedVideo = forwardRef<
                         e.stopPropagation();
                         window.open("https://cap.so", "_blank");
                       }}
-                      className="hidden xs:flex items-center gap-2 text-white/80 hover:text-white transition-colors duration-200 text-sm bg-black/50 px-3 py-2 rounded-full backdrop-blur-sm"
+                      className="hidden gap-2 items-center px-3 py-2 text-sm rounded-full backdrop-blur-sm transition-colors duration-200 xs:flex text-white/80 hover:text-white bg-black/50"
                       aria-label="Powered by Cap"
                     >
                       <span className="text-sm text-white/80">Powered by</span>
@@ -686,15 +690,15 @@ export const EmbedVideo = forwardRef<
                 className="absolute top-2 left-2 xs:top-6 xs:left-6 z-30 max-w-[calc(100%-1rem)] xs:max-w-2xl"
               >
                 <div className="bg-gradient-to-r from-black/70 to-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
-                  <div className="flex items-center gap-2 sm:gap-3">
+                  <div className="flex gap-2 items-center sm:gap-3">
                     {ownerName && (
                       <Avatar
                         name={ownerName}
-                        className="hidden xs:flex xs:size-10 flex-shrink-0"
+                        className="hidden flex-shrink-0 xs:flex xs:size-10"
                         letterClass="xs:text-base font-medium"
                       />
                     )}
-                    <div className="min-w-0 flex-1">
+                    <div className="flex-1 min-w-0">
                       <a
                         href={`/s/${data.id}`}
                         target="_blank"
@@ -702,21 +706,21 @@ export const EmbedVideo = forwardRef<
                         className="block"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <h1 className="text-white text-sm sm:text-xl md:text-2xl font-semibold leading-tight truncate hover:underline transition-all duration-200 cursor-pointer">
+                        <h1 className="text-sm font-semibold leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
                           {data.name}
                         </h1>
                       </a>
                       <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
                         {ownerName && (
-                          <p className="text-gray-300 text-xs sm:text-sm font-medium truncate">
+                          <p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
                             {ownerName}
                           </p>
                         )}
                         {ownerName && longestDuration > 0 && (
-                          <span className="text-gray-400 text-xs">•</span>
+                          <span className="text-xs text-gray-400">•</span>
                         )}
                         {longestDuration > 0 && (
-                          <p className="text-gray-300 text-xs sm:text-sm">
+                          <p className="text-xs text-gray-300 sm:text-sm">
                             {formatTime(longestDuration)}
                           </p>
                         )}
@@ -730,11 +734,10 @@ export const EmbedVideo = forwardRef<
 
           {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
             <div
-              className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
-                overlayVisible
-                  ? "bottom-24 xs:bottom-24"
-                  : "bottom-8 xs:bottom-8"
-              }`}
+              className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible
+                ? "bottom-24 xs:bottom-24"
+                : "bottom-8 xs:bottom-8"
+                }`}
             >
               <div className="inline px-3 py-2 text-base text-white bg-black bg-opacity-75 rounded-xl xs:text-lg md:text-2xl max-w-[90%] xs:max-w-none">
                 {currentSubtitle.text
@@ -752,11 +755,11 @@ export const EmbedVideo = forwardRef<
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
-                className="hidden xs:flex absolute top-4 left-4 xs:top-6 xs:left-6 z-30"
+                className="hidden absolute top-4 left-4 z-30 xs:flex xs:top-6 xs:left-6"
               >
                 <button
                   onClick={() => window.open("https://cap.so", "_blank")}
-                  className="opacity-30 hover:opacity-100 transition-opacity duration-200 cursor-pointer"
+                  className="opacity-30 transition-opacity duration-200 cursor-pointer hover:opacity-100"
                   aria-label="Powered by Cap"
                 >
                   <Logo className="w-auto h-6 xs:h-8" white={true} />
@@ -767,18 +770,14 @@ export const EmbedVideo = forwardRef<
         </div>
 
         <div
-          className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-            overlayVisible ? "bottom-[68px] xs:bottom-[60px]" : "bottom-0"
-          }`}
+          className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[68px] xs:bottom-[60px]" : "bottom-0"
+            }`}
         >
           <div
             ref={timelineRef}
-            className="h-8 xs:h-6 cursor-pointer px-4 py-2 xs:py-0 touch-manipulation"
+            className="px-4 py-2 h-8 cursor-pointer xs:h-6 xs:py-0 touch-manipulation"
             onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
             onTouchStart={(e) => {
-              e.preventDefault();
               const touch = e.touches[0];
               const rect = timelineRef.current?.getBoundingClientRect();
               if (rect && touch) {
@@ -796,7 +795,6 @@ export const EmbedVideo = forwardRef<
             }}
             onTouchMove={(e) => {
               if (isDragging) {
-                e.preventDefault();
                 const touch = e.touches[0];
                 const rect = timelineRef.current?.getBoundingClientRect();
                 if (rect && touch) {
@@ -840,7 +838,7 @@ export const EmbedVideo = forwardRef<
                   return (
                     <div
                       key={comment.id}
-                      className="absolute z-10 text-sm transition-all hover:scale-125 active:scale-110 -mt-5 md:-mt-5 touch-manipulation"
+                      className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 active:scale-110 md:-mt-5 touch-manipulation"
                       style={{
                         left: `${commentPosition}%`,
                       }}
@@ -877,21 +875,13 @@ export const EmbedVideo = forwardRef<
                     const chapterWidth =
                       (chapterDuration / longestDuration) * 100;
 
-                    const chapterProgress = Math.max(
-                      0,
-                      Math.min(
-                        (currentTime - chapterStart) / chapterDuration,
-                        1
-                      )
-                    );
-
                     const isCurrentChapter =
                       currentTime >= chapterStart && currentTime < chapterEnd;
 
                     return (
                       <div
                         key={chapter.start}
-                        className="relative h-full cursor-pointer group"
+                        className="h-full cursor-pointer group"
                         style={{ width: `${chapterWidth}%` }}
                         onClick={(e) => {
                           e.stopPropagation();
@@ -899,7 +889,7 @@ export const EmbedVideo = forwardRef<
                         }}
                       >
                         <div
-                          className="w-full h-full bg-gray-400 bg-opacity-50 group-hover:bg-opacity-70 transition-colors"
+                          className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
                           style={{
                             boxShadow: "0 0 20px rgba(0,0,0,0.6)",
                             borderRight:
@@ -910,12 +900,9 @@ export const EmbedVideo = forwardRef<
                         />
                         {isCurrentChapter && (
                           <div
-                            className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                            style={{ width: `${chapterProgress * 100}%` }}
+                            className="absolute top-0 left-0 h-full bg-white"
+                            style={{ width: `${watchedPercentage}%` }}
                           />
-                        )}
-                        {currentTime > chapterEnd && (
-                          <div className="absolute top-0 left-0 w-full h-full bg-white" />
                         )}
                       </div>
                     );
@@ -948,9 +935,8 @@ export const EmbedVideo = forwardRef<
         </div>
 
         <div
-          className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
-            overlayVisible ? "translate-y-0" : "translate-y-full"
-          }`}
+          className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
+            }`}
           onMouseEnter={() => {
             setIsHoveringControls(true);
           }}
@@ -958,7 +944,7 @@ export const EmbedVideo = forwardRef<
             setIsHoveringControls(false);
           }}
         >
-          <div className="flex justify-between items-center px-3 xs:px-4 py-3 xs:py-3">
+          <div className="flex justify-between items-center px-3 py-3 xs:px-4 xs:py-3">
             <div className="flex items-center space-x-2 xs:space-x-3">
               <button
                 aria-label="Play video"
@@ -973,7 +959,7 @@ export const EmbedVideo = forwardRef<
                   <Play className="w-auto h-6 xs:h-5 md:h-6" />
                 )}
               </button>
-              <div className="text-xs xs:text-sm text-white font-medium select-none tabular">
+              <div className="text-xs font-medium text-white select-none xs:text-sm tabular">
                 {formatTime(currentTime)} / {formatTime(longestDuration)}
               </div>
             </div>
@@ -1139,9 +1125,8 @@ export const EmbedVideo = forwardRef<
             subscriptionStatus: user.stripeSubscriptionStatus,
           }) && (
             <div
-              className={`absolute top-4 z-30 transition-all duration-300 ${
-                showTitleOverlay ? "right-4" : "left-4"
-              }`}
+              className={`absolute top-4 z-30 transition-all duration-300 ${showTitleOverlay ? "right-4" : "left-4"
+                }`}
             >
               <div
                 className="block cursor-pointer"
@@ -1156,9 +1141,8 @@ export const EmbedVideo = forwardRef<
                   </div>
 
                   <div
-                    className={`absolute top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100 ${
-                      showTitleOverlay ? "right-0" : "left-0"
-                    }`}
+                    className={`absolute top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100 ${showTitleOverlay ? "right-0" : "left-0"
+                      }`}
                   >
                     <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
                       Remove watermark

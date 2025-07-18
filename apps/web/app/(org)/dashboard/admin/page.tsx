@@ -1,25 +1,13 @@
-"use client";
+import { redirect } from "next/navigation";
+import { getCurrentUser } from "@cap/database/auth/session";
+import AdminDashboardClient from "./AdminDashboardClient";
 
-import { useState } from "react";
-import { lookupUserById } from "./actions";
+export default async function AdminDashboard() {
+  const currentUser = await getCurrentUser();
 
-export default function () {
-  const [data, setData] = useState<any>(null);
+  if (currentUser?.email !== "richie@mcilroy.co") {
+    redirect("/dashboard");
+  }
 
-  return (
-    <div>
-      <label>Lookup user by ID</label>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          lookupUserById(new FormData(e.currentTarget)).then(setData);
-        }}
-      >
-        <input type="text" name="id" />
-        <button type="submit">Lookup</button>
-      </form>
-
-      {data && <pre>{JSON.stringify(data, null, 4)}</pre>}
-    </div>
-  );
+  return <AdminDashboardClient />;
 }

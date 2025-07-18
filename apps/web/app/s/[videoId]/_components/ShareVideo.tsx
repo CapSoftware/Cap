@@ -117,6 +117,40 @@ export const ShareVideo = forwardRef<
     videoMetadataLoaded
   );
 
+  // Global timeline seeking (desktop)
+  useEffect(() => {
+    if (!seeking) return;
+    const timeline = document.getElementById("seek");
+    if (!timeline) return;
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseMove
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseMove(syntheticEvent);
+    };
+    const handleGlobalMouseUp = (e: MouseEvent) => {
+      // Synthesize a React-like event for handleSeekMouseUp
+      const rect = timeline.getBoundingClientRect();
+      const syntheticEvent = {
+        ...e,
+        currentTarget: timeline,
+        clientX: e.clientX,
+      } as unknown as React.MouseEvent<HTMLDivElement>;
+      handleSeekMouseUp(syntheticEvent);
+    };
+    document.addEventListener("mousemove", handleGlobalMouseMove);
+    document.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleGlobalMouseMove);
+      document.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, [seeking]);
+
   // Update isMP4Source based on query result
   useEffect(() => {
     if (videoSourceData) {
@@ -274,79 +308,78 @@ export const ShareVideo = forwardRef<
     };
   }, []);
 
-  const handlePlayPauseClick = async () => {
+  const handlePlayPauseClick = async (): Promise<void> => {
     const videoElement = videoRef.current;
-
     if (!videoElement) return;
 
     if (isPlaying) {
       videoElement.pause();
       setIsPlaying(false);
-    } else {
-      try {
-        if (!videoReadyToPlay) {
+      setTempOverlayVisible(true); // Show overlay briefly on pause
+      return;
+    }
+
+    if (!videoReadyToPlay) {
+      console.warn('Video is not ready to play yet.');
+      return;
+    }
+
+    const currentPosition = videoElement.currentTime;
+
+    try {
+      videoElement.muted = userMuted;
+
+      await videoElement.play();
+      setIsPlaying(true);
+      setTempOverlayVisible(true); // Show overlay briefly on play
+      scheduleHideControls(); // Schedule hiding controls after play
+
+      if (videoElement.currentTime === 0 && currentPosition > 0) {
+        videoElement.currentTime = currentPosition;
+      }
+
+      if (videoElement.muted !== userMuted) {
+        setUserMuted(videoElement.muted);
+      }
+    } catch (error: unknown) {
+      const playError = error as DOMException;
+      console.error('Error playing video:', playError);
+
+      if (playError.name === 'NotAllowedError') {
+        try {
+          videoElement.muted = true;
+          await videoElement.play();
           setIsPlaying(true);
-        } else {
+          setUserMuted(true);
+          setTempOverlayVisible(true);
+          scheduleHideControls();
+
+          if (videoElement.currentTime === 0 && currentPosition > 0) {
+            videoElement.currentTime = currentPosition;
+          }
+
           if (!userMuted) {
-            videoElement.muted = false;
+            requestAnimationFrame(() => {
+              try {
+                videoElement.muted = false;
+                setUserMuted(false);
+              } catch (err) {
+                console.error('Error unmuting video:', err);
+              }
+            });
           }
-
-          const currentPosition = videoElement.currentTime;
-
-          const playPromise = videoElement.play();
-
-          if (playPromise !== undefined) {
-            playPromise
-              .then(() => {
-                setIsPlaying(true);
-
-                if (videoElement.currentTime === 0 && currentPosition > 0) {
-                  videoElement.currentTime = currentPosition;
-                }
-              })
-              .catch((error) => {
-                console.error("Error with playing:", error);
-
-                if (error.name === "NotAllowedError") {
-                  videoElement.muted = true;
-                  videoElement
-                    .play()
-                    .then(() => {
-                      setIsPlaying(true);
-                      if (!userMuted) {
-                        setTimeout(() => {
-                          videoElement.muted = false;
-                        }, 100);
-                      }
-
-                      if (
-                        videoElement.currentTime === 0 &&
-                        currentPosition > 0
-                      ) {
-                        videoElement.currentTime = currentPosition;
-                      }
-                    })
-                    .catch((innerError) => {
-                      console.error(
-                        "Still can't play even with muted:",
-                        innerError
-                      );
-                    });
-                }
-              });
-          } else {
-            setIsPlaying(true);
-
-            if (videoElement.currentTime === 0 && currentPosition > 0) {
-              videoElement.currentTime = currentPosition;
-            }
-          }
+        } catch (mutedError: unknown) {
+          console.error('Failed to play video even with mute:', mutedError);
+          setIsPlaying(false);
+          setTempOverlayVisible(true);
         }
-      } catch (error) {
-        console.error("Error with playing:", error);
+      } else {
+        setIsPlaying(false);
+        setTempOverlayVisible(true);
       }
     }
   };
+
 
   const applyTimeToVideos = (time: number) => {
     if (!Number.isFinite(time)) {
@@ -386,7 +419,9 @@ export const ShareVideo = forwardRef<
 
     videoElement.addEventListener("timeupdate", handleTimeUpdate);
     const handleEnded = () => {
-      setIsPlaying(false);
+      if (videoRef.current && videoRef.current.currentTime === videoRef.current.duration) {
+        setIsPlaying(false);
+      }
     };
     videoElement.addEventListener("ended", handleEnded);
 
@@ -506,123 +541,110 @@ export const ShareVideo = forwardRef<
   }, [isMP4Source, data, previewWidth, previewHeight, isLargeScreen]);
 
   const updatePreviewFrame = (time: number) => {
-    if (!isLargeScreen) return;
+    if (!isLargeScreen || !isMP4Source) return;
 
-    if (!isMP4Source) return;
     setPreviewTime(time);
 
-    if (isPreviewSeeking) {
-      return;
-    }
+    if (isPreviewSeeking) return;
 
-    try {
-      if (scrubbingVideo && previewCanvasRef.current) {
-        const canvas = previewCanvasRef.current;
-        const ctx = canvas.getContext("2d");
+    const drawFrame = () => {
+      try {
+        if (scrubbingVideo && previewCanvasRef.current) {
+          const canvas = previewCanvasRef.current;
+          const ctx = canvas.getContext("2d");
 
-        if (ctx) {
-          if (
-            canvas.width !== previewWidth ||
-            canvas.height !== previewHeight
-          ) {
-            canvas.width = previewWidth;
-            canvas.height = previewHeight;
-          }
-
-          setIsPreviewSeeking(true);
-
-          scrubbingVideo.currentTime = time;
-
-          const handleSeeked = () => {
-            try {
-              ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
-
-              ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-              ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
-              ctx.fillStyle = "white";
-              ctx.font = "12px Arial";
-              ctx.textAlign = "center";
-              ctx.fillText(
-                formatTime(time),
-                canvas.width / 2,
-                canvas.height - 6
-              );
-
-              setPreviewLoaded(true);
-              setIsPreviewSeeking(false);
-            } catch (err) {
-              console.error("Error drawing frame:", err);
-              setIsPreviewSeeking(false);
+          if (ctx) {
+            // Ensure canvas dimensions match preview size
+            if (canvas.width !== previewWidth || canvas.height !== previewHeight) {
+              canvas.width = previewWidth;
+              canvas.height = previewHeight;
             }
 
-            scrubbingVideo.removeEventListener("seeked", handleSeeked);
-          };
+            setIsPreviewSeeking(true);
+            scrubbingVideo.currentTime = time;
 
-          scrubbingVideo.addEventListener("seeked", handleSeeked);
-
-          const timeoutId = setTimeout(() => {
-            if (isPreviewSeeking) {
+            const handleSeeked = () => {
               try {
-                ctx.drawImage(
-                  scrubbingVideo,
-                  0,
-                  0,
-                  canvas.width,
-                  canvas.height
-                );
+                // Draw the video frame
+                ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
 
+                // Draw time overlay
                 ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
                 ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
                 ctx.fillStyle = "white";
                 ctx.font = "12px Arial";
                 ctx.textAlign = "center";
-                ctx.fillText(
-                  formatTime(time),
-                  canvas.width / 2,
-                  canvas.height - 6
-                );
+                ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
 
                 setPreviewLoaded(true);
               } catch (err) {
-                console.error("Error drawing frame after timeout:", err);
+                console.error("Error drawing frame:", err);
               } finally {
                 setIsPreviewSeeking(false);
                 scrubbingVideo.removeEventListener("seeked", handleSeeked);
               }
+            };
+
+            scrubbingVideo.addEventListener("seeked", handleSeeked);
+
+            // Fallback if seeked event doesn't fire within 250ms
+            const timeoutId = setTimeout(() => {
+              if (isPreviewSeeking) {
+                try {
+                  ctx.drawImage(scrubbingVideo, 0, 0, canvas.width, canvas.height);
+                  ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                  ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+                  ctx.fillStyle = "white";
+                  ctx.font = "12px Arial";
+                  ctx.textAlign = "center";
+                  ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
+                  setPreviewLoaded(true);
+                } catch (err) {
+                  console.error("Error drawing frame after timeout:", err);
+                } finally {
+                  setIsPreviewSeeking(false);
+                  scrubbingVideo.removeEventListener("seeked", handleSeeked);
+                }
+              }
+            }, 250);
+
+            return () => clearTimeout(timeoutId);
+          }
+        } else if (videoRef.current && previewCanvasRef.current) {
+          const canvas = previewCanvasRef.current;
+          const video = videoRef.current;
+          const ctx = canvas.getContext("2d");
+
+          if (ctx) {
+            try {
+              canvas.width = previewWidth;
+              canvas.height = previewHeight;
+
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+              ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
+              ctx.fillStyle = "white";
+              ctx.font = "12px Arial";
+              ctx.textAlign = "center";
+              ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
+
+              setPreviewLoaded(true);
+            } catch (err) {
+              console.error("Error in fallback video capture:", err);
             }
-          }, 250);
-
-          return () => clearTimeout(timeoutId);
-        }
-      } else if (videoRef.current && previewCanvasRef.current) {
-        const canvas = previewCanvasRef.current;
-        const video = videoRef.current;
-        const ctx = canvas.getContext("2d");
-
-        if (ctx) {
-          try {
-            canvas.width = previewWidth;
-            canvas.height = previewHeight;
-
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
-            ctx.fillRect(0, canvas.height - 20, canvas.width, 20);
-            ctx.fillStyle = "white";
-            ctx.font = "12px Arial";
-            ctx.textAlign = "center";
-            ctx.fillText(formatTime(time), canvas.width / 2, canvas.height - 6);
-
-            setPreviewLoaded(true);
-          } catch (err) {
-            console.error("Error in fallback video capture:", err);
           }
         }
+      } catch (err) {
+        console.error("Error updating preview frame:", err);
+        setIsPreviewSeeking(false);
       }
-    } catch (err) {
-      console.error("Error updating preview frame:", err);
-      setIsPreviewSeeking(false);
-    }
+    };
+
+    // Schedule the frame drawing with requestAnimationFrame
+    const rafId = requestAnimationFrame(drawFrame);
+
+    // Cleanup to cancel any pending animation frame
+    return () => cancelAnimationFrame(rafId);
   };
 
   const handleTimelineHover = (
@@ -955,9 +977,8 @@ export const ShareVideo = forwardRef<
       className="overflow-hidden relative w-full h-full rounded-lg shadow-lg group"
     >
       <div
-        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${
-          isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
-        }`}
+        className={`absolute inset-0 flex items-center justify-center z-10 bg-black transition-opacity duration-300 ${isLoading ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
       >
         <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
       </div>
@@ -971,11 +992,10 @@ export const ShareVideo = forwardRef<
         </div>
         {!isLoading && (
           <div
-            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
-              (overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
-                ? "opacity-100"
-                : "opacity-0"
-            }`}
+            className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${(overlayVisible && isPlaying) || tempOverlayVisible || !isPlaying
+              ? "opacity-100"
+              : "opacity-0"
+              }`}
           >
             <button
               aria-label={isPlaying ? "Pause video" : "Play video"}
@@ -1024,9 +1044,8 @@ export const ShareVideo = forwardRef<
         )}
         {currentSubtitle && currentSubtitle.text && subtitlesVisible && (
           <div
-            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${
-              overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
-            }`}
+            className={`absolute z-10 p-2 w-full text-center transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-16 sm:bottom-20" : "bottom-6 sm:bottom-8"
+              }`}
           >
             <div className="inline px-2 py-1 text-sm text-white bg-black bg-opacity-75 rounded-xl sm:text-lg md:text-2xl">
               {currentSubtitle.text
@@ -1109,21 +1128,13 @@ export const ShareVideo = forwardRef<
       )}
 
       <div
-        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${
-          overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
-        }`}
+        className={`absolute left-0 right-0 z-30 transition-all duration-300 ease-in-out ${overlayVisible ? "bottom-[40px] md:bottom-[60px]" : "bottom-1"
+          }`}
       >
         <div
           id="seek"
           className="h-6 cursor-pointer"
           onMouseDown={handleSeekMouseDown}
-          onMouseMove={(e) => {
-            handleSeekMouseMove(e);
-          }}
-          onMouseUp={handleSeekMouseUp}
-          onMouseLeave={() => {
-            setSeeking(false);
-          }}
           onTouchStart={handleSeekMouseDown}
           onTouchMove={(e) => {
             handleSeekMouseMove(e);
@@ -1144,79 +1155,51 @@ export const ShareVideo = forwardRef<
             onMouseMove={handleTimelineHover}
             onMouseLeave={handleTimelineLeave}
           >
+            {/* Render chapter backgrounds */}
             {chapters.length > 0 && longestDuration > 0 ? (
               <div className="absolute top-2.5 w-full h-1 sm:h-1.5 z-10 flex">
                 {chapters.map((chapter, index) => {
                   const nextChapter = chapters[index + 1];
                   const chapterStart = chapter.start;
-                  const chapterEnd = nextChapter
-                    ? nextChapter.start
-                    : longestDuration;
+                  const chapterEnd = nextChapter ? nextChapter.start : longestDuration;
                   const chapterDuration = chapterEnd - chapterStart;
-                  const chapterWidth =
-                    (chapterDuration / longestDuration) * 100;
-
-                  const chapterProgress = Math.max(
-                    0,
-                    Math.min((currentTime - chapterStart) / chapterDuration, 1)
-                  );
-
-                  const isCurrentChapter =
-                    currentTime >= chapterStart && currentTime < chapterEnd;
-
+                  const chapterWidth = (chapterDuration / longestDuration) * 100;
                   return (
                     <div
                       key={chapter.start}
                       className="relative h-full cursor-pointer group"
-                      style={{ width: `${chapterWidth}%` }}
+                      style={{
+                        width: `${chapterWidth}%`,
+                        background: "rgba(156, 163, 175, 0.5)", // bg-gray-400 bg-opacity-50
+                        borderRight:
+                          index < chapters.length - 1
+                            ? "1px solid rgba(255,255,255,0.3)"
+                            : "none",
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         applyTimeToVideos(chapter.start);
                       }}
-                    >
-                      <div
-                        className="w-full h-full bg-gray-400 bg-opacity-50 transition-colors group-hover:bg-opacity-70"
-                        style={{
-                          boxShadow: "0 0 20px rgba(0,0,0,0.6)",
-                          borderRight:
-                            index < chapters.length - 1
-                              ? "1px solid rgba(255,255,255,0.3)"
-                              : "none",
-                        }}
-                      />
-                      {isCurrentChapter && (
-                        <div
-                          className="absolute top-0 left-0 h-full bg-white transition-all duration-100"
-                          style={{ width: `${chapterProgress * 100}%` }}
-                        />
-                      )}
-                      {currentTime > chapterEnd && (
-                        <div className="absolute top-0 left-0 w-full h-full bg-white" />
-                      )}
-                    </div>
+                    />
                   );
                 })}
               </div>
             ) : (
-              <>
-                <div
-                  style={{ boxShadow: "0 0 20px rgba(0,0,0,0.6)" }}
-                  className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10"
-                />
-                <div
-                  className="absolute top-2.5 h-1 sm:h-1.5 bg-white cursor-pointer z-10"
-                  style={{ width: `${watchedPercentage}%` }}
-                />
-              </>
+              <div className="absolute top-2.5 w-full h-1 sm:h-1.5 bg-gray-400 bg-opacity-50 z-10" />
             )}
-
+            {/* Render the main progress bar (white) */}
+            <div
+              className="absolute top-2.5 h-1 sm:h-1.5 bg-white z-20"
+              style={{ width: `${Math.max(0, Math.min(watchedPercentage + 0.82, 99.15))}%` }}
+            />
             <div
               style={{
                 boxShadow: "0 0 20px rgba(0,0,0,0.1)",
-                left: `${watchedPercentage}%`,
+                left: `calc(${Math.max(0, Math.min(watchedPercentage + 0.82, 99.15))}% )`,
               }}
               className={clsx(
-                "drag-button absolute top-2 z-20 -mt-1.5 -ml-2 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5",
+                "drag-button absolute top-2 z-20 mx-auto -mt-1.5 w-5 h-5 bg-white rounded-full cursor-pointer focus:outline-none border-2 border-gray-5 -translate-x-1/2",
+
                 seeking
                   ? "scale-125 transition-transform ring-blue-300 ring-offset-2 ring-2"
                   : ""
@@ -1228,9 +1211,8 @@ export const ShareVideo = forwardRef<
       </div>
 
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${
-          overlayVisible ? "translate-y-0" : "translate-y-full"
-        }`}
+        className={`absolute bottom-0 left-0 right-0 bg-black bg-opacity-60 z-20 transition-transform duration-300 ease-in-out ${overlayVisible ? "translate-y-0" : "translate-y-full"
+          }`}
         onMouseEnter={() => {
           setIsHoveringControls(true);
         }}
@@ -1283,7 +1265,7 @@ export const ShareVideo = forwardRef<
               <span className="inline-flex">
                 <button
                   aria-label={`Change video speed to ${videoSpeed}x`}
-                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
+                  className="inline-flex min-w-[35px] sm:min-w-[45px] items-center text-xs sm:text-sm font-medium transition ease-in-out duration-150 focus:outline-none border text-gray-100 border-transparent hover:text-white focus:border-white hover:bg-gray-100 hover:bg-opacity-10 active:bg-gray-100 active:bg-opacity-10 px-1 sm:px-2 py-1 sm:py-2 justify-center rounded-lg"
                   tabIndex={0}
                   type="button"
                   onClick={handleSpeedChange}
@@ -1597,7 +1579,7 @@ function CommentIndicators(props: {
         return (
           <div
             key={comment.id}
-            className="absolute z-10 text-sm transition-all hover:scale-125 -mt-5 md:-mt-5"
+            className="absolute z-10 -mt-5 text-sm transition-all hover:scale-125 md:-mt-5"
             style={{
               left: `${commentPosition}%`,
             }}

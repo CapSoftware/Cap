@@ -5,7 +5,6 @@ import {
 } from "@/utils/platform";
 import { Button } from "@cap/ui";
 import clsx from "clsx";
-import { motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
 import { useState } from "react";

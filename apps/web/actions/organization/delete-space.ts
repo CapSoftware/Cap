@@ -2,7 +2,12 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces, spaceMembers, spaceVideos } from "@cap/database/schema";
+import {
+  spaces,
+  spaceMembers,
+  spaceVideos,
+  folders,
+} from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createBucketProvider } from "@/utils/s3";
@@ -50,13 +55,17 @@ export async function deleteSpace(
     }
 
     // Delete in order to maintain referential integrity:
+
     // 1. First delete all space videos
     await db().delete(spaceVideos).where(eq(spaceVideos.spaceId, spaceId));
 
     // 2. Delete all space members
     await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 
-    // 3. Delete space icons from S3
+    // 3. Delete all space folders
+    await db().delete(folders).where(eq(folders.spaceId, spaceId));
+
+    // 4. Delete space icons from S3
     try {
       const bucketProvider = await createBucketProvider();
 

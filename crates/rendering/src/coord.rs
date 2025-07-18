@@ -84,8 +84,6 @@ impl Coord<RawDisplaySpace> {
     }
 }
 
-fn frame_size() {}
-
 impl Coord<CroppedDisplaySpace> {
     pub fn to_frame_space(
         &self,

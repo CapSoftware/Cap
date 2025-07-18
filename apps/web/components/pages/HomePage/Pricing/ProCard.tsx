@@ -223,7 +223,7 @@ export const ProCard = () => {
       </div>
 
       <Button
-        variant="white"
+        variant="blue"
         size="lg"
         onClick={() => planCheckout()}
         disabled={proLoading}

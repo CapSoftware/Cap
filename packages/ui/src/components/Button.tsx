@@ -4,7 +4,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "flex items-center justify-center rounded-full cursor-pointer font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
+  "flex items-center justify-center rounded-full disabled:cursor-not-allowed cursor-pointer font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
   {
     defaultVariants: {
       variant: "primary",
@@ -12,12 +12,12 @@ const buttonVariants = cva(
     },
     variants: {
       variant: {
-        primary: "bg-gray-12 text-gray-1 hover:bg-gray-11",
+        primary: "bg-gray-12 text-gray-1 hover:bg-gray-11 disabled:bg-gray-6 disabled:text-gray-9",
         blue: "bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-200 disabled:text-gray-8",
         destructive:
           "bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
         white: "bg-gray-1 text-gray-12 hover:bg-gray-2 disabled:bg-gray-8",
-        gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-1",
+        gray: "bg-gray-4 text-gray-12 hover:bg-gray-5 disabled:bg-gray-6 disabled:text-gray-9",
         dark: "bg-gray-12 text-gray-1 disabled:cursor-not-allowed hover:bg-gray-11 disabled:text-gray-10 disabled:bg-gray-7 disabled:border-gray-8",
         darkgradient:
           "bg-gradient-to-t button-gradient-border from-[#0f0f0f] to-[#404040] shadow-[0_0_0_1px] hover:brightness-110 shadow-[#383838] text-gray-50 hover:bg-[#383838] disabled:bg-[#383838] border-transparent",

@@ -171,7 +171,7 @@ impl CompletedRecording {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn list_capture_screens() -> Vec<CaptureScreen> {
+pub async fn list_capture_screens() -> Vec<CaptureScreen> {
     cap_media::sources::list_screens()
         .into_iter()
         .map(|(v, _)| v)
@@ -180,7 +180,7 @@ pub fn list_capture_screens() -> Vec<CaptureScreen> {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn list_capture_windows() -> Vec<CaptureWindow> {
+pub async fn list_capture_windows() -> Vec<CaptureWindow> {
     cap_media::sources::list_windows()
         .into_iter()
         .map(|(v, _)| v)

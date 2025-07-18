@@ -569,9 +569,7 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "windows")]
         {
-            if !id.should_have_decorations() {
-                builder = builder.decorations(false);
-            }
+            builder = builder.decorations(false);
         }
 
         builder

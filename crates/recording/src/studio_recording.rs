@@ -5,32 +5,26 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use cap_flags::FLAGS;
 use cap_media::{
-    data::{AudioInfo, FFAudio, VideoInfo},
+    data::VideoInfo,
     encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
-    sources::{
-        AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureSource,
-        ScreenCaptureTarget,
-    },
+    sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
     MediaError,
 };
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
-use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::Receiver;
-use futures::{future::OptionFuture, StreamExt};
 use relative_path::RelativePathBuf;
 use tokio::sync::{oneshot, Mutex};
-use tracing::{debug, info, trace, Instrument};
+use tracing::{debug, info, trace};
 
 use crate::{
     capture_pipeline::{create_screen_capture, MakeCapturePipeline, ScreenCaptureMethod},
     cursor::{spawn_cursor_recorder, CursorActor, Cursors},
-    ActorError, RecordingBaseInputs, RecordingError, RecordingOptions,
+    ActorError, RecordingBaseInputs, RecordingError,
 };
 
 enum StudioRecordingActorState {
@@ -655,7 +649,8 @@ async fn create_segment_pipeline(
         120,
         system_audio.0,
         start_time,
-    )?;
+    )
+    .await?;
     let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {

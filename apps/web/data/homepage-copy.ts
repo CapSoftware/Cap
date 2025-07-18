@@ -110,7 +110,7 @@ export interface HomePageCopy {
 export const homepageCopy: HomePageCopy = {
   header: {
     announcement: {
-      text: "🚨 Early adopter pricing ending soon",
+      text: "🚨 Early Adopter Pricing Ends Soon - Lock In Your Discount",
       href: "/pricing",
     },
     variants: {
@@ -123,7 +123,7 @@ export const homepageCopy: HomePageCopy = {
       primaryButton: "Upgrade to Cap Pro",
       secondaryButton: "Download",
       freeVersionText: "No credit card required. Get started for free.",
-      seeOtherOptionsText: "See pricing",
+      seeOtherOptionsText: "More download options",
     },
   },
   textReveal: "Record. Edit. Share.",
@@ -236,6 +236,22 @@ export const homepageCopy: HomePageCopy = {
     title: "Questions? We've got answers.",
     items: [
       {
+        question: "What is the difference between Cap Pro and Desktop License?",
+        answer: "Cap Pro is a paid plan that includes all the features of the Desktop License plus cloud features for seamless sharing and collaboration. Desktop License grants you commercial usage rights for a single user.",
+      },
+      {
+        question: "Is there a free version?",
+        answer: "Yes! Cap is 100% free for personal use. You can record and share locally with Studio Mode. A paid plan is required for commercial usage.",
+      },
+      {
+        question: "How long can I record for on the free version?",
+        answer: "You can record for 5 minutes on the free version. After that, you'll need to upgrade to a paid plan.",
+      },
+      {
+        question: "How does Cap AI work?",
+        answer: "Cap AI is a powerful tool that can be used to generate titles, summaries, clickable chapters, and transcriptions for your recordings. It's available for all Cap Pro users and has no usage limits.",
+      },
+      {
         question: "How is Cap different from Loom?",
         answer: "Cap gives you the best of both worlds: the simplicity of Loom with the power of professional tools. We're open source, support custom storage, offer better pricing, and our desktop app works offline. Plus, you actually own your content.",
       },
@@ -268,8 +284,8 @@ export const homepageCopy: HomePageCopy = {
   readyToGetStarted: {
     title: "Ready to upgrade how you communicate?",
     buttons: {
-      primary: "Download Cap",
-      secondary: "Started",
+      primary: "Upgrade to Cap Pro",
+      secondary: "Download for free",
     },
   },
 }; 
