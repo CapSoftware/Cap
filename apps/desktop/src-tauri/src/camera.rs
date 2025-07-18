@@ -279,8 +279,6 @@ impl CameraWindowState {
         //     this.update_uniforms(&s, &this.store.get().unwrap_or_default());
         // }
 
-        println!("ATTEMPTING TO GET WRITE LOCK");
-
         let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
         // We bail out really late which kinda sucks but:
         //  - it shouldn't happen
@@ -306,6 +304,7 @@ impl CameraWindowState {
     pub fn save(&self, state: &CameraWindowConfig) -> tauri_plugin_store::Result<()> {
         self.store.set("state", serde_json::to_value(&state)?);
         self.store.save()?;
+
         if let Some(window) = self
             .window
             .read()
@@ -317,6 +316,7 @@ impl CameraWindowState {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
 
+            self.resize_inner(window, &self.get().unwrap_or_default(), s.width, s.height)?;
             update_uniforms(window, &s, state);
         }
         Ok(())
@@ -332,8 +332,24 @@ impl CameraWindowState {
 
     /// Called to update the preview based on the new size of the video feed.
     pub fn resize(&self, width: u32, height: u32) -> tauri::Result<()> {
-        let state = self.get().unwrap_or_default();
+        if let Some(window) = self
+            .window
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            self.resize_inner(window, &self.get().unwrap_or_default(), width, height)?;
+        }
+        Ok(())
+    }
 
+    fn resize_inner(
+        &self,
+        window: &WindowState,
+        state: &CameraWindowConfig,
+        width: u32,
+        height: u32,
+    ) -> tauri::Result<()> {
         let base: f32 = if state.size == CameraPreviewSize::Sm {
             230.0
         } else {
@@ -359,36 +375,28 @@ impl CameraWindowState {
             base
         } + TOOLBAR_HEIGHT;
 
-        if let Some(window) = self
+        let (monitor_size, monitor_offset, monitor_scale_factor): (
+            PhysicalSize<u32>,
+            LogicalPosition<u32>,
+            _,
+        ) = if let Some(monitor) = window.window.current_monitor()? {
+            let size = monitor.position().to_logical(monitor.scale_factor());
+            (monitor.size().clone(), size, monitor.scale_factor())
+        } else {
+            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+        };
+
+        let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
+            as u32
+            + monitor_offset.x;
+        let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
+            as u32
+            + monitor_offset.y;
+
+        window
             .window
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-        {
-            let (monitor_size, monitor_offset, monitor_scale_factor): (
-                PhysicalSize<u32>,
-                LogicalPosition<u32>,
-                _,
-            ) = if let Some(monitor) = window.window.current_monitor()? {
-                let size = monitor.position().to_logical(monitor.scale_factor());
-                (monitor.size().clone(), size, monitor.scale_factor())
-            } else {
-                (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
-            };
-
-            let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
-                as u32
-                + monitor_offset.x;
-            let y = (monitor_size.height as f64 / monitor_scale_factor
-                - window_height as f64
-                - 100.0) as u32
-                + monitor_offset.y;
-
-            window
-                .window
-                .set_size(LogicalSize::new(window_width, window_height))?;
-            window.window.set_position(LogicalPosition::new(x, y))?;
-        }
+            .set_size(LogicalSize::new(window_width, window_height))?;
+        window.window.set_position(LogicalPosition::new(x, y))?;
 
         Ok(())
     }
