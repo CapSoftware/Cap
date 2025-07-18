@@ -53,6 +53,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::sync::PoisonError;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -1744,6 +1746,24 @@ async fn set_camera_preview_state(
 
 #[tauri::command]
 #[specta::specta]
+async fn await_camera_preview_ready(store: State<'_, CameraWindowState>) -> Result<bool, ()> {
+    loop {
+        if let Some(_) = store
+            .frame
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(70)).await;
+    }
+
+    Ok(true)
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -1823,6 +1843,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             get_editor_meta,
             set_server_url,
             set_camera_preview_state,
+            await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
             captions::transcribe_audio,
@@ -1868,6 +1889,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_frame) = camera_frame_sync_task();
+    let camera_frame2 = camera_frame.clone();
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -1972,7 +1994,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }),
                 })));
 
-                if let Ok(camera_window_state) = CameraWindowState::init(&app)
+                if let Ok(camera_window_state) = CameraWindowState::init(&app, camera_frame2)
                     .map_err(|err| error!("Error initializing window state: {err}"))
                 {
                     app.manage(camera_window_state);

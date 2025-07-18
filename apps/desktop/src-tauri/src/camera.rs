@@ -85,14 +85,19 @@ struct WindowState {
 pub struct CameraWindowState {
     window: Arc<RwLock<Option<WindowState>>>,
     store: Arc<Store<Wry>>,
+    pub frame: Arc<RwLock<Option<RawCameraFrame>>>,
 }
 
 impl CameraWindowState {
     /// Initialize the global state for the managing the camera preview.
-    pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
+    pub fn init(
+        manager: &impl Manager<Wry>,
+        frame: Arc<RwLock<Option<RawCameraFrame>>>,
+    ) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             window: Arc::new(RwLock::new(None)),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
+            frame,
         })
     }
 
@@ -102,6 +107,12 @@ impl CameraWindowState {
         let size = window
             .inner_size()
             .with_context(|| "Error getting the window size")?;
+
+        // Reset frame data so we don't show a stale frame while loading
+        self.frame
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
 
         let (tx, rx) = oneshot::channel();
         window
@@ -271,13 +282,17 @@ impl CameraWindowState {
             window,
         };
 
-        // {
-        //     let s = this
-        //         .surface_config
-        //         .lock()
-        //         .unwrap_or_else(PoisonError::into_inner);
-        //     this.update_uniforms(&s, &this.store.get().unwrap_or_default());
-        // }
+        {
+            let s = window
+                .surface_config
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+
+            let state = self.get().unwrap_or_default();
+            self.resize_inner(&window, &state, s.width, s.height)?;
+            update_uniforms(&window, &s, &state);
+            window.window.show()?;
+        }
 
         let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
         // We bail out really late which kinda sucks but:
@@ -552,7 +567,77 @@ impl CameraWindowState {
                     render_pass.set_bind_group(0, &bind_group, &[]);
                     render_pass.set_bind_group(1, &window.uniform_bind_group, &[]);
                     render_pass.draw(0..6, 0..1);
-                }
+                } else {
+                    let surface_width = surface_frame.texture.width();
+                    let surface_height = surface_frame.texture.height();
+
+                    let texture = window.device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some("Camera Texture"),
+                        size: wgpu::Extent3d {
+                            width: surface_width,
+                            height: surface_height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    });
+
+                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                    let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("Texture Bind Group"),
+                        layout: &window.bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&texture_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&window.sampler),
+                            },
+                        ],
+                    });
+
+                    // Create color data for #111111 (RGBA format)
+                    let color = [0x11, 0x11, 0x11, 0xFF]; // R=17, G=17, B=17, A=255
+                    let pixel_count = (surface_height * surface_width) as usize;
+                    let buffer: Vec<u8> = color
+                        .iter()
+                        .cycle()
+                        .take(pixel_count * 4)
+                        .copied()
+                        .collect();
+
+                    window.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        &buffer,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(4 * surface_width),
+                            rows_per_image: Some(surface_height),
+                        },
+                        wgpu::Extent3d {
+                            width: surface_width,
+                            height: surface_height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+
+                    render_pass.set_pipeline(&window.render_pipeline);
+                    render_pass.set_bind_group(0, &bind_group, &[]);
+                    render_pass.set_bind_group(1, &window.uniform_bind_group, &[]);
+                    render_pass.draw(0..6, 0..1);
+                };
             }
 
             window.queue.submit(Some(encoder.finish()));

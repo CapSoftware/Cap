@@ -188,6 +188,9 @@ async setServerUrl(serverUrl: string) : Promise<null> {
 async setCameraPreviewState(state: CameraWindowConfig) : Promise<null> {
     return await TAURI_INVOKE("set_camera_preview_state", { state });
 },
+async awaitCameraPreviewReady() : Promise<boolean> {
+    return await TAURI_INVOKE("await_camera_preview_ready");
+},
 /**
  * Function to handle creating directories for the model
  */

@@ -338,7 +338,8 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
                 window

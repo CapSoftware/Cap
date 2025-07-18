@@ -1,7 +1,13 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type ComponentProps, createEffect, on } from "solid-js";
+import {
+  type ComponentProps,
+  createEffect,
+  createResource,
+  on,
+  Show,
+} from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { createCameraMutation } from "~/utils/queries";
@@ -45,6 +51,10 @@ function Page() {
 
   createEffect(() => commands.setCameraPreviewState(state));
 
+  const [cameraPreviewReady] = createResource(() =>
+    commands.awaitCameraPreviewReady()
+  );
+
   const setCamera = createCameraMutation();
 
   createEffect(
@@ -61,9 +71,8 @@ function Page() {
     <div
       data-tauri-drag-region
       class="flex relative flex-col w-screen h-screen cursor-move group"
-      // style={{ "border-radius": cameraBorderRadius(state) }}
     >
-      <div class="h-14">
+      <div class="h-13">
         <div class="flex flex-row justify-center items-center">
           <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
             <ControlButton onClick={() => setCamera.mutate(null)}>
@@ -102,6 +111,11 @@ function Page() {
       </div>
 
       {/* The camera preview is rendered in Rust by wgpu */}
+      <Show when={cameraPreviewReady.loading}>
+        <div class="w-full flex-1 flex items-center justify-center">
+          <div class="text-gray-11">Loading camera...</div>
+        </div>
+      </Show>
     </div>
   );
 }
