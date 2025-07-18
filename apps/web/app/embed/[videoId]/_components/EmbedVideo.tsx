@@ -181,7 +181,7 @@ export const EmbedVideo = forwardRef<
 
         <AnimatePresence>
           {!isPlaying && (
-            <div className="absolute top-4 left-6 z-10 space-y-2">
+            <div className="absolute top-3 left-3 z-10 space-y-2">
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -204,7 +204,7 @@ export const EmbedVideo = forwardRef<
                       className="block"
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <h1 className="text-sm max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
+                      <h1 className="text-xs max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
                         {data.name}
                       </h1>
                     </a>

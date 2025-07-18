@@ -22,6 +22,9 @@ import {
 import { useRef, useEffect, useCallback, useState } from "react";
 import Hls from "hls.js";
 import clsx from "clsx";
+import { faPlay } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { AnimatePresence, motion } from "framer-motion";
 
 interface Props {
   videoSrc: string;
@@ -46,6 +49,7 @@ export function CapVideoPlayer({
   const [currentCue, setCurrentCue] = useState<string>('');
   const [controlsVisible, setControlsVisible] = useState(false);
   const [toggleCaptions, setToggleCaptions] = useState(true);
+  const [showPlayButton, setShowPlayButton] = useState(true);
 
   useEffect(() => {
     if (!videoRef.current || !hlsVideo) return;
@@ -193,6 +197,7 @@ export function CapVideoPlayer({
       }
     };
   }, []);
+
   return (
     <>
       <MediaPlayer
@@ -201,9 +206,30 @@ export function CapVideoPlayer({
         onTouchStart={() => setControlsVisible(true)}
         onTouchEnd={() => setControlsVisible(false)}
         className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
+        <AnimatePresence>
+          {showPlayButton && (
+            <motion.div
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 10 }}
+              transition={{ duration: 0.2 }}
+              onClick={() => videoRef.current?.play()}
+              className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32">
+              <FontAwesomeIcon icon={faPlay} className="text-white size-4 xs:size-8 md:size-12" />
+            </motion.div>
+          )}
+        </AnimatePresence>
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
+          onLoad={() => {
+            setShowPlayButton(true);
+          }}
+          onPlay={() => {
+            setShowPlayButton(false);
+          }}
           crossOrigin="anonymous"
           playsInline
           autoPlay={autoplay}

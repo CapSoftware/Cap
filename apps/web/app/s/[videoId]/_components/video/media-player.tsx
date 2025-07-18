@@ -3004,44 +3004,6 @@ function MediaPlayerSettings(props: MediaPlayerSettingsProps) {
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         )}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <span className="flex-1">Captions</span>
-            <Badge variant="outline" className="rounded-sm">
-              {selectedSubtitleLabel}
-            </Badge>
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-            <DropdownMenuItem
-              className="justify-between"
-              onSelect={onSubtitlesToggle}
-            >
-              Off
-              {!isSubtitlesActive && <CheckIcon />}
-            </DropdownMenuItem>
-            {mediaSubtitlesList.map((subtitleTrack) => {
-              const isSelected = mediaSubtitlesShowing.some(
-                (showingSubtitle) =>
-                  showingSubtitle.label === subtitleTrack.label,
-              );
-              return (
-                <DropdownMenuItem
-                  key={`${subtitleTrack.kind}-${subtitleTrack.label}-${subtitleTrack.language}`}
-                  className="justify-between"
-                  onSelect={() => onShowSubtitleTrack(subtitleTrack)}
-                >
-                  {subtitleTrack.label}
-                  {isSelected && <CheckIcon />}
-                </DropdownMenuItem>
-              );
-            })}
-            {mediaSubtitlesList.length === 0 && (
-              <DropdownMenuItem disabled>
-                No captions available
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
   );
