@@ -99,7 +99,7 @@ const RecordingModes = () => {
               }}
             >
               <iframe
-                src="https://cap.so/embed/72wmq9fsmv32j4j"
+                src="https://cap-web-git-rework-video-player-mc-ilroy.vercel.app/embed/8cq21vmz12tm1zf"
                 frameBorder="0"
                 allowFullScreen
                 style={{
