@@ -165,7 +165,7 @@ export function CapVideoPlayer({
       // Hide native captions
       for (let i = 0; i < video.textTracks.length; i++) {
         const track = video.textTracks[i];
-        if (track && track.kind === 'subtitles') {
+        if (track && (track.kind === 'subtitles' || track.kind === 'captions')) {
           track.mode = 'hidden'; // Load but don't display
           track.addEventListener('cuechange', handleCueChange);
         }
@@ -178,7 +178,7 @@ export function CapVideoPlayer({
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       for (let i = 0; i < video.textTracks.length; i++) {
         const track = video.textTracks[i];
-        if (track && track.kind === 'subtitles') {
+        if (track && (track.kind === 'subtitles' || track.kind === 'captions')) {
           track.removeEventListener('cuechange', handleCueChange);
         }
       }
