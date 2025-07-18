@@ -229,7 +229,7 @@ export function CapVideoPlayer({
         {currentCue && (
           <div
             className={clsx(
-              "absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
+              "absolute left-1/2 transform -translate-x-1/2 text-xl z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
               controlsVisible || videoRef.current?.paused ? 'bottom-20' : 'bottom-12'
             )}
           >
