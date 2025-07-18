@@ -120,6 +120,11 @@ export function ZoomTrack(props: {
                       },
                     },
                   });
+
+                  setEditorState("timeline", "selection", {
+                    type: "zoom",
+                    index,
+                  });
                 })
               );
             });
