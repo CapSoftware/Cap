@@ -178,72 +178,70 @@ export const EmbedVideo = forwardRef<
         <div className="relative w-screen h-screen rounded-xl">
           <CapVideoPlayer hlsVideo={videoType === "application/x-mpegURL"} mediaPlayerClassName="w-full h-full" videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
         </div>
-        <AnimatePresence>
-          {!isPlaying && (
-            <motion.button
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.3, delay: 0.1 }}
-              onClick={(e) => {
-                e.stopPropagation();
-                window.open("https://cap.so", "_blank");
-              }}
-              className="flex absolute left-6 top-16 z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 md:top-28 min-w-fit border-white/10 w-fit xs:flex text-white/80 hover:text-white bg-black/50"
-              aria-label="Powered by Cap"
-            >
-              <span className="text-xs md:text-sm text-white/80">Powered by</span>
-              <Logo className="w-auto h-4" white={true} />
-            </motion.button>
-          )}
-        </AnimatePresence>
 
         <AnimatePresence>
           {!isPlaying && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              transition={{ duration: 0.3, delay: 0.2 }}
-              className="absolute z-10 top-2 md:top-6 left-6 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
-              <div className="flex gap-2 items-center sm:gap-3">
-                {ownerName && (
-                  <Avatar
-                    name={ownerName}
-                    className="hidden flex-shrink-0 xs:flex xs:size-10"
-                    letterClass="xs:text-base font-medium"
-                  />
-                )}
-                <div className="flex-1 min-w-0">
-                  <a
-                    href={`/s/${data.id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <h1 className="text-sm font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
-                      {data.name}
-                    </h1>
-                  </a>
-                  <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
-                    {ownerName && (
-                      <p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
-                        {ownerName}
-                      </p>
-                    )}
-                    {ownerName && longestDuration > 0 && (
-                      <>
-                        <span className="text-xs text-gray-400">•</span>
-                        <p className="text-xs text-gray-300 sm:text-sm">
-                          {formatTime(longestDuration)}
+            <div className="absolute top-4 left-6 z-10 space-y-2">
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                transition={{ duration: 0.3, delay: 0.2 }}
+                className="z-10 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
+                <div className="flex gap-2 items-center sm:gap-3">
+                  {ownerName && (
+                    <Avatar
+                      name={ownerName}
+                      className="hidden flex-shrink-0 xs:flex xs:size-10"
+                      letterClass="xs:text-base font-medium"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <a
+                      href={`/s/${data.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <h1 className="text-sm max-w-[175px] xs:max-w-[300px] sm:max-w-[400px] font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
+                        {data.name}
+                      </h1>
+                    </a>
+                    <div className="flex items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                      {ownerName && (
+                        <p className="text-xs font-medium text-gray-300 truncate sm:text-sm">
+                          {ownerName}
                         </p>
-                      </>
-                    )}
+                      )}
+                      {ownerName && longestDuration > 0 && (
+                        <>
+                          <span className="text-xs text-gray-400">•</span>
+                          <p className="text-xs text-gray-300 sm:text-sm">
+                            {formatTime(longestDuration)}
+                          </p>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </motion.div>
+              </motion.div>
+              <motion.button
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                transition={{ duration: 0.3, delay: 0.1 }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  window.open("https://cap.so", "_blank");
+                }}
+                className="hidden z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 sm:flex border-white/10 w-fit text-white/80 hover:text-white bg-black/50"
+                aria-label="Powered by Cap"
+              >
+                <span className="text-xs md:text-sm text-white/80">Powered by</span>
+                <Logo className="w-auto h-4" white={true} />
+              </motion.button>
+            </div>
           )}
         </AnimatePresence>
       </>
