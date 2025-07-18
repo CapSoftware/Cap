@@ -175,7 +175,6 @@ export const EmbedVideo = forwardRef<
       };
       player.addEventListener("play", () => listener(true));
       player.addEventListener("pause", () => listener(false));
-      player.addEventListener('loadedmetadata', handleLoadedMetadata);
       return () => {
         player.removeEventListener("play", () => listener(true));
         player.removeEventListener("pause", () => listener(false));
