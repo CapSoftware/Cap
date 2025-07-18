@@ -189,7 +189,7 @@ export const EmbedVideo = forwardRef<
                 e.stopPropagation();
                 window.open("https://cap.so", "_blank");
               }}
-              className="absolute left-6 top-28 z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 border-white/10 w-fit xs:flex text-white/80 hover:text-white bg-black/50"
+              className="flex absolute left-6 top-16 z-10 gap-2 items-center px-3 py-2 text-sm rounded-full border backdrop-blur-sm transition-colors duration-200 md:top-28 min-w-fit border-white/10 w-fit xs:flex text-white/80 hover:text-white bg-black/50"
               aria-label="Powered by Cap"
             >
               <span className="text-sm text-white/80">Powered by</span>
@@ -205,7 +205,7 @@ export const EmbedVideo = forwardRef<
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 10 }}
               transition={{ duration: 0.3, delay: 0.2 }}
-              className="absolute z-10 top-6 left-6 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
+              className="absolute z-10 top-2 md:top-6 left-6 bg-black/50 backdrop-blur-md rounded-lg sm:rounded-xl px-2 py-1.5 sm:px-4 sm:py-3 border border-white/10 shadow-2xl">
               <div className="flex gap-2 items-center sm:gap-3">
                 {ownerName && (
                   <Avatar
@@ -222,7 +222,7 @@ export const EmbedVideo = forwardRef<
                     className="block"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <h1 className="text-sm font-semibold leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
+                    <h1 className="text-sm font-semibold md:max-w-[500px] leading-tight text-white truncate transition-all duration-200 cursor-pointer sm:text-xl md:text-2xl hover:underline">
                       {data.name}
                     </h1>
                   </a>
