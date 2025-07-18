@@ -53,14 +53,24 @@ export function CapVideoPlayer({
   const [showPlayButton, setShowPlayButton] = useState(false);
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
 
-  // Set up video event listeners for better loading detection
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 640);
+    };
+
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     const handleLoadedData = () => {
-      console.log('Video loadeddata event fired');
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -102,7 +112,6 @@ export function CapVideoPlayer({
     video.addEventListener('play', handlePlay);
 
     if (video.readyState >= 2) {
-      console.log('Video already loaded, readyState:', video.readyState);
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -124,13 +133,11 @@ export function CapVideoPlayer({
     const videoElement = videoRef.current;
 
     if (!Hls.isSupported()) {
-      console.warn("HLS is not supported in this browser");
       return;
     }
     const isHlsStream = videoSrc.includes('.m3u8');
 
     if (!isHlsStream) {
-      console.warn("Video source doesn't appear to be an HLS stream");
       return;
     }
 
@@ -148,20 +155,15 @@ export function CapVideoPlayer({
     const wasPaused = videoElement.paused;
 
     hls.on(Hls.Events.ERROR, (event, data) => {
-      console.error("HLS error:", data);
-
       if (data.fatal) {
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            console.log("Network error, trying to recover...");
             hls.startLoad();
             break;
           case Hls.ErrorTypes.MEDIA_ERROR:
-            console.log("Media error, trying to recover...");
             hls.recoverMediaError();
             break;
           default:
-            console.error("Fatal error, destroying HLS instance");
             hls.destroy();
             break;
         }
@@ -169,8 +171,6 @@ export function CapVideoPlayer({
     });
 
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
-      console.log("HLS manifest parsed successfully");
-
       if (currentTime > 0) {
         videoElement.currentTime = currentTime;
       }
@@ -182,10 +182,7 @@ export function CapVideoPlayer({
       }
     });
 
-    // HLS specific events for better loading detection
     hls.on(Hls.Events.FRAG_LOADED, () => {
-      console.log("HLS fragment loaded");
-      // Set video as loaded when first fragment is loaded
       if (!videoLoaded) {
         setVideoLoaded(true);
         if (!hasPlayedOnce) {
@@ -223,7 +220,6 @@ export function CapVideoPlayer({
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         return canvas.toDataURL('image/jpeg', 0.8);
       } catch (error) {
-        console.error('Error capturing video frame:', error);
         return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
       }
     }
@@ -276,7 +272,6 @@ export function CapVideoPlayer({
       }
     };
   }, []);
-
 
   return (
     <>
@@ -345,7 +340,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />

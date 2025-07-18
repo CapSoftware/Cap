@@ -185,7 +185,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
         </div>
 
         <motion.div
-          className="xl:absolute drop-shadow-2xl -top-[15%] lg:-right-[400px] 2xl:-right-[300px] w-full xl:max-w-[1000px] 2xl:max-w-[1200px]"
+          className="xl:absolute drop-shadow-2xl -top-[22%] lg:-right-[400px] 2xl:-right-[300px] w-full xl:max-w-[1000px] 2xl:max-w-[1200px]"
           initial="hidden"
           animate="visible"
           variants={fadeInFromRight}
