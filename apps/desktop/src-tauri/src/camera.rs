@@ -44,6 +44,7 @@ pub struct CameraWindowConfig {
 pub struct CameraPreviewMutableState {
     scaler: scaling::Context,
     camera_frame: Arc<RwLock<Option<RawCameraFrame>>>,
+    cached_texture: Option<CachedTexture>,
 }
 
 impl CameraPreviewMutableState {
@@ -63,8 +64,21 @@ impl CameraPreviewMutableState {
         Ok(Self {
             scaler,
             camera_frame,
+            cached_texture: None,
         })
     }
+
+    pub fn invalidate_texture_cache(&mut self) {
+        self.cached_texture = None;
+    }
+}
+
+struct CachedTexture {
+    texture: wgpu::Texture,
+    texture_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
 }
 
 struct WindowState {
@@ -419,7 +433,7 @@ impl CameraWindowState {
     /// Called by the Tauri event loop on window resize events to reconfigure the GPU texture and uniforms.
     ///
     /// We do this in the event-loop (as opposed to `resize`) so we don't need to lock the surface.
-    pub fn on_window_resize(&self, width: u32, height: u32) {
+    pub fn on_window_resize(&self, width: u32, height: u32, mutable_state: &mut CameraPreviewMutableState) {
         let state = self.get().unwrap_or_default();
         if let Some(window) = self
             .window
@@ -434,6 +448,10 @@ impl CameraWindowState {
             s.width = if width > 0 { width } else { 1 };
             s.height = if height > 0 { height } else { 1 };
             window.surface.configure(&window.device, &s);
+            
+            // Invalidate cached texture on window resize
+            mutable_state.invalidate_texture_cache();
+            
             update_uniforms(window, &s, &state);
         }
     }
@@ -501,7 +519,6 @@ impl CameraWindowState {
                             scaling::Flags::empty(),
                         );
 
-                        // TODO: We could probably reuse this frame but if the resolution changes it needs to get reset.
                         let mut out_frame = frame::Video::empty();
                         state
                             .scaler
@@ -511,41 +528,58 @@ impl CameraWindowState {
                         (out_frame.data(0).to_vec(), out_frame.stride(0) as u32)
                     };
 
-                    let texture = window.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Camera Texture"),
-                        size: wgpu::Extent3d {
+                    let should_create_new = match state.cached_texture.as_ref() {
+                        Some(cached_tex) => cached_tex.width != surface_width || cached_tex.height != surface_height,
+                        None => true,
+                    };
+                    
+                    if should_create_new {
+                        let texture = window.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("Camera Texture"),
+                            size: wgpu::Extent3d {
+                                width: surface_width,
+                                height: surface_height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+                        
+                        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        
+                        let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("Texture Bind Group"),
+                            layout: &window.bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&window.sampler),
+                                },
+                            ],
+                        });
+                        
+                        state.cached_texture = Some(CachedTexture {
+                            texture,
+                            texture_view,
+                            bind_group,
                             width: surface_width,
                             height: surface_height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Texture Bind Group"),
-                        layout: &window.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&texture_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&window.sampler),
-                            },
-                        ],
-                    });
+                        });
+                    }
+                    
+                    let cached_tex = state.cached_texture.as_ref().unwrap();
 
                     window.queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
+                            texture: &cached_tex.texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
@@ -564,44 +598,61 @@ impl CameraWindowState {
                     );
 
                     render_pass.set_pipeline(&window.render_pipeline);
-                    render_pass.set_bind_group(0, &bind_group, &[]);
+                    render_pass.set_bind_group(0, &cached_tex.bind_group, &[]);
                     render_pass.set_bind_group(1, &window.uniform_bind_group, &[]);
                     render_pass.draw(0..6, 0..1);
                 } else {
                     let surface_width = surface_frame.texture.width();
                     let surface_height = surface_frame.texture.height();
 
-                    let texture = window.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Camera Texture"),
-                        size: wgpu::Extent3d {
+                    let should_create_new = match state.cached_texture.as_ref() {
+                        Some(cached_tex) => cached_tex.width != surface_width || cached_tex.height != surface_height,
+                        None => true,
+                    };
+                    
+                    if should_create_new {
+                        let texture = window.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("Camera Texture"),
+                            size: wgpu::Extent3d {
+                                width: surface_width,
+                                height: surface_height,
+                                depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
+                        
+                        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                        
+                        let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("Texture Bind Group"),
+                            layout: &window.bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&window.sampler),
+                                },
+                            ],
+                        });
+                        
+                        state.cached_texture = Some(CachedTexture {
+                            texture,
+                            texture_view,
+                            bind_group,
                             width: surface_width,
                             height: surface_height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let bind_group = window.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Texture Bind Group"),
-                        layout: &window.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&texture_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&window.sampler),
-                            },
-                        ],
-                    });
+                        });
+                    }
+                    
+                    let cached_tex = state.cached_texture.as_ref().unwrap();
 
                     // Create color data for #111111 (RGBA format)
                     let color = [0x11, 0x11, 0x11, 0xFF]; // R=17, G=17, B=17, A=255
@@ -615,7 +666,7 @@ impl CameraWindowState {
 
                     window.queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
+                            texture: &cached_tex.texture,
                             mip_level: 0,
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
@@ -634,7 +685,7 @@ impl CameraWindowState {
                     );
 
                     render_pass.set_pipeline(&window.render_pipeline);
-                    render_pass.set_bind_group(0, &bind_group, &[]);
+                    render_pass.set_bind_group(0, &cached_tex.bind_group, &[]);
                     render_pass.set_bind_group(1, &window.uniform_bind_group, &[]);
                     render_pass.draw(0..6, 0..1);
                 };

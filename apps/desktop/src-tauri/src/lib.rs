@@ -2177,9 +2177,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     event: WindowEvent::Resized(size),
                     ..
                 } => {
-                    handle
-                        .state::<CameraWindowState>()
-                        .on_window_resize(size.width, size.height);
+                    if let Some(camera) = camera.as_mut() {
+                        handle.state::<CameraWindowState>().on_window_resize(
+                            size.width,
+                            size.height,
+                            camera,
+                        );
+                    }
                 }
                 tauri::RunEvent::MainEventsCleared => {
                     if let Some(camera) = camera.as_mut() {
