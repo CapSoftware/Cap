@@ -129,26 +129,28 @@ export function CapVideoPlayer({
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2) {
+
+    if (!video) {
       return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
     }
+
+    if (!video) return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 
     const canvas = document.createElement('canvas');
     canvas.width = 224;
     canvas.height = 128;
     const ctx = canvas.getContext('2d');
 
-    if (!ctx) {
-      return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+    if (ctx) {
+      try {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.8);
+      } catch (error) {
+        console.error('Error capturing video frame:', error);
+        return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+      }
     }
-
-    try {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg', 0.8);
-    } catch (error) {
-      console.error('Error capturing video frame:', error);
-      return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-    }
+    return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
   }, []);
 
   useEffect(() => {
