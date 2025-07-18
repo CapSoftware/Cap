@@ -2717,16 +2717,10 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
 
   const isDisabled = disabled || context.disabled;
   const onCaptionsToggle = React.useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
+    () => {
       setToggleCaptions?.(!toggleCaptions);
-
-      if (event.defaultPrevented) return;
-
-      dispatch({
-        type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
-      });
     },
-    [dispatch, toggleCaptions, setToggleCaptions],
+    [toggleCaptions, setToggleCaptions],
   );
 
   return (
