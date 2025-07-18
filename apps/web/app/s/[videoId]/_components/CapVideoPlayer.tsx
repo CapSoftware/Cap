@@ -60,20 +60,17 @@ export function CapVideoPlayer({
     const handleLoadedData = () => {
       console.log('Video loadeddata event fired');
       setVideoLoaded(true);
-      setShowPlayButton(true);
     };
 
     const handleCanPlay = () => {
       console.log('Video canplay event fired');
       setVideoLoaded(true);
-      setShowPlayButton(true);
     };
 
     const handleLoadedMetadata = () => {
       console.log('Video loadedmetadata event fired');
       if (!hlsVideo) {
         setVideoLoaded(true);
-        setShowPlayButton(true);
       }
     };
 
@@ -168,7 +165,6 @@ export function CapVideoPlayer({
 
     // HLS specific events for better loading detection
     hls.on(Hls.Events.FRAG_LOADED, () => {
-      console.log("HLS fragment loaded");
       // Set video as loaded when first fragment is loaded
       if (!videoLoaded) {
         setVideoLoaded(true);
@@ -258,8 +254,6 @@ export function CapVideoPlayer({
       }
     };
   }, []);
-
-  console.log('videoLoaded:', videoLoaded, 'showPlayButton:', showPlayButton);
 
   return (
     <>
