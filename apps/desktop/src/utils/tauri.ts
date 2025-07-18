@@ -185,7 +185,7 @@ async getEditorMeta() : Promise<RecordingMeta> {
 async setServerUrl(serverUrl: string) : Promise<null> {
     return await TAURI_INVOKE("set_server_url", { serverUrl });
 },
-async setCameraPreviewState(state: CameraWindowConfig) : Promise<null> {
+async setCameraPreviewState(state: CameraWindowState) : Promise<null> {
     return await TAURI_INVOKE("set_camera_preview_state", { state });
 },
 async awaitCameraPreviewReady() : Promise<boolean> {
@@ -313,7 +313,7 @@ export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraPreviewShape = "round" | "square" | "full"
 export type CameraPreviewSize = "sm" | "lg"
 export type CameraShape = "square" | "source"
-export type CameraWindowConfig = { size: CameraPreviewSize; shape: CameraPreviewShape; mirrored: boolean }
+export type CameraWindowState = { size: CameraPreviewSize; shape: CameraPreviewShape; mirrored: boolean }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }

@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 
 use crate::{
-    camera::CameraWindowState, recording::StartRecordingInputs, windows::ShowCapWindow, App,
-    ArcLock,
+    camera::{CameraPreview, CameraWindowState},
+    recording::StartRecordingInputs,
+    windows::ShowCapWindow,
+    App, ArcLock,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,9 +110,9 @@ impl DeepLinkAction {
                 mode,
             } => {
                 let state = app.state::<ArcLock<App>>();
-                let store = app.state::<CameraWindowState>();
+                let camera = app.state::<CameraPreview>();
 
-                crate::set_camera_input(state.clone(), store, camera_label).await?;
+                crate::set_camera_input(state.clone(), camera, camera_label).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 use cap_media::sources::ScreenCaptureTarget;

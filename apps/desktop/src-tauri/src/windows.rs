@@ -2,10 +2,7 @@
 #![allow(unused_imports)]
 
 use crate::{
-    camera::{CameraWindowConfig, CameraWindowState},
-    fake_window,
-    general_settings::AppTheme,
-    permissions, App, ArcLock,
+    camera::CameraPreview, fake_window, general_settings::AppTheme, permissions, App, ArcLock,
 };
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
@@ -343,7 +340,7 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
                 window
-                    .state::<CameraWindowState>()
+                    .state::<CameraPreview>()
                     .init_window(window.clone())
                     .await?;
 
