@@ -25,6 +25,7 @@ import clsx from "clsx";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
+import { LogoSpinner } from "@cap/ui";
 
 interface Props {
   videoSrc: string;
@@ -49,7 +50,57 @@ export function CapVideoPlayer({
   const [currentCue, setCurrentCue] = useState<string>('');
   const [controlsVisible, setControlsVisible] = useState(false);
   const [toggleCaptions, setToggleCaptions] = useState(true);
-  const [showPlayButton, setShowPlayButton] = useState(true);
+  const [showPlayButton, setShowPlayButton] = useState(false);
+  const [videoLoaded, setVideoLoaded] = useState(false);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleLoadedData = () => {
+      console.log('Video loadeddata event fired');
+      setVideoLoaded(true);
+      setShowPlayButton(true);
+    };
+
+    const handleCanPlay = () => {
+      console.log('Video canplay event fired');
+      setVideoLoaded(true);
+      setShowPlayButton(true);
+    };
+
+    const handleLoadedMetadata = () => {
+      console.log('Video loadedmetadata event fired');
+      if (!hlsVideo) {
+        setVideoLoaded(true);
+        setShowPlayButton(true);
+      }
+    };
+
+    const handleLoad = () => {
+      console.log('Video load event fired');
+      setVideoLoaded(true);
+      setShowPlayButton(true);
+    };
+
+    video.addEventListener('loadeddata', handleLoadedData);
+    video.addEventListener('canplay', handleCanPlay);
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('load', handleLoad);
+
+    if (video.readyState >= 2) {
+      console.log('Video already loaded, readyState:', video.readyState);
+      setVideoLoaded(true);
+      setShowPlayButton(true);
+    }
+
+    return () => {
+      video.removeEventListener('loadeddata', handleLoadedData);
+      video.removeEventListener('canplay', handleCanPlay);
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('load', handleLoad);
+    };
+  }, [hlsVideo]);
 
   useEffect(() => {
     if (!videoRef.current || !hlsVideo) return;
@@ -115,6 +166,16 @@ export function CapVideoPlayer({
       }
     });
 
+    // HLS specific events for better loading detection
+    hls.on(Hls.Events.FRAG_LOADED, () => {
+      console.log("HLS fragment loaded");
+      // Set video as loaded when first fragment is loaded
+      if (!videoLoaded) {
+        setVideoLoaded(true);
+        setShowPlayButton(true);
+      }
+    });
+
     hls.loadSource(videoSrc);
     hls.attachMedia(videoElement);
 
@@ -125,7 +186,7 @@ export function CapVideoPlayer({
         hlsInstance.current = null;
       }
     };
-  }, [videoSrc, hlsVideo, autoplay]);
+  }, [videoSrc, hlsVideo, autoplay, videoLoaded]);
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
@@ -198,6 +259,8 @@ export function CapVideoPlayer({
     };
   }, []);
 
+  console.log('videoLoaded:', videoLoaded, 'showPlayButton:', showPlayButton);
+
   return (
     <>
       <MediaPlayer
@@ -206,8 +269,13 @@ export function CapVideoPlayer({
         onTouchStart={() => setControlsVisible(true)}
         onTouchEnd={() => setControlsVisible(false)}
         className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
+        <div
+          className={clsx("flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300", videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100")}
+        >
+          <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+        </div>
         <AnimatePresence>
-          {showPlayButton && (
+          {showPlayButton && videoLoaded && (
             <motion.div
               whileHover={{ scale: 1.1 }}
               whileTap={{ scale: 0.9 }}
@@ -224,9 +292,6 @@ export function CapVideoPlayer({
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
-          onLoad={() => {
-            setShowPlayButton(true);
-          }}
           onPlay={() => {
             setShowPlayButton(false);
           }}
