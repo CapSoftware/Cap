@@ -22,7 +22,7 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
-use camera::create_camera_preview_ws;
+use camera::{CameraPreview, CameraWindowState};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
@@ -51,6 +51,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::sync::PoisonError;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -61,6 +63,7 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
+use tauri::async_runtime;
 use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -86,7 +89,6 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     #[serde(skip)]
     camera_tx: flume::Sender<RawCameraFrame>,
-    camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
@@ -183,6 +185,7 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[specta::specta]
 async fn set_camera_input(
     state: MutableState<'_, App>,
+    camera: State<'_, CameraPreview>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -198,7 +201,6 @@ async fn set_camera_input(
             Ok(true)
         }
         (Some(label), None) => {
-            let camera_tx = app.camera_tx.clone();
             drop(app);
 
             let init_rx = CameraFeed::init_async(label);
@@ -210,10 +212,21 @@ async fn set_camera_input(
                             Ok(Ok(feed)) => {
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
-                                    feed.attach(camera_tx);
+                                    feed.attach(app.camera_tx.clone());
+                                    let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
+
+                                    // TODO
+                                    // store.resize(video_info.width, video_info.height)
+                                    //     .map_err(|err| format!("Error resizing camera preview: {err}"))?;
+
                                     return Ok(true);
                                 } else {
+                                    // TODO
+                                    // let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
+                                    // store.resize(video_info.width, video_info.height)
+                                    //     .map_err(|err| format!("Error resizing camera preview: {err}"))?;
+
                                     return Ok(false);
                                 }
                             }
@@ -1720,6 +1733,38 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 
 #[tauri::command]
 #[specta::specta]
+async fn set_camera_preview_state(
+    store: State<'_, CameraPreview>,
+    state: CameraWindowState,
+) -> Result<(), ()> {
+    store.save(&state).map_err(|err| {
+        error!("Error saving camera window state: {err}");
+        ()
+    })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn await_camera_preview_ready(store: State<'_, CameraPreview>) -> Result<bool, ()> {
+    // loop {
+    //     if let Some(_) = store
+    //         .frame
+    //         .read()
+    //         .unwrap_or_else(PoisonError::into_inner)
+    //         .as_ref()
+    //     {
+    //         break;
+    //     }
+    //     tokio::time::sleep(Duration::from_millis(70)).await;
+    // }
+
+    Ok(true)
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn update_auth_plan(app: AppHandle) {
     AuthStore::update_auth_plan(&app).await.ok();
 }
@@ -1798,6 +1843,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             set_window_transparent,
             get_editor_meta,
             set_server_url,
+            set_camera_preview_state,
+            await_camera_preview_ready,
             captions::create_dir,
             captions::save_model_file,
             captions::transcribe_audio,
@@ -1842,8 +1889,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_ws_port, _shutdown) = create_camera_preview_ws().await;
-
+    let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -1930,9 +1976,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             {
                 app.manage(Arc::new(RwLock::new(App {
                     handle: app.clone(),
-                    camera_tx,
-                    camera_ws_port,
                     camera_feed: None,
+                    camera_tx,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
@@ -1947,6 +1992,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 .to_string()
                         }),
                 })));
+
+                if let Ok(s) = CameraPreview::init(&app, camera_rx)
+                    .map_err(|err| error!("Error initializing camera preview: {err}"))
+                {
+                    app.manage(s);
+                }
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -2042,6 +2093,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 }
                                 return;
                             }
+                            CapWindowId::Camera => {
+                                app.state::<CameraPreview>().close_window();
+                            }
                             _ => {}
                         };
                     }
@@ -2079,39 +2133,56 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(|handle, event| match event {
-            #[cfg(target_os = "macos")]
-            tauri::RunEvent::Reopen { .. } => {
-                let has_window = handle.webview_windows().iter().any(|(label, _)| {
-                    label.starts_with("editor-")
-                        || label.as_str() == "settings"
-                        || label.as_str() == "signin"
-                });
+        .run({
+            // let mut camera = CameraPreviewMutableState::init(camera_frame)
+            //     .map_err(|err| error!("Error initializing camera preview renderer: {err:?}"))
+            //     .ok();
 
-                if has_window {
-                    if let Some(window) = handle
-                        .webview_windows()
-                        .iter()
-                        .find(|(label, _)| {
-                            label.starts_with("editor-")
-                                || label.as_str() == "settings"
-                                || label.as_str() == "signin"
-                        })
-                        .map(|(_, window)| window.clone())
-                    {
-                        window.set_focus().ok();
+            move |handle, event| match event {
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                        label.starts_with("editor-")
+                            || label.as_str() == "settings"
+                            || label.as_str() == "signin"
+                    });
+
+                    if has_window {
+                        if let Some(window) = handle
+                            .webview_windows()
+                            .iter()
+                            .find(|(label, _)| {
+                                label.starts_with("editor-")
+                                    || label.as_str() == "settings"
+                                    || label.as_str() == "signin"
+                            })
+                            .map(|(_, window)| window.clone())
+                        {
+                            window.set_focus().ok();
+                        }
+                    } else {
+                        let handle = handle.clone();
+                        let _ =
+                            tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                     }
-                } else {
-                    let handle = handle.clone();
-                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                 }
-            }
-            tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if code.is_none() {
-                    api.prevent_exit();
+                tauri::RunEvent::ExitRequested { code, api, .. } => {
+                    if code.is_none() {
+                        api.prevent_exit();
+                    }
                 }
+                tauri::RunEvent::WindowEvent {
+                    label: _,
+                    event: WindowEvent::Resized(size),
+                    ..
+                } => {
+                    // TODO
+                    // handle
+                    //     .state::<CameraWindowState>()
+                    //     .on_window_resize2(size.width, size.height);
+                }
+                _ => {}
             }
-            _ => {}
         });
 }
 

@@ -3,11 +3,9 @@ use ffmpeg::format::Pixel;
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use nokhwa::{pixel_format::RgbAFormat, utils::*, Camera};
 use std::{
-    sync::Arc,
     thread::{self},
     time::SystemTime,
 };
-use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
