@@ -2405,7 +2405,7 @@ function MediaPlayerTime(props: MediaPlayerTimeProps) {
       )}
     >
       <span className="text-xs tabular-nums text-white min-w-fit md:text-base">{times.current}</span>
-      <span role="separator" aria-hidden="true" tabIndex={-1}>
+      <span className="text-xs tabular-nums text-gray-11" role="separator" aria-hidden="true" tabIndex={-1}>
         /
       </span>
       <span className="text-xs tabular-nums text-white min-w-fit md:text-base">{times.duration}</span>
