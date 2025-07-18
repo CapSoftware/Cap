@@ -2728,11 +2728,11 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
       <PlayerButton
         type="button"
         aria-controls={context.mediaId}
-        aria-label={isSubtitlesActive ? "Disable captions" : "Enable captions"}
-        aria-pressed={isSubtitlesActive}
+        aria-label={toggleCaptions ? "Disable captions" : "Enable captions"}
+        aria-pressed={toggleCaptions}
         data-disabled={isDisabled ? "" : undefined}
         data-slot="media-player-captions"
-        data-state={isSubtitlesActive ? "on" : "off"}
+        data-state={toggleCaptions ? "on" : "off"}
         disabled={isDisabled}
         {...captionsProps}
         variant="ghost"
@@ -2741,7 +2741,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
         onClick={onCaptionsToggle}
       >
         {children ??
-          (isSubtitlesActive ? <SubtitlesIcon /> : <CaptionsOffIcon />)}
+          (toggleCaptions ? <SubtitlesIcon /> : <CaptionsOffIcon />)}
       </PlayerButton>
     </MediaPlayerTooltip>
   );
