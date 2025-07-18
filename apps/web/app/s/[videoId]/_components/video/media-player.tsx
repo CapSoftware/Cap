@@ -2704,10 +2704,10 @@ function MediaPlayerPiP(props: MediaPlayerPiPProps) {
 }
 
 interface MediaPlayerCaptionsProps
-  extends React.ComponentProps<typeof Button> { }
+  extends React.ComponentProps<typeof Button> { setToggleCaptions?: (toggleCaptions: boolean) => void, toggleCaptions?: boolean }
 
 function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
-  const { children, className, disabled, ...captionsProps } = props;
+  const { children, className, disabled, toggleCaptions, setToggleCaptions, ...captionsProps } = props;
 
   const context = useMediaPlayerContext("MediaPlayerCaptions");
   const dispatch = useMediaDispatch();
@@ -2718,7 +2718,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
   const isDisabled = disabled || context.disabled;
   const onCaptionsToggle = React.useCallback(
     (event: React.MouseEvent<HTMLButtonElement>) => {
-      props.onClick?.(event);
+      setToggleCaptions?.(!toggleCaptions);
 
       if (event.defaultPrevented) return;
 
@@ -2726,7 +2726,7 @@ function MediaPlayerCaptions(props: MediaPlayerCaptionsProps) {
         type: MediaActionTypes.MEDIA_TOGGLE_SUBTITLES_REQUEST,
       });
     },
-    [dispatch, props.onClick],
+    [dispatch, toggleCaptions, setToggleCaptions],
   );
 
   return (

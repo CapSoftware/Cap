@@ -45,6 +45,7 @@ export function CapVideoPlayer({
   const hlsInstance = useRef<Hls | null>(null);
   const [currentCue, setCurrentCue] = useState<string>('');
   const [controlsVisible, setControlsVisible] = useState(false);
+  const [toggleCaptions, setToggleCaptions] = useState(true);
 
   useEffect(() => {
     if (!videoRef.current || !hlsVideo) return;
@@ -165,20 +166,14 @@ export function CapVideoPlayer({
 
     const setupTracks = (): void => {
       const tracks = Array.from(video.textTracks);
-      console.log('All tracks:', tracks.map(t => ({ kind: t.kind, label: t.label, language: t.language })));
 
       for (const track of tracks) {
         if (track.kind === 'captions' || track.kind === 'subtitles') {
           captionTrack = track;
           track.mode = 'hidden';
           track.addEventListener('cuechange', handleCueChange);
-          console.log('Caption track set up:', track.label);
           break;
         }
-      }
-
-      if (!captionTrack) {
-        console.log('No caption track found!');
       }
     };
 
@@ -188,7 +183,6 @@ export function CapVideoPlayer({
 
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
 
-    // Also try immediately if metadata is already loaded
     if (video.readyState >= 1) {
       setupTracks();
     }
@@ -205,6 +199,8 @@ export function CapVideoPlayer({
       <MediaPlayer
         onMouseEnter={() => setControlsVisible(true)}
         onMouseLeave={() => setControlsVisible(false)}
+        onTouchStart={() => setControlsVisible(true)}
+        onTouchEnd={() => setControlsVisible(false)}
         className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")} autoHide>
         <MediaPlayerVideo
           src={hlsVideo ? undefined : videoSrc}
@@ -226,7 +222,7 @@ export function CapVideoPlayer({
             default
           />
         </MediaPlayerVideo>
-        {currentCue && (
+        {currentCue && toggleCaptions && (
           <div
             className={clsx(
               "absolute left-1/2 transform -translate-x-1/2 text-xl z-40 pointer-events-none bg-black/80 text-white px-4 py-2 rounded-md text-center max-w-[80%] transition-all duration-300 ease-in-out",
@@ -251,7 +247,7 @@ export function CapVideoPlayer({
               <MediaPlayerTime />
             </div>
             <div className="flex gap-2 items-center">
-              <MediaPlayerCaptions />
+              <MediaPlayerCaptions setToggleCaptions={setToggleCaptions} toggleCaptions={toggleCaptions} />
               <MediaPlayerSettings />
               <MediaPlayerPiP />
               <MediaPlayerFullscreen />
