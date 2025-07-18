@@ -6,6 +6,7 @@ use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
+    ptr::null_mut,
     slice::from_raw_parts,
 };
 
@@ -13,7 +14,8 @@ use windows::Win32::{Media::MediaFoundation::*, System::Com::CoInitialize};
 use windows_core::PWSTR;
 
 pub fn initialize_mediafoundation() -> windows_core::Result<()> {
-    unsafe { CoInitialize(None) }.ok()
+    unsafe { CoInitialize(None) }.ok()?;
+    unsafe { MFStartup(MF_API_VERSION, MFSTARTUP_NOSOCKET) }
 }
 
 pub struct DeviceSourcesIterator {
@@ -156,6 +158,7 @@ impl Display for Device {
     }
 }
 
+#[derive(Clone)]
 pub struct SourceReader {
     inner: IMFSourceReader,
 }
@@ -176,6 +179,60 @@ impl SourceReader {
         unsafe {
             self.inner
                 .SetCurrentMediaType(stream_index, None, media_type)
+        }
+    }
+
+    pub fn try_read_sample(&self, stream_index: u32) -> windows_core::Result<Option<VideoSample>> {
+        let mut imf_sample = None;
+        let mut stream_flags = 0;
+
+        let imf_sample = loop {
+            unsafe {
+                self.ReadSample(
+                    stream_index,
+                    0,
+                    None,
+                    Some(&mut stream_flags),
+                    None,
+                    Some(&mut imf_sample),
+                )?;
+            }
+
+            if let Some(imf_sample) = imf_sample {
+                break imf_sample;
+            }
+        };
+
+        if stream_flags as i32 & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
+            == MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
+        {
+            return Ok(None);
+            // selected_format =
+            //     VideoFormat::new(reader.GetCurrentMediaType(stream_index).unwrap())
+            //         .unwrap();
+        }
+
+        Ok(Some(VideoSample(imf_sample)))
+    }
+}
+
+pub struct VideoSample(IMFSample);
+
+impl VideoSample {
+    pub fn bytes(&self) -> windows_core::Result<Vec<u8>> {
+        unsafe {
+            let bytes = self.0.GetTotalLength().unwrap();
+            let mut out = Vec::with_capacity(bytes as usize);
+
+            let buffer_count = self.0.GetBufferCount()?;
+            for buffer_i in 0..buffer_count {
+                let buffer = self.0.GetBufferByIndex(buffer_i)?;
+
+                let bytes = buffer.lock()?;
+                out.extend(&*bytes);
+            }
+
+            Ok(out)
         }
     }
 }
@@ -240,4 +297,49 @@ fn get_device_model_id(device_id: &str) -> Option<String> {
     let id_product = &device_id[pid_location + 4..pid_location + 8];
 
     Some(format!("{id_vendor}:{id_product}"))
+}
+
+pub trait IMFMediaBufferExt {
+    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock>;
+}
+
+impl IMFMediaBufferExt for IMFMediaBuffer {
+    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock> {
+        let mut bytes_ptr = null_mut();
+        let mut size = 0;
+
+        unsafe {
+            self.Lock(&mut bytes_ptr, None, Some(&mut size))?;
+        }
+
+        Ok(IMFMediaBufferLock {
+            source: self,
+            bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr as *mut u8, size as usize) },
+        })
+    }
+}
+
+pub struct IMFMediaBufferLock<'a> {
+    source: &'a IMFMediaBuffer,
+    bytes: &'a mut [u8],
+}
+
+impl<'a> Drop for IMFMediaBufferLock<'a> {
+    fn drop(&mut self) {
+        let _ = unsafe { self.source.Unlock() };
+    }
+}
+
+impl<'a> Deref for IMFMediaBufferLock<'a> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        &self.bytes
+    }
+}
+
+impl<'a> DerefMut for IMFMediaBufferLock<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.bytes
+    }
 }
