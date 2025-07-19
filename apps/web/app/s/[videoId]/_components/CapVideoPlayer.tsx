@@ -52,6 +52,7 @@ export function CapVideoPlayer({
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [corsErrorDetected, setCorsErrorDetected] = useState(false);
+  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -63,6 +64,39 @@ export function CapVideoPlayer({
 
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Fetch new URL with redirect resolution (from MP4VideoPlayer)
+  const fetchNewUrl = useCallback(async () => {
+    try {
+      const timestamp = new Date().getTime();
+      const urlWithTimestamp = videoSrc.includes("?")
+        ? `${videoSrc}&_t=${timestamp}`
+        : `${videoSrc}?_t=${timestamp}`;
+
+      const response = await fetch(urlWithTimestamp, { method: "HEAD" });
+
+      if (response.redirected) {
+        setResolvedVideoSrc(response.url);
+        return response.url;
+      } else {
+        setResolvedVideoSrc(urlWithTimestamp);
+        return urlWithTimestamp;
+      }
+    } catch (error) {
+      console.error("CapVideoPlayer: Error fetching new video URL:", error);
+      const timestamp = new Date().getTime();
+      const fallbackUrl = videoSrc.includes("?")
+        ? `${videoSrc}&_t=${timestamp}`
+        : `${videoSrc}?_t=${timestamp}`;
+      setResolvedVideoSrc(fallbackUrl);
+      return fallbackUrl;
+    }
+  }, [videoSrc]);
+
+  // Resolve video URL on mount and when videoSrc changes
+  useEffect(() => {
+    fetchNewUrl();
+  }, [fetchNewUrl]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -242,7 +276,7 @@ export function CapVideoPlayer({
           )}
         </AnimatePresence>
         <MediaPlayerVideo
-          src={videoSrc}
+          src={resolvedVideoSrc}
           ref={videoRef}
           onPlay={() => {
             setShowPlayButton(false);
