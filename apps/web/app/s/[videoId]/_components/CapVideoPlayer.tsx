@@ -54,29 +54,28 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [useCrossOrigin, setUseCrossOrigin] = useState(true);
-  const [videoKey, setVideoKey] = useState(0); // Force video reload when crossOrigin changes
 
-  // Smart crossOrigin fallback - try with crossOrigin first, fallback if CORS fails
+  // Determine video source type and CORS handling
+  const isApiVideo = videoSrc.startsWith('/api/');
+  const isMP4Video = !hlsVideo && videoSrc.includes('.mp4');
+  const isCustomS3Video = !isApiVideo && (videoSrc.includes('s3') || videoSrc.includes('.m3u8'));
+  
+  // Custom S3 videos don't have CORS configured, so we shouldn't use crossOrigin
+  // API videos and MP4 videos from Cap's infrastructure have proper CORS
+  const shouldUseCrossOrigin = isApiVideo || isMP4Video;
+  const crossOriginValue = shouldUseCrossOrigin ? "anonymous" : undefined;
+
+  // Log video source type for debugging
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    const handleError = (event: Event) => {
-      const error = (event.target as HTMLVideoElement).error;
-      console.log('CapVideoPlayer: Video error detected:', error);
-      
-      // If we're currently using crossOrigin and get an error, try without it
-      if (useCrossOrigin && error) {
-        console.log('CapVideoPlayer: CORS error detected, retrying without crossOrigin');
-        setUseCrossOrigin(false);
-        setVideoKey(prev => prev + 1); // Force reload
-      }
-    };
-
-    video.addEventListener('error', handleError);
-    return () => video.removeEventListener('error', handleError);
-  }, [useCrossOrigin]);
+    console.log('CapVideoPlayer: Video source analysis:', {
+      videoSrc,
+      isApiVideo,
+      isMP4Video,
+      isCustomS3Video,
+      shouldUseCrossOrigin,
+      crossOriginValue
+    });
+  }, [videoSrc, isApiVideo, isMP4Video, isCustomS3Video, shouldUseCrossOrigin, crossOriginValue]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -325,14 +324,13 @@ export function CapVideoPlayer({
           )}
         </AnimatePresence>
         <MediaPlayerVideo
-          key={videoKey} // Force reload when crossOrigin changes
           src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
           onPlay={() => {
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={useCrossOrigin ? "anonymous" : undefined}
+          crossOrigin={crossOriginValue}
           playsInline
           autoPlay={autoplay}
         >
