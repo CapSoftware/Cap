@@ -182,6 +182,9 @@ async setWindowTransparent(value: boolean) : Promise<void> {
 async getEditorMeta() : Promise<RecordingMeta> {
     return await TAURI_INVOKE("get_editor_meta");
 },
+async setPrettyName(prettyName: string) : Promise<null> {
+    return await TAURI_INVOKE("set_pretty_name", { prettyName });
+},
 async setServerUrl(serverUrl: string) : Promise<null> {
     return await TAURI_INVOKE("set_server_url", { serverUrl });
 },
