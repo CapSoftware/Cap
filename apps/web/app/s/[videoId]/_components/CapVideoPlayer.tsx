@@ -54,6 +54,8 @@ export function CapVideoPlayer({
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
+  const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
+  const [urlResolved, setUrlResolved] = useState(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -66,7 +68,7 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution (simplified)
+  // Fetch new URL with redirect resolution and pre-emptive CORS detection
   const fetchNewUrl = useCallback(async () => {
     try {
       const timestamp = new Date().getTime();
@@ -77,23 +79,46 @@ export function CapVideoPlayer({
       const response = await fetch(urlWithTimestamp, { method: "HEAD" });
       const finalUrl = response.redirected ? response.url : urlWithTimestamp;
 
+      // Check if the resolved URL is from a CORS-incompatible service
+      const isCloudflareR2 = finalUrl.includes('.r2.cloudflarestorage.com');
+      const isS3 = finalUrl.includes('.s3.') || finalUrl.includes('amazonaws.com');
+      const isCorsIncompatible = isCloudflareR2 || isS3;
+      
+      // Set CORS based on URL compatibility BEFORE video element is created
+      if (isCorsIncompatible) {
+        console.log('CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:', finalUrl);
+        setUseCrossOrigin(false);
+      } else {
+        setUseCrossOrigin(enableCrossOrigin);
+      }
+
       setResolvedVideoSrc(finalUrl);
+      setUrlResolved(true);
       return finalUrl;
     } catch (error) {
       console.error("CapVideoPlayer: Error fetching new video URL:", error);
+      // On fetch error, disable CORS to be safe
+      setUseCrossOrigin(false);
       const timestamp = new Date().getTime();
       const fallbackUrl = videoSrc.includes("?")
         ? `${videoSrc}&_t=${timestamp}`
         : `${videoSrc}?_t=${timestamp}`;
       setResolvedVideoSrc(fallbackUrl);
+      setUrlResolved(true);
       return fallbackUrl;
     }
-  }, [videoSrc]);
+  }, [videoSrc, enableCrossOrigin]);
 
   // Resolve video URL on mount and when videoSrc changes
   useEffect(() => {
     fetchNewUrl();
   }, [fetchNewUrl]);
+
+  // Reset URL resolution state when video source changes
+  useEffect(() => {
+    setUrlResolved(false);
+    setUseCrossOrigin(enableCrossOrigin);
+  }, [videoSrc, enableCrossOrigin]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -256,6 +281,35 @@ export function CapVideoPlayer({
         >
           <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
         </div>
+        {urlResolved && (
+          <MediaPlayerVideo
+            src={resolvedVideoSrc}
+            ref={videoRef}
+            onLoadedData={() => {
+              setVideoLoaded(true);
+            }}
+            onPlay={() => {
+              setShowPlayButton(false);
+              setHasPlayedOnce(true);
+            }}
+            crossOrigin={useCrossOrigin ? "anonymous" : undefined}
+            playsInline
+            autoPlay={autoplay}
+          >
+          <track
+            default
+            kind="chapters"
+            src={chaptersSrc}
+          />
+          <track
+            label="English"
+            kind="captions"
+            srcLang="en"
+            src={captionsSrc}
+            default
+          />
+        </MediaPlayerVideo>
+        )}
         <AnimatePresence>
           {showPlayButton && videoLoaded && !hasPlayedOnce && (
             <motion.div
@@ -271,30 +325,6 @@ export function CapVideoPlayer({
             </motion.div>
           )}
         </AnimatePresence>
-        <MediaPlayerVideo
-          src={resolvedVideoSrc}
-          ref={videoRef}
-          onPlay={() => {
-            setShowPlayButton(false);
-            setHasPlayedOnce(true);
-          }}
-          crossOrigin={enableCrossOrigin ? "anonymous" : undefined}
-          playsInline
-          autoPlay={autoplay}
-        >
-          <track
-            default
-            kind="chapters"
-            src={chaptersSrc}
-          />
-          <track
-            label="English"
-            kind="captions"
-            srcLang="en"
-            src={captionsSrc}
-            default
-          />
-        </MediaPlayerVideo>
         {currentCue && toggleCaptions && (
           <div
             className={clsx(
@@ -311,7 +341,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !enableCrossOrigin ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !useCrossOrigin ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />

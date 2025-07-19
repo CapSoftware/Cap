@@ -113,12 +113,12 @@ export const ShareVideo = forwardRef<
   const publicEnv = usePublicEnv();
 
   let videoSrc: string;
-
-
   let enableCrossOrigin = false;
 
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+    // Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
+    enableCrossOrigin = true;
   } else if (
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
