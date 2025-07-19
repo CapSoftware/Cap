@@ -1,4 +1,3 @@
-use cap_project::XY;
 use futures_intrusive::channel::shared::oneshot_channel;
 use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
@@ -96,15 +95,15 @@ pub async fn finish_encoder(
     );
 
     encoder.copy_texture_to_buffer(
-        wgpu::ImageCopyTexture {
+        wgpu::TexelCopyTextureInfo {
             texture: session.current_texture(),
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
         },
-        wgpu::ImageCopyBuffer {
+        wgpu::TexelCopyBufferInfo {
             buffer: &output_buffer,
-            layout: wgpu::ImageDataLayout {
+            layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_bytes_per_row),
                 rows_per_image: Some(uniforms.output_size.1),
@@ -120,7 +119,7 @@ pub async fn finish_encoder(
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).ok();
     });
-    device.poll(wgpu::Maintain::Wait);
+    device.poll(wgpu::PollType::Wait);
 
     rx.receive()
         .await

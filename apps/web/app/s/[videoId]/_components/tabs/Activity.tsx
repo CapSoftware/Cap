@@ -694,14 +694,9 @@ const Comments = Object.assign(
               user={props.user}
             />
           ) : (
-            <div
-              onClick={() => props.setShowAuthOverlay(true)}
-              className="p-4 rounded-lg transition-colors cursor-pointer bg-gray-1 hover:bg-gray-200"
-            >
-              <span className="text-[15px] leading-[22px] text-gray-1">
-                Sign in to leave a comment
-              </span>
-            </div>
+            <Button className="min-w-full" variant="primary" onClick={() => props.setShowAuthOverlay(true)}>
+              Sign in to leave a comment
+            </Button>
           )}
         </div>
       </>

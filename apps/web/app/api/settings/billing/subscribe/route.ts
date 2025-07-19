@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       success_url: `${serverEnv().WEB_URL}/dashboard/caps?upgrade=true`,
       cancel_url: `${serverEnv().WEB_URL}/pricing`,
       allow_promotion_codes: true,
-      metadata: { platform: "web" },
+      metadata: { platform: "web", dubCustomerId: user.id },
     });
 
     if (checkoutSession.url) {

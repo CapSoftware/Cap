@@ -1,5 +1,5 @@
 import { dub } from "@/utils/dub";
-import { createBucketProvider, getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
@@ -7,7 +7,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { count, eq } from "drizzle-orm";
+import { count, eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -161,6 +161,51 @@ app.get(
       });
     } catch (error) {
       console.error("Error in video create endpoint:", error);
+      return c.json({ error: "Internal server error" }, { status: 500 });
+    }
+  }
+);
+
+app.delete(
+  "/delete",
+  zValidator("query", z.object({ videoId: z.string() })),
+  async (c) => {
+    const { videoId } = c.req.valid("query");
+    const user = c.get("user");
+
+    try {
+      const [result] = await db()
+        .select({ video: videos, bucket: s3Buckets })
+        .from(videos)
+        .leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+        .where(eq(videos.id, videoId));
+
+      if (!result)
+        return c.json(
+          { error: true, message: "Video not found" },
+          { status: 404 }
+        );
+
+      await db()
+        .delete(videos)
+        .where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+      const bucket = await createBucketProvider(result.bucket);
+
+      const listedObjects = await bucket.listObjects({
+        prefix: `${user.id}/${videoId}/`,
+      });
+
+      if (listedObjects.Contents?.length)
+        await bucket.deleteObjects(
+          listedObjects.Contents.map((content: any) => ({
+            Key: content.Key,
+          }))
+        );
+
+      return c.json(true);
+    } catch (error) {
+      console.error("Error in video delete endpoint:", error);
       return c.json({ error: "Internal server error" }, { status: 500 });
     }
   }

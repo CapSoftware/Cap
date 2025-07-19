@@ -99,4 +99,4 @@ const HomeIcon = forwardRef<HomeIconHandle, HomeIconProps>(
 
 HomeIcon.displayName = 'HomeIcon';
 
-export { HomeIcon };
+export default HomeIcon;

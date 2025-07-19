@@ -5,8 +5,10 @@ import { buildEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import { PropsWithChildren } from "react";
 import { getBootstrapData } from "@/utils/getBootstrapData";
+import { Analytics as DubAnalytics } from "@dub/analytics/react";
 
 import {
   SessionProvider,
@@ -18,8 +20,42 @@ import {
 import { script } from "./themeScript";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { AuthContextProvider } from "./Layout/AuthContext";
-import { Intercom } from "./Layout/Intercom";
 import { PosthogIdentify } from "./Layout/PosthogIdentify";
+
+const defaultFont = localFont({
+  src: [
+    {
+      path: "../public/fonts/NeueMontreal-Bold.otf",
+      weight: "700",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Regular.otf",
+      weight: "400",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Medium.otf",
+      weight: "500",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-MediumItalic.otf",
+      weight: "500",
+      style: "italic",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Italic.otf",
+      weight: "400",
+      style: "italic",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-BoldItalic.otf",
+      weight: "700",
+      style: "italic",
+    },
+  ],
+});
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -42,7 +78,7 @@ export default async function RootLayout({ children }: PropsWithChildren) {
   const userPromise = getCurrentUser();
 
   return (
-    <html lang="en">
+    <html className={defaultFont.className} lang="en">
       <head>
         <link
           rel="apple-touch-icon"
@@ -84,15 +120,21 @@ export default async function RootLayout({ children }: PropsWithChildren) {
                 >
                   <ReactQueryProvider>
                     <SonnerToaster />
-                    <main className="overflow-x-hidden w-full">{children}</main>
+                    <main className="w-full">{children}</main>
                     <PosthogIdentify />
-                    <Intercom />
                   </ReactQueryProvider>
                 </PublicEnvContext>
               </SessionProvider>
             </AuthContextProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>
+        {buildEnv.NEXT_PUBLIC_IS_CAP && (
+          <DubAnalytics
+            domainsConfig={{
+              refer: "go.cap.so",
+            }}
+          />
+        )}
       </body>
     </html>
   );

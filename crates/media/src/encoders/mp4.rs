@@ -8,6 +8,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
+use tracing::{info, trace};
 
 use super::{audio::AudioEncoder, H264Encoder};
 
@@ -19,6 +20,25 @@ pub struct MP4File {
     is_finished: bool,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum InitError {
+    #[error("ffmpeg error: {0}")]
+    Ffmpeg(ffmpeg::Error),
+    #[error("video init: {0}")]
+    VideoInit(MediaError),
+    #[error("audio init: {0}")]
+    AudioInit(MediaError),
+}
+
+impl From<InitError> for MediaError {
+    fn from(value: InitError) -> Self {
+        match value {
+            InitError::AudioInit(e) | InitError::VideoInit(e) => e,
+            InitError::Ffmpeg(e) => Self::FFmpeg(e),
+        }
+    }
+}
+
 impl MP4File {
     pub fn init(
         tag: &'static str,
@@ -27,15 +47,26 @@ impl MP4File {
         audio: impl FnOnce(
             &mut format::context::Output,
         ) -> Option<Result<Box<dyn AudioEncoder + Send>, MediaError>>,
-    ) -> Result<Self, MediaError> {
+    ) -> Result<Self, InitError> {
         output.set_extension("mp4");
-        let mut output = format::output(&output)?;
 
-        let video = video(&mut output)?;
-        let audio = audio(&mut output).transpose()?;
+        if let Some(parent) = output.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let mut output = format::output(&output).map_err(InitError::Ffmpeg)?;
+
+        trace!("Preparing encoders for mp4 file");
+
+        let video = video(&mut output).map_err(InitError::VideoInit)?;
+        let audio = audio(&mut output)
+            .transpose()
+            .map_err(InitError::AudioInit)?;
+
+        info!("Prepared encoders for mp4 file");
 
         // make sure this happens after adding all encoders!
-        output.write_header()?;
+        output.write_header().map_err(InitError::Ffmpeg)?;
 
         Ok(Self {
             tag,

@@ -197,7 +197,7 @@ pub struct CropRatio {
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
-    pub fn init(
+    pub async fn init(
         target: &ScreenCaptureTarget,
         output_type: Option<FrameType>,
         show_camera: bool,
@@ -252,7 +252,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             (x, y)
         };
         #[cfg(windows)]
-        let video_size = (bounds.width as u32, bounds.height as u32);
+        // not sure how reliable this is for the general case so just use it for screen capture for now
+        let video_size = if matches!(target, ScreenCaptureTarget::Screen { .. }) {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        } else {
+            (bounds.width as u32, bounds.height as u32)
+        };
 
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
@@ -305,7 +311,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 let id = {
                     #[cfg(target_os = "macos")]
                     {
-                        display.raw_handle.id
+                        display.raw_handle.0
                     }
 
                     #[cfg(windows)]
@@ -461,17 +467,25 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         let start_time = self.start_time;
 
+        let mut video_i = 0;
+        let mut audio_i = 0;
+
         inner(
             self,
             ready_signal,
             control_signal,
             |capturer| match capturer.get_next_frame() {
                 Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
+                    video_i += 1;
+
                     if frame.height == 0 || frame.width == 0 {
                         return ControlFlow::Continue(());
                     }
 
-                    let elapsed = frame.display_time.duration_since(start_time).unwrap();
+                    let Ok(elapsed) = frame.display_time.duration_since(start_time) else {
+                        warn!("Skipping video frame {video_i} as elapsed time is invalid");
+                        return ControlFlow::Continue(());
+                    };
 
                     let mut buffer =
                         FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
@@ -525,12 +539,16 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let elapsed = frame.time().duration_since(start_time).unwrap();
+                        let Ok(elapsed) = frame.time().duration_since(start_time) else {
+                            warn!("Skipping audio frame {audio_i} as elapsed time is invalid");
+                            return ControlFlow::Continue(());
+                        };
                         let mut frame = scap_audio_to_ffmpeg(frame);
                         frame.set_pts(Some(
                             (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                         ));
                         let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
+                        audio_i += 1;
                     }
                     ControlFlow::Continue(())
                 }
@@ -570,6 +588,8 @@ fn inner<T: ScreenCaptureFormat>(
 
     let mut capturing = false;
     let _ = ready_signal.send(Ok(()));
+
+    cap_fail::fail!("macos screen_capture start panic");
 
     loop {
         match control_signal.last() {
@@ -635,8 +655,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
-        use screencapturekit::stream::output_type::SCStreamOutputType;
-
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
@@ -660,6 +678,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             control_signal,
             |capturer| match capturer.raw().get_next_sample_buffer() {
                 Ok((sample_buffer, typ)) => {
+                    use cidre::sc;
+
                     let sample_buffer = unsafe {
                         std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
                     };
@@ -670,7 +690,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     let relative_time = unix_timestamp - start_time_f64;
 
                     match typ {
-                        SCStreamOutputType::Screen => {
+                        sc::stream::OutputType::Screen => {
                             let Some(pixel_buffer) = sample_buffer.image_buf() else {
                                 return ControlFlow::Continue(());
                             };
@@ -679,12 +699,23 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 return ControlFlow::Continue(());
                             }
 
-                            if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
-                                error!("Pipeline is unreachable. Shutting down recording.");
-                                return ControlFlow::Continue(());
+                            let check_skip_send = || {
+                                cap_fail::fail_err!(
+                                    "media::sources::screen_capture::skip_send",
+                                    ()
+                                );
+
+                                Ok::<(), ()>(())
+                            };
+
+                            if check_skip_send().is_ok() {
+                                if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
+                                    error!("Pipeline is unreachable. Shutting down recording.");
+                                    return ControlFlow::Continue(());
+                                }
                             }
                         }
-                        SCStreamOutputType::Audio => {
+                        sc::stream::OutputType::Audio => {
                             let res = || {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
@@ -718,6 +749,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                             let _ = audio_tx.send((frame, relative_time));
                         }
+                        _ => {}
                     }
 
                     ControlFlow::Continue(())
@@ -807,7 +839,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
 pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     #[cfg(target_os = "macos")]
     match target {
-        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.id),
+        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.0),
         scap::Target::Window(window) => platform::get_display_refresh_rate(
             platform::display_for_window(window.raw_handle)
                 .ok_or_else(|| "failed to get display for window".to_string())?
@@ -837,7 +869,7 @@ fn display_for_target<'a>(
             {
                 let id = platform::display_for_window(window.raw_handle)?;
                 targets.iter().find(|t| match t {
-                    scap::Target::Display(d) => d.raw_handle.id == id.id,
+                    scap::Target::Display(d) => d.raw_handle.0 == id.id,
                     _ => false,
                 })
             }

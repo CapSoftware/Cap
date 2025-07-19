@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::oneshot;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 use crate::pipeline::{
     clock::CloneFrom,
@@ -18,7 +18,7 @@ use crate::pipeline::{
 struct Task {
     ready_signal: Receiver<Result<(), MediaError>>,
     join_handle: JoinHandle<()>,
-    done_rx: tokio::sync::oneshot::Receiver<()>,
+    done_rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
 }
 
 pub struct PipelineBuilder<T> {
@@ -48,6 +48,7 @@ impl<T> PipelineBuilder<T> {
 
         self.spawn_task(name, move |ready_signal| {
             task.run(clock, ready_signal, control_signal);
+            Ok(())
         });
 
         PipelinePathBuilder {
@@ -67,13 +68,14 @@ impl<T> PipelineBuilder<T> {
 
         self.spawn_task(name, move |ready_signal| {
             task.run(clock, ready_signal, control_signal);
+            Ok(())
         });
     }
 
     pub fn spawn_task(
         &mut self,
         name: impl Into<String>,
-        launch: impl FnOnce(PipelineReadySignal) + Send + 'static,
+        launch: impl FnOnce(PipelineReadySignal) -> Result<(), String> + Send + 'static,
     ) {
         let name = name.into();
 
@@ -86,21 +88,32 @@ impl<T> PipelineBuilder<T> {
         let dispatcher = tracing::dispatcher::get_default(|d| d.clone());
         let span = tracing::error_span!("pipeline", task = &name);
 
-        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Result<(), String>>();
 
         let join_handle = thread::spawn({
             let name = name.clone();
             move || {
                 tracing::dispatcher::with_default(&dispatcher, || {
-                    span.in_scope(|| {
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            info!("launching task '{name}'");
-                            launch(ready_sender);
-                            info!("task '{name}' done");
-                        }))
-                        .ok();
-                    });
-                    done_tx.send(()).ok();
+                    let result = span
+                        .in_scope(|| {
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                info!("launching task '{name}'");
+                                let res = launch(ready_sender);
+                                info!("task '{name}' done");
+                                res
+                            }))
+                            .map_err(|e| {
+                                if let Some(s) = e.downcast_ref::<&'static str>() {
+                                    format!("Panicked: {s}")
+                                } else if let Some(s) = e.downcast_ref::<String>() {
+                                    format!("Panicked: {s}")
+                                } else {
+                                    format!("Panicked: Unknown error")
+                                }
+                            })
+                        })
+                        .and_then(|v| v);
+                    let _ = done_tx.send(result);
                 });
             }
         });
@@ -117,7 +130,9 @@ impl<T> PipelineBuilder<T> {
 }
 
 impl<T: PipelineClock> PipelineBuilder<T> {
-    pub async fn build(self) -> Result<(Pipeline<T>, oneshot::Receiver<()>), MediaError> {
+    pub async fn build(
+        self,
+    ) -> Result<(Pipeline<T>, oneshot::Receiver<Result<(), String>>), MediaError> {
         let Self {
             clock,
             control,
@@ -131,6 +146,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
         let mut task_handles = IndexMap::new();
 
         let mut stop_rx = vec![];
+        let mut task_names = vec![];
 
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
@@ -140,24 +156,30 @@ impl<T: PipelineClock> PipelineBuilder<T> {
                 .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
                 .map_err(|e| MediaError::TaskLaunch(format!("{name} build / {e}")))??;
 
-            task_handles.insert(name, task.join_handle);
+            task_handles.insert(name.clone(), task.join_handle);
             stop_rx.push(task.done_rx);
+            task_names.push(name);
         }
 
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        let (done_tx, done_rx) = oneshot::channel::<()>();
+        let (done_tx, done_rx) = oneshot::channel();
 
-        tokio::spawn({
-            let mut control = control.clone();
-            async move {
-                futures::future::select_all(stop_rx).await.0.ok();
-                control
-                    .broadcast(super::control::Control::Shutdown)
-                    .await
-                    .ok();
-                done_tx.send(()).ok();
+        tokio::spawn(async move {
+            let (result, index, _) = futures::future::select_all(stop_rx).await;
+            let task_name = &task_names[index];
+
+            let result = match result {
+                Ok(Err(error)) => Err(format!("Task '{task_name}' failed: {error}")),
+                Err(_) => Err(format!("Task '{task_name}' failed for unknown reason")),
+                _ => Ok(()),
+            };
+
+            if let Err(e) = &result {
+                error!("{e}");
             }
+
+            let _ = done_tx.send(result);
         });
 
         Ok((

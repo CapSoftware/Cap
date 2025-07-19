@@ -109,4 +109,4 @@ const LayersIcon = forwardRef<LayersIconHandle, LayersIconProps>(
 
 LayersIcon.displayName = 'LayersIcon';
 
-export { LayersIcon };
+export default LayersIcon;

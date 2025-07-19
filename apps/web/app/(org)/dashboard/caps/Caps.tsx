@@ -2,9 +2,13 @@
 import { deleteVideo } from "@/actions/videos/delete";
 import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
-import { useRouter, useSearchParams } from "next/navigation";
+import { Button } from "@cap/ui";
+import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useRouter, useSearchParams, } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { NewFolderDialog } from "./components/NewFolderDialog";
 import { useDashboardContext } from "../Contexts";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
@@ -12,8 +16,12 @@ import { EmptyCapState } from "./components/EmptyCapState";
 import { SelectedCapsBar } from "./components/SelectedCapsBar";
 import { UploadCapButton } from "./components/UploadCapButton";
 import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
+import Folder from "./components/Folder";
+import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
+import type { FolderDataType } from "./components/Folder";
+import { useUploadingContext } from "./UploadingContext";
 
-type VideoData = {
+export type VideoData = {
   id: string;
   ownerId: string;
   name: string;
@@ -32,34 +40,44 @@ type VideoData = {
   hasPassword: boolean;
 }[];
 
+
 export const Caps = ({
   data,
   count,
+  customDomain,
+  domainVerified,
   dubApiKeyEnabled,
+  folders,
 }: {
   data: VideoData;
   count: number;
+  customDomain: string | null;
+  domainVerified: boolean;
+  folders: FolderDataType[];
   dubApiKeyEnabled: boolean;
 }) => {
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const [analytics, setAnalytics] = useState<Record<string, number>>({});
-  const { user, spacesData, organizationData } = useDashboardContext();
+  const { user } = useDashboardContext();
   const limit = 15;
+  const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const totalPages = Math.ceil(count / limit);
-  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
+  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
-  const [uploadPlaceholders, setUploadPlaceholders] = useState<
-    {
-      id: string;
-      progress: number;
-      thumbnail?: string;
-      uploadProgress?: number;
-    }[]
-  >([]);
+  const {
+    isUploading,
+    setIsUploading,
+    uploadingCapId,
+    setUploadingCapId,
+    uploadingThumbnailUrl,
+    setUploadingThumbnailUrl,
+    uploadProgress,
+    setUploadProgress
+  } = useUploadingContext();
 
   const anyCapSelected = selectedCaps.length > 0;
 
@@ -143,25 +161,6 @@ export const Caps = ({
     };
   }, []);
 
-  const deleteCap = async (videoId: string) => {
-    try {
-      const response = await deleteVideo(videoId);
-      if (response.success) {
-        refresh();
-        toast.success("Cap deleted successfully");
-      } else {
-        throw new Error(
-          response.message || "Failed to delete Cap - please try again later"
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        toast.error(error.message);
-      } else {
-        toast.error("Failed to delete Cap - please try again later");
-      }
-    }
-  };
 
   const handleCapSelection = (capId: string) => {
     setSelectedCaps((prev) => {
@@ -181,7 +180,7 @@ export const Caps = ({
     setIsDeleting(true);
 
     try {
-      await toast.promise(
+      toast.promise(
         async () => {
           const results = await Promise.allSettled(
             selectedCaps.map((capId) => deleteVideo(capId))
@@ -228,26 +227,17 @@ export const Caps = ({
     }
   };
 
-  const handleUploadStart = (id: string, thumbnail?: string) => {
-    setUploadPlaceholders((prev) => [{ id, progress: 0, thumbnail }, ...prev]);
+  const deleteCap = async (capId: string) => {
+    try {
+      await deleteVideo(capId);
+      toast.success("Cap deleted successfully");
+      refresh();
+    } catch (error) {
+      toast.error("Failed to delete cap");
+    }
   };
 
-  const handleUploadProgress = (
-    id: string,
-    progress: number,
-    uploadProgress?: number
-  ) => {
-    setUploadPlaceholders((prev) =>
-      prev.map((u) => (u.id === id ? { ...u, progress, uploadProgress } : u))
-    );
-  };
-
-  const handleUploadComplete = (id: string) => {
-    setUploadPlaceholders((prev) => prev.filter((u) => u.id !== id));
-    refresh();
-  };
-
-  if (data.length === 0) {
+  if (count === 0) {
     return <EmptyCapState />;
   }
 
@@ -256,42 +246,90 @@ export const Caps = ({
       {isDraggingCap && (
         <div className="fixed inset-0 z-50 pointer-events-none">
           <div className="flex justify-center items-center w-full h-full">
-            <div className="px-5 py-3 text-sm font-medium rounded-lg border backdrop-blur-md bg-gray-1/80 border-gray-4 text-gray-12">
-              Drag to a space to share
+            <div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
+              <FontAwesomeIcon className="size-3.5 text-white opacity-50" icon={faInfoCircle} />
+              <p className="text-white">Drag to a space to share or folder to move</p>
             </div>
           </div>
         </div>
       )}
-      <div className="flex justify-start mb-5">
-        <UploadCapButton
-          onStart={handleUploadStart}
+      <NewFolderDialog
+        open={openNewFolderDialog}
+        onOpenChange={setOpenNewFolderDialog}
+      />
+      <div className="flex gap-3 items-center mb-10 w-full">
+        <Button
+          onClick={() => setOpenNewFolderDialog(true)}
           size="sm"
-          onProgress={handleUploadProgress}
-          onComplete={handleUploadComplete}
+          variant="dark"
+          className="flex gap-2 items-center w-fit"
+        >
+          <FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+          New Folder
+        </Button>
+        <UploadCapButton
+          onStart={(id, thumbnailUrl) => {
+            setIsUploading(true);
+            setUploadingCapId(id);
+            setUploadingThumbnailUrl(thumbnailUrl);
+            setUploadProgress(0);
+          }}
+          size="sm"
+          onComplete={() => {
+            setIsUploading(false);
+            setUploadingCapId(null);
+            setUploadingThumbnailUrl(undefined);
+            setUploadProgress(0);
+          }}
         />
       </div>
-      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {uploadPlaceholders.map((u) => (
-          <UploadPlaceholderCard
-            key={u.id}
-            thumbnail={u.thumbnail}
-            progress={u.progress}
-            uploadProgress={u.uploadProgress}
-          />
-        ))}
-        {data.map((cap) => (
-          <CapCard
-            key={cap.id}
-            cap={cap}
-            analytics={analytics[cap.id] || 0}
-            onDelete={deleteCap}
-            userId={user?.id}
-            isSelected={selectedCaps.includes(cap.id)}
-            onSelectToggle={() => handleCapSelection(cap.id)}
-            anyCapSelected={anyCapSelected}
-          />
-        ))}
-      </div>
+      {folders.length > 0 && (
+        <>
+          <div className="flex gap-3 items-center mb-6 w-full">
+            <h1 className="text-2xl font-medium text-gray-12">Folders</h1>
+          </div>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
+            {folders.map((folder) => (
+              <Folder key={folder.id} {...folder} />
+            ))}
+          </div>
+        </>
+      )}
+      {data.length > 0 && (
+        <>
+          <div className="flex justify-between items-center mb-6 w-full">
+            <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+            {isUploading && (
+              <UploadPlaceholderCard
+                key={"upload-placeholder"}
+              />
+            )}
+            {data.map((cap) => (
+              <CapCard
+                key={cap.id}
+                cap={cap}
+                analytics={analytics[cap.id] || 0}
+                onDelete={async () => {
+                  if (selectedCaps.length > 0) {
+                    await deleteSelectedCaps();
+                  } else {
+                    await deleteCap(cap.id);
+                  }
+                }}
+                userId={user?.id}
+                customDomain={customDomain}
+                domainVerified={domainVerified}
+                isSelected={selectedCaps.includes(cap.id)}
+                anyCapSelected={anyCapSelected}
+                onSelectToggle={() => handleCapSelection(cap.id)}
+              />
+            ))}
+          </div>
+        </>
+      )}
       {(data.length > limit || data.length === limit || page !== 1) && (
         <div className="mt-7">
           <CapPagination currentPage={page} totalPages={totalPages} />

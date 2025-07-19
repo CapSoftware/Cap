@@ -11,7 +11,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -23,7 +23,8 @@ import SpaceDialog from "./SpaceDialog";
 
 import { useDashboardContext } from "../../Contexts";
 import { Spaces } from "../../dashboard-data";
-import { LayersIcon, LayersIconHandle } from "../AnimatedIcons/Layers";
+import { LayersIcon } from "../AnimatedIcons";
+import { LayersIconHandle } from "../AnimatedIcons/Layers";
 import { navItemClass } from "./Items";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
@@ -248,9 +249,17 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
                       }}
                     />
                   )}
-                  {activeDropTarget === space.id && (
-                    <div className="absolute inset-0 z-10 rounded-xl border pointer-events-none border-gray-5 bg-gray-4" />
-                  )}
+                  <AnimatePresence>
+                    {activeDropTarget === space.id && (
+                      <motion.div
+                        className="absolute inset-0 z-10 rounded-xl border transition-all duration-200 pointer-events-none border-blue-10 bg-gray-4"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                      />
+                    )}
+                  </AnimatePresence>
                   <Link
                     href={`/dashboard/spaces/${space.id}`}
                     className={clsx(

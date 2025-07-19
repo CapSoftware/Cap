@@ -35,7 +35,6 @@ interface SidebarProps {
     processing?: boolean;
   } | null;
   aiGenerationEnabled?: boolean;
-  aiUiEnabled?: boolean;
 }
 
 const TabContent = motion.div;
@@ -71,7 +70,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   videoId,
   aiData,
   aiGenerationEnabled = false,
-  aiUiEnabled = false,
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
@@ -87,9 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const tabs = [
     { id: "activity", label: "Comments" },
-    ...(aiUiEnabled || hasExistingAiData
-      ? [{ id: "summary", label: "Summary" }]
-      : []),
+    { id: "summary", label: "Summary" },
     { id: "transcript", label: "Transcript" },
   ];
 
@@ -131,7 +127,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             onSeek={onSeek}
             initialAiData={aiData || undefined}
             aiGenerationEnabled={aiGenerationEnabled}
-            aiUiEnabled={aiUiEnabled}
             user={user}
           />
         );

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { spaceMembers } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { v4 as uuidv4 } from "uuid";
 
 const addSpaceMemberSchema = z.object({
@@ -171,7 +171,7 @@ export async function setSpaceMembers(
   // Insert new members if any
   if (userIds.length > 0) {
     const now = new Date();
-    const values = userIds.map(userId => ({
+    const values = userIds.map((userId) => ({
       id: uuidv4().substring(0, nanoIdLength),
       spaceId,
       userId,
@@ -212,10 +212,10 @@ export async function batchRemoveSpaceMembers(
   const members = await db()
     .select({ spaceId: spaceMembers.spaceId })
     .from(spaceMembers)
-    .where(spaceMembers.id.in(memberIds));
+    .where(inArray(spaceMembers.id, memberIds));
   const spaceId = members[0]?.spaceId;
 
-  await db().delete(spaceMembers).where(spaceMembers.id.in(memberIds));
+  await db().delete(spaceMembers).where(inArray(spaceMembers.id, memberIds));
   if (spaceId) {
     revalidatePath(`/dashboard/spaces/${spaceId}`);
   }

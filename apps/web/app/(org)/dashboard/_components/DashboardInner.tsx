@@ -29,12 +29,17 @@ import { usePathname } from "next/navigation";
 import React, { cloneElement, memo, MutableRefObject, useMemo, useRef, useState } from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
-import { ArrowUpIcon } from "./AnimatedIcons/ArrowUp";
-import { MessageCircleMoreIcon } from "./AnimatedIcons/Chat";
-import { DownloadIcon, DownloadIconHandle } from "./AnimatedIcons/Download";
-import { HomeIcon } from "./AnimatedIcons/Home";
-import { LogoutIcon } from "./AnimatedIcons/Logout";
-import { SettingsGearIcon } from "./AnimatedIcons/Settings";
+import {
+  ArrowUpIcon,
+  MessageCircleMoreIcon,
+  DownloadIcon,
+  HomeIcon,
+  LogoutIcon,
+  SettingsGearIcon,
+  ReferIcon,
+} from "./AnimatedIcons";
+import { DownloadIconHandle } from "./AnimatedIcons/Download";
+import { ReferIconHandle } from "./AnimatedIcons/Refer";
 
 export const navItemClass =
   "flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
@@ -96,12 +101,13 @@ export default function DashboardInner({
                   name={activeSpace?.name}
                 />
               ))}
-            <p className="relative text-base truncate md:text-lg text-gray-12 lg:text-2xl">
+            <p className="relative text-lg truncate text-gray-12 lg:text-2xl">
               {title}
             </p>
           </div>
         </div>
         <div className="flex gap-4 items-center">
+          {buildEnv.NEXT_PUBLIC_IS_CAP && <ReferButton />}
           <div
             data-state={toggleNotifications ? "open" : "closed"}
             ref={bellRef}
@@ -163,55 +169,66 @@ const User = () => {
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const { user, isSubscribed } = useDashboardContext();
 
-  const menuItems = useMemo(() => [
-    {
-      name: "Homepage",
-      icon: <HomeIcon />,
-      href: "/home",
-      onClick: () => setMenuOpen(false),
-      iconClassName: "text-gray-11 group-hover:text-gray-12",
-      showCondition: true,
-    },
-    {
-      name: "Upgrade to Pro",
-      icon: <ArrowUpIcon />,
-      onClick: () => {
-        setMenuOpen(false);
-        setUpgradeModalOpen(true);
+  const menuItems = useMemo(
+    () => [
+      {
+        name: "Homepage",
+        icon: <HomeIcon />,
+        href: "/home",
+        onClick: () => setMenuOpen(false),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: true,
       },
-      iconClassName: "text-amber-400 group-hover:text-amber-500",
-      showCondition: !isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP,
-    },
-    {
-      name: "Settings",
-      icon: <SettingsGearIcon />,
-      href: "/dashboard/settings/account",
-      onClick: () => setMenuOpen(false),
-      iconClassName: "text-gray-11 group-hover:text-gray-12",
-      showCondition: true,
-    },
-    {
-      name: "Chat Support",
-      icon: <MessageCircleMoreIcon />,
-      onClick: () => window.open("https://cap.link/discord", "_blank"),
-      iconClassName: "text-gray-11 group-hover:text-gray-12",
-      showCondition: true,
-    },
-    {
-      name: "Download App",
-      icon: <DownloadIcon />,
-      onClick: () => window.open("https://cap.so/download", "_blank"),
-      iconClassName: "text-gray-11 group-hover:text-gray-12",
-      showCondition: true,
-    },
-    {
-      name: "Sign Out",
-      icon: <LogoutIcon />,
-      onClick: () => signOut(),
-      iconClassName: "text-gray-11 group-hover:text-gray-12",
-      showCondition: true,
-    },
-  ], []);
+      {
+        name: "Upgrade to Pro",
+        icon: <ArrowUpIcon />,
+        onClick: () => {
+          setMenuOpen(false);
+          setUpgradeModalOpen(true);
+        },
+        iconClassName: "text-amber-400 group-hover:text-amber-500",
+        showCondition: !isSubscribed && buildEnv.NEXT_PUBLIC_IS_CAP,
+      },
+      {
+        name: "Earn 40% Referral",
+        icon: <ReferIcon />,
+        href: "/dashboard/refer",
+        onClick: () => setMenuOpen(false),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: buildEnv.NEXT_PUBLIC_IS_CAP,
+      },
+      {
+        name: "Settings",
+        icon: <SettingsGearIcon />,
+        href: "/dashboard/settings/account",
+        onClick: () => setMenuOpen(false),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: true,
+      },
+      {
+        name: "Chat Support",
+        icon: <MessageCircleMoreIcon />,
+        onClick: () => window.open("https://cap.link/discord", "_blank"),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: true,
+      },
+      {
+        name: "Download App",
+        icon: <DownloadIcon />,
+        onClick: () => window.open("https://cap.so/download", "_blank"),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: true,
+      },
+      {
+        name: "Sign Out",
+        icon: <LogoutIcon />,
+        onClick: () => signOut(),
+        iconClassName: "text-gray-11 group-hover:text-gray-12",
+        showCondition: true,
+      },
+    ],
+    []
+  );
 
   return (
     <>
@@ -272,7 +289,7 @@ const User = () => {
       </Popover>
     </>
   );
-}
+};
 
 interface Props {
   icon: React.ReactElement;
@@ -297,23 +314,50 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
       }}
     >
       <Link
-        className="flex gap-2 items-center"
+        className="flex gap-2 items-center w-full"
         href={href ?? "#"}
         onClick={onClick}
       >
-        {cloneElement(icon, {
-          ref: iconRef,
-          className: iconClassName,
-          size: 14,
-        })}
-        <p
-          className={clsx(
-            "text-sm text-gray-12"
-          )}
-        >
-          {name}
-        </p>
+        <div className="flex-shrink-0 flex items-center justify-center w-3.5 h-3.5">
+          {cloneElement(icon, {
+            ref: iconRef,
+            className: iconClassName,
+            size: 14,
+          })}
+        </div>
+        <p className={clsx("text-sm text-gray-12")}>{name}</p>
       </Link>
     </CommandItem>
   );
 });
+
+const ReferButton = () => {
+  const iconRef = useRef<ReferIconHandle>(null);
+
+  return (
+    <Link href="/dashboard/refer" className="hidden relative lg:block">
+      {/* Red notification dot with pulse animation */}
+      <div className="absolute right-0 top-1 z-10">
+        <div className="relative">
+          <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full opacity-75 animate-ping" />
+          <div className="relative w-2 h-2 bg-red-500 rounded-full" />
+        </div>
+      </div>
+
+      <div
+        onMouseEnter={() => {
+          iconRef.current?.startAnimation();
+        }}
+        onMouseLeave={() => {
+          iconRef.current?.stopAnimation();
+        }}
+        className="flex justify-center items-center rounded-full transition-colors cursor-pointer bg-gray-3 hover:bg-gray-5 size-9"
+      >
+        {cloneElement(<ReferIcon />, {
+          ref: iconRef,
+          className: "text-gray-12 size-3.5",
+        })}
+      </div>
+    </Link>
+  );
+};

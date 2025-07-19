@@ -443,8 +443,7 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let mut width = 180.0 + 32.0;
-
+                let width = 244.0;
                 let height = 40.0;
 
                 let window = self
@@ -569,9 +568,7 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "windows")]
         {
-            if !id.should_have_decorations() {
-                builder = builder.decorations(false);
-            }
+            builder = builder.decorations(false);
         }
 
         builder

@@ -42,7 +42,10 @@ export default function () {
   );
 
   createEffect(() => {
-    if (!currentRecording.isPending && currentRecording.data === undefined)
+    if (
+      !currentRecording.isPending &&
+      (currentRecording.data === undefined || currentRecording.data === null)
+    )
       getCurrentWindow().close();
   });
 
@@ -82,9 +85,25 @@ export default function () {
 
       if (!shouldRestart) return;
 
-      await events.requestRestartRecording.emit();
+      await commands.restartRecording();
+
       setState("recording");
       setTime(Date.now());
+    },
+  }));
+
+  const deleteRecording = createMutation(() => ({
+    mutationFn: async () => {
+      const shouldDelete = await dialog.confirm(
+        "Are you sure you want to delete the recording?",
+        { title: "Confirm Delete", okLabel: "Delete", cancelLabel: "Cancel" }
+      );
+
+      if (!shouldDelete) return;
+
+      await commands.deleteRecording();
+
+      setState("stopped");
     },
   }));
 
@@ -152,6 +171,12 @@ export default function () {
             onClick={() => restartRecording.mutate()}
           >
             <IconCapRestart />
+          </ActionButton>
+          <ActionButton
+            disabled={deleteRecording.isPending}
+            onClick={() => deleteRecording.mutate()}
+          >
+            <IconCapTrash />
           </ActionButton>
         </div>
       </div>

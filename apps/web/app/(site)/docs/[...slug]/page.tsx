@@ -116,7 +116,7 @@ export default async function DocPage(props: DocProps) {
     const rootDoc = categoryDocs.find((doc) => doc.slug === category);
 
     return (
-      <div className="px-5 py-32 mx-auto sm:py-32 prose">
+      <div className="px-5 py-32 mx-auto md:py-40 prose">
         <h1>{displayCategory} Documentation</h1>
         {/* Show root category content if it exists */}
         {rootDoc && (
@@ -175,7 +175,7 @@ export default async function DocPage(props: DocProps) {
   }
 
   return (
-    <article className="px-5 py-20 mx-auto sm:py-32 prose">
+    <article className="py-32 mx-auto md:py-40 sm:py-32 prose">
       {doc.metadata.image && (
         <div className="relative mb-12 h-[345px] w-full">
           <Image

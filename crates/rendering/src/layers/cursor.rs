@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
 use wgpu::{include_wgsl, util::DeviceExt, BindGroup, FilterMode};
@@ -61,8 +59,6 @@ impl Statics {
 
         let shader = device.create_shader_module(include_wgsl!("../shaders/cursor.wgsl"));
 
-        let empty_constants: HashMap<String, f64> = HashMap::new();
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Cursor Pipeline"),
             layout: Some(
@@ -74,17 +70,16 @@ impl Statics {
             ),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState {
@@ -102,9 +97,8 @@ impl Statics {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             }),
             primitive: wgpu::PrimitiveState {

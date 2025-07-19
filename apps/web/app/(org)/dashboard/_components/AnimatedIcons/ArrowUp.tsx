@@ -108,4 +108,4 @@ const ArrowUpIcon = forwardRef<ArrowUpIconHandle, ArrowUpIconProps>(
 
 ArrowUpIcon.displayName = 'ArrowUpIcon';
 
-export { ArrowUpIcon };
+export default ArrowUpIcon;
