@@ -133,7 +133,7 @@ export const ShareVideo = forwardRef<
     videoType = "application/x-mpegURL";
   }
 
-  console.log(videoSrc, videoType)
+  console.log({ videoSrc, videoType })
 
   return (
     <>
