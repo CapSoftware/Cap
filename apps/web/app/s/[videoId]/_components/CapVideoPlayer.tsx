@@ -282,7 +282,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={corsErrorDetected ? "anonymous" : undefined}
+          crossOrigin={corsErrorDetected ? undefined : "anonymous"}
           playsInline
           autoPlay={autoplay}
         >
