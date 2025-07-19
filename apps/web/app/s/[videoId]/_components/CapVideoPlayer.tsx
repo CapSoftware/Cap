@@ -65,7 +65,7 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution (from MP4VideoPlayer)
+  // Fetch new URL with redirect resolution and CORS pre-check
   const fetchNewUrl = useCallback(async () => {
     try {
       const timestamp = new Date().getTime();
@@ -74,16 +74,22 @@ export function CapVideoPlayer({
         : `${videoSrc}?_t=${timestamp}`;
 
       const response = await fetch(urlWithTimestamp, { method: "HEAD" });
+      const finalUrl = response.redirected ? response.url : urlWithTimestamp;
 
-      if (response.redirected) {
-        setResolvedVideoSrc(response.url);
-        return response.url;
-      } else {
-        setResolvedVideoSrc(urlWithTimestamp);
-        return urlWithTimestamp;
+      // Pre-check CORS headers to determine if crossOrigin will work
+      const corsHeaders = response.headers.get('access-control-allow-origin');
+      const hasCorsSupport = corsHeaders === '*' || corsHeaders === window.location.origin;
+      // Set CORS error state early if we detect no CORS support
+      if (!hasCorsSupport && new URL(finalUrl).origin !== window.location.origin) {
+        setCorsErrorDetected(true);
       }
+
+      setResolvedVideoSrc(finalUrl);
+      return finalUrl;
     } catch (error) {
       console.error("CapVideoPlayer: Error fetching new video URL:", error);
+      // On fetch error, assume CORS issues and disable crossOrigin
+      setCorsErrorDetected(true);
       const timestamp = new Date().getTime();
       const fallbackUrl = videoSrc.includes("?")
         ? `${videoSrc}&_t=${timestamp}`
@@ -315,7 +321,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || corsErrorDetected ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />

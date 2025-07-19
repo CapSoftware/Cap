@@ -132,9 +132,6 @@ export const ShareVideo = forwardRef<
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
     videoType = "application/x-mpegURL";
   }
-
-  console.log({ videoSrc, videoType })
-
   return (
     <>
 
