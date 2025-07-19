@@ -71,16 +71,16 @@ export function CapVideoPlayer({
 
         // Add timestamp to prevent caching issues
         const timestamp = new Date().getTime();
-        const urlWithTimestamp = videoSrc.includes('?') 
-          ? `${videoSrc}&_t=${timestamp}` 
+        const urlWithTimestamp = videoSrc.includes('?')
+          ? `${videoSrc}&_t=${timestamp}`
           : `${videoSrc}?_t=${timestamp}`;
 
         const response = await fetch(urlWithTimestamp, { method: 'HEAD' });
-        
+
         console.log('CapVideoPlayer: HEAD response status:', response.status);
         console.log('CapVideoPlayer: HEAD response redirected:', response.redirected);
         console.log('CapVideoPlayer: HEAD response URL:', response.url);
-        
+
         if (response.redirected) {
           // Use the final redirected URL
           console.log('CapVideoPlayer: Using redirected URL:', response.url);
@@ -354,7 +354,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin="anonymous"
+          // crossOrigin="anonymous" // Temporarily removed to test CORS
           playsInline
           autoPlay={autoplay}
         >
