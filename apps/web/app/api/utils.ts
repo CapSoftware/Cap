@@ -65,6 +65,7 @@ export const withAuth = createMiddleware<{
 
 export const allowedOrigins = [
   buildEnv.NEXT_PUBLIC_WEB_URL,
+  "https://cap.so",
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",
