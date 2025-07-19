@@ -35,6 +35,8 @@ interface Props {
   mediaPlayerClassName?: string;
   autoplay?: boolean;
   hlsVideo?: boolean;
+  enableCrossOrigin?: boolean;
+  enableThumbnails?: boolean;
 }
 
 export function CapVideoPlayer({
@@ -44,7 +46,9 @@ export function CapVideoPlayer({
   videoRef,
   mediaPlayerClassName,
   autoplay = false,
-  hlsVideo = false
+  hlsVideo = false,
+  enableCrossOrigin = false,
+  enableThumbnails = false
 }: Props) {
   const hlsInstance = useRef<Hls | null>(null);
   const [currentCue, setCurrentCue] = useState<string>('');
@@ -114,7 +118,7 @@ export function CapVideoPlayer({
         message: error?.message,
         videoSrc
       });
-      
+
       // Detect CORS-related errors and disable crossOrigin + thumbnails
       if (error && (error.code === 4 || error.message?.includes('CORS'))) {
         console.log('CapVideoPlayer: CORS error detected, disabling crossOrigin and thumbnails');
@@ -327,7 +331,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={corsErrorDetected ? undefined : "anonymous"}
+          crossOrigin={enableCrossOrigin ? "anonymous" : undefined}
           playsInline
           autoPlay={autoplay}
         >
@@ -360,7 +364,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || corsErrorDetected ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !enableThumbnails ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />
