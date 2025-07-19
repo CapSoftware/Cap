@@ -123,6 +123,7 @@ export const ShareVideo = forwardRef<
     enableThumbnails = true;
   } else if (NODE_ENV === "development") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoType = "application/x-mpegURL"
     enableThumbnails = true;
     enableCrossOrigin = true;
   } else if (
