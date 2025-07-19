@@ -54,6 +54,42 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
+
+  // Resolve redirect URLs to prevent CORS issues
+  useEffect(() => {
+    const resolveVideoUrl = async () => {
+      try {
+        // If it's not an API URL, use it directly
+        if (!videoSrc.startsWith('/api/')) {
+          setResolvedVideoSrc(videoSrc);
+          return;
+        }
+
+        // Add timestamp to prevent caching issues
+        const timestamp = new Date().getTime();
+        const urlWithTimestamp = videoSrc.includes('?') 
+          ? `${videoSrc}&_t=${timestamp}` 
+          : `${videoSrc}?_t=${timestamp}`;
+
+        const response = await fetch(urlWithTimestamp, { method: 'HEAD' });
+        
+        if (response.redirected) {
+          // Use the final redirected URL
+          setResolvedVideoSrc(response.url);
+        } else {
+          // Use the original URL with timestamp
+          setResolvedVideoSrc(urlWithTimestamp);
+        }
+      } catch (error) {
+        console.error('Error resolving video URL:', error);
+        // Fallback to original URL
+        setResolvedVideoSrc(videoSrc);
+      }
+    };
+
+    resolveVideoUrl();
+  }, [videoSrc]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -128,14 +164,14 @@ export function CapVideoPlayer({
   }, [hlsVideo, hasPlayedOnce]);
 
   useEffect(() => {
-    if (!videoRef.current || !hlsVideo) return;
+    if (!videoRef.current || !hlsVideo || !resolvedVideoSrc) return;
 
     const videoElement = videoRef.current;
 
     if (!Hls.isSupported()) {
       return;
     }
-    const isHlsStream = videoSrc.includes('.m3u8');
+    const isHlsStream = resolvedVideoSrc.includes('.m3u8');
 
     if (!isHlsStream) {
       return;
@@ -191,7 +227,7 @@ export function CapVideoPlayer({
       }
     });
 
-    hls.loadSource(videoSrc);
+    hls.loadSource(resolvedVideoSrc);
     hls.attachMedia(videoElement);
 
     hlsInstance.current = hls;
@@ -201,7 +237,7 @@ export function CapVideoPlayer({
         hlsInstance.current = null;
       }
     };
-  }, [videoSrc, hlsVideo, autoplay, videoLoaded, hasPlayedOnce]);
+  }, [resolvedVideoSrc, hlsVideo, autoplay, videoLoaded, hasPlayedOnce]);
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
@@ -302,7 +338,7 @@ export function CapVideoPlayer({
           )}
         </AnimatePresence>
         <MediaPlayerVideo
-          src={hlsVideo ? undefined : videoSrc}
+          src={hlsVideo ? undefined : resolvedVideoSrc}
           ref={videoRef}
           onPlay={() => {
             setShowPlayButton(false);

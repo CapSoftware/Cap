@@ -65,7 +65,6 @@ export const withAuth = createMiddleware<{
 
 export const allowedOrigins = [
   buildEnv.NEXT_PUBLIC_WEB_URL,
-  "https://cap.so",
   "http://localhost:3001",
   "http://localhost:3000",
   "tauri://localhost",
@@ -76,6 +75,6 @@ export const allowedOrigins = [
 export const corsMiddleware = cors({
   origin: allowedOrigins,
   credentials: true,
-  allowMethods: ["GET", "POST", "OPTIONS"],
+  allowMethods: ["POST", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
