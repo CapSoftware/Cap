@@ -118,33 +118,25 @@ export const ShareVideo = forwardRef<
 
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-    // API videos: disable CORS and thumbnails due to R2 CORS issues
     enableCrossOrigin = true;
     enableThumbnails = true;
-  } else if (NODE_ENV === "development") {
-    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-    videoType = "application/x-mpegURL"
-    enableThumbnails = true;
-    enableCrossOrigin = true;
   } else if (
+    NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
     videoType = "application/x-mpegURL";
-    // API videos: disable CORS and thumbnails due to R2 CORS issues
-    enableCrossOrigin = false;
-    enableThumbnails = false;
+    enableCrossOrigin = true;
+    enableThumbnails = true;
   } else if (data.source.type === "MediaConvert") {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
     videoType = "application/x-mpegURL";
-    // Direct S3 videos: disable CORS and thumbnails to avoid CORS errors
     enableCrossOrigin = false;
     enableThumbnails = false;
   } else {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
     videoType = "application/x-mpegURL";
-    // Direct S3 videos: disable CORS and thumbnails to avoid CORS errors
     enableCrossOrigin = false;
     enableThumbnails = false;
   }
