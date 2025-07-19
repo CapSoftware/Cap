@@ -122,6 +122,7 @@ export const ShareVideo = forwardRef<
     enableCrossOrigin = true;
     enableThumbnails = true;
   } else if (NODE_ENV === "development") {
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
     enableThumbnails = true;
     enableCrossOrigin = true;
   } else if (
