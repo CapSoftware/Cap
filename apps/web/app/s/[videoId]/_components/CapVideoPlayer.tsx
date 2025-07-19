@@ -122,7 +122,7 @@ export function CapVideoPlayer({
 
   useEffect(() => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || !urlResolved) return;
 
     const handleLoadedData = () => {
       setVideoLoaded(true);
@@ -194,7 +194,7 @@ export function CapVideoPlayer({
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('error', handleError);
     };
-  }, [hasPlayedOnce, videoSrc]);
+  }, [hasPlayedOnce, videoSrc, urlResolved]);
 
 
 
