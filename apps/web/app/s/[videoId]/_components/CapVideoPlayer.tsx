@@ -33,6 +33,7 @@ interface Props {
   videoRef: React.RefObject<HTMLVideoElement>;
   mediaPlayerClassName?: string;
   autoplay?: boolean;
+  enableCrossOrigin?: boolean;
 }
 
 export function CapVideoPlayer({
@@ -42,6 +43,7 @@ export function CapVideoPlayer({
   videoRef,
   mediaPlayerClassName,
   autoplay = false,
+  enableCrossOrigin = false,
 }: Props) {
 
   const [currentCue, setCurrentCue] = useState<string>('');
@@ -51,7 +53,6 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [corsErrorDetected, setCorsErrorDetected] = useState(false);
   const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
 
   useEffect(() => {
@@ -65,7 +66,7 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution and smart CORS detection
+  // Fetch new URL with redirect resolution (simplified)
   const fetchNewUrl = useCallback(async () => {
     try {
       const timestamp = new Date().getTime();
@@ -76,38 +77,10 @@ export function CapVideoPlayer({
       const response = await fetch(urlWithTimestamp, { method: "HEAD" });
       const finalUrl = response.redirected ? response.url : urlWithTimestamp;
       
-      // Smart CORS detection based on URL patterns and headers
-      const finalUrlObj = new URL(finalUrl);
-      const isCurrentOrigin = finalUrlObj.origin === window.location.origin;
-      
-      // If same origin, no CORS issues
-      if (isCurrentOrigin) {
-        setResolvedVideoSrc(finalUrl);
-        return finalUrl;
-      }
-      
-      // For cross-origin, check common patterns that typically don't support CORS for video
-      const isCloudflareR2 = finalUrl.includes('.r2.cloudflarestorage.com');
-      const isS3 = finalUrl.includes('.s3.') || finalUrl.includes('amazonaws.com');
-      
-      // Pre-emptively disable CORS for known problematic services
-      if (isCloudflareR2 || isS3) {
-        setCorsErrorDetected(true);
-      } else {
-        // For other domains, try to check CORS headers
-        const corsHeaders = response.headers.get('access-control-allow-origin');
-        const hasCorsSupport = corsHeaders === '*' || corsHeaders === window.location.origin;
-        if (!hasCorsSupport) {
-          setCorsErrorDetected(true);
-        }
-      }
-
       setResolvedVideoSrc(finalUrl);
       return finalUrl;
     } catch (error) {
       console.error("CapVideoPlayer: Error fetching new video URL:", error);
-      // On fetch error, assume CORS issues and disable crossOrigin
-      setCorsErrorDetected(true);
       const timestamp = new Date().getTime();
       const fallbackUrl = videoSrc.includes("?")
         ? `${videoSrc}&_t=${timestamp}`
@@ -168,10 +141,9 @@ export function CapVideoPlayer({
         videoSrc
       });
 
-      // Detect CORS-related errors and disable crossOrigin + thumbnails
+      // CORS errors are now handled at the ShareVideo level via enableCrossOrigin prop
       if (error && (error.code === 4 || error.message?.includes('CORS'))) {
-        console.log('CapVideoPlayer: CORS error detected, disabling crossOrigin and thumbnails');
-        setCorsErrorDetected(true);
+        console.log('CapVideoPlayer: CORS error detected - this should be prevented by ShareVideo logic');
       }
     };
 
@@ -306,7 +278,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={corsErrorDetected ? undefined : "anonymous"}
+          crossOrigin={enableCrossOrigin ? "anonymous" : undefined}
           playsInline
           autoPlay={autoplay}
         >
@@ -339,7 +311,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || corsErrorDetected ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !enableCrossOrigin ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />

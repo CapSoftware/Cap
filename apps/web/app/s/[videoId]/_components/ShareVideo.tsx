@@ -113,25 +113,24 @@ export const ShareVideo = forwardRef<
   const publicEnv = usePublicEnv();
 
   let videoSrc: string;
-  let videoType: string = "video/mp4";
+
+
+  let enableCrossOrigin = false;
 
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
-    videoType = "video/mp4";
   } else if (
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-    videoType = "application/x-mpegURL";
   } else if (data.source.type === "MediaConvert") {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
-    videoType = "application/x-mpegURL";
   } else {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
-    videoType = "application/x-mpegURL";
   }
+
   return (
     <>
 
@@ -143,6 +142,7 @@ export const ShareVideo = forwardRef<
             chaptersSrc={chaptersUrl || ""}
             captionsSrc={subtitleUrl || ""}
             videoRef={videoRef}
+            enableCrossOrigin={enableCrossOrigin}
           />
         ) : (
           <HLSVideoPlayer
