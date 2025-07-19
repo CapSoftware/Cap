@@ -54,52 +54,29 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
+  const [useCrossOrigin, setUseCrossOrigin] = useState(true);
+  const [videoKey, setVideoKey] = useState(0); // Force video reload when crossOrigin changes
 
-  // Resolve redirect URLs to prevent CORS issues
+  // Smart crossOrigin fallback - try with crossOrigin first, fallback if CORS fails
   useEffect(() => {
-    const resolveVideoUrl = async () => {
-      try {
-        // If it's not an API URL, use it directly
-        if (!videoSrc.startsWith('/api/')) {
-          console.log('CapVideoPlayer: Using direct URL:', videoSrc);
-          setResolvedVideoSrc(videoSrc);
-          return;
-        }
+    const video = videoRef.current;
+    if (!video) return;
 
-        console.log('CapVideoPlayer: Resolving redirect for:', videoSrc);
-
-        // Add timestamp to prevent caching issues
-        const timestamp = new Date().getTime();
-        const urlWithTimestamp = videoSrc.includes('?')
-          ? `${videoSrc}&_t=${timestamp}`
-          : `${videoSrc}?_t=${timestamp}`;
-
-        const response = await fetch(urlWithTimestamp, { method: 'HEAD' });
-
-        console.log('CapVideoPlayer: HEAD response status:', response.status);
-        console.log('CapVideoPlayer: HEAD response redirected:', response.redirected);
-        console.log('CapVideoPlayer: HEAD response URL:', response.url);
-
-        if (response.redirected) {
-          // Use the final redirected URL
-          console.log('CapVideoPlayer: Using redirected URL:', response.url);
-          setResolvedVideoSrc(response.url);
-        } else {
-          // Use the original URL with timestamp
-          console.log('CapVideoPlayer: Using original URL with timestamp:', urlWithTimestamp);
-          setResolvedVideoSrc(urlWithTimestamp);
-        }
-      } catch (error) {
-        console.error('CapVideoPlayer: Error resolving video URL:', error);
-        // Fallback to original URL
-        console.log('CapVideoPlayer: Falling back to original URL:', videoSrc);
-        setResolvedVideoSrc(videoSrc);
+    const handleError = (event: Event) => {
+      const error = (event.target as HTMLVideoElement).error;
+      console.log('CapVideoPlayer: Video error detected:', error);
+      
+      // If we're currently using crossOrigin and get an error, try without it
+      if (useCrossOrigin && error) {
+        console.log('CapVideoPlayer: CORS error detected, retrying without crossOrigin');
+        setUseCrossOrigin(false);
+        setVideoKey(prev => prev + 1); // Force reload
       }
     };
 
-    resolveVideoUrl();
-  }, [videoSrc]);
+    video.addEventListener('error', handleError);
+    return () => video.removeEventListener('error', handleError);
+  }, [useCrossOrigin]);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -174,14 +151,14 @@ export function CapVideoPlayer({
   }, [hlsVideo, hasPlayedOnce]);
 
   useEffect(() => {
-    if (!videoRef.current || !hlsVideo || !resolvedVideoSrc) return;
+    if (!videoRef.current || !hlsVideo || !videoSrc) return;
 
     const videoElement = videoRef.current;
 
     if (!Hls.isSupported()) {
       return;
     }
-    const isHlsStream = resolvedVideoSrc.includes('.m3u8');
+    const isHlsStream = videoSrc.includes('.m3u8');
 
     if (!isHlsStream) {
       return;
@@ -237,7 +214,7 @@ export function CapVideoPlayer({
       }
     });
 
-    hls.loadSource(resolvedVideoSrc);
+    hls.loadSource(videoSrc);
     hls.attachMedia(videoElement);
 
     hlsInstance.current = hls;
@@ -247,7 +224,7 @@ export function CapVideoPlayer({
         hlsInstance.current = null;
       }
     };
-  }, [resolvedVideoSrc, hlsVideo, autoplay, videoLoaded, hasPlayedOnce]);
+  }, [videoSrc, hlsVideo, autoplay, videoLoaded, hasPlayedOnce]);
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
@@ -348,13 +325,14 @@ export function CapVideoPlayer({
           )}
         </AnimatePresence>
         <MediaPlayerVideo
-          src={hlsVideo ? undefined : resolvedVideoSrc}
+          key={videoKey} // Force reload when crossOrigin changes
+          src={hlsVideo ? undefined : videoSrc}
           ref={videoRef}
           onPlay={() => {
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          // crossOrigin="anonymous" // Temporarily removed to test CORS
+          crossOrigin={useCrossOrigin ? "anonymous" : undefined}
           playsInline
           autoPlay={autoplay}
         >
