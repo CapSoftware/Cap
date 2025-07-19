@@ -55,28 +55,6 @@ export function CapVideoPlayer({
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
-  // Determine video source type and CORS handling
-  const isApiVideo = videoSrc.startsWith('/api/');
-  const isMP4Video = !hlsVideo && videoSrc.includes('.mp4');
-  const isCustomS3Video = !isApiVideo && (videoSrc.includes('s3') || videoSrc.includes('.m3u8'));
-  
-  // Custom S3 videos don't have CORS configured, so we shouldn't use crossOrigin
-  // API videos and MP4 videos from Cap's infrastructure have proper CORS
-  const shouldUseCrossOrigin = isApiVideo || isMP4Video;
-  const crossOriginValue = shouldUseCrossOrigin ? "anonymous" : undefined;
-
-  // Log video source type for debugging
-  useEffect(() => {
-    console.log('CapVideoPlayer: Video source analysis:', {
-      videoSrc,
-      isApiVideo,
-      isMP4Video,
-      isCustomS3Video,
-      shouldUseCrossOrigin,
-      crossOriginValue
-    });
-  }, [videoSrc, isApiVideo, isMP4Video, isCustomS3Video, shouldUseCrossOrigin, crossOriginValue]);
-
   useEffect(() => {
     const checkMobile = () => {
       setIsMobile(window.innerWidth < 640);
@@ -150,7 +128,7 @@ export function CapVideoPlayer({
   }, [hlsVideo, hasPlayedOnce]);
 
   useEffect(() => {
-    if (!videoRef.current || !hlsVideo || !videoSrc) return;
+    if (!videoRef.current || !hlsVideo) return;
 
     const videoElement = videoRef.current;
 
@@ -330,7 +308,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={crossOriginValue}
+          crossOrigin={undefined}
           playsInline
           autoPlay={autoplay}
         >
