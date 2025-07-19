@@ -33,7 +33,6 @@ interface Props {
   videoRef: React.RefObject<HTMLVideoElement>;
   mediaPlayerClassName?: string;
   autoplay?: boolean;
-  enableCrossOrigin?: boolean;
 }
 
 export function CapVideoPlayer({
@@ -43,7 +42,6 @@ export function CapVideoPlayer({
   videoRef,
   mediaPlayerClassName,
   autoplay = false,
-  enableCrossOrigin = false,
 }: Props) {
 
   const [currentCue, setCurrentCue] = useState<string>('');
@@ -76,7 +74,7 @@ export function CapVideoPlayer({
 
       const response = await fetch(urlWithTimestamp, { method: "HEAD" });
       const finalUrl = response.redirected ? response.url : urlWithTimestamp;
-      
+
       setResolvedVideoSrc(finalUrl);
       return finalUrl;
     } catch (error) {
@@ -278,7 +276,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={enableCrossOrigin ? "anonymous" : undefined}
+          crossOrigin="anonymous"
           playsInline
           autoPlay={autoplay}
         >
@@ -311,7 +309,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !enableCrossOrigin ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />

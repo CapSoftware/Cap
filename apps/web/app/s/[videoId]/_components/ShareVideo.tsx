@@ -114,9 +114,6 @@ export const ShareVideo = forwardRef<
 
   let videoSrc: string;
 
-
-  let enableCrossOrigin = false;
-
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
   } else if (
@@ -142,7 +139,6 @@ export const ShareVideo = forwardRef<
             chaptersSrc={chaptersUrl || ""}
             captionsSrc={subtitleUrl || ""}
             videoRef={videoRef}
-            enableCrossOrigin={enableCrossOrigin}
           />
         ) : (
           <HLSVideoPlayer
