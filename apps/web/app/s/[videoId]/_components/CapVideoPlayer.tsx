@@ -54,6 +54,7 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [corsErrorDetected, setCorsErrorDetected] = useState(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -105,11 +106,28 @@ export function CapVideoPlayer({
       setHasPlayedOnce(true);
     };
 
+    const handleError = (e: Event) => {
+      const error = (e.target as HTMLVideoElement).error;
+      console.error('CapVideoPlayer: Video error detected:', {
+        error,
+        code: error?.code,
+        message: error?.message,
+        videoSrc
+      });
+      
+      // Detect CORS-related errors and disable crossOrigin + thumbnails
+      if (error && (error.code === 4 || error.message?.includes('CORS'))) {
+        console.log('CapVideoPlayer: CORS error detected, disabling crossOrigin and thumbnails');
+        setCorsErrorDetected(true);
+      }
+    };
+
     video.addEventListener('loadeddata', handleLoadedData);
     video.addEventListener('canplay', handleCanPlay);
     video.addEventListener('loadedmetadata', handleLoadedMetadata);
     video.addEventListener('load', handleLoad);
     video.addEventListener('play', handlePlay);
+    video.addEventListener('error', handleError);
 
     if (video.readyState >= 2) {
       setVideoLoaded(true);
@@ -124,6 +142,7 @@ export function CapVideoPlayer({
       video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       video.removeEventListener('load', handleLoad);
       video.removeEventListener('play', handlePlay);
+      video.removeEventListener('error', handleError);
     };
   }, [hlsVideo, hasPlayedOnce]);
 
@@ -308,7 +327,7 @@ export function CapVideoPlayer({
             setShowPlayButton(false);
             setHasPlayedOnce(true);
           }}
-          crossOrigin={undefined}
+          crossOrigin={corsErrorDetected ? undefined : "anonymous"}
           playsInline
           autoPlay={autoplay}
         >
@@ -341,7 +360,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || corsErrorDetected ? undefined : generateVideoFrameThumbnail} />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />
