@@ -65,7 +65,7 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution and CORS pre-check
+  // Fetch new URL with redirect resolution and smart CORS detection
   const fetchNewUrl = useCallback(async () => {
     try {
       const timestamp = new Date().getTime();
@@ -75,13 +75,31 @@ export function CapVideoPlayer({
 
       const response = await fetch(urlWithTimestamp, { method: "HEAD" });
       const finalUrl = response.redirected ? response.url : urlWithTimestamp;
-
-      // Pre-check CORS headers to determine if crossOrigin will work
-      const corsHeaders = response.headers.get('access-control-allow-origin');
-      const hasCorsSupport = corsHeaders === '*' || corsHeaders === window.location.origin;
-      // Set CORS error state early if we detect no CORS support
-      if (!hasCorsSupport && new URL(finalUrl).origin !== window.location.origin) {
+      
+      // Smart CORS detection based on URL patterns and headers
+      const finalUrlObj = new URL(finalUrl);
+      const isCurrentOrigin = finalUrlObj.origin === window.location.origin;
+      
+      // If same origin, no CORS issues
+      if (isCurrentOrigin) {
+        setResolvedVideoSrc(finalUrl);
+        return finalUrl;
+      }
+      
+      // For cross-origin, check common patterns that typically don't support CORS for video
+      const isCloudflareR2 = finalUrl.includes('.r2.cloudflarestorage.com');
+      const isS3 = finalUrl.includes('.s3.') || finalUrl.includes('amazonaws.com');
+      
+      // Pre-emptively disable CORS for known problematic services
+      if (isCloudflareR2 || isS3) {
         setCorsErrorDetected(true);
+      } else {
+        // For other domains, try to check CORS headers
+        const corsHeaders = response.headers.get('access-control-allow-origin');
+        const hasCorsSupport = corsHeaders === '*' || corsHeaders === window.location.origin;
+        if (!hasCorsSupport) {
+          setCorsErrorDetected(true);
+        }
       }
 
       setResolvedVideoSrc(finalUrl);
