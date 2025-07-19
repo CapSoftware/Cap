@@ -75,6 +75,6 @@ export const allowedOrigins = [
 export const corsMiddleware = cors({
   origin: allowedOrigins,
   credentials: true,
-  allowMethods: ["POST", "OPTIONS"],
+  allowMethods: ["GET", "POST", "OPTIONS"],
   allowHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
 });
