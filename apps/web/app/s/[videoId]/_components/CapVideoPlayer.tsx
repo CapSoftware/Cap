@@ -172,9 +172,43 @@ export function CapVideoPlayer({
       }
     };
 
+    // Caption track setup
+    let captionTrack: TextTrack | null = null;
+
+    const handleCueChange = (): void => {
+      if (captionTrack && captionTrack.activeCues && captionTrack.activeCues.length > 0) {
+        const cue = captionTrack.activeCues[0] as VTTCue;
+        const plainText = cue.text.replace(/<[^>]*>/g, '');
+        setCurrentCue(plainText);
+      } else {
+        setCurrentCue('');
+      }
+    };
+
+    const setupTracks = (): void => {
+      const tracks = Array.from(video.textTracks);
+
+      for (const track of tracks) {
+        if (track.kind === 'captions' || track.kind === 'subtitles') {
+          captionTrack = track;
+          track.mode = 'hidden';
+          track.addEventListener('cuechange', handleCueChange);
+          break;
+        }
+      }
+    };
+
+    const handleLoadedMetadataWithTracks = () => {
+      setVideoLoaded(true);
+      if (!hasPlayedOnce) {
+        setShowPlayButton(true);
+      }
+      setupTracks();
+    };
+
     video.addEventListener('loadeddata', handleLoadedData);
     video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
     video.addEventListener('load', handleLoad);
     video.addEventListener('play', handlePlay);
     video.addEventListener('error', handleError);
@@ -186,13 +220,21 @@ export function CapVideoPlayer({
       }
     }
 
+    // Setup tracks immediately if video is already loaded
+    if (video.readyState >= 1) {
+      setupTracks();
+    }
+
     return () => {
       video.removeEventListener('loadeddata', handleLoadedData);
       video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
       video.removeEventListener('load', handleLoad);
       video.removeEventListener('play', handlePlay);
       video.removeEventListener('error', handleError);
+      if (captionTrack) {
+        captionTrack.removeEventListener('cuechange', handleCueChange);
+      }
     };
   }, [hasPlayedOnce, videoSrc, urlResolved]);
 
@@ -221,52 +263,7 @@ export function CapVideoPlayer({
     return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
   }, []);
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
 
-    let captionTrack: TextTrack | null = null;
-
-    const handleCueChange = (): void => {
-      if (captionTrack && captionTrack.activeCues && captionTrack.activeCues.length > 0) {
-        const cue = captionTrack.activeCues[0] as VTTCue;
-        const plainText = cue.text.replace(/<[^>]*>/g, '');
-        setCurrentCue(plainText);
-      } else {
-        setCurrentCue('');
-      }
-    };
-
-    const setupTracks = (): void => {
-      const tracks = Array.from(video.textTracks);
-
-      for (const track of tracks) {
-        if (track.kind === 'captions' || track.kind === 'subtitles') {
-          captionTrack = track;
-          track.mode = 'hidden';
-          track.addEventListener('cuechange', handleCueChange);
-          break;
-        }
-      }
-    };
-
-    const handleLoadedMetadata = (): void => {
-      setupTracks();
-    };
-
-    video.addEventListener('loadedmetadata', handleLoadedMetadata);
-
-    if (video.readyState >= 1) {
-      setupTracks();
-    }
-
-    return () => {
-      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      if (captionTrack) {
-        captionTrack.removeEventListener('cuechange', handleCueChange);
-      }
-    };
-  }, []);
 
   return (
     <>
