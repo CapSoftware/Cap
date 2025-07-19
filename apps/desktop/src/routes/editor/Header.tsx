@@ -109,7 +109,12 @@ export function Header() {
           <Tooltip disabled={!truncated()} content={meta().prettyName}>
             <input
               ref={prettyNameRef}
-              class="text-sm text-gray-12 max-w-[300px] bg-transparent focus:border-b focus:border-gray-7 focus:outline-none"
+              class={cx(
+                "text-sm text-gray-12 max-w-[300px] bg-transparent focus:border-b focus:border-gray-7 focus:outline-none",
+                truncated() && "truncate",
+                (prettyName().length < 5 || prettyName().length > 100) &&
+                  "focus:border-red-500"
+              )}
               value={prettyName()}
               onInput={(e) => setPrettyName(e.currentTarget.value)}
               onBlur={async () => {
