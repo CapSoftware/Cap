@@ -18,6 +18,7 @@ import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
+import { commands } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import PresetsDropdown from "./PresetsDropdown";
@@ -51,6 +52,7 @@ export function Header() {
     meta,
     exportState,
     setExportState,
+    refetchMeta,
     customDomain,
   } = useEditorContext();
 
@@ -60,15 +62,17 @@ export function Header() {
   });
   onCleanup(() => unlistenTitlebar?.());
 
+  let prettyNameRef: HTMLInputElement | undefined;
+  let prettyNameMeasureRef: HTMLSpanElement | undefined;
   const [truncated, setTruncated] = createSignal(false);
-
-  let prettyNameRef: HTMLParagraphElement | undefined;
+  const [prettyName, setPrettyName] = createSignal(meta().prettyName);
 
   createEffect(() => {
-    if (!prettyNameRef) return;
-    const width = prettyNameRef.offsetWidth;
-    const scrollWidth = prettyNameRef.scrollWidth;
-    setTruncated(width < scrollWidth);
+    if (!prettyNameRef || !prettyNameMeasureRef) return;
+    prettyNameMeasureRef.textContent = prettyName();
+    const inputWidth = prettyNameRef.offsetWidth;
+    const textWidth = prettyNameMeasureRef.offsetWidth;
+    setTruncated(inputWidth < textWidth);
   });
 
   return (
@@ -103,12 +107,33 @@ export function Header() {
 
         <div class="flex flex-row items-center">
           <Tooltip disabled={!truncated()} content={meta().prettyName}>
-            <p
+            <input
               ref={prettyNameRef}
-              class="text-sm truncate text-gray-12 max-w-[300px] cursor-default"
-            >
-              {meta().prettyName}
-            </p>
+              class="text-sm text-gray-12 max-w-[300px] bg-transparent focus:border-b focus:border-gray-7 focus:outline-none"
+              value={prettyName()}
+              onInput={(e) => setPrettyName(e.currentTarget.value)}
+              onBlur={async () => {
+                const trimmed = prettyName().trim();
+                if (trimmed.length < 5 || trimmed.length > 100) {
+                  setPrettyName(meta().prettyName);
+                  return;
+                }
+                if (trimmed && trimmed !== meta().prettyName) {
+                  await commands.setPrettyName(trimmed);
+                  refetchMeta();
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                  prettyNameRef?.blur();
+                }
+              }}
+            />
+            {/* Hidden span for measuring text width */}
+            <span
+              ref={prettyNameMeasureRef}
+              class="invisible absolute pointer-events-none whitespace-pre h-0 overflow-hidden text-sm font-inherit font-normal tracking-inherit p-0 m-0"
+            />
           </Tooltip>
           <span class="text-sm text-gray-11">.cap</span>
         </div>
