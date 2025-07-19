@@ -120,15 +120,19 @@ export const ShareVideo = forwardRef<
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
     enableCrossOrigin = true;
     enableThumbnails = true;
+  } else if (NODE_ENV === "development") {
+    videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
+    videoType = "application/x-mpegURL";
+    enableCrossOrigin = true;
+    enableThumbnails = true;
   } else if (
-    NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
     videoType = "application/x-mpegURL";
-    enableCrossOrigin = true;
-    enableThumbnails = true;
+    enableCrossOrigin = false;
+    enableThumbnails = false;
   } else if (data.source.type === "MediaConvert") {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
     videoType = "application/x-mpegURL";
