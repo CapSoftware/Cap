@@ -62,9 +62,12 @@ export function CapVideoPlayer({
       try {
         // If it's not an API URL, use it directly
         if (!videoSrc.startsWith('/api/')) {
+          console.log('CapVideoPlayer: Using direct URL:', videoSrc);
           setResolvedVideoSrc(videoSrc);
           return;
         }
+
+        console.log('CapVideoPlayer: Resolving redirect for:', videoSrc);
 
         // Add timestamp to prevent caching issues
         const timestamp = new Date().getTime();
@@ -74,16 +77,23 @@ export function CapVideoPlayer({
 
         const response = await fetch(urlWithTimestamp, { method: 'HEAD' });
         
+        console.log('CapVideoPlayer: HEAD response status:', response.status);
+        console.log('CapVideoPlayer: HEAD response redirected:', response.redirected);
+        console.log('CapVideoPlayer: HEAD response URL:', response.url);
+        
         if (response.redirected) {
           // Use the final redirected URL
+          console.log('CapVideoPlayer: Using redirected URL:', response.url);
           setResolvedVideoSrc(response.url);
         } else {
           // Use the original URL with timestamp
+          console.log('CapVideoPlayer: Using original URL with timestamp:', urlWithTimestamp);
           setResolvedVideoSrc(urlWithTimestamp);
         }
       } catch (error) {
-        console.error('Error resolving video URL:', error);
+        console.error('CapVideoPlayer: Error resolving video URL:', error);
         // Fallback to original URL
+        console.log('CapVideoPlayer: Falling back to original URL:', videoSrc);
         setResolvedVideoSrc(videoSrc);
       }
     };
