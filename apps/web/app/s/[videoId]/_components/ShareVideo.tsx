@@ -115,14 +115,16 @@ export const ShareVideo = forwardRef<
   let videoType: string = "video/mp4";
   let enableCrossOrigin = false;
   let enableThumbnails = false;
-  
+
   if (data.source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
     // API videos: disable CORS and thumbnails due to R2 CORS issues
-    enableCrossOrigin = false;
-    enableThumbnails = false;
+    enableCrossOrigin = true;
+    enableThumbnails = true;
+  } else if (NODE_ENV === "development") {
+    enableThumbnails = true;
+    enableCrossOrigin = true;
   } else if (
-    NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
       data.source.type === "MediaConvert")
   ) {
@@ -149,12 +151,12 @@ export const ShareVideo = forwardRef<
     <>
 
       <div className="relative h-full">
-        <CapVideoPlayer 
-          hlsVideo={videoType === "application/x-mpegURL"} 
+        <CapVideoPlayer
+          hlsVideo={videoType === "application/x-mpegURL"}
           mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
-          videoSrc={videoSrc} 
-          chaptersSrc={chaptersUrl || ""} 
-          captionsSrc={subtitleUrl || ""} 
+          videoSrc={videoSrc}
+          chaptersSrc={chaptersUrl || ""}
+          captionsSrc={subtitleUrl || ""}
           videoRef={videoRef}
           enableCrossOrigin={enableCrossOrigin}
           enableThumbnails={enableThumbnails}
