@@ -19,7 +19,8 @@ import {
   MediaPlayerVolume,
   MediaPlayerVolumeIndicator,
 } from "./video/media-player";
-import { useEffect, useCallback, useState } from "react";
+import { useRef, useEffect, useCallback, useState } from "react";
+import Hls from "hls.js";
 import clsx from "clsx";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -33,19 +34,17 @@ interface Props {
   videoRef: React.RefObject<HTMLVideoElement>;
   mediaPlayerClassName?: string;
   autoplay?: boolean;
-  enableCrossOrigin?: boolean;
 }
 
-export function CapVideoPlayer({
+export function HLSVideoPlayer({
   videoSrc,
   chaptersSrc,
   captionsSrc,
   videoRef,
   mediaPlayerClassName,
-  autoplay = false,
-  enableCrossOrigin = false,
+  autoplay = false
 }: Props) {
-
+  const hlsInstance = useRef<Hls | null>(null);
   const [currentCue, setCurrentCue] = useState<string>('');
   const [controlsVisible, setControlsVisible] = useState(false);
   const [toggleCaptions, setToggleCaptions] = useState(true);
@@ -53,9 +52,6 @@ export function CapVideoPlayer({
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
-  const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
-  const [urlResolved, setUrlResolved] = useState(false);
 
   useEffect(() => {
     const checkMobile = () => {
@@ -68,61 +64,9 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution and pre-emptive CORS detection
-  const fetchNewUrl = useCallback(async () => {
-    try {
-      const timestamp = new Date().getTime();
-      const urlWithTimestamp = videoSrc.includes("?")
-        ? `${videoSrc}&_t=${timestamp}`
-        : `${videoSrc}?_t=${timestamp}`;
-
-      const response = await fetch(urlWithTimestamp, { method: "HEAD" });
-      const finalUrl = response.redirected ? response.url : urlWithTimestamp;
-
-      // Check if the resolved URL is from a CORS-incompatible service
-      const isCloudflareR2 = finalUrl.includes('.r2.cloudflarestorage.com');
-      const isS3 = finalUrl.includes('.s3.') || finalUrl.includes('amazonaws.com');
-      const isCorsIncompatible = isCloudflareR2 || isS3;
-      
-      // Set CORS based on URL compatibility BEFORE video element is created
-      if (isCorsIncompatible) {
-        console.log('CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:', finalUrl);
-        setUseCrossOrigin(false);
-      } else {
-        setUseCrossOrigin(enableCrossOrigin);
-      }
-
-      setResolvedVideoSrc(finalUrl);
-      setUrlResolved(true);
-      return finalUrl;
-    } catch (error) {
-      console.error("CapVideoPlayer: Error fetching new video URL:", error);
-      // On fetch error, disable CORS to be safe
-      setUseCrossOrigin(false);
-      const timestamp = new Date().getTime();
-      const fallbackUrl = videoSrc.includes("?")
-        ? `${videoSrc}&_t=${timestamp}`
-        : `${videoSrc}?_t=${timestamp}`;
-      setResolvedVideoSrc(fallbackUrl);
-      setUrlResolved(true);
-      return fallbackUrl;
-    }
-  }, [videoSrc, enableCrossOrigin]);
-
-  // Resolve video URL on mount and when videoSrc changes
-  useEffect(() => {
-    fetchNewUrl();
-  }, [fetchNewUrl]);
-
-  // Reset URL resolution state when video source changes
-  useEffect(() => {
-    setUrlResolved(false);
-    setUseCrossOrigin(enableCrossOrigin);
-  }, [videoSrc, enableCrossOrigin]);
-
   useEffect(() => {
     const video = videoRef.current;
-    if (!video || !urlResolved) return;
+    if (!video) return;
 
     const handleLoadedData = () => {
       setVideoLoaded(true);
@@ -132,13 +76,6 @@ export function CapVideoPlayer({
     };
 
     const handleCanPlay = () => {
-      setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
-      }
-    };
-
-    const handleLoadedMetadata = () => {
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -159,56 +96,16 @@ export function CapVideoPlayer({
 
     const handleError = (e: Event) => {
       const error = (e.target as HTMLVideoElement).error;
-      console.error('CapVideoPlayer: Video error detected:', {
+      console.error('HLSVideoPlayer: Video error detected:', {
         error,
         code: error?.code,
         message: error?.message,
         videoSrc
       });
-
-      // CORS errors are now handled at the ShareVideo level via enableCrossOrigin prop
-      if (error && (error.code === 4 || error.message?.includes('CORS'))) {
-        console.log('CapVideoPlayer: CORS error detected - this should be prevented by ShareVideo logic');
-      }
-    };
-
-    // Caption track setup
-    let captionTrack: TextTrack | null = null;
-
-    const handleCueChange = (): void => {
-      if (captionTrack && captionTrack.activeCues && captionTrack.activeCues.length > 0) {
-        const cue = captionTrack.activeCues[0] as VTTCue;
-        const plainText = cue.text.replace(/<[^>]*>/g, '');
-        setCurrentCue(plainText);
-      } else {
-        setCurrentCue('');
-      }
-    };
-
-    const setupTracks = (): void => {
-      const tracks = Array.from(video.textTracks);
-
-      for (const track of tracks) {
-        if (track.kind === 'captions' || track.kind === 'subtitles') {
-          captionTrack = track;
-          track.mode = 'hidden';
-          track.addEventListener('cuechange', handleCueChange);
-          break;
-        }
-      }
-    };
-
-    const handleLoadedMetadataWithTracks = () => {
-      setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
-      }
-      setupTracks();
     };
 
     video.addEventListener('loadeddata', handleLoadedData);
     video.addEventListener('canplay', handleCanPlay);
-    video.addEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
     video.addEventListener('load', handleLoad);
     video.addEventListener('play', handlePlay);
     video.addEventListener('error', handleError);
@@ -220,50 +117,121 @@ export function CapVideoPlayer({
       }
     }
 
-    // Setup tracks immediately if video is already loaded
+    return () => {
+      video.removeEventListener('loadeddata', handleLoadedData);
+      video.removeEventListener('canplay', handleCanPlay);
+      video.removeEventListener('load', handleLoad);
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('error', handleError);
+    };
+  }, [hasPlayedOnce, videoSrc]);
+
+  // HLS setup
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !videoSrc) return;
+
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+      });
+
+      hlsInstance.current = hls;
+
+      hls.loadSource(videoSrc);
+      hls.attachMedia(video);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('HLSVideoPlayer: HLS manifest parsed successfully');
+        setVideoLoaded(true);
+        if (!hasPlayedOnce) {
+          setShowPlayButton(true);
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('HLSVideoPlayer: HLS error:', event, data);
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log('HLSVideoPlayer: Fatal network error encountered, trying to recover');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log('HLSVideoPlayer: Fatal media error encountered, trying to recover');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.log('HLSVideoPlayer: Fatal error, cannot recover');
+              hls.destroy();
+              break;
+          }
+        }
+      });
+
+      return () => {
+        if (hlsInstance.current) {
+          hlsInstance.current.destroy();
+          hlsInstance.current = null;
+        }
+      };
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      video.src = videoSrc;
+      console.log('HLSVideoPlayer: Using native HLS support');
+    } else {
+      console.error('HLSVideoPlayer: HLS is not supported in this browser');
+    }
+  }, [videoSrc, hasPlayedOnce]);
+
+  // Caption handling
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !captionsSrc) return;
+
+    let captionTrack: TextTrack | null = null;
+
+    const handleCueChange = (): void => {
+      if (captionTrack && captionTrack.activeCues && captionTrack.activeCues.length > 0) {
+        const activeCue = captionTrack.activeCues[0] as VTTCue;
+        setCurrentCue(activeCue.text);
+      } else {
+        setCurrentCue('');
+      }
+    };
+
+    const setupTracks = (): void => {
+      const tracks = video.textTracks;
+      for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        if (track && (track.kind === 'captions' || track.kind === 'subtitles')) {
+          captionTrack = track;
+          track.mode = 'hidden';
+          track.addEventListener('cuechange', handleCueChange);
+          break;
+        }
+      }
+    };
+
+    const handleLoadedMetadata = (): void => {
+      setupTracks();
+    };
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+
     if (video.readyState >= 1) {
       setupTracks();
     }
 
     return () => {
-      video.removeEventListener('loadeddata', handleLoadedData);
-      video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
-      video.removeEventListener('load', handleLoad);
-      video.removeEventListener('play', handlePlay);
-      video.removeEventListener('error', handleError);
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
       if (captionTrack) {
         captionTrack.removeEventListener('cuechange', handleCueChange);
       }
     };
-  }, [hasPlayedOnce, videoSrc, urlResolved]);
-
-
-
-  const generateVideoFrameThumbnail = useCallback((time: number): string => {
-    const video = videoRef.current;
-
-    if (!video) {
-      return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
-    }
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 224;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
-
-    if (ctx) {
-      try {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.8);
-      } catch (error) {
-        return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-      }
-    }
-    return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
-  }, []);
-
-
+  }, [captionsSrc]);
 
   return (
     <>
@@ -278,35 +246,6 @@ export function CapVideoPlayer({
         >
           <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
         </div>
-        {urlResolved && (
-          <MediaPlayerVideo
-            src={resolvedVideoSrc}
-            ref={videoRef}
-            onLoadedData={() => {
-              setVideoLoaded(true);
-            }}
-            onPlay={() => {
-              setShowPlayButton(false);
-              setHasPlayedOnce(true);
-            }}
-            crossOrigin={useCrossOrigin ? "anonymous" : undefined}
-            playsInline
-            autoPlay={autoplay}
-          >
-          <track
-            default
-            kind="chapters"
-            src={chaptersSrc}
-          />
-          <track
-            label="English"
-            kind="captions"
-            srcLang="en"
-            src={captionsSrc}
-            default
-          />
-        </MediaPlayerVideo>
-        )}
         <AnimatePresence>
           {showPlayButton && videoLoaded && !hasPlayedOnce && (
             <motion.div
@@ -322,6 +261,29 @@ export function CapVideoPlayer({
             </motion.div>
           )}
         </AnimatePresence>
+        <MediaPlayerVideo
+          src={undefined} // HLS source is handled by HLS.js
+          ref={videoRef}
+          onPlay={() => {
+            setShowPlayButton(false);
+            setHasPlayedOnce(true);
+          }}
+          playsInline
+          autoPlay={autoplay}
+        >
+          <track
+            default
+            kind="chapters"
+            src={chaptersSrc}
+          />
+          <track
+            label="English"
+            kind="captions"
+            srcLang="en"
+            src={captionsSrc}
+            default
+          />
+        </MediaPlayerVideo>
         {currentCue && toggleCaptions && (
           <div
             className={clsx(
@@ -338,7 +300,7 @@ export function CapVideoPlayer({
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
-          <MediaPlayerSeek tooltipThumbnailSrc={isMobile || !useCrossOrigin ? undefined : generateVideoFrameThumbnail} />
+          <MediaPlayerSeek />
           <div className="flex gap-2 items-center w-full">
             <div className="flex flex-1 gap-2 items-center">
               <MediaPlayerPlay />
