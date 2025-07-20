@@ -83,7 +83,7 @@ export function CapVideoPlayer({
       const isCloudflareR2 = finalUrl.includes('.r2.cloudflarestorage.com');
       const isS3 = finalUrl.includes('.s3.') || finalUrl.includes('amazonaws.com');
       const isCorsIncompatible = isCloudflareR2 || isS3;
-      
+
       // Set CORS based on URL compatibility BEFORE video element is created
       if (isCorsIncompatible) {
         console.log('CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:', finalUrl);
@@ -132,13 +132,6 @@ export function CapVideoPlayer({
     };
 
     const handleCanPlay = () => {
-      setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
-      }
-    };
-
-    const handleLoadedMetadata = () => {
       setVideoLoaded(true);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
@@ -293,19 +286,19 @@ export function CapVideoPlayer({
             playsInline
             autoPlay={autoplay}
           >
-          <track
-            default
-            kind="chapters"
-            src={chaptersSrc}
-          />
-          <track
-            label="English"
-            kind="captions"
-            srcLang="en"
-            src={captionsSrc}
-            default
-          />
-        </MediaPlayerVideo>
+            <track
+              default
+              kind="chapters"
+              src={chaptersSrc}
+            />
+            <track
+              label="English"
+              kind="captions"
+              srcLang="en"
+              src={captionsSrc}
+              default
+            />
+          </MediaPlayerVideo>
         )}
         <AnimatePresence>
           {showPlayButton && videoLoaded && !hasPlayedOnce && (
