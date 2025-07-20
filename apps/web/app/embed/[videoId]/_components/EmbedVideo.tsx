@@ -14,6 +14,7 @@ import { useTranscript } from "hooks/use-transcript";
 import { AnimatePresence, motion } from "framer-motion";
 import { Logo, Avatar } from "@cap/ui";
 import { CapVideoPlayer } from "@/app/s/[videoId]/_components/CapVideoPlayer";
+import { HLSVideoPlayer } from "@/app/s/[videoId]/_components/HLSVideoPlayer";
 
 declare global {
   interface Window {
@@ -138,22 +139,22 @@ export const EmbedVideo = forwardRef<
     const publicEnv = usePublicEnv();
 
     let videoSrc: string;
-    let videoType: string = "video/mp4";
+    let enableCrossOrigin = false;
+
     if (data.source.type === "desktopMP4") {
       videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
+      // Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
+      enableCrossOrigin = true;
     } else if (
       NODE_ENV === "development" ||
       ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
         data.source.type === "MediaConvert")
     ) {
       videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-      videoType = "application/x-mpegURL";
     } else if (data.source.type === "MediaConvert") {
       videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
-      videoType = "application/x-mpegURL";
     } else {
       videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
-      videoType = "application/x-mpegURL";
     }
 
 
@@ -186,7 +187,24 @@ export const EmbedVideo = forwardRef<
       <>
 
         <div className="relative w-screen h-screen rounded-xl">
-          <CapVideoPlayer hlsVideo={videoType === "application/x-mpegURL"} mediaPlayerClassName="w-full h-full" videoSrc={videoSrc} chaptersSrc={chaptersUrl || ""} captionsSrc={subtitleUrl || ""} videoRef={videoRef} />
+          {data.source.type === "desktopMP4" ? (
+            <CapVideoPlayer
+              mediaPlayerClassName="w-full h-full"
+              videoSrc={videoSrc}
+              chaptersSrc={chaptersUrl || ""}
+              captionsSrc={subtitleUrl || ""}
+              videoRef={videoRef}
+              enableCrossOrigin={enableCrossOrigin}
+            />
+          ) : (
+            <HLSVideoPlayer
+              mediaPlayerClassName="w-full h-full"
+              videoSrc={videoSrc}
+              chaptersSrc={chaptersUrl || ""}
+              captionsSrc={subtitleUrl || ""}
+              videoRef={videoRef}
+            />
+          )}
         </div>
 
         <AnimatePresence>
