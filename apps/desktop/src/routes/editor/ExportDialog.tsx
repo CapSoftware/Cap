@@ -18,7 +18,7 @@ import {
   on,
   Show,
   Switch,
-  ValidComponent
+  ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
@@ -50,11 +50,11 @@ export const COMPRESSION_OPTIONS: Array<{
   label: string;
   value: ExportCompression;
 }> = [
-    { label: "Minimal", value: "Minimal" },
-    { label: "Social Media", value: "Social" },
-    { label: "Web", value: "Web" },
-    { label: "Potato", value: "Potato" },
-  ];
+  { label: "Minimal", value: "Minimal" },
+  { label: "Social Media", value: "Social" },
+  { label: "Web", value: "Web" },
+  { label: "Potato", value: "Potato" },
+];
 
 export const FPS_OPTIONS = [
   { label: "15 FPS", value: 15 },
@@ -211,7 +211,8 @@ export function ExportDialog() {
         });
       } else
         toast.success(
-          `${settings.format === "Gif" ? "GIF" : "Recording"
+          `${
+            settings.format === "Gif" ? "GIF" : "Recording"
           } exported to clipboard`
         );
     },
@@ -336,8 +337,8 @@ export function ExportDialog() {
         const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
-            Initial: { pre_created_video: null },
-          });
+              Initial: { pre_created_video: null },
+            });
 
         if (result === "NotAuthenticated")
           throw new Error("You need to sign in to share recordings");
@@ -375,12 +376,12 @@ export function ExportDialog() {
           title="Export"
           confirm={
             <>
-              {settings.exportTo === "link" && !auth.data ?
+              {settings.exportTo === "link" && !auth.data ? (
                 <SignInButton>
                   {exportButtonIcon[settings.exportTo]}
                   <span class="ml-1.5">Sign in to share</span>
                 </SignInButton>
-                :
+              ) : (
                 <Button
                   class="flex gap-1.5 items-center"
                   variant="primary"
@@ -392,7 +393,8 @@ export function ExportDialog() {
                 >
                   Export to
                   {exportButtonIcon[settings.exportTo]}
-                </Button>}
+                </Button>
+              )}
             </>
           }
           leftFooterContent={
@@ -421,13 +423,17 @@ export function ExportDialog() {
                             return `${hours}:${minutes
                               .toString()
                               .padStart(2, "0")}:${seconds
-                                .toString()
-                                .padStart(2, "0")}`;
+                              .toString()
+                              .padStart(2, "0")}`;
                           }
                           return `${minutes}:${seconds
                             .toString()
                             .padStart(2, "0")}`;
                         })()}
+                      </span>
+                      <span class="flex items-center text-[--gray-500]">
+                        <IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                        {settings.resolution.width}×{settings.resolution.height}
                       </span>
                       <span class="flex items-center text-[--gray-500]">
                         <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
@@ -449,8 +455,8 @@ export function ExportDialog() {
                             return `~${hours}:${minutes
                               .toString()
                               .padStart(2, "0")}:${seconds
-                                .toString()
-                                .padStart(2, "0")}`;
+                              .toString()
+                              .padStart(2, "0")}`;
                           }
                           return `~${minutes}:${seconds
                             .toString()
@@ -638,10 +644,10 @@ export function ExportDialog() {
                       settings.format === "Gif"
                         ? [RESOLUTION_OPTIONS._720p]
                         : [
-                          RESOLUTION_OPTIONS._720p,
-                          RESOLUTION_OPTIONS._1080p,
-                          RESOLUTION_OPTIONS._4k,
-                        ]
+                            RESOLUTION_OPTIONS._720p,
+                            RESOLUTION_OPTIONS._1080p,
+                            RESOLUTION_OPTIONS._4k,
+                          ]
                     }
                   >
                     {(option) => (
@@ -706,12 +712,12 @@ export function ExportDialog() {
                             {copyState.type === "starting"
                               ? "Preparing..."
                               : copyState.type === "rendering"
-                                ? settings.format === "Gif"
-                                  ? "Rendering GIF..."
-                                  : "Rendering video..."
-                                : copyState.type === "copying"
-                                  ? "Copying to clipboard..."
-                                  : "Copied to clipboard"}
+                              ? settings.format === "Gif"
+                                ? "Rendering GIF..."
+                                : "Rendering video..."
+                              : copyState.type === "copying"
+                              ? "Copying to clipboard..."
+                              : "Copied to clipboard"}
                           </h1>
                           <Show
                             when={
@@ -748,12 +754,12 @@ export function ExportDialog() {
                                   {saveState.type === "starting"
                                     ? "Preparing..."
                                     : saveState.type === "rendering"
-                                      ? settings.format === "Gif"
-                                        ? "Rendering GIF..."
-                                        : "Rendering video..."
-                                      : saveState.type === "copying"
-                                        ? "Exporting to file..."
-                                        : "Export completed"}
+                                    ? settings.format === "Gif"
+                                      ? "Rendering GIF..."
+                                      : "Rendering video..."
+                                    : saveState.type === "copying"
+                                    ? "Exporting to file..."
+                                    : "Export completed"}
                                 </h1>
                                 <Show
                                   when={
@@ -931,7 +937,8 @@ export function ExportDialog() {
                           }, 2000);
                           await commands.copyVideoToClipboard(path);
                           toast.success(
-                            `${settings.format === "Gif" ? "GIF" : "Video"
+                            `${
+                              settings.format === "Gif" ? "GIF" : "Video"
                             } copied to clipboard`
                           );
                         }
@@ -961,14 +968,15 @@ function RenderProgress(props: { state: RenderState; format?: ExportFormat }) {
       amount={
         props.state.type === "rendering"
           ? (props.state.progress.renderedCount /
-            props.state.progress.totalFrames) *
-          100
+              props.state.progress.totalFrames) *
+            100
           : 0
       }
       label={
         props.state.type === "rendering"
-          ? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${props.state.progress.renderedCount
-          }/${props.state.progress.totalFrames} frames)`
+          ? `Rendering ${props.format === "Gif" ? "GIF" : "video"} (${
+              props.state.progress.renderedCount
+            }/${props.state.progress.totalFrames} frames)`
           : "Preparing to render..."
       }
     />
