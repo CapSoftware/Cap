@@ -308,7 +308,9 @@ pub async fn start_recording(
                 else {
                     unreachable!();
                 };
-                display_for_window(target.raw_handle).unwrap().0 as u32
+                display_for_window(windows::Win32::Foundation::HWND(target.raw_handle.0))
+                    .unwrap()
+                    .0 as u32
             };
 
             let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }

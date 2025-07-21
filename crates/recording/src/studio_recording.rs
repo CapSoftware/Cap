@@ -150,7 +150,7 @@ pub async fn spawn_studio_recording_actor<'a>(
 
     if let Some(camera_feed) = &camera_feed {
         let camera_feed = camera_feed.lock().await;
-        debug!("camera device info: {:#?}", camera_feed.camera_info());
+        // debug!("camera device info: {:#?}", camera_feed.camera_info());
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
 

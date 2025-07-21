@@ -259,7 +259,10 @@ impl Iterator for NativeMediaTypesIterator<'_> {
     type Item = IMFMediaType;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let ret = unsafe { self.reader.GetNativeMediaType(self.stream_index, self.i) }.ok()?;
+        let Some(ret) = unsafe { self.reader.GetNativeMediaType(self.stream_index, self.i) }.ok()
+        else {
+            return None;
+        };
 
         self.i += 1;
 

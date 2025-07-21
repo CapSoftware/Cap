@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
+#[cfg(target_os = "windows")]
+use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
     data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
@@ -848,9 +850,11 @@ pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     }
     #[cfg(target_os = "windows")]
     match target {
-        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
+        scap::Target::Display(display) => {
+            platform::get_display_refresh_rate(HMONITOR(display.raw_handle.0))
+        }
         scap::Target::Window(window) => platform::get_display_refresh_rate(
-            platform::display_for_window(window.raw_handle)
+            platform::display_for_window(HWND(window.raw_handle.0))
                 .ok_or_else(|| "failed to get display for window".to_string())?,
         ),
     }
@@ -875,9 +879,9 @@ fn display_for_target<'a>(
             }
             #[cfg(windows)]
             {
-                let id = platform::display_for_window(window.raw_handle)?;
+                let id = platform::display_for_window(HWND(window.raw_handle.0))?;
                 targets.iter().find(|t| match t {
-                    scap::Target::Display(d) => d.raw_handle == id,
+                    scap::Target::Display(d) => d.raw_handle.0 == id.0,
                     _ => false,
                 })
             }

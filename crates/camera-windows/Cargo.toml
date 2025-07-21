@@ -8,8 +8,8 @@ ffmpeg = { workspace = true }
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 
-windows = { version = "0.60", features = ["Win32_Media_MediaFoundation"] }
-windows-core = { version = "0.60" }
+windows = { workspace = true, features = ["Win32_Media_MediaFoundation"] }
+windows-core = { workspace = true }
 thiserror.workspace = true
 inquire = "0.7.5"
 

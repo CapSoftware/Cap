@@ -10,7 +10,7 @@ use std::{
     ptr::null_mut,
     time::Duration,
 };
-use windows::Win32::Media::{DirectShow::*, MediaFoundation::*};
+use windows::Win32::Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*};
 use windows_core::GUID;
 
 #[derive(Clone)]
@@ -58,6 +58,8 @@ impl VideoDeviceInfo {
             ) => {
                 let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
                 let pixel_format = format.pixel_format;
+                let width = format.width as usize;
+                let height = format.height as usize;
 
                 reader
                     .set_current_media_type(stream_index, &mf_format)
@@ -79,7 +81,9 @@ impl VideoDeviceInfo {
 
                     Some(Ok(Frame {
                         bytes,
-                        pixel_format: pixel_format,
+                        pixel_format,
+                        width,
+                        height,
                     }))
                 })) as CaptureIterator
             }
@@ -91,7 +95,10 @@ impl VideoDeviceInfo {
 
                 device.set_format(format)?;
 
-                let _ = device.run(Box::new(move |buffer, media_type, time_delta| {
+                let _ = device.run(Box::new(move |buffer, media_type, _| {
+                    let video_info =
+                        unsafe { &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER) };
+
                     let Some(format) = DSPixelFormat::new(media_type).map(|v| v.format) else {
                         return;
                     };
@@ -99,6 +106,8 @@ impl VideoDeviceInfo {
                     let _ = tx.try_send(Frame {
                         bytes: buffer.to_vec(),
                         pixel_format: format,
+                        width: video_info.bmiHeader.biWidth as usize,
+                        height: video_info.bmiHeader.biHeight as usize,
                     });
                 }));
 
@@ -132,6 +141,8 @@ impl Debug for VideoDeviceInfo {
 pub struct Frame {
     pub bytes: Vec<u8>,
     pub pixel_format: PixelFormat,
+    pub width: usize,
+    pub height: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -279,7 +290,25 @@ pub struct VideoFormat {
     height: u32,
     frame_rate: f32,
     pixel_format: PixelFormat,
-    inner: VideoFormatInner,
+    pub inner: VideoFormatInner,
+}
+
+impl VideoFormat {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn frame_rate(&self) -> f32 {
+        self.frame_rate
+    }
+
+    pub fn pixel_format(&self) -> PixelFormat {
+        self.pixel_format
+    }
 }
 
 #[derive(Clone)]
@@ -290,15 +319,10 @@ pub enum VideoFormatInner {
 
 impl Debug for VideoFormatInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VideoFormatInner")
-            .field(
-                "variant",
-                &match self {
-                    VideoFormatInner::MediaFoundation(_) => "MediaFoundation",
-                    VideoFormatInner::DirectShow(_) => "DirectShow",
-                },
-            )
-            .finish()
+        f.write_str(&match self {
+            VideoFormatInner::MediaFoundation(_) => "MediaFoundation",
+            VideoFormatInner::DirectShow(_) => "DirectShow",
+        })
     }
 }
 

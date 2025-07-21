@@ -1,13 +1,13 @@
 use windows::{
     Win32::{
-        Foundation::{BOOL, CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
+        Foundation::{CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
         Graphics::Gdi::{
             DEVMODEW, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors,
             EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONULL,
             MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
         },
     },
-    core::{PCWSTR, PWSTR},
+    core::{BOOL, PCWSTR, PWSTR},
 };
 
 #[derive(Clone, Copy)]

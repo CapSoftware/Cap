@@ -15,7 +15,7 @@ debug-logging = [] # Feature flag to control debug logging
 [dependencies]
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
-cap-gpu-converters = { path = "../gpu-converters" }
+# cap-gpu-converters = { path = "../gpu-converters" }
 cap-audio = { path = "../audio" }
 cpal.workspace = true
 ffmpeg.workspace = true
@@ -61,3 +61,9 @@ windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 ] }
 windows-capture = { workspace = true }
+cap-camera-windows = { path = "../camera-windows" }
+
+[dev-dependencies]
+inquire = "0.7.5"
+tokio = { workspace = true, features = ["macros"] }
+tracing-subscriber = "0.3.19"
