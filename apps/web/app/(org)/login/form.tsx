@@ -145,7 +145,7 @@ export function LoginForm() {
         animate={{
           opacity: showOrgInput ? 1 : 0,
           display: showOrgInput ? "flex" : "none",
-          transition: { duration: 0.2, delay: 0.2 },
+          transition: { duration: 0.1, delay: 0.2 },
         }}
         onClick={() => setShowOrgInput(false)}
         className="absolute overflow-hidden top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
