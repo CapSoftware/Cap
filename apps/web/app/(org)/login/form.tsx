@@ -186,79 +186,79 @@ export function LoginForm() {
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25, ease: "easeInOut" }}
+                transition={{ duration: 0.25, ease: "easeInOut", opacity: { delay: 0.05 } }}
                 className="px-1"
               >
-              {showOrgInput ? (
-                <motion.div
-                  key="sso"
-                  layout
-                  className="min-w-fit"
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10, transition: { duration: 0.15 } }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                >
-                  <LoginWithSSO
-                    handleOrganizationLookup={handleOrganizationLookup}
-                    organizationId={organizationId}
-                    setOrganizationId={setOrganizationId}
-                    organizationName={organizationName}
-                  />
-                </motion.div>
-              ) : (
-                <motion.form
-                  key="email"
-                  layout
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10, transition: { duration: 0.15 } }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!email) return;
+                {showOrgInput ? (
+                  <motion.div
+                    key="sso"
+                    layout
+                    className="min-w-fit"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0, transition: { delay: 0.1 } }}
+                    exit={{ opacity: 0, y: -10, transition: { duration: 0.1 } }}
+                    transition={{ duration: 0.2, ease: "easeInOut" }}
+                  >
+                    <LoginWithSSO
+                      handleOrganizationLookup={handleOrganizationLookup}
+                      organizationId={organizationId}
+                      setOrganizationId={setOrganizationId}
+                      organizationName={organizationName}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.form
+                    key="email"
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0, transition: { duration: 0.1 } }}
+                    exit={{ opacity: 0, y: -10, transition: { duration: 0.15 } }}
+                    transition={{ duration: 0.2, ease: "easeInOut", opacity: { delay: 0.05 } }}
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!email) return;
 
-                    setLoading(true);
-                    trackEvent("auth_started", {
-                      method: "email",
-                      is_signup: !oauthError,
-                    });
-                    signIn("email", {
-                      email,
-                      redirect: false,
-                      ...(next && next.length > 0 ? { callbackUrl: next } : {}),
-                    })
-                      .then((res) => {
-                        setLoading(false);
-                        if (res?.ok && !res?.error) {
-                          setEmailSent(true);
-                          trackEvent("auth_email_sent", {
-                            email_domain: email.split("@")[1],
-                          });
-                          toast.success("Email sent - check your inbox!");
-                        } else {
-                          toast.error("Error sending email - try again?");
-                        }
-                      })
-                      .catch(() => {
-                        setEmailSent(false);
-                        setLoading(false);
-                        toast.error("Error sending email - try again?");
+                      setLoading(true);
+                      trackEvent("auth_started", {
+                        method: "email",
+                        is_signup: !oauthError,
                       });
-                  }}
-                  className="flex flex-col space-y-3"
-                >
-                  <NormalLogin
-                    setShowOrgInput={setShowOrgInput}
-                    email={email}
-                    emailSent={emailSent}
-                    setEmail={setEmail}
-                    loading={loading}
-                    oauthError={oauthError}
-                    handleGoogleSignIn={handleGoogleSignIn}
-                  />
-                </motion.form>
-              )}
+                      signIn("email", {
+                        email,
+                        redirect: false,
+                        ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                      })
+                        .then((res) => {
+                          setLoading(false);
+                          if (res?.ok && !res?.error) {
+                            setEmailSent(true);
+                            trackEvent("auth_email_sent", {
+                              email_domain: email.split("@")[1],
+                            });
+                            toast.success("Email sent - check your inbox!");
+                          } else {
+                            toast.error("Error sending email - try again?");
+                          }
+                        })
+                        .catch(() => {
+                          setEmailSent(false);
+                          setLoading(false);
+                          toast.error("Error sending email - try again?");
+                        });
+                    }}
+                    className="flex flex-col space-y-3"
+                  >
+                    <NormalLogin
+                      setShowOrgInput={setShowOrgInput}
+                      email={email}
+                      emailSent={emailSent}
+                      setEmail={setEmail}
+                      loading={loading}
+                      oauthError={oauthError}
+                      handleGoogleSignIn={handleGoogleSignIn}
+                    />
+                  </motion.form>
+                )}
               </motion.div>
             </AnimatePresence>
             <motion.p
