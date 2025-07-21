@@ -147,13 +147,20 @@ pub struct Frame {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PixelFormat {
+    /// Packed
     ARGB,
+    /// Packed
     RGB24,
+    /// Packed
     RGB32,
+    /// Planar (3)
     YUV420P,
-    YUYV422,
-    UYVY422,
+    /// Planar (2)
     NV12,
+    /// Packed
+    YUYV422,
+    /// Packed
+    UYVY422,
 }
 
 impl PixelFormat {

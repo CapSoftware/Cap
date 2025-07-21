@@ -517,7 +517,7 @@ fn run_camera_feed(
                     let stride = ff_frame.stride(0);
 
                     for y in 0..frame.height {
-                        let row_width = frame.width * 4;
+                        let row_width = frame.width * 2;
                         let src_row = &frame.bytes[y * row_width..];
                         let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
 
@@ -529,12 +529,11 @@ fn run_camera_feed(
                 PixelFormat::UYVY422 => {
                     let mut ff_frame =
                         FFVideo::new(Pixel::UYVY422, frame.width as u32, frame.height as u32);
-                    assert_eq!(ff_frame.planes(), 1);
 
                     let stride = ff_frame.stride(0);
 
                     for y in 0..frame.height {
-                        let row_width = frame.width * 4;
+                        let row_width = frame.width * 2;
                         let src_row = &frame.bytes[y * row_width..];
                         let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
 
