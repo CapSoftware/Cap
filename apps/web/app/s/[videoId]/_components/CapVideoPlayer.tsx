@@ -60,6 +60,8 @@ export function CapVideoPlayer({
   const retryTimeout = useRef<NodeJS.Timeout | null>(null);
   const startTime = useRef<number>(Date.now());
   const [hasError, setHasError] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const isRetryingRef = useRef(false);
   const maxRetries = 3;
 
   useEffect(() => {
@@ -148,6 +150,8 @@ export function CapVideoPlayer({
     if (retryCount.current >= maxRetries) {
       console.error(`Video failed to load after ${maxRetries} attempts`);
       setHasError(true);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
       return;
     }
 
@@ -155,18 +159,22 @@ export function CapVideoPlayer({
     if (elapsedMs > 60000) {
       console.error("Video failed to load after 1 minute");
       setHasError(true);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
       return;
     }
 
     let retryInterval: number;
     if (retryCount.current === 0) {
-      retryInterval = 2000;
+      retryInterval = 2000; // 2 seconds
     } else if (retryCount.current === 1) {
-      retryInterval = 5000;
+      retryInterval = 5000; // 5 seconds
     } else {
-      retryInterval = 10000;
+      retryInterval = 10000; // 10 seconds
     }
 
+    console.log(`Retrying video load in ${retryInterval}ms (attempt ${retryCount.current + 1}/${maxRetries})`);
+    
     retryTimeout.current = setTimeout(() => {
       reloadVideo();
     }, retryInterval);
@@ -177,6 +185,8 @@ export function CapVideoPlayer({
     setResolvedVideoSrc(videoSrc);
     setVideoLoaded(false);
     setHasError(false);
+    isRetryingRef.current = false;
+    setIsRetrying(false);
     retryCount.current = 0;
     startTime.current = Date.now();
     setUrlResolved(false);
@@ -200,6 +210,8 @@ export function CapVideoPlayer({
     const handleLoadedData = () => {
       setVideoLoaded(true);
       setHasError(false);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
       }
@@ -212,6 +224,8 @@ export function CapVideoPlayer({
     const handleCanPlay = () => {
       setVideoLoaded(true);
       setHasError(false);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
       if (retryTimeout.current) {
         clearTimeout(retryTimeout.current);
         retryTimeout.current = null;
@@ -230,6 +244,10 @@ export function CapVideoPlayer({
       const error = (e.target as HTMLVideoElement).error;
       console.error('CapVideoPlayer: Video error detected:', error);
       if (!videoLoaded && !hasError) {
+        // Set both ref and state immediately to prevent any flash of error UI
+        isRetryingRef.current = true;
+        setIsRetrying(true);
+        setHasError(false);
         setupRetry();
       }
     };
@@ -287,6 +305,8 @@ export function CapVideoPlayer({
           console.log(
             "Video taking longer than expected to load, attempting reload"
           );
+          isRetryingRef.current = true;
+          setIsRetrying(true);
           setupRetry();
         }
       }, 10000);
@@ -423,7 +443,7 @@ export function CapVideoPlayer({
           </div>
         )}
         <MediaPlayerLoading />
-        <MediaPlayerError />
+        {!isRetrying && !isRetryingRef.current && <MediaPlayerError />}
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />
