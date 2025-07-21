@@ -122,7 +122,6 @@ export function CapVideoPlayer({
     const currentPosition = video.currentTime;
     const wasPlaying = !video.paused;
 
-    const newUrl = await fetchNewUrl();
     video.load();
 
     if (currentPosition > 0) {
@@ -316,8 +315,7 @@ export function CapVideoPlayer({
       if (retryTimeout.current) {
         clearTimeout(retryTimeout.current);
       }
-    };  
-    if (captionTrack) {
+      if (captionTrack) {
         captionTrack.removeEventListener('cuechange', handleCueChange);
       }
     };
