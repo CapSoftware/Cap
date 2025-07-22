@@ -115,6 +115,7 @@ impl CameraPreview {
         let store = self.store.clone();
         thread::spawn(move || {
             let mut window_visible = false;
+            let mut resampler_frame = Cached::default();
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -135,6 +136,8 @@ impl CameraPreview {
                     renderer.refresh_state(&store);
                 }
 
+                renderer.reconfigure_gpu_surface().unwrap();
+
                 if let Ok(surface) = renderer
                     .surface
                     .get_current_texture()
@@ -147,7 +150,10 @@ impl CameraPreview {
                     renderer.update_uniforms(reconfigure || window_size_updated, &surface);
 
                     let (buffer, stride) = if let Some(frame) = frame {
-                        let resampler_frame = renderer.get_resampler_output(&surface);
+                        let resampler_frame = resampler_frame.get_or_init(
+                            (surface.texture.width(), surface.texture.height()),
+                            || frame::Video::empty(),
+                        );
 
                         scaler.cached(
                             frame.format(),
@@ -221,7 +227,7 @@ impl CameraPreview {
 
 struct Renderer {
     surface: wgpu::Surface<'static>,
-    surface_config: Mutex<wgpu::SurfaceConfiguration>,
+    surface_config: wgpu::SurfaceConfiguration,
     render_pipeline: wgpu::RenderPipeline,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -239,8 +245,7 @@ struct Renderer {
     cached_frame_info: Option<(format::Pixel, u32, u32)>,
     // Used by `Self::update_uniforms` to determine if it should update
     cache_surface_height: Option<u32>,
-    // Used by `Self::get_resampler_output` to determine if the resampler output frame can be reused.
-    cached_resampler_output: Cached<(u32, u32), frame::Video>,
+    cache_surface_size: Cached<(u32, u32)>,
     // Used by `Self::render` to cache the texture across renders
     cached_texture: Cached<(u32, u32), (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
 }
@@ -383,7 +388,7 @@ impl Renderer {
             cache: None,
         });
 
-        let config = wgpu::SurfaceConfiguration {
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
             width: size.width,
@@ -394,7 +399,7 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
 
-        surface.configure(&device, &config);
+        surface.configure(&device, &surface_config);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -408,7 +413,7 @@ impl Renderer {
 
         Ok(Self {
             surface,
-            surface_config: Mutex::new(config),
+            surface_config,
             render_pipeline,
             device,
             queue,
@@ -421,7 +426,7 @@ impl Renderer {
             cached_state: CameraWindowState::default(),
             cached_frame_info: None,
             cache_surface_height: None,
-            cached_resampler_output: Cached::default(),
+            cache_surface_size: Cached::default(),
             cached_texture: Cached::default(),
         })
     }
@@ -501,6 +506,18 @@ impl Renderer {
         Ok(should_resize)
     }
 
+    fn reconfigure_gpu_surface(&mut self) -> tauri::Result<()> {
+        let size = self.window.outer_size()?;
+        self.cache_surface_size
+            .get_or_init((size.width, size.height), || {
+                self.surface_config.width = if size.width > 0 { size.width } else { 1 };
+                self.surface_config.height = if size.height > 0 { size.height } else { 1 };
+                self.surface.configure(&self.device, &self.surface_config);
+            });
+
+        Ok(())
+    }
+
     // Update the shader state if required
     fn update_uniforms(&mut self, reconfigure: bool, surface: &SurfaceTexture) {
         if reconfigure || self.cache_surface_height != Some(surface.texture.height()) {
@@ -525,31 +542,6 @@ impl Renderer {
                 ]),
             );
         }
-    }
-
-    /// Get a ffmpeg frame which the resampler can use.
-    /// We cache the frame between renders.
-    fn get_resampler_output(&mut self, surface_frame: &SurfaceTexture) -> &mut frame::Video {
-        let surface_width = surface_frame.texture.width();
-        let surface_height = surface_frame.texture.height();
-
-        self.cached_resampler_output
-            .get_or_init((surface_width, surface_height), || frame::Video::empty())
-
-        // if self
-        //     .cached_resampler_output
-        //     .as_ref()
-        //     .is_none_or(|f| f.0 == surface_width && f.1 == surface_height)
-        // {
-        //     self.cached_resampler_output =
-        //         Some((surface_width, surface_height, frame::Video::empty()));
-        // }
-
-        // &mut self
-        //     .cached_resampler_output
-        //     .as_mut()
-        //     .expect("checked above")
-        //     .2
     }
 
     /// Render the camera preview to the window.
@@ -689,9 +681,5 @@ impl<K: PartialEq, V> Cached<K, V> {
         }
 
         &mut self.value.as_mut().expect("checked above").1
-    }
-
-    pub fn clear(&mut self) {
-        self.value = None;
     }
 }
