@@ -45,33 +45,14 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Calculate offset in normalized coordinates
-    let offset_y = (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
+    // Position the quad to fill the crop region
+    let crop_range = 2.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
+    let final_y = -1.0 + (pos[idx].y + 1.0) * crop_range / 2.0;
 
-    // Calculate the available height for the camera content
-    let available_height = window_uniforms.window_height - uniforms.offset_pixels;
-    let scale_factor = available_height / window_uniforms.window_height;
-
-    // Calculate window aspect ratio
-    let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
-    let camera_aspect = uniforms.camera_aspect_ratio;
-
-    // Calculate scaling factors to maintain aspect ratio
-    let scale_x = select(camera_aspect / window_aspect, 1.0, camera_aspect > window_aspect);
-    let scale_y = select(1.0, window_aspect / camera_aspect, camera_aspect > window_aspect);
-
-    // Apply aspect ratio scaling
-    let scaled_x = pos[idx].x * scale_x;
-    let scaled_y = pos[idx].y * scale_y * scale_factor;
-
-    // Position the scaled quad in the bottom portion of the screen
-    let available_range = 2.0 - offset_y;
-    let final_y = -1.0 + (scaled_y + 1.0) * available_range / 2.0;
-
-    let adjusted_pos = vec2<f32>(scaled_x, final_y);
+    let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
 
     // Mark pixels in the offset area as transparent
-    let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - offset_y));
+    let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0));
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
@@ -91,6 +72,33 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
+    // Calculate the crop region dimensions
+    let crop_width = window_uniforms.window_width;
+    let crop_height = window_uniforms.window_height - uniforms.offset_pixels;
+    let crop_aspect = crop_width / crop_height;
+    let camera_aspect = uniforms.camera_aspect_ratio;
+
+    // Calculate UV coordinates for proper "cover" behavior
+    var final_uv = in.uv;
+    
+    // Determine which dimension needs to be scaled to cover the crop region
+    if (camera_aspect > crop_aspect) {
+        // Camera is wider than crop region - scale horizontally
+        let scale = crop_aspect / camera_aspect;
+        let offset = (1.0 - scale) * 0.5;
+        final_uv.x = final_uv.x * scale + offset;
+    } else {
+        // Camera is taller than crop region - scale vertically
+        let scale = camera_aspect / crop_aspect;
+        let offset = (1.0 - scale) * 0.5;
+        final_uv.y = final_uv.y * scale + offset;
+    }
+
+    // Apply mirroring if enabled
+    if (uniforms.mirrored == 1.0) {
+        final_uv.x = 1.0 - final_uv.x;
+    }
+
     // Shape constants: 0 = Round, 1 = Square, 2 = Full
     // Size constants: 0 = Sm, 1 = Lg
     let shape = uniforms.shape;
@@ -98,12 +106,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // For Full shape, render with subtle rounded corners
     if (shape == 2.0) {
-        // Apply mirroring if enabled
-        var final_uv = in.uv;
-        if (uniforms.mirrored == 1.0) {
-            final_uv.x = 1.0 - final_uv.x;
-        }
-
         // Apply subtle rounded corners for Full shape
         let center_uv = (in.uv - 0.5) * 2.0;
         let corner_radius = 0.05; // Small radius for subtle corners
@@ -149,12 +151,6 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // Apply the mask
     if (mask < 0.5) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
-
-    // Apply mirroring if enabled
-    var final_uv = in.uv;
-    if (uniforms.mirrored == 1.0) {
-        final_uv.x = 1.0 - final_uv.x;
     }
 
     // Sample the camera texture
