@@ -22,7 +22,6 @@ use tauri::{
 };
 use tauri_plugin_store::Store;
 use tokio::sync::{oneshot, Notify};
-use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */ + 16.0 /* camera preview inset */;
@@ -157,14 +156,9 @@ impl WindowCache {
     }
 }
 
-struct WindowState {
-    task: tokio::task::JoinHandle<()>,
-    thread: std::thread::JoinHandle<()>,
-}
-
 pub struct CameraPreview {
     reconfigure: Arc<Notify>,
-    window: RwLock<Option<WindowState>>,
+    window: RwLock<Option<tokio::task::JoinHandle<()>>>,
     store: Arc<Store<Wry>>,
     camera_rx: Receiver<RawCameraFrame>,
 }
@@ -236,7 +230,7 @@ impl CameraPreview {
         });
 
         let store = self.store.clone();
-        let thread = thread::spawn(move || {
+        thread::spawn(move || {
             let mut scaler = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -254,6 +248,8 @@ impl CameraPreview {
 
             // TODO: On reconfigure we need to resize the texture always
 
+            // This thread will automatically be shutdown if `internal_tx` is dropped
+            // which is held by the Tokio task.
             while let Some(frame) = internal_rx.blocking_recv() {
                 let surface_frame = renderer.surface.get_current_texture().unwrap();
                 // .with_context(|| "Error getting surface current texture")?;
@@ -295,8 +291,6 @@ impl CameraPreview {
                     //
                     // We do it this way so the correct window shape is maintained without it being implemented in both the webview and shader.
 
-                    println!("USING FALLBACK FRAME");
-
                     let color = [0x11, 0x11, 0x11, 0xFF]; // #111111
                     let pixel_count = (surface_height * surface_width) as usize;
                     let buffer: Vec<u8> = color
@@ -313,17 +307,11 @@ impl CameraPreview {
             }
         });
 
-        *self.window.write().unwrap_or_else(PoisonError::into_inner) =
-            Some(WindowState { task, thread });
-
-        // let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
-        // // We bail out really late which kinda sucks but:
-        // //  - it shouldn't happen
-        // //  - we can't hold the mutex over the wgpu `await` so we wouldn't be able to enforce it anyway.
-        // if state.is_some() {
-        //     return Err(anyhow!("Camera preview window already initialized"));
-        // }
-        // *state = Some(window);
+        let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
+        if state.is_some() {
+            return Err(anyhow!("Camera preview window already initialized"));
+        }
+        *state = Some(task);
 
         Ok(())
     }
@@ -331,10 +319,14 @@ impl CameraPreview {
     /// Triggered by Tauri when the camera preview window is closed.
     /// We drop the handle we have to the `tauri::Window` + wgpu stuff, to prevent us attempting to accessing something that's no longer valid.
     pub fn close_window(&self) {
-        self.window
+        if let Some(task) = self
+            .window
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .take();
+            .take()
+        {
+            task.abort();
+        }
     }
 
     /// Save the current state of the camera window.
