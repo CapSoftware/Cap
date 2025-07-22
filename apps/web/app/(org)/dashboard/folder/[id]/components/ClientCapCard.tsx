@@ -9,6 +9,7 @@ import { useState, useRef } from "react";
 type ClientCapCardProps = CapCardProps & {
   videoId: string;
   isLoadingAnalytics: boolean;
+  analytics: number;
 };
 
 // Interface for drop targets that will be registered for mobile drag and drop
@@ -36,7 +37,7 @@ export function registerDropTarget(
 }
 
 export function ClientCapCard(props: ClientCapCardProps) {
-  const { videoId, ...rest } = props;
+  const { videoId, isLoadingAnalytics, analytics, ...rest } = props;
   const [isDragging, setIsDragging] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -104,7 +105,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
       onDragEnd={handleDragEnd}
       className={isDragging ? "opacity-50" : ""}
     >
-      <CapCard {...rest} isLoadingAnalytics={isLoadingAnalytics} />
+      <CapCard {...rest} analytics={analytics} isLoadingAnalytics={isLoadingAnalytics} />
     </div>
   );
 }

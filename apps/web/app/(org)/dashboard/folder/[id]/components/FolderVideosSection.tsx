@@ -103,13 +103,13 @@ export default function FolderVideosSection({
   };
 
   const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
-    queryKey: ['analytics', data.map(video => video.id)],
+    queryKey: ['analytics', initialVideos.map(video => video.id)],
     queryFn: async () => {
-      if (!dubApiKeyEnabled || data.length === 0) {
+      if (!dubApiKeyEnabled || initialVideos.length === 0) {
         return {};
       }
 
-      const analyticsPromises = data.map(async (video) => {
+      const analyticsPromises = initialVideos.map(async (video) => {
         try {
           const response = await fetch(`/api/analytics?videoId=${video.id}`, {
             method: 'GET',
@@ -180,8 +180,8 @@ export default function FolderVideosSection({
                   key={video.id}
                   videoId={video.id}
                   cap={video}
-                  isLoadingAnalytics={isLoadingAnalytics}
                   analytics={analytics[video.id] || 0}
+                  isLoadingAnalytics={isLoadingAnalytics}
                   isSelected={selectedCaps.includes(video.id)}
                   anyCapSelected={selectedCaps.length > 0}
                   isDeleting={isDeleting}
