@@ -2,10 +2,10 @@
 import { userSelectProps } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AuthOverlay } from "./AuthOverlay";
+import { revalidateVideoPath } from "@/actions/revalidate-video";
 
 // million-ignore
 export const Toolbar = ({
@@ -15,7 +15,6 @@ export const Toolbar = ({
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
 }) => {
-  const { refresh } = useRouter();
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
@@ -95,6 +94,8 @@ export const Toolbar = ({
       }),
     });
 
+    await revalidateVideoPath(data.id);
+
     if (response.status === 429) {
       toast.error("Too many requests - please try again later.");
       return;
@@ -103,8 +104,6 @@ export const Toolbar = ({
     if (!response.ok) {
       console.error("Failed to record emoji reaction");
     }
-
-    refresh();
   };
 
   const handleCommentSubmit = async () => {
@@ -137,7 +136,7 @@ export const Toolbar = ({
 
       setComment("");
       setCommentBoxOpen(false);
-      refresh();
+      await revalidateVideoPath(data.id);
     } catch (error) {
       console.error("Failed to submit comment:", error);
     }
@@ -211,14 +210,12 @@ export const Toolbar = ({
   return (
     <>
       <div
-        className={`${
-          !commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
-        } mx-auto`}
+        className={`${!commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
+          } mx-auto`}
       >
         <div
-          className={`new-card-style mx-auto transition-all ${
-            commentBoxOpen === true && "w-full"
-          }`}
+          className={`new-card-style mx-auto transition-all ${commentBoxOpen === true && "w-full"
+            }`}
         >
           <div className="flex">
             <div className="flex-grow p-1">

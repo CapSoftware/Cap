@@ -1,7 +1,6 @@
 "use server";
 
 import { dub } from "@/utils/dub";
-import { ClicksCount } from "dub/models/components";
 
 export async function getVideoAnalytics(videoId: string) {
   if (!videoId) {
@@ -13,13 +12,13 @@ export async function getVideoAnalytics(videoId: string) {
       domain: "cap.link",
       key: videoId,
     });
-    const { clicks: analytics } = response as ClicksCount;
+    const { clicks } = response as { clicks: number };
 
-    if (typeof analytics !== "number" || analytics === null) {
+    if (typeof clicks !== "number" || clicks === null) {
       return { count: 0 };
     }
 
-    return { count: analytics };
+    return { count: clicks };
   } catch (error: any) {
     if (error.code === "not_found") {
       return { count: 0 };

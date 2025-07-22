@@ -1,6 +1,3 @@
-export const revalidate = 0;
-export const fetchCache = "force-no-store";
-
 import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
