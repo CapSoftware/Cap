@@ -87,15 +87,18 @@ export const Caps = ({
 
     const fetchAnalytics = async () => {
       try {
-        // Fetch analytics for all videos in parallel
         const analyticsPromises = data.map(async (video) => {
           try {
-            const response = await apiClient.video.getAnalytics({
-              query: { videoId: video.id },
+            const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+              method: 'GET',
+              headers: {
+                'Content-Type': 'application/json',
+              },
             });
 
-            if (response.status === 200) {
-              return { videoId: video.id, count: response.body.count || 0 };
+            if (response.ok) {
+              const data = await response.json();
+              return { videoId: video.id, count: data.count || 0 };
             }
             return { videoId: video.id, count: 0 };
           } catch (error) {
@@ -106,7 +109,6 @@ export const Caps = ({
 
         const results = await Promise.allSettled(analyticsPromises);
 
-        // Only update state if component is still mounted
         if (!abortController.signal.aborted) {
           const analyticsData: Record<string, number> = {};
           results.forEach((result) => {
@@ -125,11 +127,10 @@ export const Caps = ({
 
     fetchAnalytics();
 
-    // Cleanup function to abort requests if component unmounts
     return () => {
       abortController.abort();
     };
-  }, [data, dubApiKeyEnabled, apiClient]);
+  }, [data, dubApiKeyEnabled]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
