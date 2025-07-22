@@ -12,11 +12,12 @@ use ffmpeg::{
 
 use cap_media::{data::FFVideo, feeds::RawCameraFrame};
 use flume::Receiver;
+use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
-use tokio::sync::{Notify, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
@@ -47,8 +48,8 @@ pub struct CameraWindowState {
 }
 
 pub struct CameraPreview {
-    reconfigure: Arc<Notify>,
-    window: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    reconfigure: (broadcast::Sender<()>, broadcast::Receiver<()>),
+    window: RwLock<Option<Arc<Notify>>>,
     store: Arc<Store<Wry>>,
     camera_rx: Receiver<RawCameraFrame>,
 }
@@ -59,7 +60,7 @@ impl CameraPreview {
         camera_rx: Receiver<RawCameraFrame>,
     ) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
-            reconfigure: Arc::new(Notify::new()),
+            reconfigure: broadcast::channel(1),
             window: RwLock::new(None),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
             camera_rx,
@@ -71,52 +72,16 @@ impl CameraPreview {
     pub async fn init_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
         let mut renderer = Renderer::init(window.clone()).await?;
 
-        // Due to the ffmpeg rescaler not being `Send` and joining the channels requiring async, we split it out.
-        let (internal_tx, mut internal_rx) = tokio::sync::mpsc::channel(4);
-        let reconfigure = self.reconfigure.clone();
-        let camera_rx = self.camera_rx.clone();
-
-        let task = tokio::spawn(async move {
-            let reconfigure = reconfigure.notified();
-            let mut reconfigure = std::pin::pin!(reconfigure);
-            let mut last_frame = None;
-
-            // Render a loading frame by default
-            internal_tx.send((None, true)).await.ok();
-
-            loop {
-                let frame = tokio::select! {
-                    frame = camera_rx.recv_async() => frame.map(Some),
-                    _ = reconfigure.as_mut() => Ok(None),
-                };
-
-                let result = match frame {
-                    Ok(Some(frame)) => {
-                        last_frame = Some(frame.frame.clone());
-                        (Some(frame.frame), false)
-                    }
-                    // By yielding a new frame when reconfigure is sent,
-                    // the renderer thread will rescale the output to the new window size.
-                    // If no frame is available, the fallback frame will be regenerated to the new size
-                    Ok(None) => (last_frame.clone(), true),
-                    Err(err) => {
-                        error!("Error receiving frame from camera: {err}");
-                        return;
-                    }
-                };
-
-                if let Err(_) = internal_tx.send(result).await {
-                    error!("Error sending frame to renderer. Did it crash?");
-                    return;
-                }
-            }
-        });
-
         let store = self.store.clone();
+        let mut reconfigure = self.reconfigure.1.resubscribe();
+        let camera_rx = self.camera_rx.clone();
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_handle = shutdown.clone();
         thread::spawn(move || {
             let mut window_visible = false;
             let mut first = true;
             let mut resampler_frame = Cached::default();
+            let mut shutdown = std::pin::pin!(shutdown.notified());
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -130,9 +95,25 @@ impl CameraPreview {
                 return;
             };
 
-            // This thread will automatically be shutdown if `internal_tx` is dropped
-            // which is held by the Tokio task.
-            while let Some((frame, reconfigure)) = internal_rx.blocking_recv() {
+            while let Some((frame, reconfigure)) = block_on({
+                let shutdown = shutdown.as_mut();
+                let camera_rx = &camera_rx;
+                let reconfigure = &mut reconfigure;
+
+                async {
+                    // Render a loading frame by default
+                    if first {
+                        // We don't set `first = false` as that is done within the loop.
+                        return Some((None, true));
+                    }
+
+                    tokio::select! {
+                        frame = camera_rx.recv_async() => frame.ok().map(|f| (Some(f.frame), false)),
+                        _ = reconfigure.recv() => Some((None, true)),
+                        _ = shutdown => None,
+                    }
+                }
+            }) {
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
                     let camera_aspect_ratio = frame
@@ -224,7 +205,7 @@ impl CameraPreview {
         if state.is_some() {
             return Err(anyhow!("Camera preview window already initialized"));
         }
-        *state = Some(task);
+        *state = Some(shutdown_handle);
 
         Ok(())
     }
@@ -238,7 +219,7 @@ impl CameraPreview {
             .unwrap_or_else(PoisonError::into_inner)
             .take()
         {
-            task.abort();
+            task.notify_waiters();
         }
     }
 
@@ -246,7 +227,7 @@ impl CameraPreview {
     pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
         self.store.set("state", serde_json::to_value(&state)?);
         self.store.save()?;
-        self.reconfigure.notify_waiters();
+        self.reconfigure.0.send(()).ok();
         Ok(())
     }
 }
