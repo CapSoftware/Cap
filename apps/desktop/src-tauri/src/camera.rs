@@ -1,25 +1,20 @@
 use std::{
-    sync::{mpsc, Arc, Mutex, PoisonError, RwLock, TryLockError},
-    thread::{self, JoinHandle},
-    time::Duration,
+    sync::{Arc, Mutex, PoisonError, RwLock},
+    thread,
 };
 
 use anyhow::{anyhow, Context};
 use ffmpeg::{
-    encoder::video,
     format::{self, Pixel},
     frame,
-    software::{scaler, scaling},
-    Format,
+    software::scaling,
 };
 
 use cap_media::feeds::RawCameraFrame;
-use flume::{Receiver, TryRecvError};
+use flume::Receiver;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tauri::{
-    async_runtime, LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry,
-};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::{oneshot, Notify};
 use tracing::error;
@@ -49,41 +44,6 @@ pub struct CameraWindowState {
     size: CameraPreviewSize,
     shape: CameraPreviewShape,
     mirrored: bool,
-}
-
-// Cache values tied to the incoming video feed from the camera
-struct IncomingCache {
-    // cache key
-    format: format::Pixel,
-    width: u32,
-    height: u32,
-
-    // values
-    out: frame::Video,
-}
-
-impl IncomingCache {
-    pub fn check<'a>(this: &'a mut Option<Self>, frame: &frame::Video) -> (&'a mut Self, bool) {
-        let format = frame.format();
-        let width = frame.width();
-        let height = frame.height();
-
-        // Will rerun when no cache, or when input changed
-        let reinitialize = this.as_ref().map(|v| v.format) != Some(format)
-            || this.as_ref().map(|v| v.width) != Some(width)
-            || this.as_ref().map(|v| v.height) != Some(height);
-
-        if reinitialize {
-            *this = Some(IncomingCache {
-                format,
-                width,
-                height,
-                out: frame::Video::empty(),
-            });
-        }
-
-        (this.as_mut().expect("initialized above"), reinitialize)
-    }
 }
 
 // Cache values tied to the window output
@@ -226,7 +186,8 @@ impl CameraPreview {
         let store = self.store.clone();
         thread::spawn(move || {
             let mut window_visible = false;
-            let mut incoming_cache = None;
+            let mut last_frame_info = None;
+            let mut resampler_output = None;
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -250,27 +211,39 @@ impl CameraPreview {
                 let surface_height = surface_frame.texture.height();
 
                 let (buffer, stride) = if let Some(frame) = frame {
-                    let (incoming_cache, initialized) =
-                        IncomingCache::check(&mut incoming_cache, &frame);
-                    // `initialized` accounts for a change in the incoming frame's resolution.
-                    // `reconfigure` accounts for when the state is changed (Eg. window shape)
-                    if initialized || reconfigure {
+                    let current_frame_info = Some((frame.format(), frame.width(), frame.height()));
+                    if
+                    // The incoming camera feed as changed size
+                    last_frame_info != current_frame_info
+                    // Or the state has changed (Eg. window shape)
+                    || reconfigure
+                    {
+                        last_frame_info = current_frame_info;
+                        resampler_output = None;
+
                         let state = get_state(&store).unwrap_or_default();
                         renderer
-                            .resize_window(&state, incoming_cache.width, incoming_cache.height)
+                            .resize_window(&state, frame.width(), frame.height())
                             .unwrap();
 
                         // TODO: Does this care about the incoming frame's resolution or is the cache key condition wrong?
-                        renderer.update_uniforms(&state, incoming_cache.height);
+                        renderer.update_uniforms(&state, frame.height());
 
                         if !window_visible {
                             window_visible = true;
                             renderer.window.show().unwrap();
                         }
-                    }
+                    };
 
-                    // TODO: Investigate moving the rescaling into the shader
-                    // This will either reuse or reinitialize the scaler
+                    let mut resampler_output = match resampler_output.as_mut() {
+                        Some(frame) => frame,
+                        None => {
+                            resampler_output = Some(frame::Video::empty());
+                            &mut resampler_output.as_mut().expect("assigned above")
+                        }
+                    };
+
+                    // TODO: Investigate moving the rescaling into the GPU shader
                     scaler.cached(
                         frame.format(),
                         frame.width(),
@@ -281,12 +254,12 @@ impl CameraPreview {
                         scaling::Flags::empty(),
                     );
 
-                    scaler.run(&frame, &mut incoming_cache.out).unwrap();
+                    scaler.run(&frame, resampler_output).unwrap();
                     // .with_context(|| "Error rescaling frame with ffmpeg")?;
 
                     (
-                        incoming_cache.out.data(0).to_vec(),
-                        incoming_cache.out.stride(0) as u32,
+                        resampler_output.data(0).to_vec(),
+                        resampler_output.stride(0) as u32,
                     )
                 } else {
                     // If a frame is not available, we render a fallback block color.
