@@ -240,13 +240,9 @@ struct Renderer {
     // Used by `Self::update_uniforms` to determine if it should update
     cache_surface_height: Option<u32>,
     // Used by `Self::get_resampler_output` to determine if the resampler output frame can be reused.
-    cached_resampler_output: Option<(u32, u32, frame::Video)>,
-    // TODO
-    cached_texture: Option<(
-        u32,
-        u32,
-        (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup),
-    )>,
+    cached_resampler_output: Cached<(u32, u32), frame::Video>,
+    // Used by `Self::render` to cache the texture across renders
+    cached_texture: Cached<(u32, u32), (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
 }
 
 impl Renderer {
@@ -425,8 +421,8 @@ impl Renderer {
             cached_state: CameraWindowState::default(),
             cached_frame_info: None,
             cache_surface_height: None,
-            cached_resampler_output: None,
-            cached_texture: None,
+            cached_resampler_output: Cached::default(),
+            cached_texture: Cached::default(),
         })
     }
 
@@ -537,20 +533,23 @@ impl Renderer {
         let surface_width = surface_frame.texture.width();
         let surface_height = surface_frame.texture.height();
 
-        if self
-            .cached_resampler_output
-            .as_ref()
-            .is_none_or(|f| f.0 == surface_width && f.1 == surface_height)
-        {
-            self.cached_resampler_output =
-                Some((surface_width, surface_height, frame::Video::empty()));
-        }
+        self.cached_resampler_output
+            .get_or_init((surface_width, surface_height), || frame::Video::empty())
 
-        &mut self
-            .cached_resampler_output
-            .as_mut()
-            .expect("checked above")
-            .2
+        // if self
+        //     .cached_resampler_output
+        //     .as_ref()
+        //     .is_none_or(|f| f.0 == surface_width && f.1 == surface_height)
+        // {
+        //     self.cached_resampler_output =
+        //         Some((surface_width, surface_height, frame::Video::empty()));
+        // }
+
+        // &mut self
+        //     .cached_resampler_output
+        //     .as_mut()
+        //     .expect("checked above")
+        //     .2
     }
 
     /// Render the camera preview to the window.
@@ -588,52 +587,47 @@ impl Renderer {
             });
 
             // Get or reinitialize the texture if necessary
-            let (texture, _, bind_group) = {
-                if self
+            let (texture, _, bind_group) =
+                &*self
                     .cached_texture
-                    .as_ref()
-                    .is_none_or(|f| f.0 == surface_width && f.1 == surface_height)
-                {
-                    let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some("Camera Texture"),
-                        size: wgpu::Extent3d {
-                            width: surface_width,
-                            height: surface_height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                    let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("Texture Bind Group"),
-                        layout: &self.bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(&texture_view),
+                    .get_or_init((surface_width, surface_height), || {
+                        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("Camera Texture"),
+                            size: wgpu::Extent3d {
+                                width: surface_width,
+                                height: surface_height,
+                                depth_or_array_layers: 1,
                             },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::Sampler(&self.sampler),
-                            },
-                        ],
-                    });
-                    self.cached_texture = Some((
-                        surface_width,
-                        surface_height,
-                        (texture, texture_view, bind_group),
-                    ));
-                }
+                            mip_level_count: 1,
+                            sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: wgpu::TextureFormat::Rgba8Unorm,
+                            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                | wgpu::TextureUsages::COPY_DST,
+                            view_formats: &[],
+                        });
 
-                &self.cached_texture.as_ref().expect("initialized above").2
-            };
+                        let texture_view =
+                            texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+                        let bind_group =
+                            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("Texture Bind Group"),
+                                layout: &self.bind_group_layout,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                    },
+                                ],
+                            });
+
+                        (texture, texture_view, bind_group)
+                    });
 
             self.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -676,4 +670,28 @@ fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32)
         .collect();
 
     (buffer, 4 * width)
+}
+
+struct Cached<K, V = ()> {
+    value: Option<(K, V)>,
+}
+
+impl<K, V> Default for Cached<K, V> {
+    fn default() -> Self {
+        Self { value: None }
+    }
+}
+
+impl<K: PartialEq, V> Cached<K, V> {
+    pub fn get_or_init<'a>(&'a mut self, key: K, init: impl FnOnce() -> V) -> &'a mut V {
+        if self.value.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.value = Some((key, init()));
+        }
+
+        &mut self.value.as_mut().expect("checked above").1
+    }
+
+    pub fn clear(&mut self) {
+        self.value = None;
+    }
 }
