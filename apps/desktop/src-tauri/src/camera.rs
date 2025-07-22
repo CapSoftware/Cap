@@ -49,6 +49,7 @@ pub struct CameraWindowState {
 
 pub struct CameraPreview {
     reconfigure: (broadcast::Sender<()>, broadcast::Receiver<()>),
+    loading: (broadcast::Sender<()>, broadcast::Receiver<()>),
     window: RwLock<Option<Arc<Notify>>>,
     store: Arc<Store<Wry>>,
     camera_rx: Receiver<RawCameraFrame>,
@@ -61,6 +62,7 @@ impl CameraPreview {
     ) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             reconfigure: broadcast::channel(1),
+            loading: broadcast::channel(1),
             window: RwLock::new(None),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
             camera_rx,
@@ -78,8 +80,11 @@ impl CameraPreview {
         let shutdown = Arc::new(Notify::new());
         let shutdown_handle = shutdown.clone();
         thread::spawn(move || {
+            println!("NEW THREAD");
+
             let mut window_visible = false;
             let mut first = true;
+            let mut loading = false;
             let mut resampler_frame = Cached::default();
             let mut shutdown = std::pin::pin!(shutdown.notified());
             let Ok(mut scaler) = scaling::Context::get(
@@ -101,7 +106,7 @@ impl CameraPreview {
                 let reconfigure = &mut reconfigure;
 
                 async {
-                    // Render a loading frame by default
+                    // Triggers the first paint
                     if first {
                         // We don't set `first = false` as that is done within the loop.
                         return Some((None, true));
@@ -152,7 +157,14 @@ impl CameraPreview {
                     .get_current_texture()
                     .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
                 {
-                    let (buffer, stride, output_width, output_height) = if let Some(frame) = frame {
+                    if let Some(frame) = frame {
+                        if loading == false {
+                            println!("DONE LOADING");
+                            continue; // TODO
+
+                            loading = true;
+                        }
+
                         let output_width = 1280;
                         let output_height =
                             (1280.0 / (frame.width() as f64 / frame.height() as f64)) as u32;
@@ -175,21 +187,39 @@ impl CameraPreview {
                             continue;
                         }
 
-                        (
-                            resampler_frame.data(0).to_vec(),
-                            resampler_frame.stride(0) as u32,
+                        renderer.render(
+                            Some((
+                                &resampler_frame.data(0).to_vec(),
+                                resampler_frame.stride(0) as u32,
+                            )),
                             output_width,
                             output_height,
-                        )
-                    } else {
-                        render_solid_frame(
+                            surface,
+                        );
+                    } else if loading {
+                        println!("RENDER LOADING");
+
+                        let (buffer, stride) = render_solid_frame(
                             [0x11, 0x11, 0x11, 0xFF], // #111111
                             surface.texture.width(),
                             surface.texture.height(),
-                        )
-                    };
+                        );
 
-                    renderer.render(surface, &buffer, stride, output_width, output_height);
+                        renderer.render(
+                            Some((&buffer, stride)),
+                            surface.texture.width(),
+                            surface.texture.height(),
+                            surface,
+                        );
+                    } else {
+                        println!("DETECT RECONFIGURE");
+                        renderer.render(
+                            None, // This will reuse the existing texture
+                            surface.texture.width(),
+                            surface.texture.height(),
+                            surface,
+                        );
+                    }
                 }
 
                 if !window_visible {
@@ -199,6 +229,8 @@ impl CameraPreview {
                     }
                 }
             }
+
+            println!("SHUTDOWN THREAD");
         });
 
         let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
@@ -230,6 +262,11 @@ impl CameraPreview {
         self.reconfigure.0.send(()).ok();
         Ok(())
     }
+
+    // /// Set the system back into the loading state, instead of holding the frame
+    // pub fn switch_camera(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
+
+    // }
 }
 
 struct Renderer {
@@ -565,11 +602,10 @@ impl Renderer {
     /// Render the camera preview to the window.
     fn render(
         &mut self,
-        surface: SurfaceTexture,
-        buffer: &[u8],
-        stride: u32,
+        new_texture_value: Option<(&[u8], u32)>,
         width: u32,
         height: u32,
+        surface: SurfaceTexture,
     ) {
         let view = surface
             .texture
@@ -637,25 +673,27 @@ impl Renderer {
                 (texture, texture_view, bind_group)
             });
 
-            self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &buffer,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(stride),
-                    rows_per_image: Some(height),
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
+            if let Some((buffer, stride)) = new_texture_value {
+                self.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &buffer,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: Some(height),
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, bind_group, &[]);
@@ -668,7 +706,7 @@ impl Renderer {
     }
 }
 
-fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32, u32, u32) {
+fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {
     let pixel_count = (height * width) as usize;
     let buffer: Vec<u8> = color
         .iter()
@@ -677,7 +715,7 @@ fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32,
         .copied()
         .collect();
 
-    (buffer, 4 * width, width, height)
+    (buffer, 4 * width)
 }
 
 struct Cached<K, V = ()> {
@@ -701,6 +739,7 @@ impl<K: PartialEq, V> Cached<K, V> {
 }
 
 impl<K: PartialEq> Cached<K, ()> {
+    /// Updates the key and returns `true` when the key was changed.
     pub fn update_key_and_should_init(&mut self, key: K) -> bool {
         if self.value.as_ref().is_none_or(|(k, _)| *k != key) {
             self.value = Some((key, ()));
