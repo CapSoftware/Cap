@@ -5,7 +5,6 @@ import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AuthOverlay } from "./AuthOverlay";
-import { revalidateVideoPath } from "@/actions/revalidate-video";
 import { useRouter } from "next/navigation";
 
 // million-ignore
@@ -106,8 +105,6 @@ export const Toolbar = ({
       return;
     }
 
-    // Revalidate and refresh to show new comment
-    await revalidateVideoPath(data.id);
     router.refresh();
   };
 
@@ -142,8 +139,6 @@ export const Toolbar = ({
       setComment("");
       setCommentBoxOpen(false);
 
-      // Revalidate and refresh to show new comment
-      await revalidateVideoPath(data.id);
       router.refresh();
     } catch (error) {
       console.error("Failed to submit comment:", error);
