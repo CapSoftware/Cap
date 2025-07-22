@@ -25,7 +25,7 @@ use tokio::sync::{Notify, broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
-static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */;
+static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]

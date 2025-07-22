@@ -2,7 +2,7 @@
 #![allow(unused_imports)]
 
 use crate::{
-    camera::CameraPreview, fake_window, general_settings::AppTheme, permissions, App, ArcLock,
+    App, ArcLock, camera::CameraPreview, fake_window, general_settings::AppTheme, permissions,
 };
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
@@ -14,7 +14,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicU32, mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32, mpsc},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -662,7 +662,7 @@ fn position_traffic_lights_impl(
     window: &tauri::Window,
     controls_inset: Option<LogicalPosition<f64>>,
 ) {
-    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {

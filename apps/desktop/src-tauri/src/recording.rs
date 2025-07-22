@@ -1,6 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
+    App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
+    RecordingStarted, RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -10,12 +12,10 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
+        InstantMultipartUpload, create_or_get_video, prepare_screenshot_upload, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
-    App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingStopped, VideoUploadInfo,
 };
 use cap_fail::fail;
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
@@ -28,8 +28,8 @@ use cap_project::{
     StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
 };
 use cap_recording::{
-    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
+    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
@@ -690,7 +690,9 @@ async fn handle_recording_finish(
                             .and_then(|r| r)
                         {
                             Ok(()) => {
-                                info!("Not attempting instant recording upload as progressive upload succeeded");
+                                info!(
+                                    "Not attempting instant recording upload as progressive upload succeeded"
+                                );
                                 true
                             }
                             Err(e) => {

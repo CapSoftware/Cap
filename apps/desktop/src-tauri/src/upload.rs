@@ -3,11 +3,11 @@
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use cap_utils::spawn_actor;
 use flume::Receiver;
-use futures::{stream, StreamExt};
-use image::codecs::jpeg::JpegEncoder;
+use futures::{StreamExt, stream};
 use image::ImageReader;
+use image::codecs::jpeg::JpegEncoder;
 use reqwest::header::CONTENT_LENGTH;
-use reqwest::{multipart::Form, StatusCode};
+use reqwest::{StatusCode, multipart::Form};
 use serde_json::json;
 use std::collections::HashMap;
 use std::io::SeekFrom;
@@ -19,15 +19,15 @@ use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio::time::sleep;
 use tracing::{info, trace, warn};
 
 use crate::web_api::{self, ManagerExt};
 
-use crate::{notifications, App, MutableState, RecordingStopped, UploadProgress, VideoUploadInfo};
+use crate::{App, MutableState, RecordingStopped, UploadProgress, VideoUploadInfo, notifications};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -855,7 +855,7 @@ impl InstantMultipartUpload {
                 return Err(format!(
                     "Failed to request presigned URL for part {}: {}",
                     *part_number, e
-                ))
+                ));
             }
         };
 
@@ -956,7 +956,7 @@ impl InstantMultipartUpload {
                 return Err(format!(
                     "Failed to upload part {} after {} attempts",
                     *part_number, max_retries
-                ))
+                ));
             }
         };
 

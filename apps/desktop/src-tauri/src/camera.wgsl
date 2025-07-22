@@ -52,7 +52,7 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Apply 14px padding using unified NDC transformation
+    // Apply 16px padding using unified NDC transformation (matches fragment shader)
     let padding = 0.0;
 
     // Define target viewport in pixel space (with padding and toolbar offset)

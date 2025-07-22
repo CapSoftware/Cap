@@ -1,4 +1,4 @@
-use crate::{recording, RequestStartRecording};
+use crate::{RequestStartRecording, recording};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
