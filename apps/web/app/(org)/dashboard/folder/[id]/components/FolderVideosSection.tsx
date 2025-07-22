@@ -131,7 +131,8 @@ export default function FolderVideosSection({
       });
 
       const results = await Promise.allSettled(analyticsPromises);
-      const analyticsData: Record<string, number> = {};
+      const analytics = analyticsData || {};
+
 
       results.forEach((result) => {
         if (result.status === 'fulfilled' && result.value) {
@@ -141,7 +142,7 @@ export default function FolderVideosSection({
 
       return analyticsData;
     },
-    enabled: dubApiKeyEnabled && data.length > 0,
+    enabled: dubApiKeyEnabled && initialVideos.length > 0,
     staleTime: 30000, // 30 seconds
     refetchOnWindowFocus: false,
   });
