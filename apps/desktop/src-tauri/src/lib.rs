@@ -72,13 +72,13 @@ use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 use tracing::error;
+use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::Layer;
-use upload::{create_or_get_video, upload_image, upload_video, S3UploadMeta};
+use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
-use windows::set_window_transparent;
 use windows::EditorWindowIds;
+use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
 #[derive(specta::Type, Serialize)]
@@ -2118,56 +2118,39 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run({
-            // let mut camera = CameraPreviewMutableState::init(camera_frame)
-            //     .map_err(|err| error!("Error initializing camera preview renderer: {err:?}"))
-            //     .ok();
+        .run(move |handle, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                    label.starts_with("editor-")
+                        || label.as_str() == "settings"
+                        || label.as_str() == "signin"
+                });
 
-            move |handle, event| match event {
-                #[cfg(target_os = "macos")]
-                tauri::RunEvent::Reopen { .. } => {
-                    let has_window = handle.webview_windows().iter().any(|(label, _)| {
-                        label.starts_with("editor-")
-                            || label.as_str() == "settings"
-                            || label.as_str() == "signin"
-                    });
-
-                    if has_window {
-                        if let Some(window) = handle
-                            .webview_windows()
-                            .iter()
-                            .find(|(label, _)| {
-                                label.starts_with("editor-")
-                                    || label.as_str() == "settings"
-                                    || label.as_str() == "signin"
-                            })
-                            .map(|(_, window)| window.clone())
-                        {
-                            window.set_focus().ok();
-                        }
-                    } else {
-                        let handle = handle.clone();
-                        let _ =
-                            tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
+                if has_window {
+                    if let Some(window) = handle
+                        .webview_windows()
+                        .iter()
+                        .find(|(label, _)| {
+                            label.starts_with("editor-")
+                                || label.as_str() == "settings"
+                                || label.as_str() == "signin"
+                        })
+                        .map(|(_, window)| window.clone())
+                    {
+                        window.set_focus().ok();
                     }
+                } else {
+                    let handle = handle.clone();
+                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                 }
-                tauri::RunEvent::ExitRequested { code, api, .. } => {
-                    if code.is_none() {
-                        api.prevent_exit();
-                    }
-                }
-                tauri::RunEvent::WindowEvent {
-                    label: _,
-                    event: WindowEvent::Resized(size),
-                    ..
-                } => {
-                    // TODO
-                    // handle
-                    //     .state::<CameraWindowState>()
-                    //     .on_window_resize2(size.width, size.height);
-                }
-                _ => {}
             }
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+            _ => {}
         });
 }
 
