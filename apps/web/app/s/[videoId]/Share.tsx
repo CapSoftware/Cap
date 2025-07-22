@@ -1,6 +1,5 @@
 "use client";
 
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
@@ -117,19 +116,6 @@ const useVideoStatus = (
     },
     refetchIntervalInBackground: false,
     staleTime: 1000,
-  });
-};
-
-const useVideoAnalytics = (videoId: string, initialCount: number) => {
-  return useQuery({
-    queryKey: ["videoAnalytics", videoId],
-    queryFn: async () => {
-      const result = await getVideoAnalytics(videoId);
-      return result.count || 0;
-    },
-    initialData: initialCount,
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
   });
 };
 

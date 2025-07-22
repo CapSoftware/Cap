@@ -29,6 +29,7 @@ import { duplicateVideo } from "@/actions/videos/duplicate";
 
 
 export interface CapCardProps extends PropsWithChildren {
+  isLoadingAnalytics: boolean;
   cap: {
     id: string;
     ownerId: string;
@@ -69,6 +70,7 @@ export interface CapCardProps extends PropsWithChildren {
 export const CapCard = ({
   cap,
   analytics,
+  isLoadingAnalytics,
   children,
   onDelete,
   userId,
@@ -92,11 +94,6 @@ export const CapCard = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
-
-  const displayCount =
-    analytics === 0
-      ? Math.max(cap.totalComments, cap.totalReactions)
-      : analytics;
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -350,7 +347,7 @@ export const CapCard = ({
                   <FontAwesomeIcon
                     className="size-3"
                     icon={faCopy}
-                  />f
+                  />
                   <p className="text-sm text-gray-12">Duplicate</p>
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -459,7 +456,8 @@ export const CapCard = ({
           {children}
           <CapCardAnalytics
             capId={cap.id}
-            displayCount={displayCount}
+            displayCount={analytics}
+            isLoadingAnalytics={isLoadingAnalytics}
             totalComments={cap.totalComments}
             totalReactions={cap.totalReactions}
           />
