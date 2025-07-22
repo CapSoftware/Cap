@@ -163,9 +163,7 @@ impl CameraPreview {
                 );
 
                 if window_resize_required {
-                    if let Err(err) =
-                        renderer.update_window_size(frame.as_ref(), camera_aspect_ratio)
-                    {
+                    if let Err(err) = renderer.resize_window(camera_aspect_ratio) {
                         error!("Error updating window size: {err:?}");
                         continue;
                     }
@@ -541,7 +539,7 @@ impl Renderer {
     }
 
     /// Resize the OS window to the correct size
-    fn update_window_size(&self, frame: Option<&FFVideo>, aspect: f32) -> tauri::Result<()> {
+    fn resize_window(&self, aspect: f32) -> tauri::Result<()> {
         let base: f32 = if self.state.size == CameraPreviewSize::Sm {
             230.0
         } else {
