@@ -102,12 +102,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let shape = uniforms.shape;
     let size = uniforms.size;
 
-    // For Full shape, render with subtle rounded corners
+    // For Full shape, render with rounded corners
     if (shape == 2.0) {
-        // Apply subtle rounded corners for Full shape
-        // Use final_uv for corner calculation to respect aspect ratio scaling
-        let center_uv = (final_uv - 0.5) * 2.0;
-        let corner_radius = 0.05; // Small radius for subtle corners
+        // Apply rounded corners for Full shape
+        // Use in.uv for corner calculation to avoid distortion from aspect ratio scaling
+        let center_uv = (in.uv - 0.5) * 2.0;
+        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
