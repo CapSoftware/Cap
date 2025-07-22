@@ -115,6 +115,7 @@ impl CameraPreview {
         let store = self.store.clone();
         thread::spawn(move || {
             let mut window_visible = false;
+            let mut first = true;
             let mut resampler_frame = Cached::default();
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
@@ -132,8 +133,8 @@ impl CameraPreview {
             // This thread will automatically be shutdown if `internal_tx` is dropped
             // which is held by the Tokio task.
             while let Some((frame, reconfigure)) = internal_rx.blocking_recv() {
-                // let reconfigured =
-                if reconfigure && renderer.refresh_state(&store) {
+                if first || reconfigure && renderer.refresh_state(&store) {
+                    first = false;
                     renderer.update_state_uniforms();
                     if let Err(err) = renderer.update_window_size(frame.as_ref()) {
                         error!("Error updating window size: {err:?}");
@@ -520,6 +521,7 @@ impl Renderer {
         self.window
             .set_size(LogicalSize::new(window_width, window_height))?;
         self.window.set_position(LogicalPosition::new(x, y))?;
+
         Ok(())
     }
 
