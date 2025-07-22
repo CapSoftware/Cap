@@ -51,8 +51,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
-use std::sync::PoisonError;
-use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -63,7 +61,6 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tauri::async_runtime;
 use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -213,7 +210,7 @@ async fn set_camera_input(
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
                                     feed.attach(app.camera_tx.clone());
-                                    let video_info = feed.video_info();
+                                    // let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
 
                                     // TODO
