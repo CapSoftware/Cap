@@ -132,7 +132,9 @@ impl CameraPreview {
 
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
+
                     renderer.update_state_uniforms();
+                    // Always update window size when state changes, even without a frame
                     if let Err(err) = renderer.update_window_size(frame.as_ref()) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -532,7 +534,11 @@ impl Renderer {
         let aspect = frame
             .as_ref()
             .map(|f| f.width() as f32 / f.height() as f32)
-            .unwrap_or(1.0);
+            .unwrap_or(if self.state.shape == CameraPreviewShape::Full {
+                16.0 / 9.0
+            } else {
+                1.0
+            });
         let window_width = if self.state.shape == CameraPreviewShape::Full {
             if aspect >= 1.0 { base * aspect } else { base }
         } else {
@@ -543,6 +549,11 @@ impl Renderer {
         } else {
             base
         } + TOOLBAR_HEIGHT;
+
+        println!(
+            "Window size update - Shape: {:?}, Size: {:?}, Aspect: {:.2}, Width: {:.1}, Height: {:.1}",
+            self.state.shape, self.state.size, aspect, window_width, window_height
+        );
 
         let (monitor_size, monitor_offset, monitor_scale_factor): (
             PhysicalSize<u32>,
@@ -566,6 +577,8 @@ impl Renderer {
             .set_size(LogicalSize::new(window_width, window_height))?;
         self.window.set_position(LogicalPosition::new(x, y))?;
 
+        println!("SET WINDOW SIZE {} {}", window_width, window_height);
+
         Ok(())
     }
 
@@ -574,6 +587,10 @@ impl Renderer {
         let size = self.window.outer_size()?;
         self.surface_size
             .get_or_init((size.width, size.height), || {
+                println!(
+                    "Reconfiguring GPU surface - Width: {}, Height: {}",
+                    size.width, size.height
+                );
                 self.surface_config.width = if size.width > 0 { size.width } else { 1 };
                 self.surface_config.height = if size.height > 0 { size.height } else { 1 };
                 self.surface.configure(&self.device, &self.surface_config);

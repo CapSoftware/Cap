@@ -105,7 +105,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // For Full shape, render with subtle rounded corners
     if (shape == 2.0) {
         // Apply subtle rounded corners for Full shape
-        let center_uv = (in.uv - 0.5) * 2.0;
+        // Use final_uv for corner calculation to respect aspect ratio scaling
+        let center_uv = (final_uv - 0.5) * 2.0;
         let corner_radius = 0.05; // Small radius for subtle corners
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
