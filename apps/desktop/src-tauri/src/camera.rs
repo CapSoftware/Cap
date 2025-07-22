@@ -21,7 +21,7 @@ use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */;
-static PREVIEW_INSET: f32 = 16.0 /* camera preview inset */;
+static PREVIEW_INSET: f32 = 0.0; // 16.0 /* camera preview inset */;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -509,7 +509,8 @@ impl Renderer {
             if aspect >= 1.0 { base } else { base / aspect }
         } else {
             base
-        } + TOOLBAR_HEIGHT;
+        } + TOOLBAR_HEIGHT
+            + PREVIEW_INSET;
 
         let (monitor_size, monitor_offset, monitor_scale_factor): (
             PhysicalSize<u32>,
@@ -577,7 +578,7 @@ impl Renderer {
                 },
                 if self.state.mirrored { 1.0 } else { 0.0 },
                 camera_aspect_ratio,
-                0.0, // padding
+                PREVIEW_INSET,
             ]),
         );
     }
