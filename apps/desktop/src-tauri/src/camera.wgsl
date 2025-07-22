@@ -4,7 +4,7 @@ struct StateUniforms {
     size: f32,
     mirrored: f32,
     camera_aspect_ratio: f32,
-    preview_inset: f32,
+    _padding: f32,
 }
 
 struct WindowUniforms {
@@ -45,21 +45,16 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Calculate target area bounds in NDC coordinates
-    // Apply both offset_pixels (toolbar) and preview_inset (padding) 
-    let total_top_offset = uniforms.offset_pixels + uniforms.preview_inset;
-    let side_inset = uniforms.preview_inset;
-    
     // Calculate bounds with inset applied
-    let top_bound = 1.0 - (total_top_offset / window_uniforms.window_height) * 2.0;
-    let bottom_bound = -1.0 + (uniforms.preview_inset / window_uniforms.window_height) * 2.0;
-    let left_bound = -1.0 + (side_inset / window_uniforms.window_width) * 2.0;
-    let right_bound = 1.0 - (side_inset / window_uniforms.window_width) * 2.0;
-    
+    let top_bound = 1.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
+    let bottom_bound = -1.0 + (0.0 / window_uniforms.window_height) * 2.0;
+    let left_bound = -1.0 + (0.0 / window_uniforms.window_width) * 2.0;
+    let right_bound = 1.0 - (0.0 / window_uniforms.window_width) * 2.0;
+
     // Map quad vertices to fill the inset area
     let mapped_x = left_bound + (pos[idx].x + 1.0) * (right_bound - left_bound) * 0.5;
     let mapped_y = bottom_bound + (pos[idx].y + 1.0) * (top_bound - bottom_bound) * 0.5;
-    
+
     let adjusted_pos = vec2<f32>(mapped_x, mapped_y);
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
@@ -75,15 +70,9 @@ var s_camera: sampler;
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // // DEBUG: Color code different areas to see what's happening
-    // // Red if in what should be the offset area, Green for normal area
-    // if (in.uv.y > 0.7) {  // Top 30% of quad
-    //     return vec4<f32>(1.0, 0.0, 0.0, 1.0); // RED
-    // }
-
     // Calculate the crop region dimensions with inset applied
-    let crop_width = window_uniforms.window_width - (uniforms.preview_inset * 2.0);
-    let crop_height = window_uniforms.window_height - uniforms.offset_pixels - (uniforms.preview_inset * 2.0);
+    let crop_width = window_uniforms.window_width;
+    let crop_height = window_uniforms.window_height - uniforms.offset_pixels;
     let crop_aspect = crop_width / crop_height;
     let camera_aspect = uniforms.camera_aspect_ratio;
 
