@@ -3,11 +3,13 @@ struct StateUniforms {
     shape: f32,
     size: f32,
     mirrored: f32,
+    camera_aspect_ratio: f32,
     _padding: f32,
 }
 
 struct WindowUniforms {
     window_height: f32,
+    window_width: f32,
     _padding: f32,
 }
 
@@ -50,16 +52,23 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     let available_height = window_uniforms.window_height - uniforms.offset_pixels;
     let scale_factor = available_height / window_uniforms.window_height;
 
-    // Scale the Y coordinate to fit the available space
-    let scaled_y = pos[idx].y * scale_factor;
+    // Calculate window aspect ratio
+    let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
+    let camera_aspect = uniforms.camera_aspect_ratio;
+
+    // Calculate scaling factors to maintain aspect ratio
+    let scale_x = select(camera_aspect / window_aspect, 1.0, camera_aspect > window_aspect);
+    let scale_y = select(1.0, window_aspect / camera_aspect, camera_aspect > window_aspect);
+
+    // Apply aspect ratio scaling
+    let scaled_x = pos[idx].x * scale_x;
+    let scaled_y = pos[idx].y * scale_y * scale_factor;
 
     // Position the scaled quad in the bottom portion of the screen
-    // Available space bottom: -1.0, top: (1.0 - offset_y)
-    // Map scaled_y from [-1,1] to the available space
-    let available_range = 2.0 - offset_y; // total height of available space
+    let available_range = 2.0 - offset_y;
     let final_y = -1.0 + (scaled_y + 1.0) * available_range / 2.0;
 
-    let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
+    let adjusted_pos = vec2<f32>(scaled_x, final_y);
 
     // Mark pixels in the offset area as transparent
     let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - offset_y));

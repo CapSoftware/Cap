@@ -135,7 +135,10 @@ impl CameraPreview {
             while let Some((frame, reconfigure)) = internal_rx.blocking_recv() {
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
-                    renderer.update_state_uniforms();
+                    let camera_aspect_ratio = frame.as_ref()
+                        .map(|f| f.width() as f32 / f.height() as f32)
+                        .unwrap_or(1.0);
+                    renderer.update_state_uniforms(camera_aspect_ratio);
                     if let Err(err) = renderer.update_window_size(frame.as_ref()) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -149,6 +152,8 @@ impl CameraPreview {
                         frame.height(),
                     ))
                 {
+                    let camera_aspect_ratio = frame.width() as f32 / frame.height() as f32;
+                    renderer.update_state_uniforms(camera_aspect_ratio);
                     if let Err(err) = renderer.update_window_size(Some(frame)) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -367,14 +372,14 @@ impl Renderer {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 5]>() as u64, // offset_pixels, shape, size, mirrored, padding
+            size: std::mem::size_of::<[f32; 6]>() as u64, // offset_pixels, shape, size, mirrored, camera_aspect_ratio, padding
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let window_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Window Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 2]>() as u64, // window_height, padding
+            size: std::mem::size_of::<[f32; 3]>() as u64, // window_height, window_width, padding
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -543,6 +548,7 @@ impl Renderer {
                     0,
                     bytemuck::cast_slice(&[
                         self.surface_config.height as f32,
+                        self.surface_config.width as f32,
                         0.0, // padding
                     ]),
                 );
@@ -552,7 +558,7 @@ impl Renderer {
     }
 
     /// Update the uniforms which hold the camera preview state
-    fn update_state_uniforms(&self) {
+    fn update_state_uniforms(&self, camera_aspect_ratio: f32) {
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -568,6 +574,7 @@ impl Renderer {
                     CameraPreviewSize::Lg => 1.0,
                 },
                 if self.state.mirrored { 1.0 } else { 0.0 },
+                camera_aspect_ratio,
                 0.0, // padding
             ]),
         );
