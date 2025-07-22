@@ -115,7 +115,6 @@ export const Caps = ({
       return analyticsData;
     },
     staleTime: 30000, // 30 seconds
-    enabled: dubApiKeyEnabled && data.length > 0,
     refetchOnWindowFocus: false,
   });
 
