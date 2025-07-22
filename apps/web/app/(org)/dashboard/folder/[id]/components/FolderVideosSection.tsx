@@ -131,6 +131,7 @@ export default function FolderVideosSection({
       });
 
       const results = await Promise.allSettled(analyticsPromises);
+      const analyticsData: Record<string, number> = {};
 
 
       results.forEach((result) => {
@@ -138,69 +139,69 @@ export default function FolderVideosSection({
           analyticsData[result.value.videoId] = result.value.count;
         }
       });
-
-      return analyticsData;
-    },
-    enabled: dubApiKeyEnabled && initialVideos.length > 0,
-    staleTime: 30000, // 30 seconds
+§§
+  return analyticsData;
+},
+enabled: dubApiKeyEnabled && initialVideos.length > 0,
+  staleTime: 30000, // 30 seconds
     refetchOnWindowFocus: false,
   });
 
-  const analytics = analyticsData || {};
+const analytics = analyticsData || {};
 
-  return (
-    <>
-      <div className="flex justify-between items-center mb-6 w-full">
-        <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
-      </div>
-      <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-        {initialVideos.length === 0 && !isUploading ? (
-          <p className="col-span-full text-gray-9">
-            No videos in this folder yet. Drag and drop into the folder or
-            upload.
-          </p>
-        ) : (
-          <>
-            {isUploading && (
-              <UploadPlaceholderCard key={"upload-placeholder"} />
-            )}
+return (
+  <>
+    <div className="flex justify-between items-center mb-6 w-full">
+      <h1 className="text-2xl font-medium text-gray-12">Videos</h1>
+    </div>
+    <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+      {initialVideos.length === 0 && !isUploading ? (
+        <p className="col-span-full text-gray-9">
+          No videos in this folder yet. Drag and drop into the folder or
+          upload.
+        </p>
+      ) : (
+        <>
+          {isUploading && (
+            <UploadPlaceholderCard key={"upload-placeholder"} />
+          )}
 
-            {cardType === "shared" ? (
-              initialVideos.map((video) => (
-                <SharedCapCard
-                  key={video.id}
-                  cap={video}
-                  hideSharedStatus
-                  analytics={analytics[video.id] || 0}
-                  organizationName={activeOrganization?.organization.name || ""}
-                  userId={userId}
-                />
-              ))
-            ) : (
-              initialVideos.map((video) => (
-                <ClientCapCard
-                  key={video.id}
-                  videoId={video.id}
-                  cap={video}
-                  analytics={analytics[video.id] || 0}
-                  isLoadingAnalytics={isLoadingAnalytics}
-                  isSelected={selectedCaps.includes(video.id)}
-                  anyCapSelected={selectedCaps.length > 0}
-                  isDeleting={isDeleting}
-                  onSelectToggle={() => handleCapSelection(video.id)}
-                  onDelete={deleteSelectedCaps}
-                />
-              ))
-            )}
-          </>
-        )}
-      </div>
-      <SelectedCapsBar
-        selectedCaps={selectedCaps}
-        setSelectedCaps={setSelectedCaps}
-        deleteSelectedCaps={deleteSelectedCaps}
-        isDeleting={isDeleting}
-      />
-    </>
-  );
+          {cardType === "shared" ? (
+            initialVideos.map((video) => (
+              <SharedCapCard
+                key={video.id}
+                cap={video}
+                hideSharedStatus
+                analytics={analytics[video.id] || 0}
+                organizationName={activeOrganization?.organization.name || ""}
+                userId={userId}
+              />
+            ))
+          ) : (
+            initialVideos.map((video) => (
+              <ClientCapCard
+                key={video.id}
+                videoId={video.id}
+                cap={video}
+                analytics={analytics[video.id] || 0}
+                isLoadingAnalytics={isLoadingAnalytics}
+                isSelected={selectedCaps.includes(video.id)}
+                anyCapSelected={selectedCaps.length > 0}
+                isDeleting={isDeleting}
+                onSelectToggle={() => handleCapSelection(video.id)}
+                onDelete={deleteSelectedCaps}
+              />
+            ))
+          )}
+        </>
+      )}
+    </div>
+    <SelectedCapsBar
+      selectedCaps={selectedCaps}
+      setSelectedCaps={setSelectedCaps}
+      deleteSelectedCaps={deleteSelectedCaps}
+      isDeleting={isDeleting}
+    />
+  </>
+);
 }
