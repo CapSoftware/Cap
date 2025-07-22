@@ -5,7 +5,7 @@ import { Button } from "@cap/ui";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AuthOverlay } from "./AuthOverlay";
-import { revalidateVideoPath } from "@/actions/revalidate-video";
+import { useRouter } from "next/navigation";
 
 // million-ignore
 export const Toolbar = ({
@@ -15,6 +15,7 @@ export const Toolbar = ({
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
 }) => {
+  const router = useRouter();
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
@@ -64,21 +65,13 @@ export const Toolbar = ({
   };
 
   const handleEmojiClick = async (emoji: string) => {
-    // Clear any existing timeout
     if (clearEmojiTimeout.current) {
       clearTimeout(clearEmojiTimeout.current);
     }
 
-    // Set the current emoji with a unique identifier
     setCurrentEmoji({ emoji, id: Date.now() });
 
-    // Remove the emoji after the animation duration
-    clearEmojiTimeout.current = setTimeout(() => {
-      setCurrentEmoji(null);
-    }, 3000);
-
     const timestamp = getTimestamp();
-    console.log("Current timestamp:", timestamp);
 
     const response = await fetch("/api/video/comment", {
       method: "POST",
@@ -94,8 +87,6 @@ export const Toolbar = ({
       }),
     });
 
-    await revalidateVideoPath(data.id);
-
     if (response.status === 429) {
       toast.error("Too many requests - please try again later.");
       return;
@@ -103,7 +94,10 @@ export const Toolbar = ({
 
     if (!response.ok) {
       console.error("Failed to record emoji reaction");
+      return;
     }
+
+    router.refresh();
   };
 
   const handleCommentSubmit = async () => {
@@ -136,30 +130,23 @@ export const Toolbar = ({
 
       setComment("");
       setCommentBoxOpen(false);
-      await revalidateVideoPath(data.id);
+
+      router.refresh();
     } catch (error) {
       console.error("Failed to submit comment:", error);
     }
   };
 
   const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
-    <div className="relative w-fit">
+    <div className="relative size-10">
       <button
-        className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full ease-in-out font-emoji sm:text-2xl transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+        className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full ease-in-out size-full font-emoji sm:text-2xl transition-bg-color duration-600 hover:bg-gray-200 active:bg-blue-500 active:duration-0"
         role="img"
         aria-label={label ? label : ""}
         aria-hidden={label ? "false" : "true"}
         onClick={() => handleEmojiClick(emoji)}
       >
         {emoji}
-        {currentEmoji && currentEmoji.emoji === emoji && (
-          <span
-            key={currentEmoji.id}
-            className="absolute right-0 left-0 -top-10 mx-auto font-emoji animate-flyEmoji duration-3000"
-          >
-            {currentEmoji.emoji}
-          </span>
-        )}
       </button>
     </div>
   );
@@ -209,13 +196,9 @@ export const Toolbar = ({
 
   return (
     <>
-      <div
-        className={`${!commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
-          } mx-auto`}
-      >
+      <div className="mx-auto max-w-fit">
         <div
-          className={`new-card-style mx-auto transition-all ${commentBoxOpen === true && "w-full"
-            }`}
+          className={`mx-auto !rounded-full transition-all new-card-style`}
         >
           <div className="flex">
             <div className="flex-grow p-1">
@@ -268,7 +251,7 @@ export const Toolbar = ({
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-flow-col justify-center items-center">
+                <div className="grid grid-flow-col gap-2 justify-center items-center w-fit">
                   {REACTIONS.map((reaction) => (
                     <Emoji
                       key={reaction.emoji}
@@ -276,16 +259,15 @@ export const Toolbar = ({
                       label={reaction.label}
                     />
                   ))}
-                  <div className="w-[1px] bg-gray-200 h-[16px] mx-4"></div>
-                  <div className="flex items-center">
-                    <button
+                  <div className="w-[1px] bg-gray-200 h-[16px] mx-4" />
+                  <div className="flex items-center min-w-fit">
+                    <Button
                       onClick={handleCommentClick}
-                      className="flex relative justify-center items-center px-3 py-1 font-medium bg-gray-200 rounded-full ease-in-out transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+                      variant="dark"
+                      size="sm"
                     >
-                      <span className="text-sm font-medium text-gray-12">
-                        Comment (c)
-                      </span>
-                    </button>
+                      Comment (c)
+                    </Button>
                   </div>
                 </div>
               )}

@@ -16,6 +16,7 @@ import { count, desc, eq, sql, and, isNull } from "drizzle-orm";
 import { Metadata } from "next";
 import { SharedCaps } from "./SharedCaps";
 import { notFound } from "next/navigation";
+import { serverEnv } from "@cap/env";
 
 export const metadata: Metadata = {
   title: "Shared Caps — Cap",
@@ -254,6 +255,7 @@ export default async function SharedCapsPage({
         data={processedVideoData}
         count={totalCount}
         spaceData={space}
+        dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
         spaceMembers={spaceMembersData}
         organizationMembers={organizationMembersData}
         currentUserId={userId}
@@ -360,6 +362,7 @@ export default async function SharedCapsPage({
         count={totalCount}
         hideSharedWith
         organizationData={organization}
+        dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
         organizationMembers={organizationMembersData}
         currentUserId={userId}
         folders={foldersData}

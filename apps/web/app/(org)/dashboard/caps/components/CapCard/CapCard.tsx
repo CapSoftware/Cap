@@ -29,7 +29,6 @@ import { duplicateVideo } from "@/actions/videos/duplicate";
 
 
 export interface CapCardProps extends PropsWithChildren {
-  isLoadingAnalytics: boolean;
   cap: {
     id: string;
     ownerId: string;
@@ -70,7 +69,6 @@ export interface CapCardProps extends PropsWithChildren {
 export const CapCard = ({
   cap,
   analytics,
-  isLoadingAnalytics,
   children,
   onDelete,
   userId,
@@ -457,7 +455,6 @@ export const CapCard = ({
           <CapCardAnalytics
             capId={cap.id}
             displayCount={analytics}
-            isLoadingAnalytics={isLoadingAnalytics}
             totalComments={cap.totalComments}
             totalReactions={cap.totalReactions}
           />
