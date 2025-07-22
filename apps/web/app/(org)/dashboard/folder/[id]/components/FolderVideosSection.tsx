@@ -131,7 +131,6 @@ export default function FolderVideosSection({
       });
 
       const results = await Promise.allSettled(analyticsPromises);
-      const analytics = analyticsData || {};
 
 
       results.forEach((result) => {
@@ -147,6 +146,7 @@ export default function FolderVideosSection({
     refetchOnWindowFocus: false,
   });
 
+  const analytics = analyticsData || {};
 
   return (
     <>
