@@ -153,6 +153,7 @@ export async function generateAiMetadata(videoId: string, userId: string) {
   "summary": "string (write from 1st person perspective if appropriate, e.g. 'In this video, I demonstrate...' to make it feel personable)",
   "chapters": [{"title": "string", "start": number}]
 }
+Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
 ${transcriptText}`;
     const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -183,7 +184,14 @@ ${transcriptText}`;
       chapters?: { title: string; start: number }[];
     } = {};
     try {
-      data = JSON.parse(content);
+      // Remove markdown code blocks if present
+      let cleanContent = content;
+      if (content.includes("```json")) {
+        cleanContent = content.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+      } else if (content.includes("```")) {
+        cleanContent = content.replace(/```\s*/g, "");
+      }
+      data = JSON.parse(cleanContent.trim());
     } catch (e) {
       console.error(`[generateAiMetadata] Error parsing OpenAI response: ${e}`);
       data = {

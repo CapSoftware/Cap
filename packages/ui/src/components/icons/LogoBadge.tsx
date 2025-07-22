@@ -5,6 +5,10 @@ export const LogoBadge = ({ className }: { className: string }) => {
       className={className}
       fill="none"
       viewBox="0 0 40 40"
+      preserveAspectRatio="xMidYMid meet"
+      style={{
+        aspectRatio: "1 / 1",
+      }}
     >
       <rect width="40" height="40" fill="#fff" rx="8"></rect>
       <path
