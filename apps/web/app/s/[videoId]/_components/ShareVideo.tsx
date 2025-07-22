@@ -73,7 +73,9 @@ export const ShareVideo = forwardRef<
       setSubtitleUrl(newUrl);
 
       return () => {
-        URL.revokeObjectURL(newUrl);
+        if (newUrl) {
+          URL.revokeObjectURL(newUrl);
+        }
       };
     } else {
       // Clean up if no longer needed
