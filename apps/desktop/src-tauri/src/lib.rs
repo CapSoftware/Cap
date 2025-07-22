@@ -1733,18 +1733,7 @@ async fn set_camera_preview_state(
 #[tauri::command]
 #[specta::specta]
 async fn await_camera_preview_ready(store: State<'_, CameraPreview>) -> Result<bool, ()> {
-    // loop {
-    //     if let Some(_) = store
-    //         .frame
-    //         .read()
-    //         .unwrap_or_else(PoisonError::into_inner)
-    //         .as_ref()
-    //     {
-    //         break;
-    //     }
-    //     tokio::time::sleep(Duration::from_millis(70)).await;
-    // }
-
+    store.wait_for_camera_to_load().await;
     Ok(true)
 }
 

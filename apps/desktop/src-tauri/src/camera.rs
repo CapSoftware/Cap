@@ -77,6 +77,7 @@ impl CameraPreview {
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
         let camera_rx = self.camera_rx.clone();
+        let loading_tx = self.loading.0.clone();
         let shutdown = Arc::new(Notify::new());
         let shutdown_handle = shutdown.clone();
         thread::spawn(move || {
@@ -84,8 +85,9 @@ impl CameraPreview {
 
             let mut window_visible = false;
             let mut first = true;
-            let mut loading = false;
+            let mut loading = true;
             let mut resampler_frame = Cached::default();
+            let mut aspect_ratio = Cached::default();
             let mut shutdown = std::pin::pin!(shutdown.notified());
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
@@ -114,18 +116,22 @@ impl CameraPreview {
 
                     tokio::select! {
                         frame = camera_rx.recv_async() => frame.ok().map(|f| (Some(f.frame), false)),
-                        _ = reconfigure.recv() => Some((None, true)),
+                        _ = reconfigure.recv() =>  Some((None, true)),
                         _ = shutdown => None,
                     }
                 }
             }) {
+                let camera_aspect_ratio = frame
+                    .as_ref()
+                    .map(|f| f.width() as f32 / f.height() as f32)
+                    .unwrap_or(1.0);
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
-                    let camera_aspect_ratio = frame
-                        .as_ref()
-                        .map(|f| f.width() as f32 / f.height() as f32)
-                        .unwrap_or(1.0);
-                    renderer.update_state_uniforms(camera_aspect_ratio);
+                    println!("GOT ASPECT RATIO: {}", camera_aspect_ratio);
+                    renderer.update_state_uniforms();
+                    aspect_ratio.get_or_init(camera_aspect_ratio, || {
+                        renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
+                    });
                     if let Err(err) = renderer.update_window_size(frame.as_ref()) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -139,8 +145,10 @@ impl CameraPreview {
                         frame.height(),
                     ))
                 {
-                    let camera_aspect_ratio = frame.width() as f32 / frame.height() as f32;
-                    renderer.update_state_uniforms(camera_aspect_ratio);
+                    renderer.update_state_uniforms();
+                    aspect_ratio.get_or_init(camera_aspect_ratio, || {
+                        renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
+                    });
                     if let Err(err) = renderer.update_window_size(Some(frame)) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -157,17 +165,16 @@ impl CameraPreview {
                     .get_current_texture()
                     .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
                 {
-                    if let Some(frame) = frame {
-                        if loading == false {
-                            println!("DONE LOADING");
-                            continue; // TODO
+                    let output_width = 1280;
+                    let output_height = (1280.0 / camera_aspect_ratio) as u32;
 
-                            loading = true;
+                    let new_texture_value = if let Some(frame) = frame {
+                        println!("FRAME RENDER");
+
+                        if loading == true {
+                            loading_tx.send(()).ok();
+                            loading = false;
                         }
-
-                        let output_width = 1280;
-                        let output_height =
-                            (1280.0 / (frame.width() as f64 / frame.height() as f64)) as u32;
 
                         let resampler_frame = resampler_frame
                             .get_or_init((frame.width(), frame.height()), || frame::Video::empty());
@@ -187,39 +194,30 @@ impl CameraPreview {
                             continue;
                         }
 
-                        renderer.render(
-                            Some((
-                                &resampler_frame.data(0).to_vec(),
-                                resampler_frame.stride(0) as u32,
-                            )),
-                            output_width,
-                            output_height,
-                            surface,
-                        );
+                        Some((
+                            resampler_frame.data(0).to_vec(),
+                            resampler_frame.stride(0) as u32,
+                        ))
                     } else if loading {
-                        println!("RENDER LOADING");
+                        println!("LOADING RENDER");
 
                         let (buffer, stride) = render_solid_frame(
                             [0x11, 0x11, 0x11, 0xFF], // #111111
-                            surface.texture.width(),
-                            surface.texture.height(),
+                            output_width,
+                            output_height,
                         );
 
-                        renderer.render(
-                            Some((&buffer, stride)),
-                            surface.texture.width(),
-                            surface.texture.height(),
-                            surface,
-                        );
+                        Some((buffer, stride))
                     } else {
-                        println!("DETECT RECONFIGURE");
-                        renderer.render(
-                            None, // This will reuse the existing texture
-                            surface.texture.width(),
-                            surface.texture.height(),
-                            surface,
-                        );
-                    }
+                        None // This will reuse the existing texture
+                    };
+
+                    renderer.render(
+                        surface,
+                        new_texture_value.as_ref().map(|(b, s)| (&**b, *s)),
+                        output_width,
+                        output_height,
+                    );
                 }
 
                 if !window_visible {
@@ -230,7 +228,22 @@ impl CameraPreview {
                 }
             }
 
-            println!("SHUTDOWN THREAD");
+            // TODO
+            if let Ok(surface) = renderer
+                .surface
+                .get_current_texture()
+                .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
+            {
+                // TODO: Update uniforms to loading state too -> go through top loop again
+
+                let (buffer, stride) = render_solid_frame(
+                    [0x11, 0x11, 0x11, 0xFF], // #111111
+                    1280,
+                    1280,
+                );
+
+                renderer.render(surface, Some((&buffer, stride)), 1280, 1280);
+            }
         });
 
         let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
@@ -263,10 +276,10 @@ impl CameraPreview {
         Ok(())
     }
 
-    // /// Set the system back into the loading state, instead of holding the frame
-    // pub fn switch_camera(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
-
-    // }
+    /// Wait for the camera to load.
+    pub async fn wait_for_camera_to_load(&self) {
+        self.loading.1.resubscribe().recv().await.ok();
+    }
 }
 
 struct Renderer {
@@ -279,6 +292,7 @@ struct Renderer {
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     window_uniform_buffer: wgpu::Buffer,
+    camera_uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     window: tauri::WebviewWindow<Wry>,
 
@@ -364,6 +378,16 @@ impl Renderer {
                         },
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -391,7 +415,7 @@ impl Renderer {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 6]>() as u64, // offset_pixels, shape, size, mirrored, camera_aspect_ratio, padding
+            size: std::mem::size_of::<[f32; 5]>() as u64, // offset_pixels, shape, size, mirrored, padding
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -399,6 +423,13 @@ impl Renderer {
         let window_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Window Uniform Buffer"),
             size: std::mem::size_of::<[f32; 3]>() as u64, // window_height, window_width, padding
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let camera_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Camera Uniform Buffer"),
+            size: std::mem::size_of::<[f32; 2]>() as u64, // camera_aspect_ratio, padding
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -414,6 +445,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: window_uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: camera_uniform_buffer.as_entire_binding(),
                 },
             ],
         });
@@ -484,6 +519,7 @@ impl Renderer {
             bind_group_layout,
             uniform_buffer,
             window_uniform_buffer,
+            camera_uniform_buffer,
             uniform_bind_group,
             window,
 
@@ -577,7 +613,7 @@ impl Renderer {
     }
 
     /// Update the uniforms which hold the camera preview state
-    fn update_state_uniforms(&self, camera_aspect_ratio: f32) {
+    fn update_state_uniforms(&self) {
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -593,8 +629,19 @@ impl Renderer {
                     CameraPreviewSize::Lg => 1.0,
                 },
                 if self.state.mirrored { 1.0 } else { 0.0 },
+                0.0, // padding
+            ]),
+        );
+    }
+
+    /// Update the uniforms which hold the camera aspect ratio
+    fn update_camera_aspect_ratio_uniforms(&self, camera_aspect_ratio: f32) {
+        self.queue.write_buffer(
+            &self.camera_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[
                 camera_aspect_ratio,
-                0.0,
+                0.0, // padding
             ]),
         );
     }
@@ -602,10 +649,10 @@ impl Renderer {
     /// Render the camera preview to the window.
     fn render(
         &mut self,
+        surface: SurfaceTexture,
         new_texture_value: Option<(&[u8], u32)>,
         width: u32,
         height: u32,
-        surface: SurfaceTexture,
     ) {
         let view = surface
             .texture

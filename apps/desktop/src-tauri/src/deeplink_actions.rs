@@ -2,7 +2,9 @@ use cap_recording::RecordingMode;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 
-use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
+use crate::{
+    App, ArcLock, camera::CameraPreview, recording::StartRecordingInputs, windows::ShowCapWindow,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

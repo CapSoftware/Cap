@@ -3,7 +3,6 @@ struct StateUniforms {
     shape: f32,
     size: f32,
     mirrored: f32,
-    camera_aspect_ratio: f32,
     _padding: f32,
 }
 
@@ -13,11 +12,19 @@ struct WindowUniforms {
     _padding: f32,
 }
 
+struct CameraUniforms {
+    camera_aspect_ratio: f32,
+    _padding: f32,
+}
+
 @group(1) @binding(0)
 var<uniform> uniforms: StateUniforms;
 
 @group(1) @binding(1)
 var<uniform> window_uniforms: WindowUniforms;
+
+@group(1) @binding(2)
+var<uniform> camera_uniforms: CameraUniforms;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -67,7 +74,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     let crop_width = window_uniforms.window_width;
     let crop_height = window_uniforms.window_height - uniforms.offset_pixels;
     let crop_aspect = crop_width / crop_height;
-    let camera_aspect = uniforms.camera_aspect_ratio;
+    let camera_aspect = camera_uniforms.camera_aspect_ratio;
 
     // Calculate UV coordinates for proper "cover" behavior
     var final_uv = in.uv;
