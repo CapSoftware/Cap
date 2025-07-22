@@ -1,6 +1,10 @@
 use std::{
-    sync::{Arc, PoisonError, RwLock},
+    sync::{
+        Arc, PoisonError, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
+    time::Duration,
 };
 
 use anyhow::{Context, anyhow};
@@ -49,7 +53,7 @@ pub struct CameraWindowState {
 
 pub struct CameraPreview {
     reconfigure: (broadcast::Sender<()>, broadcast::Receiver<()>),
-    loading: (broadcast::Sender<()>, broadcast::Receiver<()>),
+    loading: Arc<AtomicBool>,
     window: RwLock<Option<Arc<Notify>>>,
     store: Arc<Store<Wry>>,
     camera_rx: Receiver<RawCameraFrame>,
@@ -62,7 +66,7 @@ impl CameraPreview {
     ) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             reconfigure: broadcast::channel(1),
-            loading: broadcast::channel(1),
+            loading: Arc::new(AtomicBool::new(false)),
             window: RwLock::new(None),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
             camera_rx,
@@ -72,17 +76,17 @@ impl CameraPreview {
     /// Initialize the state when the camera preview window is created.
     /// Currently we only support a single camera preview window at a time!
     pub async fn init_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
+        self.loading.store(true, Ordering::Relaxed);
+
         let mut renderer = Renderer::init(window.clone()).await?;
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
         let camera_rx = self.camera_rx.clone();
-        let loading_tx = self.loading.0.clone();
+        let loading_state = self.loading.clone();
         let shutdown = Arc::new(Notify::new());
         let shutdown_handle = shutdown.clone();
         thread::spawn(move || {
-            println!("NEW THREAD");
-
             let mut window_visible = false;
             let mut first = true;
             let mut loading = true;
@@ -182,8 +186,7 @@ impl CameraPreview {
 
                     let new_texture_value = if let Some(frame) = frame {
                         if loading == true {
-                            println!("LOADING DONE");
-                            loading_tx.send(()).ok();
+                            loading_state.store(false, Ordering::Relaxed);
                             loading = false;
                         }
 
@@ -270,7 +273,10 @@ impl CameraPreview {
 
     /// Wait for the camera to load.
     pub async fn wait_for_camera_to_load(&self) {
-        self.loading.1.resubscribe().recv().await.ok();
+        // The webview is generally slow to load so it's rare this will actually loop.
+        while self.loading.load(Ordering::Relaxed) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -582,10 +588,6 @@ impl Renderer {
         let size = self.window.outer_size()?;
         self.surface_size
             .get_or_init((size.width, size.height), || {
-                println!(
-                    "Reconfiguring GPU surface - Width: {}, Height: {}",
-                    size.width, size.height
-                );
                 self.surface_config.width = if size.width > 0 { size.width } else { 1 };
                 self.surface_config.height = if size.height > 0 { size.height } else { 1 };
                 self.surface.configure(&self.device, &self.surface_config);
