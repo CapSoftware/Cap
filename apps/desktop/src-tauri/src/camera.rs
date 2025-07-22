@@ -121,34 +121,47 @@ impl CameraPreview {
                     }
                 }
             }) {
-                let camera_aspect_ratio = frame
-                    .as_ref()
-                    .map(|f| f.width() as f32 / f.height() as f32)
-                    .unwrap_or(1.0);
-                aspect_ratio.get_or_init(camera_aspect_ratio, || {
-                    renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
-                });
-                println!("GOT ASPECT RATIO: {}", camera_aspect_ratio);
+                let mut window_resize_required =
+                    if first || reconfigure && renderer.refresh_state(&store) {
+                        first = false;
+                        renderer.update_state_uniforms();
+                        true
+                    } else if let Some(frame) = frame.as_ref()
+                        && renderer.frame_info.update_key_and_should_init((
+                            frame.format(),
+                            frame.width(),
+                            frame.height(),
+                        ))
+                    {
+                        true
+                    } else {
+                        false
+                    };
 
-                if first || reconfigure && renderer.refresh_state(&store) {
-                    first = false;
+                let camera_aspect_ratio = *aspect_ratio.get_or_init(
+                    (
+                        frame.as_ref().map(|f| (f.width(), f.height())),
+                        renderer.state.clone(),
+                    ),
+                    || {
+                        let ratio = frame
+                            .as_ref()
+                            .map(|f| f.width() as f32 / f.height() as f32)
+                            .unwrap_or(if renderer.state.shape == CameraPreviewShape::Full {
+                                16.0 / 9.0
+                            } else {
+                                1.0
+                            });
+                        renderer.update_camera_aspect_ratio_uniforms(ratio);
+                        window_resize_required = true;
+                        ratio
+                    },
+                );
 
-                    renderer.update_state_uniforms();
-                    // Always update window size when state changes, even without a frame
-                    if let Err(err) = renderer.update_window_size(frame.as_ref()) {
-                        error!("Error updating window size: {err:?}");
-                        continue;
-                    }
-                }
-
-                if let Some(frame) = frame.as_ref()
-                    && renderer.frame_info.update_key_and_should_init((
-                        frame.format(),
-                        frame.width(),
-                        frame.height(),
-                    ))
-                {
-                    if let Err(err) = renderer.update_window_size(Some(frame)) {
+                if window_resize_required {
+                    if let Err(err) =
+                        renderer.update_window_size(frame.as_ref(), camera_aspect_ratio)
+                    {
                         error!("Error updating window size: {err:?}");
                         continue;
                     }
@@ -168,9 +181,8 @@ impl CameraPreview {
                     let output_height = (1280.0 / camera_aspect_ratio) as u32;
 
                     let new_texture_value = if let Some(frame) = frame {
-                        println!("FRAME RENDER");
-
                         if loading == true {
+                            println!("LOADING DONE");
                             loading_tx.send(()).ok();
                             loading = false;
                         }
@@ -198,8 +210,6 @@ impl CameraPreview {
                             resampler_frame.stride(0) as u32,
                         ))
                     } else if loading {
-                        println!("LOADING RENDER");
-
                         let (buffer, stride) = render_solid_frame(
                             [0x11, 0x11, 0x11, 0xFF], // #111111
                             output_width,
@@ -525,20 +535,12 @@ impl Renderer {
     }
 
     /// Resize the OS window to the correct size
-    fn update_window_size(&self, frame: Option<&FFVideo>) -> tauri::Result<()> {
+    fn update_window_size(&self, frame: Option<&FFVideo>, aspect: f32) -> tauri::Result<()> {
         let base: f32 = if self.state.size == CameraPreviewSize::Sm {
             230.0
         } else {
             400.0
         };
-        let aspect = frame
-            .as_ref()
-            .map(|f| f.width() as f32 / f.height() as f32)
-            .unwrap_or(if self.state.shape == CameraPreviewShape::Full {
-                16.0 / 9.0
-            } else {
-                1.0
-            });
         let window_width = if self.state.shape == CameraPreviewShape::Full {
             if aspect >= 1.0 { base * aspect } else { base }
         } else {
@@ -549,11 +551,6 @@ impl Renderer {
         } else {
             base
         } + TOOLBAR_HEIGHT;
-
-        println!(
-            "Window size update - Shape: {:?}, Size: {:?}, Aspect: {:.2}, Width: {:.1}, Height: {:.1}",
-            self.state.shape, self.state.size, aspect, window_width, window_height
-        );
 
         let (monitor_size, monitor_offset, monitor_scale_factor): (
             PhysicalSize<u32>,
@@ -576,8 +573,6 @@ impl Renderer {
         self.window
             .set_size(LogicalSize::new(window_width, window_height))?;
         self.window.set_position(LogicalPosition::new(x, y))?;
-
-        println!("SET WINDOW SIZE {} {}", window_width, window_height);
 
         Ok(())
     }
