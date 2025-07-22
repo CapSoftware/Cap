@@ -7,6 +7,31 @@ use std::{
     time::Duration,
 };
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct StateUniforms {
+    shape: f32,
+    size: f32,
+    mirrored: f32,
+    _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct WindowUniforms {
+    window_height: f32,
+    window_width: f32,
+    toolbar_height: f32,
+    _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniforms {
+    camera_aspect_ratio: f32,
+    _padding: f32,
+}
+
 use anyhow::{Context, anyhow};
 use ffmpeg::{
     format::{self, Pixel},
@@ -376,7 +401,7 @@ impl Renderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Buffer {
                             ty: wgpu::BufferBindingType::Uniform,
                             has_dynamic_offset: false,
@@ -411,21 +436,21 @@ impl Renderer {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 5]>() as u64, // offset_pixels, shape, size, mirrored, padding
+            size: std::mem::size_of::<StateUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let window_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Window Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 3]>() as u64, // window_height, window_width, padding
+            size: std::mem::size_of::<WindowUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let camera_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Camera Uniform Buffer"),
-            size: std::mem::size_of::<[f32; 2]>() as u64, // camera_aspect_ratio, padding
+            size: std::mem::size_of::<CameraUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -590,14 +615,16 @@ impl Renderer {
                 self.surface_config.height = if size.height > 0 { size.height } else { 1 };
                 self.surface.configure(&self.device, &self.surface_config);
 
+                let window_uniforms = WindowUniforms {
+                    window_height: self.surface_config.height as f32,
+                    window_width: self.surface_config.width as f32,
+                    toolbar_height: TOOLBAR_HEIGHT,
+                    _padding: 0.0,
+                };
                 self.queue.write_buffer(
                     &self.window_uniform_buffer,
                     0,
-                    bytemuck::cast_slice(&[
-                        self.surface_config.height as f32,
-                        self.surface_config.width as f32,
-                        0.0, // padding
-                    ]),
+                    bytemuck::cast_slice(&[window_uniforms]),
                 );
             });
 
@@ -606,35 +633,36 @@ impl Renderer {
 
     /// Update the uniforms which hold the camera preview state
     fn update_state_uniforms(&self) {
+        let state_uniforms = StateUniforms {
+            shape: match self.state.shape {
+                CameraPreviewShape::Round => 0.0,
+                CameraPreviewShape::Square => 1.0,
+                CameraPreviewShape::Full => 2.0,
+            },
+            size: match self.state.size {
+                CameraPreviewSize::Sm => 0.0,
+                CameraPreviewSize::Lg => 1.0,
+            },
+            mirrored: if self.state.mirrored { 1.0 } else { 0.0 },
+            _padding: 0.0,
+        };
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
-            bytemuck::cast_slice(&[
-                TOOLBAR_HEIGHT,
-                match self.state.shape {
-                    CameraPreviewShape::Round => 0.0,
-                    CameraPreviewShape::Square => 1.0,
-                    CameraPreviewShape::Full => 2.0,
-                },
-                match self.state.size {
-                    CameraPreviewSize::Sm => 0.0,
-                    CameraPreviewSize::Lg => 1.0,
-                },
-                if self.state.mirrored { 1.0 } else { 0.0 },
-                0.0, // padding
-            ]),
+            bytemuck::cast_slice(&[state_uniforms]),
         );
     }
 
     /// Update the uniforms which hold the camera aspect ratio
     fn update_camera_aspect_ratio_uniforms(&self, camera_aspect_ratio: f32) {
+        let camera_uniforms = CameraUniforms {
+            camera_aspect_ratio,
+            _padding: 0.0,
+        };
         self.queue.write_buffer(
             &self.camera_uniform_buffer,
             0,
-            bytemuck::cast_slice(&[
-                camera_aspect_ratio,
-                0.0, // padding
-            ]),
+            bytemuck::cast_slice(&[camera_uniforms]),
         );
     }
 
