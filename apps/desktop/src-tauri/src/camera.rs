@@ -22,6 +22,7 @@ use tauri::{
 };
 use tauri_plugin_store::Store;
 use tokio::sync::{oneshot, Notify};
+use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */ + 16.0 /* camera preview inset */;
@@ -176,21 +177,10 @@ impl CameraPreview {
         })
     }
 
+    /// Initialize the state when the camera preview window is created.
+    /// Currently we only support a single camera preview window at a time!
     pub async fn init_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
         let mut renderer = Renderer::init(window.clone()).await?;
-
-        // // TODO
-        // // {
-        // //     let s = window
-        // //         .surface_config
-        // //         .lock()
-        // //         .unwrap_or_else(PoisonError::into_inner);
-
-        // //     let state = self.get().unwrap_or_default();
-        // //     self.resize_inner(&window, &state, s.width, s.height)?;
-        // //     update_uniforms(&window, &s, &state);
-        // //     window.window.show()?;
-        // // }
 
         // Due to the ffmpeg rescaler not being `Send` and joining the channels requiring async, we split it out.
         let (internal_tx, mut internal_rx) = tokio::sync::mpsc::channel(4);
@@ -198,40 +188,46 @@ impl CameraPreview {
         let camera_rx = self.camera_rx.clone();
 
         let task = tokio::spawn(async move {
-            let notify = reconfigure.notified();
-            let mut notify = std::pin::pin!(notify);
+            let reconfigure = reconfigure.notified();
+            let mut reconfigure = std::pin::pin!(reconfigure);
             let mut last_frame = None;
 
             // Render a loading frame by default
-            internal_tx.send(None).await.unwrap();
+            internal_tx.send((None, true)).await.ok();
 
             loop {
                 let frame = tokio::select! {
                     frame = camera_rx.recv_async() => frame.map(Some),
-                    _ = notify.as_mut() => Ok(None),
+                    _ = reconfigure.as_mut() => Ok(None),
                 };
 
                 let result = match frame {
                     Ok(Some(frame)) => {
                         last_frame = Some(frame.frame.clone());
-                        Some(frame.frame)
+                        (Some(frame.frame), false)
                     }
                     // By yielding a new frame when reconfigure is sent,
-                    // the renderer will rescale it to the new window size.
-                    // If no frame is available, the fallback frame will be resized.
-                    Ok(None) => last_frame.clone(),
-                    Err(err) => todo!(), // TODO: Handle error
-                                         // error!("Error receiving frame: {err}");
-                                         // return;
+                    // the renderer thread will rescale the output to the new window size.
+                    // If no frame is available, the fallback frame will be regenerated to the new size
+                    Ok(None) => (last_frame.clone(), true),
+                    Err(err) => {
+                        error!("Error receiving frame from camera: {err}");
+                        return;
+                    }
                 };
 
-                internal_tx.send(result).await.unwrap(); // TODO: Handle error
+                if let Err(_) = internal_tx.send(result).await {
+                    error!("Error sending frame to renderer. Did it crash?");
+                    return;
+                }
             }
         });
 
         let store = self.store.clone();
         thread::spawn(move || {
-            let mut scaler = scaling::Context::get(
+            let mut window_visible = false;
+            let mut incoming_cache = None;
+            let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
                 1,
@@ -240,17 +236,13 @@ impl CameraPreview {
                 1,
                 scaling::Flags::empty(),
             )
-            .unwrap(); // TODO: Error handling
-                       // .with_context(|| "Error initializing ffmpeg scaler")?;
-
-            let mut incoming_cache = None;
-            // let mut window_cache = None;
-
-            // TODO: On reconfigure we need to resize the texture always
+            .map_err(|err| error!("Error initializing ffmpeg scaler: {err:?}")) else {
+                return;
+            };
 
             // This thread will automatically be shutdown if `internal_tx` is dropped
             // which is held by the Tokio task.
-            while let Some(frame) = internal_rx.blocking_recv() {
+            while let Some((frame, reconfigure)) = internal_rx.blocking_recv() {
                 let surface_frame = renderer.surface.get_current_texture().unwrap();
                 // .with_context(|| "Error getting surface current texture")?;
 
@@ -260,13 +252,24 @@ impl CameraPreview {
                 let (buffer, stride) = if let Some(frame) = frame {
                     let (incoming_cache, initialized) =
                         IncomingCache::check(&mut incoming_cache, &frame);
-                    if initialized {
-                        // TODO: resize window & update uniforms?
-                        // todo!();
+                    // `initialized` accounts for a change in the incoming frame's resolution.
+                    // `reconfigure` accounts for when the state is changed (Eg. window shape)
+                    if initialized || reconfigure {
+                        let state = get_state(&store).unwrap_or_default();
+                        renderer
+                            .resize_window(&state, incoming_cache.width, incoming_cache.height)
+                            .unwrap();
+
+                        // TODO: Does this care about the incoming frame's resolution or is the cache key condition wrong?
+                        renderer.update_uniforms(&state, incoming_cache.height);
+
+                        if !window_visible {
+                            window_visible = true;
+                            renderer.window.show().unwrap();
+                        }
                     }
 
                     // TODO: Investigate moving the rescaling into the shader
-
                     // This will either reuse or reinitialize the scaler
                     scaler.cached(
                         frame.format(),
@@ -303,7 +306,7 @@ impl CameraPreview {
                     (buffer, 4 * surface_width)
                 };
 
-                renderer.render(surface_frame, &buffer, stride, &*store); // TODO
+                renderer.render(surface_frame, &buffer, stride, &*store);
             }
         });
 
@@ -333,23 +336,7 @@ impl CameraPreview {
     pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
         self.store.set("state", serde_json::to_value(&state)?);
         self.store.save()?;
-
-        // TODO
-        // if let Some(window) = self
-        //     .window
-        //     .read()
-        //     .unwrap_or_else(PoisonError::into_inner)
-        //     .as_ref()
-        // {
-        //     let s = window
-        //         .surface_config
-        //         .lock()
-        //         .unwrap_or_else(PoisonError::into_inner);
-
-        //     self.resize_inner(window, &self.get().unwrap_or_default(), s.width, s.height)?;
-        //     update_uniforms(window, &s, state);
-        // }
-
+        self.reconfigure.notify_waiters();
         Ok(())
     }
 }
@@ -371,7 +358,7 @@ struct Renderer {
 }
 
 impl Renderer {
-    pub async fn init(window: WebviewWindow) -> anyhow::Result<Self> {
+    async fn init(window: WebviewWindow) -> anyhow::Result<Self> {
         let size = window
             .inner_size()
             .with_context(|| "Error getting the window size")?;
@@ -546,7 +533,87 @@ impl Renderer {
         })
     }
 
-    pub fn render(
+    /// Resize the OS window to the correct size
+    fn resize_window(
+        &self,
+        state: &CameraWindowState,
+        width: u32,
+        height: u32,
+    ) -> tauri::Result<()> {
+        let base: f32 = if state.size == CameraPreviewSize::Sm {
+            230.0
+        } else {
+            400.0
+        };
+        let aspect = width as f32 / height as f32;
+        let window_width = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base * aspect
+            } else {
+                base
+            }
+        } else {
+            base
+        };
+        let window_height = if state.shape == CameraPreviewShape::Full {
+            if aspect >= 1.0 {
+                base
+            } else {
+                base / aspect
+            }
+        } else {
+            base
+        } + TOOLBAR_HEIGHT;
+
+        let (monitor_size, monitor_offset, monitor_scale_factor): (
+            PhysicalSize<u32>,
+            LogicalPosition<u32>,
+            _,
+        ) = if let Some(monitor) = self.window.current_monitor()? {
+            let size = monitor.position().to_logical(monitor.scale_factor());
+            (monitor.size().clone(), size, monitor.scale_factor())
+        } else {
+            (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
+        };
+
+        let x = (monitor_size.width as f64 / monitor_scale_factor - window_width as f64 - 100.0)
+            as u32
+            + monitor_offset.x;
+        let y = (monitor_size.height as f64 / monitor_scale_factor - window_height as f64 - 100.0)
+            as u32
+            + monitor_offset.y;
+
+        self.window
+            .set_size(LogicalSize::new(window_width, window_height))?;
+        self.window.set_position(LogicalPosition::new(x, y))?;
+
+        Ok(())
+    }
+
+    // TODO
+    fn update_uniforms(&self, state: &CameraWindowState, height: u32) {
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[
+                height as f32,
+                TOOLBAR_HEIGHT,
+                match state.shape {
+                    CameraPreviewShape::Round => 0.0,
+                    CameraPreviewShape::Square => 1.0,
+                    CameraPreviewShape::Full => 2.0,
+                },
+                match state.size {
+                    CameraPreviewSize::Sm => 0.0,
+                    CameraPreviewSize::Lg => 1.0,
+                },
+                if state.mirrored { 1.0 } else { 0.0 },
+                0.0, // padding
+            ]),
+        );
+    }
+
+    fn render(
         &mut self,
         surface_frame: SurfaceTexture,
         buffer: &[u8],
@@ -665,4 +732,10 @@ impl Renderer {
         self.queue.submit(Some(encoder.finish()));
         surface_frame.present();
     }
+}
+
+fn get_state(store: &Store<tauri::Wry>) -> Option<CameraWindowState> {
+    store
+        .get("state")
+        .and_then(|v| serde_json::from_value(v).ok())
 }

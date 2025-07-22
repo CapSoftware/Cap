@@ -182,7 +182,6 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[specta::specta]
 async fn set_camera_input(
     state: MutableState<'_, App>,
-    camera: State<'_, CameraPreview>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -210,20 +209,9 @@ async fn set_camera_input(
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
                                     feed.attach(app.camera_tx.clone());
-                                    // let video_info = feed.video_info();
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
-
-                                    // TODO
-                                    // store.resize(video_info.width, video_info.height)
-                                    //     .map_err(|err| format!("Error resizing camera preview: {err}"))?;
-
                                     return Ok(true);
                                 } else {
-                                    // TODO
-                                    // let video_info = app.camera_feed.as_ref().unwrap().lock().await.video_info();
-                                    // store.resize(video_info.width, video_info.height)
-                                    //     .map_err(|err| format!("Error resizing camera preview: {err}"))?;
-
                                     return Ok(false);
                                 }
                             }
