@@ -52,28 +52,28 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Apply 16px padding using unified NDC transformation
-    let padding = 16.0;
-    
+    // Apply 14px padding using unified NDC transformation
+    let padding = 0.0;
+
     // Define target viewport in pixel space (with padding and toolbar offset)
     // Ensure we have positive dimensions by clamping padding
     let max_horizontal_padding = window_uniforms.window_width * 0.4; // Max 40% padding
     let max_vertical_padding = (window_uniforms.window_height - uniforms.offset_pixels) * 0.4;
     let effective_padding = min(padding, min(max_horizontal_padding, max_vertical_padding));
-    
+
     let target_left = effective_padding;
     let target_right = window_uniforms.window_width - effective_padding;
-    let target_top = uniforms.offset_pixels + effective_padding;  
+    let target_top = uniforms.offset_pixels + effective_padding;
     let target_bottom = window_uniforms.window_height - effective_padding;
-    
+
     // Convert original [-1,1] NDC coordinates to target viewport pixel coordinates
     let pixel_x = (pos[idx].x + 1.0) * 0.5 * (target_right - target_left) + target_left;
     let pixel_y = (1.0 - pos[idx].y) * 0.5 * (target_bottom - target_top) + target_top;
-    
+
     // Convert back to NDC space
     let ndc_x = (pixel_x / window_uniforms.window_width) * 2.0 - 1.0;
     let ndc_y = 1.0 - (pixel_y / window_uniforms.window_height) * 2.0;
-    
+
     let adjusted_pos = vec2<f32>(ndc_x, ndc_y);
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
@@ -147,9 +147,10 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     var mask = 1.0;
 
     if (shape == 0.0) {
-        // Round shape - create circular mask (border-radius: 9999px equivalent)
-        let distance = length(center_uv);
-        mask = select(0.0, 1.0, distance <= 1.0);
+        // Round shape - create circular mask with aspect ratio correction
+        let aspect_corrected_uv = vec2<f32>(center_uv.x * crop_aspect, center_uv.y);
+        let distance = length(aspect_corrected_uv);
+        mask = select(0.0, 1.0, distance <= crop_aspect);
     } else if (shape == 1.0) {
         // Square shape - apply rounded corners based on size
         // Use a reasonable corner radius for the square shape
