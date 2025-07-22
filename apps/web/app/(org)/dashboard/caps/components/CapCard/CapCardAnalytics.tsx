@@ -8,8 +8,7 @@ import {
   ComponentProps,
   ForwardedRef,
   forwardRef,
-  PropsWithChildren,
-  Suspense,
+  PropsWithChildren
 } from "react";
 
 interface CapCardAnalyticsProps {
@@ -22,23 +21,21 @@ interface CapCardAnalyticsProps {
 export const CapCardAnalytics = Object.assign(
   ({ displayCount, totalComments, totalReactions }: CapCardAnalyticsProps) => (
     <Shell>
-      <Suspense fallback={<CapCardAnalytics.Skeleton />}>
-        <Tooltip content={`${displayCount} unique views`}>
-          <IconItem icon={faEye}>
-            <span className="text-sm text-gray-12">{displayCount}</span>
-          </IconItem>
-        </Tooltip>
-        <Tooltip content={`${totalComments} comments`}>
-          <IconItem icon={faComment}>
-            <span className="text-sm text-gray-12">{totalComments}</span>
-          </IconItem>
-        </Tooltip>
-        <Tooltip content={`${totalReactions} reactions`}>
-          <IconItem icon={faSmile}>
-            <span className="text-sm text-gray-12">{totalReactions}</span>
-          </IconItem>
-        </Tooltip>
-      </Suspense>
+      <Tooltip content={`${displayCount} unique views`}>
+        <IconItem icon={faEye}>
+          <span className="text-sm text-gray-12">{displayCount}</span>
+        </IconItem>
+      </Tooltip>
+      <Tooltip content={`${totalComments} comments`}>
+        <IconItem icon={faComment}>
+          <span className="text-sm text-gray-12">{totalComments}</span>
+        </IconItem>
+      </Tooltip>
+      <Tooltip content={`${totalReactions} reactions`}>
+        <IconItem icon={faSmile}>
+          <span className="text-sm text-gray-12">{totalReactions}</span>
+        </IconItem>
+      </Tooltip>
     </Shell>
   ),
   {
