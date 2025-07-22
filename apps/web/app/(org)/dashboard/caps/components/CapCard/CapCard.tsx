@@ -350,7 +350,7 @@ export const CapCard = ({
                   <FontAwesomeIcon
                     className="size-3"
                     icon={faCopy}
-                  />f
+                  />
                   <p className="text-sm text-gray-12">Duplicate</p>
                 </DropdownMenuItem>
                 <DropdownMenuItem

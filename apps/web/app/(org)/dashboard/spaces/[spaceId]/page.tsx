@@ -21,8 +21,6 @@ export const metadata: Metadata = {
   title: "Shared Caps — Cap",
 };
 
-export const revalidate = 0;
-
 type SpaceData = {
   id: string;
   name: string;

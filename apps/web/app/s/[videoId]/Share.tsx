@@ -5,7 +5,7 @@ import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";

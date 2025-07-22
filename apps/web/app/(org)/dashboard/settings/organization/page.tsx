@@ -8,8 +8,6 @@ export const metadata: Metadata = {
   title: "Organization Settings — Cap",
 };
 
-export const revalidate = 0;
-
 export default async function OrganizationPage() {
   const user = await getCurrentUser();
 

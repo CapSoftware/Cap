@@ -103,27 +103,55 @@ export default function FolderVideosSection({
   };
 
   useEffect(() => {
-    const fetchAnalytics = async () => {
-      if (!dubApiKeyEnabled) return;
+    if (!dubApiKeyEnabled || data.length === 0) return;
 
-      const analyticsData: Record<string, number> = {};
-      for (const video of initialVideos) {
-        const response = await apiClient.video.getAnalytics({
-          query: { videoId: video.id },
-          fetchOptions: {
-            cache: "force-cache",
-          },
+    const abortController = new AbortController();
+    
+    const fetchAnalytics = async () => {
+      try {
+        // Fetch analytics for all videos in parallel
+        const analyticsPromises = data.map(async (video) => {
+          try {
+            const response = await apiClient.video.getAnalytics({
+              query: { videoId: video.id },
+            });
+            
+            if (response.status === 200) {
+              return { videoId: video.id, count: response.body.count || 0 };
+            }
+            return { videoId: video.id, count: 0 };
+          } catch (error) {
+            console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+            return { videoId: video.id, count: 0 };
+          }
         });
 
-        if (response.status !== 200) continue;
-
-        analyticsData[video.id] = response.body.count || 0;
+        const results = await Promise.allSettled(analyticsPromises);
+        
+        // Only update state if component is still mounted
+        if (!abortController.signal.aborted) {
+          const analyticsData: Record<string, number> = {};
+          results.forEach((result) => {
+            if (result.status === 'fulfilled' && result.value) {
+              analyticsData[result.value.videoId] = result.value.count;
+            }
+          });
+          setAnalytics(analyticsData);
+        }
+      } catch (error) {
+        if (!abortController.signal.aborted) {
+          console.error('Failed to fetch analytics:', error);
+        }
       }
-      setAnalytics(analyticsData);
     };
 
     fetchAnalytics();
-  }, [initialVideos]);
+
+    // Cleanup function to abort requests if component unmounts
+    return () => {
+      abortController.abort();
+    };
+  }, [data, dubApiKeyEnabled, apiClient]);
 
   return (
     <>
