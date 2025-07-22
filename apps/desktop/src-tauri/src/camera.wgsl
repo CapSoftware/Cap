@@ -52,10 +52,25 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Apply vertical offset only (horizontal bounds unchanged)
-    let vertical_scale = 1.0 - uniforms.offset_pixels / window_uniforms.window_height;
-    let mapped_y = pos[idx].y * vertical_scale + vertical_scale - 1.0;
-    let adjusted_pos = vec2<f32>(pos[idx].x, mapped_y);
+    // Apply 16px padding and vertical offset
+    let padding = 16.0;
+    let available_height = window_uniforms.window_height - uniforms.offset_pixels;
+    let effective_width = window_uniforms.window_width - 2.0 * padding;
+    let effective_height = available_height - 2.0 * padding;
+    
+    // Scale coordinates to fit within padded area
+    let horizontal_scale = effective_width / window_uniforms.window_width;
+    let vertical_scale = effective_height / available_height;
+    
+    // Apply scaling
+    let scaled_x = pos[idx].x * horizontal_scale;
+    let scaled_y = pos[idx].y * vertical_scale;
+    
+    // Apply existing offset_pixels logic to the scaled coordinates
+    let final_vertical_scale = available_height / window_uniforms.window_height;
+    let mapped_y = scaled_y * final_vertical_scale + final_vertical_scale - 1.0;
+    
+    let adjusted_pos = vec2<f32>(scaled_x, mapped_y);
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
@@ -70,9 +85,10 @@ var s_camera: sampler;
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // Calculate the crop region dimensions with inset applied
-    let crop_width = window_uniforms.window_width;
-    let crop_height = window_uniforms.window_height - uniforms.offset_pixels;
+    // Calculate the crop region dimensions with padding and inset applied
+    let padding = 16.0;
+    let crop_width = window_uniforms.window_width - 2.0 * padding;
+    let crop_height = window_uniforms.window_height - uniforms.offset_pixels - 2.0 * padding;
     let crop_aspect = crop_width / crop_height;
     let camera_aspect = camera_uniforms.camera_aspect_ratio;
 
