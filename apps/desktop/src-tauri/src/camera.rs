@@ -20,7 +20,8 @@ use tokio::sync::{Notify, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
-static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */ + 16.0 /* camera preview inset */;
+static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */;
+static PREVIEW_INSET: f32 = 16.0 /* camera preview inset */;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -135,7 +136,8 @@ impl CameraPreview {
             while let Some((frame, reconfigure)) = internal_rx.blocking_recv() {
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
-                    let camera_aspect_ratio = frame.as_ref()
+                    let camera_aspect_ratio = frame
+                        .as_ref()
                         .map(|f| f.width() as f32 / f.height() as f32)
                         .unwrap_or(1.0);
                     renderer.update_state_uniforms(camera_aspect_ratio);

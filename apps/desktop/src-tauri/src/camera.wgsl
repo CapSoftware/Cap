@@ -45,18 +45,19 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Position the quad to fill the crop region
-    let crop_range = 2.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
-    let final_y = -1.0 + (pos[idx].y + 1.0) * crop_range / 2.0;
+    // TEST: Force a large offset to see if positioning works at all
+    let test_offset = 200.0; // Force 200 pixels offset for testing
+    let top_bound = 1.0 - (test_offset / window_uniforms.window_height) * 2.0;
+    let bottom_bound = -1.0;
 
-    let adjusted_pos = vec2<f32>(pos[idx].x, final_y);
+    // Map quad vertices to fill the target area (top_bound to bottom_bound)
+    let mapped_y = bottom_bound + (pos[idx].y + 1.0) * (top_bound - bottom_bound) * 0.5;
 
-    // Mark pixels in the offset area as transparent
-    let is_offset_area = select(0.0, 1.0, adjusted_pos.y > (1.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0));
+    let adjusted_pos = vec2<f32>(pos[idx].x, mapped_y);
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
-    out.offset_area = is_offset_area;
+    out.offset_area = 0.0; // No offset area needed with correct positioning
     return out;
 }
 
@@ -67,10 +68,11 @@ var s_camera: sampler;
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // If we're in the offset area, return transparent
-    if (in.offset_area > 0.5) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-    }
+    // // DEBUG: Color code different areas to see what's happening
+    // // Red if in what should be the offset area, Green for normal area
+    // if (in.uv.y > 0.7) {  // Top 30% of quad
+    //     return vec4<f32>(1.0, 0.0, 0.0, 1.0); // RED
+    // }
 
     // Calculate the crop region dimensions
     let crop_width = window_uniforms.window_width;
@@ -80,7 +82,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Calculate UV coordinates for proper "cover" behavior
     var final_uv = in.uv;
-    
+
     // Determine which dimension needs to be scaled to cover the crop region
     if (camera_aspect > crop_aspect) {
         // Camera is wider than crop region - scale horizontally
