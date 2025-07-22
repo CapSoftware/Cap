@@ -530,6 +530,7 @@ async function AuthorizedContent({
     hasPassword: video.password !== null,
   };
 
+
   return (
     <>
       <div className="container flex-1 px-4 py-4 mx-auto">

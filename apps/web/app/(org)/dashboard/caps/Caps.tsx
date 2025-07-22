@@ -72,6 +72,7 @@ export const Caps = ({
     isUploading,
     setIsUploading,
     setUploadingCapId,
+    setUploadProgress,
     setUploadingThumbnailUrl,
   } = useUploadingContext();
 
@@ -83,7 +84,7 @@ export const Caps = ({
     if (!dubApiKeyEnabled || data.length === 0) return;
 
     const abortController = new AbortController();
-    
+
     const fetchAnalytics = async () => {
       try {
         // Fetch analytics for all videos in parallel
@@ -92,7 +93,7 @@ export const Caps = ({
             const response = await apiClient.video.getAnalytics({
               query: { videoId: video.id },
             });
-            
+
             if (response.status === 200) {
               return { videoId: video.id, count: response.body.count || 0 };
             }
@@ -104,7 +105,7 @@ export const Caps = ({
         });
 
         const results = await Promise.allSettled(analyticsPromises);
-        
+
         // Only update state if component is still mounted
         if (!abortController.signal.aborted) {
           const analyticsData: Record<string, number> = {};

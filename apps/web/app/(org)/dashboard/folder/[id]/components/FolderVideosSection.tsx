@@ -103,19 +103,19 @@ export default function FolderVideosSection({
   };
 
   useEffect(() => {
-    if (!dubApiKeyEnabled || data.length === 0) return;
+    if (!dubApiKeyEnabled || initialVideos.length === 0) return;
 
     const abortController = new AbortController();
-    
+
     const fetchAnalytics = async () => {
       try {
         // Fetch analytics for all videos in parallel
-        const analyticsPromises = data.map(async (video) => {
+        const analyticsPromises = initialVideos.map(async (video) => {
           try {
             const response = await apiClient.video.getAnalytics({
               query: { videoId: video.id },
             });
-            
+
             if (response.status === 200) {
               return { videoId: video.id, count: response.body.count || 0 };
             }
@@ -127,7 +127,7 @@ export default function FolderVideosSection({
         });
 
         const results = await Promise.allSettled(analyticsPromises);
-        
+
         // Only update state if component is still mounted
         if (!abortController.signal.aborted) {
           const analyticsData: Record<string, number> = {};
@@ -151,7 +151,7 @@ export default function FolderVideosSection({
     return () => {
       abortController.abort();
     };
-  }, [data, dubApiKeyEnabled, apiClient]);
+  }, [initialVideos, dubApiKeyEnabled, apiClient]);
 
   return (
     <>
