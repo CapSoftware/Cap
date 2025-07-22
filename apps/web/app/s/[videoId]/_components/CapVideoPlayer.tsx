@@ -38,7 +38,6 @@ interface Props {
 
 const RETRY_INTERVALS = [2000, 5000, 10000];
 
-
 export function CapVideoPlayer({
   videoSrc,
   chaptersSrc,
@@ -48,18 +47,31 @@ export function CapVideoPlayer({
   autoplay = false,
   enableCrossOrigin = false,
 }: Props) {
-  const [currentCue, setCurrentCue] = useState<string>('');
-  const [controlsVisible, setControlsVisible] = useState(false);
-  const [toggleCaptions, setToggleCaptions] = useState(true);
-  const [showPlayButton, setShowPlayButton] = useState(false);
+  // Core video states
   const [videoLoaded, setVideoLoaded] = useState(false);
   const [hasPlayedOnce, setHasPlayedOnce] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
-  const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
-  const [urlResolved, setUrlResolved] = useState(false);
   const [hasError, setHasError] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [urlResolved, setUrlResolved] = useState(false);
+  const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
+  const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
+
+  // UI states (optimized to prevent unnecessary re-renders)
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Caption state using ref to avoid re-renders during seeking
+  const currentCueRef = useRef<string>('');
+  const [currentCue, setCurrentCue] = useState<string>('');
+  const lastCueUpdateRef = useRef<number>(0);
+
+  // Control states using refs to avoid re-renders
+  const controlsVisibleRef = useRef(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const toggleCaptionsRef = useRef(true);
+  const [toggleCaptions, setToggleCaptions] = useState(true);
+
+  // Show play button - derived state
+  const showPlayButton = videoLoaded && !hasPlayedOnce && !hasError;
 
   // Refs for cleanup and retry management
   const retryCount = useRef(0);
@@ -68,7 +80,13 @@ export function CapVideoPlayer({
   const isMountedRef = useRef(true);
   const captionTrackRef = useRef<TextTrack | null>(null);
 
+  // Thumbnail optimization
+  const lastThumbnailTime = useRef<number>(0);
+  const thumbnailCache = useRef<Map<number, string>>(new Map());
+
   const maxRetries = 3;
+
+
 
   // Cleanup function to clear all timeouts
   const clearAllTimeouts = useCallback(() => {
@@ -85,19 +103,44 @@ export function CapVideoPlayer({
     }
   }, []);
 
-  // Mobile detection
+  // Throttled controls visibility update
+  const updateControlsVisibility = useCallback((visible: boolean) => {
+    if (controlsVisibleRef.current !== visible) {
+      controlsVisibleRef.current = visible;
+      setControlsVisible(visible);
+    }
+  }, []);
+
+  // Throttled caption toggle update
+  const updateToggleCaptions = useCallback((toggle: boolean) => {
+    if (toggleCaptionsRef.current !== toggle) {
+      toggleCaptionsRef.current = toggle;
+      setToggleCaptions(toggle);
+    }
+  }, []);
+
+  // Mobile detection with debouncing
   useEffect(() => {
+    let timeoutId: NodeJS.Timeout;
+
     const checkMobile = () => {
-      safeSetState(() => setIsMobile(window.innerWidth < 640));
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        const newIsMobile = window.innerWidth < 640;
+        if (newIsMobile !== isMobile) {
+          safeSetState(() => setIsMobile(newIsMobile));
+        }
+      }, 100);
     };
 
     checkMobile();
     window.addEventListener('resize', checkMobile);
 
     return () => {
+      clearTimeout(timeoutId);
       window.removeEventListener('resize', checkMobile);
     };
-  }, [safeSetState]);
+  }, [isMobile, safeSetState]);
 
   // URL resolution
   const fetchNewUrl = useCallback(async () => {
@@ -214,13 +257,18 @@ export function CapVideoPlayer({
       setIsRetrying(false);
       setUrlResolved(false);
       setUseCrossOrigin(enableCrossOrigin);
-      setShowPlayButton(false);
       setHasPlayedOnce(false);
     });
 
+    // Reset refs
+    currentCueRef.current = '';
+    setCurrentCue('');
     retryCount.current = 0;
     startTimeRef.current = Date.now();
     clearAllTimeouts();
+
+    // Clear thumbnail cache
+    thumbnailCache.current.clear();
   }, [videoSrc, enableCrossOrigin, safeSetState, clearAllTimeouts]);
 
   // Resolve video URL on mount and when videoSrc changes
@@ -228,16 +276,32 @@ export function CapVideoPlayer({
     fetchNewUrl();
   }, [fetchNewUrl]);
 
-  const handleCueChange = (): void => {
+  // Optimized cue change handler with throttling
+  const handleCueChange = useCallback((): void => {
     const track = captionTrackRef.current;
-    if (track && track.activeCues && track.activeCues.length > 0) {
-      const cue = track.activeCues[0] as VTTCue;
-      const plainText = cue.text.replace(/<[^>]*>/g, '');
-      safeSetState(() => setCurrentCue(plainText));
-    } else {
-      safeSetState(() => setCurrentCue(''));
+    if (!track || !track.activeCues || track.activeCues.length === 0) {
+      if (currentCueRef.current !== '') {
+        currentCueRef.current = '';
+        safeSetState(() => setCurrentCue(''));
+      }
+      return;
     }
-  };
+
+    const cue = track.activeCues[0] as VTTCue;
+    const plainText = cue.text.replace(/<[^>]*>/g, '');
+
+    // Only update if text actually changed
+    if (currentCueRef.current !== plainText) {
+      currentCueRef.current = plainText;
+
+      // Throttle updates to prevent excessive re-renders
+      const now = Date.now();
+      if (now - lastCueUpdateRef.current > 100) { // 100ms throttle
+        lastCueUpdateRef.current = now;
+        safeSetState(() => setCurrentCue(plainText));
+      }
+    }
+  }, [safeSetState]);
 
   // Caption track management
   const setupTracks = useCallback(() => {
@@ -268,32 +332,72 @@ export function CapVideoPlayer({
     if (!findTracks()) {
       setTimeout(findTracks, 100);
     }
-  }, [videoRef, safeSetState]);
+  }, [videoRef, handleCueChange]);
 
-  // Thumbnail generation for seek preview
+  // Optimized thumbnail generation with caching and throttling
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
     const video = videoRef.current;
+    const roundedTime = Math.floor(time);
 
     if (!video || !useCrossOrigin) {
-      return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${Math.floor(time)}s`;
+      return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${roundedTime}s`;
     }
 
-    const canvas = document.createElement('canvas');
-    canvas.width = 224;
-    canvas.height = 128;
-    const ctx = canvas.getContext('2d');
+    // Check cache first
+    if (thumbnailCache.current.has(roundedTime)) {
+      return thumbnailCache.current.get(roundedTime)!;
+    }
 
-    if (ctx) {
-      try {
+    // Throttle generation to prevent performance issues
+    const now = Date.now();
+    if (now - lastThumbnailTime.current < 100) { // 100ms throttle
+      return `https://placeholder.pics/svg/224x128/1f2937/ffffff/Loading ${roundedTime}s`;
+    }
+    lastThumbnailTime.current = now;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 224;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+
+      if (ctx && video.videoWidth > 0 && video.videoHeight > 0) {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.8);
-      } catch (error) {
-        console.warn('CapVideoPlayer: Could not generate thumbnail due to CORS:', error);
-        return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+        // Cache the result (limit cache size)
+        if (thumbnailCache.current.size > 50) {
+          const firstKey = thumbnailCache.current.keys().next().value;
+          if (firstKey !== undefined) {
+            thumbnailCache.current.delete(firstKey);
+          }
+        }
+        thumbnailCache.current.set(roundedTime, dataUrl);
+
+        return dataUrl;
       }
+    } catch (error) {
+      console.warn('CapVideoPlayer: Could not generate thumbnail due to CORS:', error);
     }
+
     return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
   }, [videoRef, useCrossOrigin]);
+
+  // Batched state updates for video events
+  const handleVideoLoaded = useCallback(() => {
+    safeSetState(() => {
+      setVideoLoaded(true);
+      setHasError(false);
+      setIsRetrying(false);
+    });
+    clearAllTimeouts();
+  }, [safeSetState, clearAllTimeouts]);
+
+  const handleVideoPlay = useCallback(() => {
+    safeSetState(() => {
+      setHasPlayedOnce(true);
+    });
+  }, [safeSetState]);
 
   // Main video event handlers
   useEffect(() => {
@@ -301,41 +405,20 @@ export function CapVideoPlayer({
     if (!video || !urlResolved) return;
 
     const handleLoadedData = () => {
-      safeSetState(() => {
-        setVideoLoaded(true);
-        setHasError(false);
-        setIsRetrying(false);
-        if (!hasPlayedOnce) {
-          setShowPlayButton(true);
-        }
-      });
-      clearAllTimeouts();
+      handleVideoLoaded();
     };
 
     const handleCanPlay = () => {
-      safeSetState(() => {
-        setVideoLoaded(true);
-        setHasError(false);
-        setIsRetrying(false);
-      });
-      clearAllTimeouts();
+      handleVideoLoaded();
     };
 
     const handleLoadedMetadata = () => {
-      safeSetState(() => {
-        setVideoLoaded(true);
-        if (!hasPlayedOnce) {
-          setShowPlayButton(true);
-        }
-      });
+      handleVideoLoaded();
       setupTracks();
     };
 
     const handlePlay = () => {
-      safeSetState(() => {
-        setHasPlayedOnce(true);
-        setShowPlayButton(false);
-      });
+      handleVideoPlay();
     };
 
     const handleError = (e: Event) => {
@@ -387,7 +470,7 @@ export function CapVideoPlayer({
         clearTimeout(initialTimeoutId);
       }
     };
-  }, [videoRef, urlResolved, hasPlayedOnce, videoLoaded, hasError, isRetrying, safeSetState, clearAllTimeouts, setupRetry, setupTracks]);
+  }, [videoRef, urlResolved, videoLoaded, hasError, isRetrying, handleVideoLoaded, handleVideoPlay, safeSetState, setupRetry, setupTracks]);
 
   // Component unmount cleanup
   useEffect(() => {
@@ -399,52 +482,81 @@ export function CapVideoPlayer({
 
       // Clean up caption track listener
       if (captionTrackRef.current) {
-        captionTrackRef.current.removeEventListener('cuechange', () => { });
+        captionTrackRef.current.removeEventListener('cuechange', handleCueChange);
         captionTrackRef.current = null;
       }
+
+      // Clear thumbnail cache
+      thumbnailCache.current.clear();
     };
-  }, [clearAllTimeouts]);
+  }, [clearAllTimeouts, handleCueChange]);
 
   return (
     <MediaPlayer
-      onMouseEnter={() => setControlsVisible(true)}
-      onMouseLeave={() => setControlsVisible(false)}
-      onTouchStart={() => setControlsVisible(true)}
-      onTouchEnd={() => setControlsVisible(false)}
+      onMouseEnter={() => updateControlsVisibility(true)}
+      onMouseLeave={() => updateControlsVisibility(false)}
+      onTouchStart={() => updateControlsVisibility(true)}
+      onTouchEnd={() => updateControlsVisibility(false)}
       className={clsx(mediaPlayerClassName, "[&::-webkit-media-text-track-display]:!hidden")}
       autoHide
     >
-      {/* Loading spinner */}
-      <div
-        className={clsx(
-          "flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-          videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100"
-        )}
-      >
-        <div className="flex flex-col gap-2 items-center">
-          <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-          {retryCount.current > 0 && (
-            <p className="text-sm text-white opacity-75">
-              Preparing video... ({retryCount.current}/{maxRetries})
-            </p>
-          )}
+      {/* Error fallback UI */}
+      {hasError && (
+        <div className="flex absolute inset-0 z-20 justify-center items-center bg-black">
+          <div className="flex flex-col gap-4 items-center p-6 text-center">
+            <div className="text-4xl text-red-500">⚠️</div>
+            <div className="text-white">
+              <h3 className="mb-2 text-lg font-semibold">Video unavailable</h3>
+              <p className="mb-4 text-sm opacity-75">
+                We're having trouble loading this video. Please try refreshing the page.
+              </p>
+              <button
+                onClick={() => {
+                  safeSetState(() => {
+                    setHasError(false);
+                    setVideoLoaded(false);
+                    setIsRetrying(false);
+                  });
+                  retryCount.current = 0;
+                  startTimeRef.current = Date.now();
+                  clearAllTimeouts();
+                  fetchNewUrl();
+                }}
+                className="px-4 py-2 text-white bg-blue-500 rounded transition-colors hover:bg-blue-600"
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* Loading spinner */}
+      {!hasError && (
+        <div
+          className={clsx(
+            "flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+            videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100"
+          )}
+        >
+          <div className="flex flex-col gap-2 items-center">
+            <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+            {retryCount.current > 0 && (
+              <p className="text-sm text-white opacity-75">
+                Preparing video... ({retryCount.current}/{maxRetries})
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Video element */}
       {urlResolved && (
         <MediaPlayerVideo
           src={resolvedVideoSrc}
           ref={videoRef}
-          onLoadedData={() => {
-            safeSetState(() => setVideoLoaded(true));
-          }}
-          onPlay={() => {
-            safeSetState(() => {
-              setShowPlayButton(false);
-              setHasPlayedOnce(true);
-            });
-          }}
+          onLoadedData={handleVideoLoaded}
+          onPlay={handleVideoPlay}
           crossOrigin={useCrossOrigin ? "anonymous" : undefined}
           playsInline
           autoPlay={autoplay}
@@ -466,7 +578,7 @@ export function CapVideoPlayer({
 
       {/* Play button overlay */}
       <AnimatePresence>
-        {showPlayButton && videoLoaded && !hasPlayedOnce && (
+        {showPlayButton && (
           <motion.div
             whileHover={{ scale: 1.1 }}
             whileTap={{ scale: 0.9 }}
@@ -476,6 +588,15 @@ export function CapVideoPlayer({
             transition={{ duration: 0.2 }}
             onClick={() => videoRef.current?.play()}
             className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+            role="button"
+            aria-label="Play video"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                videoRef.current?.play();
+              }
+            }}
           >
             <FontAwesomeIcon icon={faPlay} className="text-white size-4 xs:size-8 md:size-12" />
           </motion.div>
@@ -514,7 +635,7 @@ export function CapVideoPlayer({
             <MediaPlayerTime />
           </div>
           <div className="flex gap-2 items-center">
-            <MediaPlayerCaptions setToggleCaptions={setToggleCaptions} toggleCaptions={toggleCaptions} />
+            <MediaPlayerCaptions setToggleCaptions={updateToggleCaptions} toggleCaptions={toggleCaptions} />
             <MediaPlayerSettings />
             <MediaPlayerPiP />
             <MediaPlayerFullscreen />
