@@ -45,17 +45,28 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // Calculate bounds with inset applied
-    let top_bound = 1.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
-    let bottom_bound = -1.0 + (0.0 / window_uniforms.window_height) * 2.0;
-    let left_bound = -1.0 + (0.0 / window_uniforms.window_width) * 2.0;
-    let right_bound = 1.0 - (0.0 / window_uniforms.window_width) * 2.0;
+    // // Calculate bounds with inset applied
+    // let top_bound = 1.0 - (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
 
-    // Map quad vertices to fill the inset area
-    let mapped_x = left_bound + (pos[idx].x + 1.0) * (right_bound - left_bound) * 0.5;
-    let mapped_y = bottom_bound + (pos[idx].y + 1.0) * (top_bound - bottom_bound) * 0.5;
+    // // Simplified mapping since left/right/bottom bounds are constant
 
-    let adjusted_pos = vec2<f32>(mapped_x, mapped_y);
+    // // let bottom_bound = -1.0 + (0.0 / window_uniforms.window_height) * 2.0;
+    // // let left_bound = -1.0 + (0.0 / window_uniforms.window_width) * 2.0;
+    // // let right_bound = 1.0 - (0.0 / window_uniforms.window_width) * 2.0;
+
+    // // Map quad vertices to fill the inset area
+    // // let mapped_x = left_bound + (pos[idx].x + 1.0) * (right_bound - left_bound) * 0.5;
+    // // let mapped_y = bottom_bound + (pos[idx].y + 1.0) * (top_bound - bottom_bound) * 0.5;
+    // let mapped_x = pos[idx].x; // No change needed for x
+    // let mapped_y = -1.0 + (pos[idx].y + 1.0) * (top_bound + 1.0) * 0.5;
+
+    // let adjusted_pos = vec2<f32>(mapped_x, mapped_y);
+
+    // Apply vertical offset only (horizontal bounds unchanged)
+    let vertical_scale = 1.0 - uniforms.offset_pixels / window_uniforms.window_height;
+    let mapped_y = pos[idx].y * vertical_scale + vertical_scale - 1.0;
+
+    let adjusted_pos = vec2<f32>(pos[idx].x, mapped_y);
 
     out.position = vec4<f32>(adjusted_pos, 0.0, 1.0);
     out.uv = uv[idx];
