@@ -14,7 +14,7 @@ use ffmpeg::{
     software::scaling,
 };
 
-use cap_media::{data::FFVideo, feeds::RawCameraFrame};
+use cap_media::feeds::RawCameraFrame;
 use flume::Receiver;
 use futures::executor::block_on;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ use tokio::sync::{Notify, broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
-static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */;
+static TOOLBAR_HEIGHT: f32 = 56.0 /* toolbar height (also defined in Typescript) */ + 16.0;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
