@@ -125,13 +125,14 @@ impl CameraPreview {
                     .as_ref()
                     .map(|f| f.width() as f32 / f.height() as f32)
                     .unwrap_or(1.0);
+                aspect_ratio.get_or_init(camera_aspect_ratio, || {
+                    renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
+                });
+                println!("GOT ASPECT RATIO: {}", camera_aspect_ratio);
+
                 if first || reconfigure && renderer.refresh_state(&store) {
                     first = false;
-                    println!("GOT ASPECT RATIO: {}", camera_aspect_ratio);
                     renderer.update_state_uniforms();
-                    aspect_ratio.get_or_init(camera_aspect_ratio, || {
-                        renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
-                    });
                     if let Err(err) = renderer.update_window_size(frame.as_ref()) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -145,10 +146,6 @@ impl CameraPreview {
                         frame.height(),
                     ))
                 {
-                    renderer.update_state_uniforms();
-                    aspect_ratio.get_or_init(camera_aspect_ratio, || {
-                        renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio)
-                    });
                     if let Err(err) = renderer.update_window_size(Some(frame)) {
                         error!("Error updating window size: {err:?}");
                         continue;
@@ -177,7 +174,7 @@ impl CameraPreview {
                         }
 
                         let resampler_frame = resampler_frame
-                            .get_or_init((frame.width(), frame.height()), || frame::Video::empty());
+                            .get_or_init((output_width, output_height), || frame::Video::empty());
 
                         scaler.cached(
                             frame.format(),
@@ -226,23 +223,6 @@ impl CameraPreview {
                         error!("Failed to show camera preview window: {}", err);
                     }
                 }
-            }
-
-            // TODO
-            if let Ok(surface) = renderer
-                .surface
-                .get_current_texture()
-                .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
-            {
-                // TODO: Update uniforms to loading state too -> go through top loop again
-
-                let (buffer, stride) = render_solid_frame(
-                    [0x11, 0x11, 0x11, 0xFF], // #111111
-                    1280,
-                    1280,
-                );
-
-                renderer.render(surface, Some((&buffer, stride)), 1280, 1280);
             }
         });
 
