@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AuthOverlay } from "./AuthOverlay";
 import { revalidateVideoPath } from "@/actions/revalidate-video";
+import { useRouter } from "next/navigation";
 
 // million-ignore
 export const Toolbar = ({
@@ -15,6 +16,7 @@ export const Toolbar = ({
   data: typeof videos.$inferSelect;
   user: typeof userSelectProps | null;
 }) => {
+  const router = useRouter();
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
@@ -94,8 +96,6 @@ export const Toolbar = ({
       }),
     });
 
-    await revalidateVideoPath(data.id);
-
     if (response.status === 429) {
       toast.error("Too many requests - please try again later.");
       return;
@@ -103,7 +103,12 @@ export const Toolbar = ({
 
     if (!response.ok) {
       console.error("Failed to record emoji reaction");
+      return;
     }
+
+    // Revalidate and refresh to show new comment
+    await revalidateVideoPath(data.id);
+    router.refresh();
   };
 
   const handleCommentSubmit = async () => {
@@ -136,7 +141,10 @@ export const Toolbar = ({
 
       setComment("");
       setCommentBoxOpen(false);
+
+      // Revalidate and refresh to show new comment
       await revalidateVideoPath(data.id);
+      router.refresh();
     } catch (error) {
       console.error("Failed to submit comment:", error);
     }

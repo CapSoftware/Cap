@@ -317,6 +317,11 @@ export const Activity = Object.assign(
     // Lift comments state up so both Analytics and Comments can share it
     const [comments, setComments] = useState(initialComments);
 
+    // Sync local state with props when they change (after revalidation)
+    useEffect(() => {
+      setComments(initialComments);
+    }, [initialComments]);
+
     return (
       <Activity.Shell
         analytics={
