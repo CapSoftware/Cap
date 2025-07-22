@@ -1,5 +1,4 @@
-struct Uniforms {
-    window_height: f32,
+struct StateUniforms {
     offset_pixels: f32,
     shape: f32,
     size: f32,
@@ -7,8 +6,16 @@ struct Uniforms {
     _padding: f32,
 }
 
+struct WindowUniforms {
+    window_height: f32,
+    _padding: f32,
+}
+
 @group(1) @binding(0)
-var<uniform> uniforms: Uniforms;
+var<uniform> uniforms: StateUniforms;
+
+@group(1) @binding(1)
+var<uniform> window_uniforms: WindowUniforms;
 
 struct VertexOut {
     @builtin(position) position: vec4<f32>,
@@ -37,11 +44,11 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     var out: VertexOut;
 
     // Calculate offset in normalized coordinates
-    let offset_y = (uniforms.offset_pixels / uniforms.window_height) * 2.0;
+    let offset_y = (uniforms.offset_pixels / window_uniforms.window_height) * 2.0;
 
     // Calculate the available height for the camera content
-    let available_height = uniforms.window_height - uniforms.offset_pixels;
-    let scale_factor = available_height / uniforms.window_height;
+    let available_height = window_uniforms.window_height - uniforms.offset_pixels;
+    let scale_factor = available_height / window_uniforms.window_height;
 
     // Scale the Y coordinate to fit the available space
     let scaled_y = pos[idx].y * scale_factor;
