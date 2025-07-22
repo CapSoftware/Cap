@@ -12,6 +12,7 @@ import { useUploadingContext } from "../../../caps/UploadingContext";
 import { type VideoData } from "../../../caps/Caps";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
+import { useQuery } from "@tanstack/react-query";
 
 interface FolderVideosSectionProps {
   initialVideos: VideoData;
