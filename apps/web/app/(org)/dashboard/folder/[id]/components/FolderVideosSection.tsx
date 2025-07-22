@@ -7,11 +7,11 @@ import { useState, useRef } from "react";
 import { toast } from "sonner";
 import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
-import { useApiClient } from "@/utils/web-api";
 import { useUploadingContext } from "../../../caps/UploadingContext";
 import { type VideoData } from "../../../caps/Caps";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 interface FolderVideosSectionProps {
   initialVideos: VideoData;
@@ -27,14 +27,11 @@ export default function FolderVideosSection({
   userId,
 }: FolderVideosSectionProps) {
   const router = useRouter();
-  const apiClient = useApiClient();
   const { isUploading } = useUploadingContext();
   const { activeOrganization } = useDashboardContext();
 
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [analytics, setAnalytics] = useState<Record<string, number>>({});
-
   const [isDeleting, setIsDeleting] = useState(false);
 
   const deleteSelectedCaps = async () => {
@@ -102,7 +99,7 @@ export default function FolderVideosSection({
     });
   };
 
-  const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+  const { data: analyticsData, isLoading: isLoadingAnalytics } = useSuspenseQuery({
     queryKey: ['analytics', initialVideos.map(video => video.id)],
     queryFn: async () => {
       if (!dubApiKeyEnabled || initialVideos.length === 0) {
@@ -132,19 +129,19 @@ export default function FolderVideosSection({
       const results = await Promise.allSettled(analyticsPromises);
       const analyticsData: Record<string, number> = {};
 
+
       results.forEach((result) => {
         if (result.status === 'fulfilled' && result.value) {
           analyticsData[result.value.videoId] = result.value.count;
         }
       });
-
       return analyticsData;
     },
-    enabled: dubApiKeyEnabled && data.length > 0,
     staleTime: 30000, // 30 seconds
     refetchOnWindowFocus: false,
   });
 
+  const analytics = analyticsData || {};
 
   return (
     <>
