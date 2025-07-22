@@ -1,6 +1,5 @@
 "use client";
 import { deleteVideo } from "@/actions/videos/delete";
-import { useApiClient } from "@/utils/web-api";
 import { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
@@ -20,6 +19,7 @@ import Folder from "./components/Folder";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
 import { useUploadingContext } from "./UploadingContext";
+import { useQuery } from "@tanstack/react-query";
 
 export type VideoData = {
   id: string;
@@ -40,7 +40,6 @@ export type VideoData = {
   hasPassword: boolean;
 }[];
 
-
 export const Caps = ({
   data,
   count,
@@ -59,7 +58,6 @@ export const Caps = ({
   const { refresh } = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
-  const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { user } = useDashboardContext();
   const limit = 15;
   const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
@@ -78,59 +76,50 @@ export const Caps = ({
 
   const anyCapSelected = selectedCaps.length > 0;
 
-  const apiClient = useApiClient();
-
-  useEffect(() => {
-    if (!dubApiKeyEnabled || data.length === 0) return;
-
-    const abortController = new AbortController();
-
-    const fetchAnalytics = async () => {
-      try {
-        const analyticsPromises = data.map(async (video) => {
-          try {
-            const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-              method: 'GET',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-            });
-
-            if (response.ok) {
-              const data = await response.json();
-              return { videoId: video.id, count: data.count || 0 };
-            }
-            return { videoId: video.id, count: 0 };
-          } catch (error) {
-            console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
-            return { videoId: video.id, count: 0 };
-          }
-        });
-
-        const results = await Promise.allSettled(analyticsPromises);
-
-        if (!abortController.signal.aborted) {
-          const analyticsData: Record<string, number> = {};
-          results.forEach((result) => {
-            if (result.status === 'fulfilled' && result.value) {
-              analyticsData[result.value.videoId] = result.value.count;
-            }
-          });
-          setAnalytics(analyticsData);
-        }
-      } catch (error) {
-        if (!abortController.signal.aborted) {
-          console.error('Failed to fetch analytics:', error);
-        }
+  const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+    queryKey: ['analytics', data.map(video => video.id)],
+    queryFn: async () => {
+      if (!dubApiKeyEnabled || data.length === 0) {
+        return {};
       }
-    };
 
-    fetchAnalytics();
+      const analyticsPromises = data.map(async (video) => {
+        try {
+          const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
 
-    return () => {
-      abortController.abort();
-    };
-  }, [data, dubApiKeyEnabled]);
+          if (response.ok) {
+            const responseData = await response.json();
+            return { videoId: video.id, count: responseData.count || 0 };
+          }
+          return { videoId: video.id, count: 0 };
+        } catch (error) {
+          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          return { videoId: video.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.allSettled(analyticsPromises);
+      const analyticsData: Record<string, number> = {};
+
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value) {
+          analyticsData[result.value.videoId] = result.value.count;
+        }
+      });
+
+      return analyticsData;
+    },
+    enabled: dubApiKeyEnabled && data.length > 0,
+    staleTime: 30000, // 30 seconds
+    refetchOnWindowFocus: false,
+  });
+
+  const analytics = analyticsData || {};
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -186,7 +175,6 @@ export const Caps = ({
       window.removeEventListener("dragend", handleDragEnd);
     };
   }, []);
-
 
   const handleCapSelection = (capId: string) => {
     setSelectedCaps((prev) => {
@@ -338,6 +326,7 @@ export const Caps = ({
                 key={cap.id}
                 cap={cap}
                 analytics={analytics[cap.id] || 0}
+                isLoadingAnalytics={isLoadingAnalytics}
                 onDelete={async () => {
                   if (selectedCaps.length > 0) {
                     await deleteSelectedCaps();

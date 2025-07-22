@@ -8,6 +8,7 @@ import { useState, useRef } from "react";
 
 type ClientCapCardProps = CapCardProps & {
   videoId: string;
+  isLoadingAnalytics: boolean;
 };
 
 // Interface for drop targets that will be registered for mobile drag and drop
@@ -26,7 +27,7 @@ export function registerDropTarget(
   element: HTMLElement,
   onDrop: (data: any) => void,
   onDragOver?: () => void,
-  onDragLeave?: () => void
+  onDragLeave?: () => void,
 ) {
   dropTargets.push({ element, onDrop, onDragOver, onDragLeave });
   return () => {
@@ -103,7 +104,7 @@ export function ClientCapCard(props: ClientCapCardProps) {
       onDragEnd={handleDragEnd}
       className={isDragging ? "opacity-50" : ""}
     >
-      <CapCard {...rest} />
+      <CapCard {...rest} isLoadingAnalytics={isLoadingAnalytics} />
     </div>
   );
 }

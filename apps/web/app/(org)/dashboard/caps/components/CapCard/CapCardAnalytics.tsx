@@ -14,16 +14,17 @@ import {
 interface CapCardAnalyticsProps {
   capId: string;
   displayCount: number;
+  isLoadingAnalytics: boolean;
   totalComments: number;
   totalReactions: number;
 }
 
 export const CapCardAnalytics = Object.assign(
-  ({ displayCount, totalComments, totalReactions }: CapCardAnalyticsProps) => (
+  ({ displayCount, isLoadingAnalytics, totalComments, totalReactions }: CapCardAnalyticsProps) => (
     <Shell>
       <Tooltip content={`${displayCount} unique views`}>
         <IconItem icon={faEye}>
-          <span className="text-sm text-gray-12">{displayCount ?? "-"}</span>
+          <span className="text-sm text-gray-12">{isLoadingAnalytics ? "..." : displayCount ?? "-"}</span>
         </IconItem>
       </Tooltip>
       <Tooltip content={`${totalComments} comments`}>

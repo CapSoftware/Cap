@@ -3,7 +3,7 @@
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { ClientCapCard } from "./index";
 import { useRouter } from "next/navigation";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { toast } from "sonner";
 import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
@@ -102,56 +102,49 @@ export default function FolderVideosSection({
     });
   };
 
-  useEffect(() => {
-    if (!dubApiKeyEnabled || initialVideos.length === 0) return;
-
-    const abortController = new AbortController();
-
-    const fetchAnalytics = async () => {
-      try {
-        // Fetch analytics for all videos in parallel
-        const analyticsPromises = initialVideos.map(async (video) => {
-          try {
-            const response = await apiClient.video.getAnalytics({
-              query: { videoId: video.id },
-            });
-
-            if (response.status === 200) {
-              return { videoId: video.id, count: response.body.count || 0 };
-            }
-            return { videoId: video.id, count: 0 };
-          } catch (error) {
-            console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
-            return { videoId: video.id, count: 0 };
-          }
-        });
-
-        const results = await Promise.allSettled(analyticsPromises);
-
-        // Only update state if component is still mounted
-        if (!abortController.signal.aborted) {
-          const analyticsData: Record<string, number> = {};
-          results.forEach((result) => {
-            if (result.status === 'fulfilled' && result.value) {
-              analyticsData[result.value.videoId] = result.value.count;
-            }
-          });
-          setAnalytics(analyticsData);
-        }
-      } catch (error) {
-        if (!abortController.signal.aborted) {
-          console.error('Failed to fetch analytics:', error);
-        }
+  const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+    queryKey: ['analytics', data.map(video => video.id)],
+    queryFn: async () => {
+      if (!dubApiKeyEnabled || data.length === 0) {
+        return {};
       }
-    };
 
-    fetchAnalytics();
+      const analyticsPromises = data.map(async (video) => {
+        try {
+          const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
 
-    // Cleanup function to abort requests if component unmounts
-    return () => {
-      abortController.abort();
-    };
-  }, [initialVideos, dubApiKeyEnabled, apiClient]);
+          if (response.ok) {
+            const responseData = await response.json();
+            return { videoId: video.id, count: responseData.count || 0 };
+          }
+          return { videoId: video.id, count: 0 };
+        } catch (error) {
+          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          return { videoId: video.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.allSettled(analyticsPromises);
+      const analyticsData: Record<string, number> = {};
+
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value) {
+          analyticsData[result.value.videoId] = result.value.count;
+        }
+      });
+
+      return analyticsData;
+    },
+    enabled: dubApiKeyEnabled && data.length > 0,
+    staleTime: 30000, // 30 seconds
+    refetchOnWindowFocus: false,
+  });
+
 
   return (
     <>
@@ -187,6 +180,7 @@ export default function FolderVideosSection({
                   key={video.id}
                   videoId={video.id}
                   cap={video}
+                  isLoadingAnalytics={isLoadingAnalytics}
                   analytics={analytics[video.id] || 0}
                   isSelected={selectedCaps.includes(video.id)}
                   anyCapSelected={selectedCaps.length > 0}
