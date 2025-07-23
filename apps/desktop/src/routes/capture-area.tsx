@@ -8,23 +8,22 @@ import {
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
-import Cropper from "~/components/Cropper";
+import CropArea from "~/components/CropArea";
 import { createOptionsQuery } from "~/utils/queries";
-import { type Crop } from "~/utils/tauri";
+import { createCropController, CropBounds } from "~/utils/cropController";
+import AltSwitch from "~/components/AltSwitch";
 
 export default function CaptureArea() {
   const { rawOptions, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
-  const [state, setState] = makePersisted(
-    createStore({
-      showGrid: true,
-    }),
-    { name: "captureArea" }
-  );
-
   const setPendingState = (pending: boolean) =>
     webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+
+  const screenId: number | null =
+    rawOptions.captureTarget.variant === "screen"
+      ? rawOptions.captureTarget.id
+      : null;
 
   let unlisten: () => void | undefined;
   onMount(async () => {
@@ -49,9 +48,23 @@ export default function CaptureArea() {
     });
   });
 
-  const [crop, setCrop] = createStore<Crop>({
-    size: { x: 0, y: 0 },
-    position: { x: 0, y: 0 },
+  const [lastSelectedBounds, setLastSelectedBounds] = makePersisted(
+    createStore<{ screenId: number; bounds: CropBounds }[]>([]),
+    {
+      name: "lastSelectedBounds",
+    }
+  );
+
+  const cropController = createCropController({
+    mappedSize: { x: windowSize().x, y: windowSize().y },
+    // Try to find stored bounds for current screen
+    initialCrop: (() => {
+      if (!screenId) return undefined;
+      return (
+        lastSelectedBounds.find((item) => item.screenId === screenId)?.bounds ??
+        undefined
+      );
+    })(),
   });
 
   async function handleConfirm() {
@@ -59,17 +72,32 @@ export default function CaptureArea() {
     if (target.variant !== "screen") return;
     setPendingState(false);
 
+    const currentBounds = cropController.crop();
+
+    // Store the bounds for this screen
+    if (screenId) {
+      const existingIndex = lastSelectedBounds.findIndex(
+        (item) => item.screenId === screenId
+      );
+      if (existingIndex >= 0) {
+        setLastSelectedBounds(existingIndex, {
+          screenId,
+          bounds: currentBounds,
+        });
+      } else {
+        setLastSelectedBounds([
+          ...lastSelectedBounds,
+          { screenId, bounds: currentBounds },
+        ]);
+      }
+    }
+
     setOptions(
       "captureTarget",
       reconcile({
         variant: "area",
         screen: target.id,
-        bounds: {
-          x: crop.position.x,
-          y: crop.position.y,
-          width: crop.size.x,
-          height: crop.size.y,
-        },
+        bounds: currentBounds,
       })
     );
 
@@ -91,42 +119,43 @@ export default function CaptureArea() {
       <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
-          enterActiveClass="fade-in animate-in slide-in-from-top-6"
-          exitActiveClass="fade-out animate-out slide-out-to-top-6"
+          enterActiveClass="fade-in animate-in slide-in-from-top-8"
+          exitActiveClass="fade-out animate-out slide-out-to-top-8"
         >
           <Show when={visible()}>
-            <div class="transition-all ease-out duration-200 absolute w-auto h-10 bg-gray-1 rounded-[12px] drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
+            <div class="transition-all ease-out duration-250 absolute w-auto h-10 bg-gray-1 rounded-full drop-shadow-2xl overflow-visible border border-gray-3 outline outline-1 outline-gray-6 flex justify-around p-1 top-11">
               <button
-                class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-[8px] ml-0 right-auto"
+                class="py-[0.25rem] px-2 text-gray-11 gap-[0.25rem] flex flex-row items-center rounded-full ml-0 right-auto"
                 type="button"
                 onClick={close}
               >
                 <IconCapCircleX class="size-5" />
               </button>
-              <Tooltip.Root openDelay={500}>
-                <Tooltip.Trigger tabIndex={-1}>
-                  <button
-                    class={`py-[0.25rem] px-2 gap-[0.25rem] mr-2 hover:bg-gray-3 flex flex-row items-center rounded-[8px] transition-colors duration-200 ${
-                      state.showGrid
-                        ? "bg-gray-3 text-blue-9"
-                        : "text-gray-12 opacity-50"
-                    }`}
-                    type="button"
-                    onClick={() => setState("showGrid", (v) => !v)}
-                  >
-                    <IconCapPadding class="size-5" />
-                  </button>
-                </Tooltip.Trigger>
-                <Tooltip.Portal>
-                  <Tooltip.Content class="z-50 px-2 py-1 text-xs rounded shadow-lg duration-500 delay-1000 text-gray-1 bg-gray-12 animate-in fade-in">
-                    Rule of Thirds
-                    <Tooltip.Arrow class="fill-gray-12" />
-                  </Tooltip.Content>
-                </Tooltip.Portal>
-              </Tooltip.Root>
               <div class="flex flex-row flex-grow gap-2 justify-center">
+                <AltSwitch
+                  normal={
+                    <button
+                      class="px-2 gap-[0.25rem] flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                      type="button"
+                      onClick={() => cropController.fill()}
+                    >
+                      <IconLucideMaximize class="size-5" />
+                      <span class="font-[500] text-[0.875rem]">Fill</span>
+                    </button>
+                  }
+                  alt={
+                    <button
+                      class="px-2 gap-[0.25rem] flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                      type="button"
+                      onClick={() => cropController.reset()}
+                    >
+                      <IconLucideMaximize class="size-5" />
+                      <span class="font-[500] text-[0.875rem]">Reset</span>
+                    </button>
+                  }
+                />
                 <button
-                  class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-[8px] grow justify-center transition-colors duration-200"
+                  class="text-blue-9 px-2 gap-[0.25rem] hover:bg-blue-3 flex flex-row items-center rounded-full grow justify-center transition-colors duration-200"
                   type="button"
                   onClick={handleConfirm}
                 >
@@ -147,13 +176,7 @@ export default function CaptureArea() {
         exitActiveClass="fade-out animate-out"
       >
         <Show when={visible()}>
-          <Cropper
-            class="transition-all duration-200"
-            value={crop}
-            onCropChange={setCrop}
-            showGuideLines={state.showGrid}
-            mappedSize={{ x: windowSize().x, y: windowSize().y }}
-          />
+          <CropArea controller={cropController} />
         </Show>
       </Transition>
     </div>
