@@ -240,9 +240,11 @@ export const Toolbar = ({
             <motion.div
               layout
               key="toolbar"
-              initial={{ scale: 0.90 }}
-              animate={{ scale: 1 }}
-              className="flex flex-col gap-2 items-center mx-auto w-full md:justify-center sm:grid sm:grid-flow-col md:w-fit"
+              initial={{ scale: 0.90, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.90, opacity: 0 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className="flex flex-col gap-2 items-center mx-auto w-full md:justify-center sm:grid sm:grid-flow-col md:w-fit min-h-[28px]"
             >
               {/* Emoji reactions row */}
               <div className="flex gap-2 justify-evenly items-center w-full md:w-fit md:justify-center">
