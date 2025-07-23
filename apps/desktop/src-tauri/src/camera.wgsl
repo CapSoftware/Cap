@@ -129,25 +129,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var mask = 1.0;
 
     if (shape == 0.0) {
-        // Round shape - create circular mask that uses full height
+        // Round shape with enhanced anti-aliasing
         let distance = length(center_uv);
-        // Use radius of 1.0 to fill the full height
         let radius = 1.0;
-        let aa_width = fwidth(distance); // Adaptive anti-aliasing width
-        mask = 1.0 - smoothstep(radius - aa_width, radius + aa_width, distance);
-    } else if (shape == 1.0) {
-        // Square shape - apply rounded corners based on size
-        // Use a reasonable corner radius for the square shape
-        let corner_radius = select(0.1, 0.12, size == 1.0); // radius in UV space (0.1 = 10% of quad size)
 
-        // Calculate distance from corners for rounded rectangle
+        // Multi-level anti-aliasing approach
+        let pixel_size = length(fwidth(center_uv));
+        let aa_width = max(pixel_size * 1.5, 0.008); // Ensure minimum AA width
+
+        // Primary edge calculation
+        let edge_distance = distance - radius;
+        mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
+
+        // Apply additional smoothing for very soft edges
+        mask = smoothstep(0.0, 1.0, mask);
+
+    } else if (shape == 1.0) {
+        // Square shape with enhanced corner anti-aliasing
+        let corner_radius = select(0.1, 0.12, size == 1.0);
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
 
-        // Apply smoothed rounded corner mask
-        let aa_width = fwidth(corner_dist); // Adaptive anti-aliasing width
-        mask = 1.0 - smoothstep(corner_radius - aa_width, corner_radius + aa_width, corner_dist);
+        // Enhanced anti-aliasing for corners
+        let pixel_size = length(fwidth(center_uv));
+        let aa_width = max(pixel_size * 1.5, 0.005);
+
+        let edge_distance = corner_dist - corner_radius;
+        mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
+        mask = smoothstep(0.0, 1.0, mask);
     } else {
         // For any other shape, default to no masking (rectangular)
         mask = 1.0;
