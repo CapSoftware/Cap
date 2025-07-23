@@ -71,10 +71,9 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate the crop region dimensions with padding and inset applied
-    let padding = 16.0;
-    let crop_width = window_uniforms.window_width - 2.0 * padding;
-    let crop_height = window_uniforms.window_height - 2.0 * padding;
+    // Calculate the crop region dimensions using window dimensions directly
+    let crop_width = window_uniforms.window_width;
+    let crop_height = window_uniforms.window_height;
     let crop_aspect = crop_width / crop_height;
     let camera_aspect = camera_uniforms.camera_aspect_ratio;
 
@@ -129,11 +128,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var mask = 1.0;
 
     if (shape == 0.0) {
-        // Round shape - create circular mask with aspect ratio correction
-        // let aspect_corrected_uv = vec2<f32>(center_uv.x * crop_aspect, center_uv.y);
-        // let distance = length(aspect_corrected_uv);
-        // mask = select(0.0, 1.0, distance <= crop_aspect);
-
         // Round shape - create circular mask that fits within the crop region
         let aspect_corrected_uv = vec2<f32>(center_uv.x * crop_aspect, center_uv.y);
         let distance = length(aspect_corrected_uv);
