@@ -1,4 +1,4 @@
-#![cfg(windows)]
+// #![cfg(windows)]
 
 use cap_camera_directshow::{AM_MEDIA_TYPEExt, AM_MEDIA_TYPEVideoExt, AMMediaType, SinkFilter};
 use cap_camera_mediafoundation::{IMFMediaBufferExt, SourceReader};
@@ -10,7 +10,10 @@ use std::{
     ptr::null_mut,
     time::Duration,
 };
-use windows::Win32::Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*};
+use windows::Win32::{
+    Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*},
+    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+};
 use windows_core::GUID;
 
 #[derive(Clone)]
@@ -18,7 +21,7 @@ pub struct VideoDeviceInfo {
     id: OsString,
     name: OsString,
     model_id: Option<String>,
-    formats: Vec<VideoFormat>,
+    // formats: Vec<VideoFormat>,
     inner: VideoDeviceInfoInner,
 }
 
@@ -31,8 +34,8 @@ impl VideoDeviceInfo {
         &self.name
     }
 
-    pub fn formats(&self) -> &Vec<VideoFormat> {
-        &self.formats
+    pub fn model_id(&self) -> Option<&str> {
+        self.model_id.as_ref()
     }
 
     pub fn is_mf(&self) -> bool {
@@ -60,6 +63,19 @@ impl VideoDeviceInfo {
                 let pixel_format = format.pixel_format;
                 let width = format.width as usize;
                 let height = format.height as usize;
+
+                let capture_engine = unsafe {
+                    let capture_engine_factory: IMFCaptureEngineClassFactory = CoCreateInstance(
+                        &CLSID_MFCaptureEngineClassFactory,
+                        null_ptr(),
+                        CLSCTX_INPROC_SERVER,
+                    )?;
+
+                    let capture_engine: IMFCaptureEngine =
+                        capture_engine_factory.CreateInstance(&CLSID_MFCaptureEngine)?;
+
+                    capture_engine
+                };
 
                 reader
                     .set_current_media_type(stream_index, &mf_format)
@@ -122,6 +138,21 @@ impl VideoDeviceInfo {
         };
 
         Ok(res)
+    }
+
+    pub fn formats(&self) -> Vec<VideoFormat> {
+        match self.inner {
+            VideoDeviceInfoInner::MediaFoundation { reader, .. } => reader
+                .native_media_types(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)?
+                .filter_map(|t| VideoFormat::new_mf(t).ok())
+                .collect::<Vec<_>>(),
+            VideoDeviceInfoInner::DirectShow(device) => device
+                .media_types()
+                .into_iter()
+                .flatten()
+                .filter_map(|media_type| VideoFormat::new_ds(media_type).ok())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
@@ -213,18 +244,11 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
             let model_id = device.model_id();
 
             let reader = device.create_source_reader()?;
-            let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-
-            let formats = reader
-                .native_media_types(stream_index)?
-                .filter_map(|t| VideoFormat::new_mf(t).ok())
-                .collect::<Vec<_>>();
 
             Ok::<_, windows_core::Error>(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
-                formats,
                 inner: VideoDeviceInfoInner::MediaFoundation { device, reader },
             })
         })
@@ -244,18 +268,10 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
             let name = device.name()?;
             let model_id = device.model_id();
 
-            let formats = device
-                .media_types()
-                .into_iter()
-                .flatten()
-                .filter_map(|media_type| VideoFormat::new_ds(media_type).ok())
-                .collect::<Vec<_>>();
-
             Some(VideoDeviceInfo {
                 name,
                 id,
                 model_id,
-                formats,
                 inner: VideoDeviceInfoInner::DirectShow(device),
             })
         })
@@ -279,7 +295,7 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
 
         match mf_device {
             Some((i, mf_device)) => {
-                if mf_device.formats.len() == 0 {
+                if mf_device.formats().len() == 0 {
                     devices.push(mf_device.clone());
                     devices.swap_remove(i);
                 }

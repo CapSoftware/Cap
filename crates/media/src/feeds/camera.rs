@@ -1,4 +1,3 @@
-use cap_camera_windows::{PixelFormat, VideoFormatInner};
 use cap_fail::{fail, fail_err};
 use ffmpeg::format::Pixel;
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
@@ -10,12 +9,14 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
-use windows::Win32::Media::MediaFoundation::MF_MT_SUBTYPE;
 
 use crate::{
     data::{FFVideo, VideoInfo},
     MediaError,
 };
+
+#[cfg(windows)]
+use cap_camera_windows::{PixelFormat, VideoFormatInner};
 
 type CameraSwitchResult = Result<(CameraInfo, VideoInfo), MediaError>;
 

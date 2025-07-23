@@ -942,6 +942,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-camera"
+version = "0.1.0"
+dependencies = [
+ "cap-camera-avfoundation",
+ "cap-camera-windows",
+ "cidre",
+ "ffmpeg-next",
+ "inquire",
+ "thiserror 1.0.69",
+ "windows 0.60.0",
+]
+
+[[package]]
 name = "cap-camera-avfoundation"
 version = "0.1.0"
 dependencies = [

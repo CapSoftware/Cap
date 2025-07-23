@@ -177,7 +177,12 @@ struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice, usize);
 
 impl<'a> Display for CaptureDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.localized_name().to_string())
+        write!(
+            f,
+            "{} ({})",
+            self.0.localized_name().to_string(),
+            self.0.unique_id().to_string()
+        )
     }
 }
 

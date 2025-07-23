@@ -3,7 +3,7 @@ use std::ops::Deref;
 use cap_camera_windows::*;
 
 fn main() {
-    let devices = get_devices()
+    let devices = list_devices()
         .unwrap()
         .into_iter()
         .map(DeviceSelection)
