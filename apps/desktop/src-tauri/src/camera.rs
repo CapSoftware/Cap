@@ -183,7 +183,11 @@ impl CameraPreview {
                     Some(s) => s,
                     // Calling `window.outer_size` will hang when a native menu is opened.
                     // So we only callback to it if absolute required as it could randomly hang.
-                    None => match renderer.window.outer_size() {
+                    None => match renderer
+                        .window
+                        .outer_size()
+                        .and_then(|size| Ok(size.to_logical(renderer.window.scale_factor()?)))
+                    {
                         Ok(size) => {
                             window_size = Some((size.width, size.height));
                             (size.width, size.height)
@@ -335,7 +339,12 @@ impl Renderer {
     async fn init(window: WebviewWindow) -> anyhow::Result<Self> {
         let size = window
             .inner_size()
-            .with_context(|| "Error getting the window size")?;
+            .with_context(|| "Error getting the window size")?
+            .to_logical(
+                window
+                    .scale_factor()
+                    .with_context(|| "Error getting the window scale")?,
+            );
 
         let (tx, rx) = oneshot::channel();
         window
@@ -625,10 +634,11 @@ impl Renderer {
                 self.surface_config.height = if window_height > 0 { window_height } else { 1 };
                 self.surface.configure(&self.device, &self.surface_config);
 
+                dbg!(TOOLBAR_HEIGHT / self.surface_config.height as f32);
                 let window_uniforms = WindowUniforms {
                     window_height: self.surface_config.height as f32,
                     window_width: self.surface_config.width as f32,
-                    toolbar_percentage: (TOOLBAR_HEIGHT + 32.0) / self.surface_config.height as f32,
+                    toolbar_percentage: TOOLBAR_HEIGHT / self.surface_config.height as f32,
                     _padding: 0.0,
                 };
                 self.queue.write_buffer(

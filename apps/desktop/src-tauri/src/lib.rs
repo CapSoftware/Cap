@@ -2141,11 +2141,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             }
             tauri::RunEvent::WindowEvent {
                 event: WindowEvent::Resized(size),
+                label,
                 ..
             } => {
-                handle
-                    .state::<CameraPreview>()
-                    .update_window_size(size.width, size.height);
+                if let Some(window) = handle.get_webview_window(&label) {
+                    let size = size.to_logical(window.scale_factor().unwrap_or(1.0));
+                    handle
+                        .state::<CameraPreview>()
+                        .update_window_size(size.width, size.height);
+                }
             }
             _ => {}
         });
