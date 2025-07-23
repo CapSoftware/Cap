@@ -70,7 +70,7 @@ function Page() {
   return (
     <div
       data-tauri-drag-region
-      class="flex relative flex-col w-screen h-screen cursor-move group bg-red-500/50"
+      class="flex relative flex-col w-screen h-screen cursor-move group"
     >
       <div class="h-13">
         <div class="flex flex-row justify-center items-center">

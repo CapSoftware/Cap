@@ -7,31 +7,6 @@ use std::{
     time::Duration,
 };
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct StateUniforms {
-    shape: f32,
-    size: f32,
-    mirrored: f32,
-    _padding: f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct WindowUniforms {
-    window_height: f32,
-    window_width: f32,
-    toolbar_height: f32,
-    _padding: f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct CameraUniforms {
-    camera_aspect_ratio: f32,
-    _padding: f32,
-}
-
 use anyhow::{Context, anyhow};
 use ffmpeg::{
     format::{self, Pixel},
@@ -653,7 +628,7 @@ impl Renderer {
                 let window_uniforms = WindowUniforms {
                     window_height: self.surface_config.height as f32,
                     window_width: self.surface_config.width as f32,
-                    toolbar_height: TOOLBAR_HEIGHT,
+                    toolbar_percentage: (TOOLBAR_HEIGHT + 48.0) / self.surface_config.height as f32,
                     _padding: 0.0,
                 };
                 self.queue.write_buffer(
@@ -850,4 +825,29 @@ impl<K: PartialEq> Cached<K, ()> {
             false
         }
     }
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct StateUniforms {
+    shape: f32,
+    size: f32,
+    mirrored: f32,
+    _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct WindowUniforms {
+    window_height: f32,
+    window_width: f32,
+    toolbar_percentage: f32,
+    _padding: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct CameraUniforms {
+    camera_aspect_ratio: f32,
+    _padding: f32,
 }
