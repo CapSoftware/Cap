@@ -34,35 +34,26 @@ var s_camera: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
-    // @location(0) tex_coords: vec2<f32>,
+    @location(0) uv: vec2<f32>,
 };
 
-// @vertex
-// fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-//     var out: VertexOutput;
-//     let x = f32(i32(in_vertex_index & 1u) * 4 - 1);
-//     let y = f32(i32(in_vertex_index & 2u) * 2 - 1);
-
-//     // Map y from [-1, 1] to [-1, 1-toolbar_percentage*2] to align to bottom
-//     let toolbar_clip_offset = window_uniforms.toolbar_percentage * 2.0;
-//     let y_offset = mix(-1.0, 1.0 - toolbar_clip_offset, (y * 0.5 + 0.5));
-//     out.clip_position = vec4<f32>(x, y_offset, 0.0, 1.0);
-
-//     // Map tex_coords.y from [0, 1] to [toolbar_percentage, 1] to skip toolbar area
-//     let u = x * 0.5 + 0.5;
-//     let v = mix(window_uniforms.toolbar_percentage, 1.0, 1.0 - (y * 0.5 + 0.5));
-//     out.tex_coords = vec2<f32>(u, v);
-//     return out;
-// }
-
 @vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     var out: VertexOutput;
     var pos: vec2<f32>;
 
+    var uv = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+    );
+
     // We use the vertex_index to determine the position of each vertex.
     // This maps the 6 vertex indices to NDC coordinates for a fullscreen quad.
-    switch in_vertex_index {
+    switch idx {
         case 0u: { // First triangle (bottom-left)
             pos = vec2<f32>(-1.0, -1.0);
         }
@@ -89,18 +80,103 @@ fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     pos.y *= (1.0 - window_uniforms.toolbar_percentage);
     pos.y -= window_uniforms.toolbar_percentage;
 
-    // pos.y += 1;
-    // pos.y /= 2;
-    // pos.y *= (1.0 - window_uniforms.toolbar_percentage);
-    // // pos.y -= window_uniforms.toolbar_percentage / 2;
-    // pos.y *= 2;
-    // pos.y -= 1;
-
     out.position = vec4<f32>(pos, 0.0, 1.0);
+    out.uv = uv[idx];
     return out;
 }
 
+// @fragment
+// fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+//     return vec4<f32>(255.0, 0.0, 0.0, 255.0);
+// }
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(255.0, 0.0, 0.0, 255.0);
+    // Calculate the crop region dimensions with padding and inset applied
+    let padding = 16.0;
+    let crop_width = window_uniforms.window_width - 2.0 * padding;
+    let crop_height = window_uniforms.window_height - 2.0 * padding;
+    let crop_aspect = crop_width / crop_height;
+    let camera_aspect = camera_uniforms.camera_aspect_ratio;
+
+    // Calculate UV coordinates for proper "cover" behavior
+    var final_uv = in.uv;
+
+    // Determine which dimension needs to be scaled to cover the crop region
+    if (camera_aspect > crop_aspect) {
+        // Camera is wider than crop region - scale horizontally
+        let scale = crop_aspect / camera_aspect;
+        let offset = (1.0 - scale) * 0.5;
+        final_uv.x = final_uv.x * scale + offset;
+    } else {
+        // Camera is taller than crop region - scale vertically
+        let scale = camera_aspect / crop_aspect;
+        let offset = (1.0 - scale) * 0.5;
+        final_uv.y = final_uv.y * scale + offset;
+    }
+
+    // Apply mirroring if enabled
+    if (uniforms.mirrored == 1.0) {
+        final_uv.x = 1.0 - final_uv.x;
+    }
+
+    // Shape constants: 0 = Round, 1 = Square, 2 = Full
+    // Size constants: 0 = Sm, 1 = Lg
+    let shape = uniforms.shape;
+    let size = uniforms.size;
+
+    // For Full shape, render with rounded corners
+    if (shape == 2.0) {
+        // Apply rounded corners for Full shape
+        // Use in.uv for corner calculation to avoid distortion from aspect ratio scaling
+        let center_uv = (in.uv - 0.5) * 2.0;
+        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
+        let abs_uv = abs(center_uv);
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
+        let mask = select(0.0, 1.0, corner_dist <= corner_radius);
+
+        if (mask < 0.5) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+
+        let camera_color = textureSample(t_camera, s_camera, final_uv);
+        return vec4<f32>(camera_color.rgb, 1.0);
+    }
+
+    // Convert UV coordinates to center-based coordinates [-1, 1]
+    let center_uv = (in.uv - 0.5) * 2.0;
+
+    var mask = 1.0;
+
+    if (shape == 0.0) {
+        // Round shape - create circular mask with aspect ratio correction
+        let aspect_corrected_uv = vec2<f32>(center_uv.x * crop_aspect, center_uv.y);
+        let distance = length(aspect_corrected_uv);
+        mask = select(0.0, 1.0, distance <= crop_aspect);
+    } else if (shape == 1.0) {
+        // Square shape - apply rounded corners based on size
+        // Use a reasonable corner radius for the square shape
+        let corner_radius = select(0.1, 0.12, size == 1.0); // radius in UV space (0.1 = 10% of quad size)
+
+        // Calculate distance from corners for rounded rectangle
+        let abs_uv = abs(center_uv);
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
+
+        // Apply rounded corner mask
+        mask = select(0.0, 1.0, corner_dist <= corner_radius);
+    } else {
+        // For any other shape, default to no masking (rectangular)
+        mask = 1.0;
+    }
+
+    // Apply the mask
+    if (mask < 0.5) {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
+    // Sample the camera texture
+    let camera_color = textureSample(t_camera, s_camera, final_uv);
+    return vec4<f32>(camera_color.rgb, 1.0);
 }
