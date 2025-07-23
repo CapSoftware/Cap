@@ -27,6 +27,10 @@ use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
+// We scale up the GPU surfaces resolution by this amount from the OS window's size.
+// This smooths out the curved edges of the window.
+static GPU_SURFACE_SCALE: u32 = 5;
+
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum CameraPreviewSize {
@@ -198,6 +202,12 @@ impl CameraPreview {
                         }
                     },
                 };
+
+                println!(
+                    "{:?} {:?}",
+                    renderer.window.inner_size().unwrap(),
+                    renderer.window.outer_size().unwrap()
+                );
 
                 if let Err(err) = renderer.reconfigure_gpu_surface(window_width, window_height) {
                     error!("Error reconfiguring GPU surface: {err:?}");
@@ -630,15 +640,23 @@ impl Renderer {
     ) -> tauri::Result<()> {
         self.surface_size
             .get_or_init((window_width, window_height), || {
-                self.surface_config.width = if window_width > 0 { window_width } else { 1 };
-                self.surface_config.height = if window_height > 0 { window_height } else { 1 };
+                self.surface_config.width = if window_width > 0 {
+                    window_width * GPU_SURFACE_SCALE
+                } else {
+                    1
+                };
+                self.surface_config.height = if window_height > 0 {
+                    window_height * GPU_SURFACE_SCALE
+                } else {
+                    1
+                };
                 self.surface.configure(&self.device, &self.surface_config);
 
-                dbg!(TOOLBAR_HEIGHT / self.surface_config.height as f32);
                 let window_uniforms = WindowUniforms {
-                    window_height: self.surface_config.height as f32,
-                    window_width: self.surface_config.width as f32,
-                    toolbar_percentage: TOOLBAR_HEIGHT / self.surface_config.height as f32,
+                    window_height: window_height as f32,
+                    window_width: window_width as f32,
+                    toolbar_percentage: (TOOLBAR_HEIGHT * GPU_SURFACE_SCALE as f32)
+                        / self.surface_config.height as f32,
                     _padding: 0.0,
                 };
                 self.queue.write_buffer(

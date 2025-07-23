@@ -112,9 +112,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
-        let mask = select(0.0, 1.0, corner_dist <= corner_radius);
+        let aa_width = fwidth(corner_dist); // Adaptive anti-aliasing width
+        let mask = 1.0 - smoothstep(corner_radius - aa_width, corner_radius + aa_width, corner_dist);
 
-        if (mask < 0.5) {
+        if (mask < 0.01) {
             return vec4<f32>(0.0, 0.0, 0.0, 0.0);
         }
 
@@ -132,7 +133,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let distance = length(center_uv);
         // Use radius of 1.0 to fill the full height
         let radius = 1.0;
-        mask = select(0.0, 1.0, distance <= radius);
+        let aa_width = fwidth(distance); // Adaptive anti-aliasing width
+        mask = 1.0 - smoothstep(radius - aa_width, radius + aa_width, distance);
     } else if (shape == 1.0) {
         // Square shape - apply rounded corners based on size
         // Use a reasonable corner radius for the square shape
@@ -143,19 +145,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
 
-        // Apply rounded corner mask
-        mask = select(0.0, 1.0, corner_dist <= corner_radius);
+        // Apply smoothed rounded corner mask
+        let aa_width = fwidth(corner_dist); // Adaptive anti-aliasing width
+        mask = 1.0 - smoothstep(corner_radius - aa_width, corner_radius + aa_width, corner_dist);
     } else {
         // For any other shape, default to no masking (rectangular)
         mask = 1.0;
     }
 
-    // Apply the mask
-    if (mask < 0.5) {
+    // Apply the mask with transparency for smooth edges
+    if (mask < 0.01) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Sample the camera texture
     let camera_color = textureSample(t_camera, s_camera, final_uv);
-    return vec4<f32>(camera_color.rgb, 1.0);
+    return vec4<f32>(camera_color.rgb, mask);
 }
