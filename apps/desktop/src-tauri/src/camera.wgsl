@@ -128,11 +128,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var mask = 1.0;
 
     if (shape == 0.0) {
-        // Round shape - create circular mask that fits within the crop region
-        let aspect_corrected_uv = vec2<f32>(center_uv.x * crop_aspect, center_uv.y);
-        let distance = length(aspect_corrected_uv);
-        // Use the smaller dimension to ensure the circle fits
-        let radius = min(crop_aspect, 1.0);
+        // Round shape - create circular mask that uses full height
+        let distance = length(center_uv);
+        // Use radius of 1.0 to fill the full height
+        let radius = 1.0;
         mask = select(0.0, 1.0, distance <= radius);
     } else if (shape == 1.0) {
         // Square shape - apply rounded corners based on size
