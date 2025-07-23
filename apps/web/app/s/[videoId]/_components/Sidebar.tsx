@@ -73,8 +73,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
-      (data.organizationId &&
-        data.organizationMembers?.includes(user?.id ?? ""))
+    (data.organizationId &&
+      data.organizationMembers?.includes(user?.id ?? ""))
   );
 
   const [activeTab, setActiveTab] = useState<TabType>("activity");
@@ -140,7 +140,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
+    <div
+      className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video"
+    >
       <div className="flex-none">
         <div className="flex border-b border-gray-200">
           {tabs.map((tab) => (
@@ -180,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <div className="h-full relative overflow-hidden">
+        <div className="overflow-hidden relative h-full">
           <AnimatePresence initial={false} custom={direction}>
             <TabContent
               key={activeTab}
@@ -190,7 +192,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               animate="center"
               exit="exit"
               transition={tabTransition}
-              className="absolute inset-0 overflow-auto"
+              className="overflow-auto absolute inset-0"
             >
               <div className="h-full">{renderTabContent()}</div>
             </TabContent>
