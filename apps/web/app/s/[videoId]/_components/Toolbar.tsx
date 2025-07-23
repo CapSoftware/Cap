@@ -179,7 +179,7 @@ export const Toolbar = ({
 
   return (
     <>
-      <motion.div layout className="flex overflow-hidden p-2 mx-auto bg-white rounded-full max-w-fit">
+      <motion.div layout className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full md:max-w-fit">
         <AnimatePresence initial={false} mode="popLayout">
           {commentBoxOpen ? (
             <motion.div
@@ -242,25 +242,35 @@ export const Toolbar = ({
               key="toolbar"
               initial={{ scale: 0.90 }}
               animate={{ scale: 1 }}
-              className="grid grid-flow-col gap-2 justify-center items-center w-fit"
+              className="flex flex-col gap-2 items-center mx-auto w-full md:justify-center sm:grid sm:grid-flow-col md:w-fit"
             >
-              {REACTIONS.map((reaction) => (
-                <Emoji
-                  key={reaction.emoji}
-                  emoji={reaction.emoji}
-                  label={reaction.label}
-                />
-              ))}
-              <motion.div className="w-px bg-gray-200 h-[16px] mx-4" />
-              <MotionButton
-                onClick={handleCommentClick}
-                variant="dark"
-                layout="position"
-                kbd="c"
-                size="sm"
-              >
-                Comment
-              </MotionButton>
+              {/* Emoji reactions row */}
+              <div className="flex gap-2 justify-evenly items-center w-full md:w-fit md:justify-center">
+                {REACTIONS.map((reaction) => (
+                  <Emoji
+                    key={reaction.emoji}
+                    emoji={reaction.emoji}
+                    label={reaction.label}
+                  />
+                ))}
+              </div>
+
+              {/* Separator - hidden on mobile, visible on desktop */}
+              <motion.div className="hidden sm:block w-px bg-gray-200 h-[16px] mx-4" />
+
+              {/* Comment button - full width on mobile, normal on desktop */}
+              <div className="ml-auto w-full sm:w-auto">
+                <MotionButton
+                  onClick={handleCommentClick}
+                  variant="dark"
+                  layout="position"
+                  kbd="c"
+                  size="sm"
+                  className="mx-auto w-fit"
+                >
+                  Comment
+                </MotionButton>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>

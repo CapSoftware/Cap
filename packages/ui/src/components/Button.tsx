@@ -96,7 +96,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         )}
         {icon && icon}
         {props.children}
-        {kbd && <kbd className="flex justify-center items-center ml-1 text-xs rounded-full border size-5 bg-gray-11 border-gray-10">{kbd}</kbd>}
+        {kbd && <kbd className="hidden justify-center items-center ml-1 text-xs rounded-full border md:flex size-5 bg-gray-11 border-gray-10">{kbd}</kbd>}
       </Comp>
     );
   }
