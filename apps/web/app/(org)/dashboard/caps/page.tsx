@@ -110,30 +110,30 @@ export default async function CapsPage({
             )
             FROM (
               -- Include spaces where the video is directly added via space_videos
-              SELECT DISTINCT 
-                s.id, 
-                s.name, 
-                s.organizationId, 
+              SELECT DISTINCT
+                s.id,
+                s.name,
+                s.organizationId,
                 o.iconUrl as iconUrl,
                 FALSE as isOrg
               FROM space_videos sv
               JOIN spaces s ON sv.spaceId = s.id
               JOIN organizations o ON s.organizationId = o.id
-              WHERE sv.videoId = ${videos.id}
-              
+              WHERE sv.videoId = videos.id
+
               UNION
-              
+
               -- For organization-level sharing, include the organization details
               -- and mark it as an organization with isOrg=TRUE
-              SELECT DISTINCT 
-                o.id as id, 
-                o.name as name, 
-                o.id as organizationId, 
+              SELECT DISTINCT
+                o.id as id,
+                o.name as name,
+                o.id as organizationId,
                 o.iconUrl as iconUrl,
                 TRUE as isOrg
               FROM shared_videos sv
               JOIN organizations o ON sv.organizationId = o.id
-              WHERE sv.videoId = ${videos.id}
+              WHERE sv.videoId = videos.id
             ) AS s
           ),
           JSON_ARRAY()
