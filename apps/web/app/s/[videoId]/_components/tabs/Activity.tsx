@@ -435,8 +435,8 @@ function Analytics(props: {
 
 const Comments = Object.assign(
   (props: {
-    comments: CommentType[]; // Changed from MaybePromise since parent resolves it
-    setComments: React.Dispatch<React.SetStateAction<CommentType[]>>; // Added setComments prop
+    comments: CommentType[];
+    setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
     user: typeof userSelectProps | null;
     videoId: string;
     onSeek?: (time: number) => void;
@@ -474,9 +474,13 @@ const Comments = Object.assign(
       }
     };
 
+    useEffect(() => {
+      setTimeout(scrollToBottom, 100);
+    }, [comments]);
+
+
     const addOptimisticComment = (newComment: CommentType) => {
       setOptimisticComments((prev) => [...prev, newComment]);
-      setTimeout(scrollToBottom, 100);
     };
 
     const handleNewComment = async (content: string) => {
