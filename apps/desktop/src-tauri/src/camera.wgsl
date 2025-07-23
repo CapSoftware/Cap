@@ -40,8 +40,17 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     var out: VertexOutput;
-    var pos: vec2<f32>;
 
+    // We use the vertex_index to determine the position of each vertex.
+    // This maps the 6 vertex indices to NDC coordinates for a fullscreen quad.
+    var indexes = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0),// First triangle (bottom-left)
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(-1.0, 1.0),
+        vec2<f32>(-1.0, 1.0), // Second triangle (top-right)
+        vec2<f32>(1.0, -1.0),
+        vec2<f32>(1.0, 1.0),
+    );
     var uv = array<vec2<f32>, 6>(
         vec2<f32>(0.0, 1.0),
         vec2<f32>(1.0, 1.0),
@@ -51,32 +60,7 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
         vec2<f32>(1.0, 0.0),
     );
 
-    // We use the vertex_index to determine the position of each vertex.
-    // This maps the 6 vertex indices to NDC coordinates for a fullscreen quad.
-    switch idx {
-        case 0u: { // First triangle (bottom-left)
-            pos = vec2<f32>(-1.0, -1.0);
-        }
-        case 1u: {
-            pos = vec2<f32>(1.0, -1.0);
-        }
-        case 2u: {
-            pos = vec2<f32>(-1.0, 1.0);
-        }
-        case 3u: { // Second triangle (top-right)
-            pos = vec2<f32>(-1.0, 1.0); // Duplicate of case 2
-        }
-        case 4u: {
-            pos = vec2<f32>(1.0, -1.0); // Duplicate of case 1
-        }
-        case 5u: {
-            pos = vec2<f32>(1.0, 1.0);
-        }
-        default: { // Should not happen for a draw call with 6 vertices
-            pos = vec2<f32>(0.0, 0.0);
-        }
-    }
-
+    var pos: vec2<f32> = indexes[idx];
     pos.y *= (1.0 - window_uniforms.toolbar_percentage);
     pos.y -= window_uniforms.toolbar_percentage;
 
@@ -84,11 +68,6 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     out.uv = uv[idx];
     return out;
 }
-
-// @fragment
-// fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-//     return vec4<f32>(255.0, 0.0, 0.0, 255.0);
-// }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
