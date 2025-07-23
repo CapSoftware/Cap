@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
-use tokio::sync::{Notify, broadcast, oneshot};
+use tokio::sync::{broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
@@ -91,7 +91,7 @@ impl CameraPreview {
             let mut loading = true;
             let mut window_size = None;
             let mut resampler_frame = Cached::default();
-            let mut aspect_ratio = Cached::default();
+            let mut aspect_ratio = None;
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -128,7 +128,7 @@ impl CameraPreview {
                     }
                 }
             }) {
-                let mut window_resize_required =
+                let window_resize_required =
                     if (first || reconfigure) && renderer.refresh_state(&store) {
                         first = false;
                         renderer.update_state_uniforms();
@@ -140,32 +140,23 @@ impl CameraPreview {
                             frame.height(),
                         ))
                     {
+                        aspect_ratio = Some(frame.width() as f32 / frame.height() as f32);
+
                         true
                     } else {
                         false
                     };
 
-                let camera_aspect_ratio = *aspect_ratio.get_or_init(
-                    (
-                        frame.as_ref().map(|f| (f.width(), f.height())),
-                        renderer.state.clone(),
-                    ),
-                    || {
-                        let ratio = frame
-                            .as_ref()
-                            .map(|f| f.width() as f32 / f.height() as f32)
-                            .unwrap_or(if renderer.state.shape == CameraPreviewShape::Full {
-                                16.0 / 9.0
-                            } else {
-                                1.0
-                            });
-                        renderer.update_camera_aspect_ratio_uniforms(ratio);
-                        window_resize_required = true;
-                        ratio
-                    },
-                );
+                let camera_aspect_ratio =
+                    aspect_ratio.unwrap_or(if renderer.state.shape == CameraPreviewShape::Full {
+                        16.0 / 9.0
+                    } else {
+                        1.0
+                    });
 
                 if window_resize_required {
+                    renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio);
+
                     if let Err(err) = renderer.resize_window(camera_aspect_ratio) {
                         error!("Error updating window size: {err:?}");
                         continue;
