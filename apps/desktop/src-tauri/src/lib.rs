@@ -85,8 +85,6 @@ use windows::{CapWindowId, ShowCapWindow};
 #[serde(rename_all = "camelCase")]
 pub struct App {
     #[serde(skip)]
-    camera_tx: flume::Sender<RawCameraFrame>,
-    #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
@@ -181,7 +179,9 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
+    app_handle: AppHandle,
     state: MutableState<'_, App>,
+    camera_preview: State<'_, CameraPreview>,
     label: Option<String>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -197,6 +197,17 @@ async fn set_camera_input(
             Ok(true)
         }
         (Some(label), None) => {
+            let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
+            if let Some(win) = CapWindowId::Main.get(&app_handle) {
+                win.set_focus().ok();
+            };
+
+            let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+            camera_preview
+                .init_preview_window(window, camera_rx)
+                .await
+                .unwrap();
+
             drop(app);
 
             let init_rx = CameraFeed::init_async(label);
@@ -208,7 +219,7 @@ async fn set_camera_input(
                             Ok(Ok(feed)) => {
                                 let mut app = state.write().await;
                                 if app.camera_feed.is_none() {
-                                    feed.attach(app.camera_tx.clone());
+                                    feed.attach(camera_tx);
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                                     return Ok(true);
                                 } else {
@@ -1863,7 +1874,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         )
         .expect("Failed to export typescript bindings");
 
-    let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -1951,7 +1961,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 app.manage(Arc::new(RwLock::new(App {
                     handle: app.clone(),
                     camera_feed: None,
-                    camera_tx,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
@@ -1967,7 +1976,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }),
                 })));
 
-                if let Ok(s) = CameraPreview::init(&app, camera_rx)
+                if let Ok(s) = CameraPreview::init(&app)
                     .map_err(|err| error!("Error initializing camera preview: {err}"))
                 {
                     app.manage(s);
@@ -2066,9 +2075,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let _ = window.show();
                                 }
                                 return;
-                            }
-                            CapWindowId::Camera => {
-                                app.state::<CameraPreview>().close_window();
                             }
                             _ => {}
                         };

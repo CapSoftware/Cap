@@ -1,13 +1,13 @@
 use std::{
     sync::{
-        Arc, PoisonError, RwLock,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
 };
 
-use anyhow::{Context, anyhow};
+use anyhow::Context;
 use ffmpeg::{
     format::{self, Pixel},
     frame,
@@ -61,38 +61,30 @@ pub struct CameraPreview {
         broadcast::Receiver<Option<(u32, u32)>>,
     ),
     loading: Arc<AtomicBool>,
-    window: RwLock<Option<Arc<Notify>>>,
     store: Arc<Store<Wry>>,
-    camera_rx: Receiver<RawCameraFrame>,
 }
 
 impl CameraPreview {
-    pub fn init(
-        manager: &impl Manager<Wry>,
-        camera_rx: Receiver<RawCameraFrame>,
-    ) -> tauri_plugin_store::Result<Self> {
+    pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             reconfigure: broadcast::channel(1),
             loading: Arc::new(AtomicBool::new(false)),
-            window: RwLock::new(None),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
-            camera_rx,
         })
     }
 
-    /// Initialize the state when the camera preview window is created.
-    /// Currently we only support a single camera preview window at a time!
-    pub async fn init_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
+    pub async fn init_preview_window(
+        &self,
+        window: WebviewWindow,
+        camera_rx: Receiver<RawCameraFrame>,
+    ) -> anyhow::Result<()> {
         self.loading.store(true, Ordering::Relaxed);
 
         let mut renderer = Renderer::init(window.clone()).await?;
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
-        let camera_rx = self.camera_rx.clone();
         let loading_state = self.loading.clone();
-        let shutdown = Arc::new(Notify::new());
-        let shutdown_handle = shutdown.clone();
         thread::spawn(move || {
             let mut window_visible = false;
             let mut first = true;
@@ -100,7 +92,6 @@ impl CameraPreview {
             let mut window_size = None;
             let mut resampler_frame = Cached::default();
             let mut aspect_ratio = Cached::default();
-            let mut shutdown = std::pin::pin!(shutdown.notified());
             let Ok(mut scaler) = scaling::Context::get(
                 Pixel::RGBA,
                 1,
@@ -115,7 +106,6 @@ impl CameraPreview {
             };
 
             while let Some((frame, reconfigure)) = block_on({
-                let shutdown = shutdown.as_mut();
                 let camera_rx = &camera_rx;
                 let reconfigure = &mut reconfigure;
 
@@ -135,12 +125,11 @@ impl CameraPreview {
 
                             Some((None, true))
                         },
-                        _ = shutdown => None,
                     }
                 }
             }) {
                 let mut window_resize_required =
-                    if first || reconfigure && renderer.refresh_state(&store) {
+                    if (first || reconfigure) && renderer.refresh_state(&store) {
                         first = false;
                         renderer.update_state_uniforms();
                         true
@@ -202,12 +191,6 @@ impl CameraPreview {
                         }
                     },
                 };
-
-                println!(
-                    "{:?} {:?}",
-                    renderer.window.inner_size().unwrap(),
-                    renderer.window.outer_size().unwrap()
-                );
 
                 if let Err(err) = renderer.reconfigure_gpu_surface(window_width, window_height) {
                     error!("Error reconfiguring GPU surface: {err:?}");
@@ -279,26 +262,7 @@ impl CameraPreview {
             }
         });
 
-        let mut state = self.window.write().unwrap_or_else(PoisonError::into_inner);
-        if state.is_some() {
-            return Err(anyhow!("Camera preview window already initialized"));
-        }
-        *state = Some(shutdown_handle);
-
         Ok(())
-    }
-
-    /// Triggered by Tauri when the camera preview window is closed.
-    /// We drop the handle we have to the `tauri::Window` + wgpu stuff, to prevent us attempting to accessing something that's no longer valid.
-    pub fn close_window(&self) {
-        if let Some(task) = self
-            .window
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            task.notify_waiters();
-        }
     }
 
     /// Save the current state of the camera window.

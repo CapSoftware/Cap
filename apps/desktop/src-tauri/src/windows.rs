@@ -339,10 +339,6 @@ impl ShowCapWindow {
                     .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
-                window
-                    .state::<CameraPreview>()
-                    .init_window(window.clone())
-                    .await?;
 
                 #[cfg(target_os = "macos")]
                 {
