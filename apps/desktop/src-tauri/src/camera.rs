@@ -77,7 +77,10 @@ pub struct CameraWindowState {
 }
 
 pub struct CameraPreview {
-    reconfigure: (broadcast::Sender<()>, broadcast::Receiver<()>),
+    reconfigure: (
+        broadcast::Sender<Option<(u32, u32)>>,
+        broadcast::Receiver<Option<(u32, u32)>>,
+    ),
     loading: Arc<AtomicBool>,
     window: RwLock<Option<Arc<Notify>>>,
     store: Arc<Store<Wry>>,
@@ -115,6 +118,7 @@ impl CameraPreview {
             let mut window_visible = false;
             let mut first = true;
             let mut loading = true;
+            let mut window_size = None;
             let mut resampler_frame = Cached::default();
             let mut aspect_ratio = Cached::default();
             let mut shutdown = std::pin::pin!(shutdown.notified());
@@ -145,7 +149,13 @@ impl CameraPreview {
 
                     tokio::select! {
                         frame = camera_rx.recv_async() => frame.ok().map(|f| (Some(f.frame), false)),
-                        _ = reconfigure.recv() =>  Some((None, true)),
+                        event = reconfigure.recv() =>  {
+                            if let Ok(Some((width, height))) = event {
+                                window_size = Some((width, height));
+                            }
+
+                            Some((None, true))
+                        },
                         _ = shutdown => None,
                     }
                 }
@@ -194,7 +204,23 @@ impl CameraPreview {
                     }
                 }
 
-                if let Err(err) = renderer.reconfigure_gpu_surface() {
+                let (window_width, window_height) = match window_size {
+                    Some(s) => s,
+                    // Calling `window.outer_size` will hang when a native menu is opened.
+                    // So we only callback to it if absolute required as it could randomly hang.
+                    None => match renderer.window.outer_size() {
+                        Ok(size) => {
+                            window_size = Some((size.width, size.height));
+                            (size.width, size.height)
+                        }
+                        Err(err) => {
+                            error!("Error getting window size: {err:?}");
+                            continue;
+                        }
+                    },
+                };
+
+                if let Err(err) = renderer.reconfigure_gpu_surface(window_width, window_height) {
                     error!("Error reconfiguring GPU surface: {err:?}");
                     continue;
                 }
@@ -290,7 +316,7 @@ impl CameraPreview {
     pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
         self.store.set("state", serde_json::to_value(&state)?);
         self.store.save()?;
-        self.reconfigure.0.send(()).ok();
+        self.reconfigure.0.send(None).ok();
         Ok(())
     }
 
@@ -300,6 +326,12 @@ impl CameraPreview {
         while self.loading.load(Ordering::Relaxed) {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    /// Update the size of the window.
+    /// Using `window.outer_size` just never resolves when a native menu is open.
+    pub fn update_window_size(&self, width: u32, height: u32) {
+        self.reconfigure.0.send(Some((width, height))).ok();
     }
 }
 
@@ -607,12 +639,15 @@ impl Renderer {
     }
 
     /// Reconfigure the GPU surface if the window has changed size
-    fn reconfigure_gpu_surface(&mut self) -> tauri::Result<()> {
-        let size = self.window.outer_size()?;
+    fn reconfigure_gpu_surface(
+        &mut self,
+        window_width: u32,
+        window_height: u32,
+    ) -> tauri::Result<()> {
         self.surface_size
-            .get_or_init((size.width, size.height), || {
-                self.surface_config.width = if size.width > 0 { size.width } else { 1 };
-                self.surface_config.height = if size.height > 0 { size.height } else { 1 };
+            .get_or_init((window_width, window_height), || {
+                self.surface_config.width = if window_width > 0 { window_width } else { 1 };
+                self.surface_config.height = if window_height > 0 { window_height } else { 1 };
                 self.surface.configure(&self.device, &self.surface_config);
 
                 let window_uniforms = WindowUniforms {

@@ -2139,6 +2139,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     api.prevent_exit();
                 }
             }
+            tauri::RunEvent::WindowEvent {
+                event: WindowEvent::Resized(size),
+                ..
+            } => {
+                handle
+                    .state::<CameraPreview>()
+                    .update_window_size(size.width, size.height);
+            }
             _ => {}
         });
 }
