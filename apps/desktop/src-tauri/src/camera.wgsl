@@ -52,31 +52,25 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOut {
     );
     var out: VertexOut;
 
-    // --- Padding logic commented out for debug ---
-    // let padding = 16.0;
-    // let max_horizontal_padding = window_uniforms.window_width * 0.4; // Max 40% padding
-    // let max_vertical_padding = window_uniforms.window_height * 0.4;
-    // let effective_padding = min(padding, min(max_horizontal_padding, max_vertical_padding));
-    // let target_left = effective_padding;
-    // let target_right = window_uniforms.window_width - effective_padding;
-    // let target_top = effective_padding;
-    // let target_bottom = window_uniforms.window_height - effective_padding;
-    // let content_width = target_right - target_left;
-    // let content_height = target_bottom - target_top;
-    // let content_aspect = content_width / content_height;
-    // var render_width = content_width;
-    // var render_height = content_height;
-    // var actual_target_bottom = target_bottom;
-    // var actual_target_top = target_top;
-    // var actual_target_left = target_left;
-    // var actual_target_right = target_right;
+    let padding = 16.0;
+    let max_horizontal_padding = window_uniforms.window_width * 0.4; // Max 40% padding
+    let max_vertical_padding = window_uniforms.window_height * 0.4;
+    let effective_padding = min(padding, min(max_horizontal_padding, max_vertical_padding));
+    let target_left = effective_padding;
+    let target_right = window_uniforms.window_width - effective_padding;
+    let target_top = effective_padding;
+    let target_bottom = window_uniforms.window_height - effective_padding;
+    let content_width = target_right - target_left;
+    let content_height = target_bottom - target_top;
+    let content_aspect = content_width / content_height;
+    var render_width = content_width;
+    var render_height = content_height;
+    var actual_target_bottom = target_bottom;
+    var actual_target_top = target_top;
+    var actual_target_left = target_left;
+    var actual_target_right = target_right;
 
-    // Use full window for debug (no padding)
-    let actual_target_left = 0.0;
-    let actual_target_right = window_uniforms.window_width;
-    let actual_target_top = 0.0;
-    let actual_target_bottom = window_uniforms.window_height;
-
+    // Convert original [-1,1] NDC coordinates to target viewport pixel coordinates
     let pixel_x = (pos[idx].x + 1.0) * 0.5 * (actual_target_right - actual_target_left) + actual_target_left;
     let pixel_y = (1.0 - pos[idx].y) * 0.5 * (actual_target_bottom - actual_target_top) + actual_target_top;
     let ndc_x = (pixel_x / window_uniforms.window_width) * 2.0 - 1.0;
@@ -95,16 +89,19 @@ var s_camera: sampler;
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-    // Use toolbar_percentage to determine green bar height
-    if (in.uv.y < window_uniforms.toolbar_percentage) {
+    let padding = 16.0;
+    let max_horizontal_padding = window_uniforms.window_width * 0.4;
+    let max_vertical_padding = window_uniforms.window_height * 0.4;
+    let effective_padding = min(padding, min(max_horizontal_padding, max_vertical_padding));
+    let target_top = effective_padding;
+    let target_bottom = window_uniforms.window_height - effective_padding;
+    let content_height = target_bottom - target_top;
+    // Calculate the y position in window pixels
+    let y_px = in.uv.y * window_uniforms.window_height;
+    // Only apply green bar if inside the padded content area
+    if (y_px >= target_top && y_px < target_top + (window_uniforms.toolbar_percentage * content_height)) {
         return vec4<f32>(0.0, 1.0, 0.0, 1.0);
     }
-    // --- Padding logic commented out for debug ---
-    // let padding = 16.0;
-    // let content_width = window_uniforms.window_width - 2.0 * padding;
-    // let content_height = window_uniforms.window_height - 2.0 * padding;
-    // let content_aspect = content_width / content_height;
-    // let camera_aspect = camera_uniforms.camera_aspect_ratio;
 
     // Calculate UV coordinates for proper "cover" behavior
     var final_uv = in.uv;
@@ -157,44 +154,45 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     var mask = 1.0;
 
+    // Compute the vertical offset in normalized [-1, 1] space for toolbar padding
+    let toolbar_offset = window_uniforms.toolbar_percentage * 2.0; // since [-1,1] is 2 units
+    // The top of the shape should be at y = 1.0 - toolbar_offset
+    // So the center is at y = (1.0 - toolbar_offset) - 1.0 (since all shapes are sized to fit in [-1,1])
+    let shape_center_y = (1.0 - toolbar_offset) - 1.0;
+
     if (shape == 0.0) {
-        // Round shape - create circular mask aligned to bottom
-        let aspect_ratio = 1.0; // content_width / content_height; // Assuming content_aspect is 1.0
-
-        // Fixed width circle (always full window width)
-        let circle_radius_x = 1.0;
-        let circle_radius_y = 1.0 / aspect_ratio;
-
-        // Convert 56px offset to center_uv space
-        let toolbar_offset_pixels = 56.0;
-        let toolbar_offset_uv = (toolbar_offset_pixels / aspect_ratio) * 2.0; // content_height
-
-        // Position circle center so top edge is 56px from window top
-        // Top of window is -1.0, top of circle is circle_center_y + circle_radius_y
-        let circle_center_y = -1.0 + toolbar_offset_uv + circle_radius_y;
-
-        // Calculate distance from circle center
-        let offset_uv = vec2<f32>(center_uv.x, center_uv.y - circle_center_y);
-        // Scale by circle radius to create proper circular distance check
-        let scaled_uv = vec2<f32>(offset_uv.x / circle_radius_x, offset_uv.y / circle_radius_y);
+        // Round shape - create circular mask centered horizontally, offset downward by toolbar_percentage
+        let aspect_ratio = window_uniforms.window_width / window_uniforms.window_height;
+        let circle_radius = 1.0;
+        let circle_center = vec2<f32>(0.0, shape_center_y);
+        // Scale x by aspect ratio to make the circle round in screen space
+        let scaled_uv = vec2<f32>(center_uv.x * aspect_ratio, center_uv.y - circle_center.y);
         let distance = length(scaled_uv);
-
-        // Check if point is inside circle (distance <= 1.0)
-        mask = select(0.0, 1.0, distance <= 1.0);
+        mask = select(0.0, 1.0, distance <= circle_radius);
     } else if (shape == 1.0) {
-        // Square shape - apply rounded corners based on size
-        // Use a reasonable corner radius for the square shape
+        // Square shape - apply rounded corners based on size, offset downward by toolbar_percentage
         let corner_radius = select(0.1, 0.12, size == 1.0); // radius in UV space (0.1 = 10% of quad size)
-
-        // Calculate distance from corners for rounded rectangle
-        let abs_uv = abs(center_uv);
+        let shifted_uv = center_uv - vec2<f32>(0.0, shape_center_y);
+        let abs_uv = abs(shifted_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
-
-        // Apply rounded corner mask
         mask = select(0.0, 1.0, corner_dist <= corner_radius);
+    } else if (shape == 2.0) {
+        // Full shape - render with rounded corners, offset downward by toolbar_percentage
+        let shifted_uv = center_uv - vec2<f32>(0.0, shape_center_y);
+        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
+        let abs_uv = abs(shifted_uv);
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
+        let mask_full = select(0.0, 1.0, corner_dist <= corner_radius);
+        if (mask_full < 0.5) {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        let camera_color = textureSample(t_camera, s_camera, final_uv);
+        return vec4<f32>(camera_color.rgb, 1.0);
     } else {
-        // For any other shape, default to no masking (rectangular)
+        // For any other shape, default to no masking (rectangular), but still apply vertical offset
+        let shifted_uv = center_uv - vec2<f32>(0.0, shape_center_y);
         mask = 1.0;
     }
 

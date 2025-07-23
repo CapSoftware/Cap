@@ -628,7 +628,7 @@ impl Renderer {
                 let window_uniforms = WindowUniforms {
                     window_height: self.surface_config.height as f32,
                     window_width: self.surface_config.width as f32,
-                    toolbar_percentage: (TOOLBAR_HEIGHT + 48.0) / self.surface_config.height as f32,
+                    toolbar_percentage: (TOOLBAR_HEIGHT + 32.0) / self.surface_config.height as f32,
                     _padding: 0.0,
                 };
                 self.queue.write_buffer(
