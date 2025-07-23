@@ -221,10 +221,12 @@ export default async function CapsPage({
     return {
       ...videoWithoutEffectiveDate,
       foldersData,
-      sharedOrganizations: video.sharedOrganizations.filter(
-        (organization) => organization.id !== null
-      ),
-      sharedSpaces: sharedSpacesMap[video.id] || [],
+      sharedOrganizations: Array.isArray(video.sharedOrganizations)
+        ? video.sharedOrganizations.filter((organization) => organization.id !== null)
+        : [],
+      sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
+        ? sharedSpacesMap[video.id]
+        : [],
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
