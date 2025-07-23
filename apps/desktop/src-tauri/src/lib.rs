@@ -242,6 +242,9 @@ async fn set_camera_input(
         }
         (None, _) => {
             app.camera_feed.take();
+            if let Some(w) = CapWindowId::Camera.get(&app_handle) {
+                w.close().ok();
+            }
             Ok(true)
         }
     }

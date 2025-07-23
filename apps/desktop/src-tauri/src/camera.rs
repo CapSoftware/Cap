@@ -260,6 +260,8 @@ impl CameraPreview {
                     }
                 }
             }
+
+            window.close().ok();
         });
 
         Ok(())
