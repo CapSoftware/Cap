@@ -1,11 +1,9 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   type ComponentProps,
   createEffect,
   createResource,
-  on,
   Show,
 } from "solid-js";
 import { createStore } from "solid-js/store";
@@ -56,16 +54,6 @@ function Page() {
   );
 
   const setCamera = createCameraMutation();
-
-  createEffect(
-    on(
-      () => rawOptions.cameraLabel,
-      (label) => {
-        if (label === null) getCurrentWindow().close();
-      },
-      { defer: true }
-    )
-  );
 
   return (
     <div

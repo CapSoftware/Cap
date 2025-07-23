@@ -82,8 +82,6 @@ function Inner() {
               for (const match of matches()) {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
-
-              currentWindow.show();
             });
 
             return (

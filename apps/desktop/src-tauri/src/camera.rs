@@ -29,7 +29,7 @@ static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
 // We scale up the GPU surfaces resolution by this amount from the OS window's size.
 // This smooths out the curved edges of the window.
-static GPU_SURFACE_SCALE: u32 = 2;
+static GPU_SURFACE_SCALE: u32 = 3;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -129,7 +129,7 @@ impl CameraPreview {
                 }
             }) {
                 let window_resize_required =
-                    if (first || reconfigure) && renderer.refresh_state(&store) {
+                    if reconfigure && renderer.refresh_state(&store) || first {
                         first = false;
                         renderer.update_state_uniforms();
                         true
@@ -157,9 +157,12 @@ impl CameraPreview {
                 if window_resize_required {
                     renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio);
 
-                    if let Err(err) = renderer.resize_window(camera_aspect_ratio) {
-                        error!("Error updating window size: {err:?}");
-                        continue;
+                    match renderer.resize_window(camera_aspect_ratio) {
+                        Ok(size) => window_size = Some(size),
+                        Err(err) => {
+                            error!("Error updating window size: {err:?}");
+                            continue;
+                        }
                     }
                 }
 
@@ -169,7 +172,7 @@ impl CameraPreview {
                     // So we only callback to it if absolute required as it could randomly hang.
                     None => match renderer
                         .window
-                        .outer_size()
+                        .inner_size()
                         .and_then(|size| Ok(size.to_logical(renderer.window.scale_factor()?)))
                     {
                         Ok(size) => {
@@ -553,7 +556,7 @@ impl Renderer {
     }
 
     /// Resize the OS window to the correct size
-    fn resize_window(&self, aspect: f32) -> tauri::Result<()> {
+    fn resize_window(&self, aspect: f32) -> tauri::Result<(u32, u32)> {
         let base: f32 = if self.state.size == CameraPreviewSize::Sm {
             230.0
         } else {
@@ -592,7 +595,7 @@ impl Renderer {
             .set_size(LogicalSize::new(window_width, window_height))?;
         self.window.set_position(LogicalPosition::new(x, y))?;
 
-        Ok(())
+        Ok((window_width as u32, window_height as u32))
     }
 
     /// Reconfigure the GPU surface if the window has changed size
