@@ -135,14 +135,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Multi-level anti-aliasing approach
         let pixel_size = length(fwidth(center_uv));
-        let aa_width = max(pixel_size * 1.5, 0.008); // Ensure minimum AA width
+        let aa_width = max(pixel_size, 0.003); // Reduced minimum AA width
 
         // Primary edge calculation
         let edge_distance = distance - radius;
         mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
-
-        // Apply additional smoothing for very soft edges
-        mask = smoothstep(0.0, 1.0, mask);
 
     } else if (shape == 1.0) {
         // Square shape with enhanced corner anti-aliasing
@@ -153,22 +150,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // Enhanced anti-aliasing for corners
         let pixel_size = length(fwidth(center_uv));
-        let aa_width = max(pixel_size * 1.5, 0.005);
+        let aa_width = max(pixel_size, 0.002);
 
         let edge_distance = corner_dist - corner_radius;
         mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
-        mask = smoothstep(0.0, 1.0, mask);
     } else {
         // For any other shape, default to no masking (rectangular)
         mask = 1.0;
     }
 
-    // Apply the mask with transparency for smooth edges
-    if (mask < 0.01) {
+    // Apply the mask with cleaner alpha handling to reduce ghosting
+    if (mask < 0.05) {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Sample the camera texture
     let camera_color = textureSample(t_camera, s_camera, final_uv);
-    return vec4<f32>(camera_color.rgb, mask);
+
+    // Use sharper alpha cutoff to reduce ghosting
+    let final_alpha = select(1.0, mask, mask < 0.95);
+    return vec4<f32>(camera_color.rgb, final_alpha);
 }

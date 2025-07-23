@@ -29,7 +29,7 @@ static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
 // We scale up the GPU surfaces resolution by this amount from the OS window's size.
 // This smooths out the curved edges of the window.
-static GPU_SURFACE_SCALE: u32 = 5;
+static GPU_SURFACE_SCALE: u32 = 2;
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -522,7 +522,7 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: swapchain_format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
