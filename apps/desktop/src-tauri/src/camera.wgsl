@@ -103,26 +103,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shape = uniforms.shape;
     let size = uniforms.size;
 
-    // For Full shape, render with rounded corners
-    if (shape == 2.0) {
-        // Apply rounded corners for Full shape
-        // Use in.uv for corner calculation to avoid distortion from aspect ratio scaling
-        let center_uv = (in.uv - 0.5) * 2.0;
-        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
-        let abs_uv = abs(center_uv);
-        let corner_pos = abs_uv - (1.0 - corner_radius);
-        let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
-        let aa_width = fwidth(corner_dist); // Adaptive anti-aliasing width
-        let mask = 1.0 - smoothstep(corner_radius - aa_width, corner_radius + aa_width, corner_dist);
-
-        if (mask < 0.01) {
-            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
-        }
-
-        let camera_color = textureSample(t_camera, s_camera, final_uv);
-        return vec4<f32>(camera_color.rgb, 1.0);
-    }
-
     // Convert UV coordinates to center-based coordinates [-1, 1]
     let center_uv = (in.uv - 0.5) * 2.0;
 
@@ -147,6 +127,32 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
         let corner_dist = length(max(corner_pos, vec2<f32>(0.0, 0.0)));
+
+        // Enhanced anti-aliasing for corners
+        let pixel_size = length(fwidth(center_uv));
+        let aa_width = max(pixel_size, 0.002);
+
+        let edge_distance = corner_dist - corner_radius;
+        mask = 1.0 - smoothstep(-aa_width, aa_width, edge_distance);
+    } else if (shape == 2.0) {
+        // Full shape with aspect ratio-corrected rounded corners
+        let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
+        let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
+        
+        let abs_uv = abs(center_uv);
+        let corner_pos = abs_uv - (1.0 - corner_radius);
+        
+        // Use aspect-ratio aware distance calculation for circular corners
+        var adjusted_corner_pos = max(corner_pos, vec2<f32>(0.0, 0.0));
+        if (window_aspect > 1.0) {
+            // For wide windows, scale X component to make distance calculation circular
+            adjusted_corner_pos.x *= window_aspect;
+        } else {
+            // For tall windows, scale Y component to make distance calculation circular
+            adjusted_corner_pos.y /= window_aspect;
+        }
+        
+        let corner_dist = length(adjusted_corner_pos);
 
         // Enhanced anti-aliasing for corners
         let pixel_size = length(fwidth(center_uv));
