@@ -1039,7 +1039,14 @@ async fn upload_exported_video(
             }
         };
 
-        create_or_get_video(&app, false, video_id, Some(meta.pretty_name.clone())).await
+        create_or_get_video(
+            &app,
+            false,
+            video_id,
+            Some(meta.pretty_name.clone()),
+            Some(duration.to_string()),
+        )
+        .await
     }
     .await?;
 
@@ -1051,6 +1058,7 @@ async fn upload_exported_video(
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
+        Some(duration.to_string()),
     )
     .await
     {
