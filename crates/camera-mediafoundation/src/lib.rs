@@ -1,4 +1,4 @@
-// #![cfg(windows)]
+#![cfg(windows)]
 
 use std::{
     ffi::OsString,
@@ -6,12 +6,18 @@ use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
-    ptr::null_mut,
+    ptr::{null, null_mut},
     slice::from_raw_parts,
+    sync::{Mutex, mpsc::*},
+    time::Duration,
 };
 
-use windows::Win32::{Foundation::*, Media::MediaFoundation::*, System::Com::CoInitialize};
-use windows_core::{ComObjectInner, PWSTR, implement};
+use windows::Win32::{
+    Foundation::*,
+    Media::MediaFoundation::*,
+    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
+};
+use windows_core::{ComObjectInner, GUID, Interface, PWSTR, implement};
 
 pub fn initialize_mediafoundation() -> windows_core::Result<()> {
     unsafe { CoInitialize(None) }.ok()?;
@@ -90,7 +96,23 @@ impl Iterator for DeviceSourcesIterator {
 #[derive(Clone)]
 pub struct Device {
     activate: IMFActivate,
-    media_source: IMFMediaSource,
+    pub media_source: IMFMediaSource,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum StartCapturingError {
+    #[error("CreateEngine: {0}")]
+    CreateEngine(windows_core::Error),
+    #[error("ConfigureEngine: {0}")]
+    ConfigureEngine(windows_core::Error),
+    #[error("InitializeEngine: {0}")]
+    InitializeEngine(windows_core::Error),
+    #[error("ConfigureSource: {0}")]
+    ConfigureSource(windows_core::Error),
+    #[error("ConfigureSink: {0}")]
+    ConfigureSink(windows_core::Error),
+    #[error("StartPreview: {0}")]
+    StartPreview(windows_core::Error),
 }
 
 impl Device {
@@ -124,111 +146,205 @@ impl Device {
             .and_then(|v| get_device_model_id(&*v.to_string_lossy()))
     }
 
-    pub fn create_source_reader(&self) -> windows_core::Result<SourceReader> {
-        unsafe {
-            MFCreateSourceReaderFromMediaSource(&self.media_source, None)
+    // Returns an iterator of IMFMediaTypes available for this device.
+    // Creates and disposes an IMFSourceReader internally,
+    // so this device must be shut down manually after calling this function.
+    pub fn formats(&self) -> windows_core::Result<impl Iterator<Item = IMFMediaType>> {
+        let mut stream_index = 0;
+
+        let reader = unsafe {
+            let mut attributes = None;
+            MFCreateAttributes(&mut attributes, 1)?;
+            let attributes = attributes.expect("Attribute creation succeeded but still None!");
+            // Media source shuts down on drop if this isn't specified
+            attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
+            MFCreateSourceReaderFromMediaSource(&self.media_source, &attributes)
                 .map(|inner| SourceReader { inner })
-        }
+        }?;
+
+        Ok(std::iter::from_fn(move || {
+            let media_type = unsafe {
+                reader
+                    .GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, stream_index)
+            }
+            .ok()?;
+
+            stream_index += 1;
+
+            Some(media_type)
+        }))
     }
 
-    pub fn start_capturing(&self) -> windows_core::Result<()> {
+    pub fn start_capturing(
+        &self,
+        requested_format: &IMFMediaType,
+        callback: Box<dyn FnMut(IMFSample) + 'static>,
+    ) -> Result<CaptureHandle, StartCapturingError> {
         unsafe {
             let capture_engine_factory: IMFCaptureEngineClassFactory = CoCreateInstance(
                 &CLSID_MFCaptureEngineClassFactory,
-                null_ptr(),
+                None,
                 CLSCTX_INPROC_SERVER,
-            )?;
+            )
+            .map_err(StartCapturingError::CreateEngine)?;
 
-            let engine: IMFCaptureEngine =
-                capture_engine_factory.CreateInstance(&CLSID_MFCaptureEngine)?;
+            let engine: IMFCaptureEngine = capture_engine_factory
+                .CreateInstance(&CLSID_MFCaptureEngine)
+                .map_err(StartCapturingError::CreateEngine)?;
 
-            let video_callback = VideoCallback {}.into_object();
+            let (event_tx, event_rx) = channel();
+            let video_callback = VideoCallback {
+                event_tx,
+                sample_callback: Mutex::new(callback),
+            }
+            .into_object();
 
             let mut attributes = None;
-            MFCreateAttributes(&mut attributes, 1)?;
-            let mut attributes = attributes.expect("Attribute creation succeeded but still None!");
-            attributes.SetUINT32(&MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY, TRUE)?;
+            MFCreateAttributes(&mut attributes, 1).map_err(StartCapturingError::ConfigureEngine)?;
+            let attributes = attributes.expect("Attribute creation succeeded but still None!");
+            attributes
+                .SetUINT32(&MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY, 1)
+                .map_err(StartCapturingError::ConfigureEngine)?;
 
-            engine.Initialize(
-                video_callback.clone().into_interface(),
-                &attributes,
-                None,
-                &self.media_source,
-            )?;
+            println!("Initializing engine...");
 
-            let source = engine.GetSource()?;
+            engine
+                .Initialize(
+                    &video_callback.to_interface::<IMFCaptureEngineOnEventCallback>(),
+                    &attributes,
+                    None,
+                    &self.media_source,
+                )
+                .map_err(StartCapturingError::InitializeEngine)?;
 
-            let video_capabilities = {
-                let stream_count = source.GetDeviceStreamCount()?; // TODO retry
+            event_rx
+                .iter()
+                .find(|e| matches!(e, CaptureEngineEvent::Initialized));
 
-                for i in 0..stream_count {
-                    let stream_category = source.GetDeviceStreamCategory(i)?; // TODO retry
+            println!("Engine initialized.");
 
-                    if stream_category != MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_CAPTURE
-                        && stream_category != MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_PREVIEW
-                    {
-                        continue;
-                    }
+            let source = engine
+                .GetSource()
+                .map_err(StartCapturingError::ConfigureSource)?;
 
-                    let mut media_type_index = 0;
-                    let mut media_type = None;
-                    while let Ok(_) = source.GetAvailableDeviceMediaType(
-                        i,
-                        media_type_index,
-                        Some(&mut media_type),
-                    ) {
-                        media_type_index += 1;
-                        let media_type = media_type.expect("Media type should be available!");
+            let stream_count = retry_on_invalid_request(|| source.GetDeviceStreamCount())
+                .map_err(StartCapturingError::ConfigureSource)?;
 
-                        let major_type_guid = media_type.GetGUID(&MF_MT_MAJOR_TYPE);
-                        let Ok(major_type_guid) = major_type_guid else {
-                            continue;
-                        };
-                        let sub_type = media_type.GetGUID(&MF_MT_SUBTYPE);
+            let mut maybe_format = None;
 
-                        media_type_index += 1;
-                    }
+            for stream_index in 0..stream_count {
+                let Ok(category) =
+                    retry_on_invalid_request(|| source.GetDeviceStreamCategory(stream_index))
+                else {
+                    continue;
+                };
+
+                if category != MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_CAPTURE
+                    && category != MF_CAPTURE_ENGINE_STREAM_CATEGORY_VIDEO_PREVIEW
+                {
+                    continue;
                 }
-            };
 
-            let source_video_media_type = {
-                let mut retry_count = 0;
+                let mut media_type_index = 0;
+
                 loop {
                     let mut media_type = None;
-                    match source.GetAvailableDeviceMediaType(
-                        todo!(),
-                        todo!(),
-                        Some(&mut media_type),
-                    ) {
-                        Ok(()) => break Ok(media_type.expect("Media type should be available")),
-                        Err(e) if e == MF_E_INVALIDREQUEST && retry_count < 50 => {
-                            retry_count += 1;
-                            std::thread::sleep(Duration::from_millis(20));
-                            continue;
-                        }
-                        Err(e) => break Err(e),
+                    if let Err(_) = retry_on_invalid_request(|| {
+                        source.GetAvailableDeviceMediaType(
+                            stream_index,
+                            media_type_index,
+                            Some(&mut media_type),
+                        )
+                    }) {
+                        break;
+                    }
+
+                    let media_type = media_type.expect("Failed to get media type");
+
+                    media_type_index += 1;
+
+                    if media_type.IsEqual(requested_format) == Ok(0b1111) {
+                        maybe_format = Some((media_type, stream_index));
                     }
                 }
-            }?;
-            source.SetCurrentDeviceMediaType(todo!(), source_video_media_type);
+            }
 
-            let sink = engine.GetSink(MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW)?;
-            let preview_sink: IMFCapturePreviewSink = sink.into();
-            preview_sink.RemoveAllStreams()?;
+            let Some((format, stream_index)) = maybe_format else {
+                return Err(StartCapturingError::ConfigureSource(
+                    MF_E_INVALIDREQUEST.ok().unwrap_err(),
+                ));
+            };
 
-            let sink_video_media_type = MFCreateMediaType()?;
-            sink_video_media_type.SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)?;
-            // let sink_media_subtype
+            source
+                .SetCurrentDeviceMediaType(stream_index, &format)
+                .map_err(StartCapturingError::ConfigureSource)?;
+            println!("Source media type set");
 
-            let sink_stream_index = None;
-            preview_sink.AddStream(0, todo!(), None, &mut sink_stream_index)?;
-            let sink_stream_index =
-                sink_stream_index.expect("Sink stream index set but still None!");
-            preview_sink.SetSampleCallback(0, video_callback.into());
+            let sink = engine
+                .GetSink(MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW)
+                .map_err(StartCapturingError::ConfigureSink)?;
+            let preview_sink: IMFCapturePreviewSink = sink.cast().expect("CapturePreviewSink");
+            preview_sink
+                .RemoveAllStreams()
+                .map_err(StartCapturingError::ConfigureSink)?;
 
-            engine.StartPreview()?;
+            let mut preview_stream_index = 0;
+            preview_sink
+                .AddStream(
+                    stream_index,
+                    Some(&format),
+                    None,
+                    Some(&mut preview_stream_index),
+                )
+                .map_err(StartCapturingError::ConfigureSink)?;
+            preview_sink
+                .SetSampleCallback(preview_stream_index, Some(&video_callback.into_interface()))
+                .map_err(StartCapturingError::ConfigureSink)?;
+
+            engine
+                .StartPreview()
+                .map_err(StartCapturingError::StartPreview)?;
+
+            Ok(CaptureHandle { engine, event_rx })
         }
-        Ok(())
+    }
+}
+
+fn retry_on_invalid_request<T>(
+    mut cb: impl FnMut() -> windows_core::Result<T>,
+) -> windows_core::Result<T> {
+    let mut retry_count = 0;
+
+    const MAX_RETRIES: u32 = 100;
+    const RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    loop {
+        match cb() {
+            Ok(result) => return Ok(result),
+            Err(e) if e.code() == MF_E_INVALIDREQUEST => {
+                if retry_count >= MAX_RETRIES {
+                    return Err(e);
+                }
+                retry_count += 1;
+                std::thread::sleep(RETRY_DELAY);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+pub struct CaptureHandle {
+    event_rx: Receiver<CaptureEngineEvent>,
+    engine: IMFCaptureEngine,
+}
+
+impl CaptureHandle {
+    pub fn event_rx(&self) -> &Receiver<CaptureEngineEvent> {
+        &self.event_rx
+    }
+
+    pub fn stop_capturing(self) -> windows_core::Result<()> {
+        unsafe { self.engine.StopPreview() }
     }
 }
 
@@ -448,26 +564,84 @@ impl<'a> DerefMut for IMFMediaBufferLock<'a> {
 }
 
 #[implement(IMFCaptureEngineOnSampleCallback, IMFCaptureEngineOnEventCallback)]
-struct VideoCallback {}
+struct VideoCallback {
+    event_tx: Sender<CaptureEngineEvent>,
+    sample_callback: Mutex<Box<dyn FnMut(IMFSample)>>,
+}
 
 impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
     fn OnSample(&self, psample: windows_core::Ref<'_, IMFSample>) -> windows_core::Result<()> {
-        let Some(sample) = psample.as_ref() else {
-            return S_OK.ok();
-        };
-
-        unsafe {
-            for i in 0..sample.GetBufferCount() {
-                let Ok(buffer) = sample.GetBufferByIndex(i) else {
-                    continue;
-                };
-
-                dbg!(buffer.clone());
+        if let Some(sample) = psample.as_ref() {
+            if let Ok(mut lock) = self.sample_callback.lock() {
+                (lock)(sample.clone());
             }
         }
+
+        Ok(())
     }
 }
 
 impl IMFCaptureEngineOnEventCallback_Impl for VideoCallback_Impl {
-    fn OnEvent(&self, pevent: windows_core::Ref<'_, IMFMediaEvent>) -> windows_core::Result<()> {}
+    fn OnEvent(&self, pevent: windows_core::Ref<'_, IMFMediaEvent>) -> windows_core::Result<()> {
+        unsafe {
+            let Some(event) = pevent.as_ref() else {
+                return S_OK.ok();
+            };
+
+            let guid = event.GetExtendedType().unwrap();
+
+            let engine_event = CaptureEngineEvent::from(&guid);
+
+            let _ = self.event_tx.send(engine_event);
+        }
+
+        Ok(())
+    }
 }
+
+#[derive(PartialEq, Eq, Debug)]
+pub enum CaptureEngineEvent {
+    Initialized,
+    Error,
+    PreviewStarted,
+    Unknown,
+    AllEffectsRemoved,
+    CameraStreamBlocked,
+    CameraStreamUnblocked,
+    EffectAdded,
+    EffectRemoved,
+    PhotoTaken,
+    PreviewStopped,
+    RecordStarted,
+    RecordStopped,
+    SinkPrepared,
+    SourceCurrentDeviceMediaTypeSet,
+    OutputMediaTypeSet,
+}
+
+impl From<&GUID> for CaptureEngineEvent {
+    fn from(guid: &GUID) -> Self {
+        match *guid {
+            MF_CAPTURE_ENGINE_ALL_EFFECTS_REMOVED => CaptureEngineEvent::AllEffectsRemoved,
+            MF_CAPTURE_ENGINE_CAMERA_STREAM_BLOCKED => CaptureEngineEvent::CameraStreamBlocked,
+            MF_CAPTURE_ENGINE_CAMERA_STREAM_UNBLOCKED => CaptureEngineEvent::CameraStreamUnblocked,
+            MF_CAPTURE_ENGINE_EFFECT_ADDED => CaptureEngineEvent::EffectAdded,
+            MF_CAPTURE_ENGINE_EFFECT_REMOVED => CaptureEngineEvent::EffectRemoved,
+            MF_CAPTURE_ENGINE_ERROR => CaptureEngineEvent::Error,
+            MF_CAPTURE_ENGINE_INITIALIZED => CaptureEngineEvent::Initialized,
+            MF_CAPTURE_ENGINE_PHOTO_TAKEN => CaptureEngineEvent::PhotoTaken,
+            MF_CAPTURE_ENGINE_PREVIEW_STARTED => CaptureEngineEvent::PreviewStarted,
+            MF_CAPTURE_ENGINE_PREVIEW_STOPPED => CaptureEngineEvent::PreviewStopped,
+            MF_CAPTURE_ENGINE_RECORD_STARTED => CaptureEngineEvent::RecordStarted,
+            MF_CAPTURE_ENGINE_RECORD_STOPPED => CaptureEngineEvent::RecordStopped,
+            MF_CAPTURE_ENGINE_OUTPUT_MEDIA_TYPE_SET => CaptureEngineEvent::OutputMediaTypeSet,
+            MF_CAPTURE_SINK_PREPARED => CaptureEngineEvent::SinkPrepared,
+            MF_CAPTURE_SOURCE_CURRENT_DEVICE_MEDIA_TYPE_SET => {
+                CaptureEngineEvent::SourceCurrentDeviceMediaTypeSet
+            }
+            _ => CaptureEngineEvent::Unknown,
+        }
+    }
+}
+
+const MF_CAPTURE_ENGINE_FIRST_SOURCE_VIDEO_STREAM: u32 = 0xFFFFFFFC;

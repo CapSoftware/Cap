@@ -25,10 +25,7 @@ fn main() {
 
     let _handle = selected_camera
         .start_capturing(selected_format.0, |frame| {
-            let ff_frame = frame.to_ffmpeg().unwrap();
-
-            dbg!(ff_frame.format());
-            dbg!(ff_frame.width(), ff_frame.height());
+            dbg!(frame);
         })
         .unwrap();
 

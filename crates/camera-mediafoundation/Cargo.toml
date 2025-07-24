@@ -12,6 +12,7 @@ windows = { version = "0.60", features = [
 ] }
 tracing.workspace = true
 inquire = "0.7.5"
+thiserror.workspace = true
 
 [lints]
 workspace = true

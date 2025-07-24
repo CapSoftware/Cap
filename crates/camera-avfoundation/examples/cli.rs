@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use cap_camera_avfoundation::{
     CallbackOutputDelegate, CallbackOutputDelegateInner, YCbCrMatrix, list_video_devices,
 };

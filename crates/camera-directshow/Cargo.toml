@@ -15,6 +15,7 @@ windows = { version = "0.60", features = [
 	"Win32_Media_KernelStreaming",
 ] }
 tracing.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

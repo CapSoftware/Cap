@@ -1,3 +1,4 @@
+#![cfg(target_os = "macos")]
 use std::fmt::Display;
 
 use cidre::{

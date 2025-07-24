@@ -948,10 +948,10 @@ dependencies = [
  "cap-camera-avfoundation",
  "cap-camera-windows",
  "cidre",
- "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
  "windows 0.60.0",
+ "windows-core 0.60.1",
 ]
 
 [[package]]
@@ -968,8 +968,24 @@ name = "cap-camera-directshow"
 version = "0.1.0"
 dependencies = [
  "inquire",
+ "thiserror 1.0.69",
  "tracing",
  "tracing-subscriber",
+ "windows 0.60.0",
+ "windows-core 0.60.1",
+]
+
+[[package]]
+name = "cap-camera-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-camera",
+ "cap-camera-avfoundation",
+ "cap-camera-windows",
+ "cidre",
+ "ffmpeg-next",
+ "inquire",
+ "thiserror 1.0.69",
  "windows 0.60.0",
  "windows-core 0.60.1",
 ]
@@ -979,6 +995,7 @@ name = "cap-camera-mediafoundation"
 version = "0.1.0"
 dependencies = [
  "inquire",
+ "thiserror 1.0.69",
  "tracing",
  "windows 0.60.0",
  "windows-core 0.60.1",

@@ -10,7 +10,10 @@ mod macos;
 // #[cfg(target_os = "macos")]
 // use macos::*;
 
+#[cfg(windows)]
 mod windows;
+use cap_camera_windows::GetDevicesError;
+#[cfg(windows)]
 use windows::*;
 
 #[derive(Debug, Clone)]
@@ -37,7 +40,7 @@ impl CameraInfo {
     }
 }
 
-pub fn list_cameras() -> Vec<CameraInfo> {
+pub fn list_cameras() -> impl Iterator<Item = CameraInfo> {
     list_cameras_impl()
 }
 
@@ -93,6 +96,16 @@ impl Debug for Format {
                 {
                     &"AVFoundation"
                 }
+                #[cfg(windows)]
+                {
+                    use crate::windows::NativeFormat;
+                    use cap_camera_windows::VideoFormatInner;
+
+                    match &self.native {
+                        VideoFormatInner::DirectShow(_) => &"DirectShow",
+                        VideoFormatInner::MediaFoundation(_) => &"MediaFoundation",
+                    }
+                }
             })
             .finish()
     }
@@ -120,23 +133,26 @@ impl Display for ModelID {
 // Capture
 
 #[derive(thiserror::Error, Debug)]
-pub enum StartCaptureError {
+pub enum StartCapturingError {
+    #[error("GetDevicesFailed/{0}")]
+    GetDevicesFailed(#[from] cap_camera_windows::GetDevicesError),
     #[error("Device not found")]
     DeviceNotFound,
+    #[cfg(windows)]
+    #[error("{0}")]
+    Inner(#[from] cap_camera_windows::StartCapturingError),
     #[cfg(target_os = "macos")]
     #[error("{0}")]
     Native(AVFoundationError),
+    #[cfg(windows)]
+    #[error("{0}")]
+    Native(windows_core::Error),
 }
 
+#[derive(Debug)]
 pub struct CapturedFrame(NativeCapturedFrame);
 
 impl CapturedFrame {
-    /// Creates an ffmpeg video frame from the native frame.
-    /// Only size, format, and data are set.
-    pub fn to_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ToFfmpegError> {
-        self.0.to_ffmpeg()
-    }
-
     pub fn native(&self) -> &NativeCapturedFrame {
         &self.0
     }
@@ -147,8 +163,14 @@ impl CameraInfo {
         &self,
         format: Format,
         callback: impl FnMut(CapturedFrame) + 'static,
-    ) -> Result<RecordingHandle, StartCaptureError> {
+    ) -> Result<RecordingHandle, StartCapturingError> {
         #[cfg(target_os = "macos")]
+        {
+            Ok(RecordingHandle {
+                native: start_capturing_impl(self, format, Box::new(callback))?,
+            })
+        }
+        #[cfg(windows)]
         {
             Ok(RecordingHandle {
                 native: start_capturing_impl(self, format, Box::new(callback))?,
@@ -163,6 +185,6 @@ pub struct RecordingHandle {
 
 impl RecordingHandle {
     pub fn stop_capturing(self) {
-        self.native.stop_capturing();
+        let _ = self.native.stop_capturing();
     }
 }
