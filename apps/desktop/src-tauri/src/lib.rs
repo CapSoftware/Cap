@@ -69,6 +69,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 use tracing::error;
@@ -86,6 +87,8 @@ use windows::{CapWindowId, ShowCapWindow};
 pub struct App {
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    #[serde(skip)]
+    camera_feed_initialization: Option<mpsc::Sender<()>>,
     #[serde(skip)]
     mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
@@ -197,6 +200,20 @@ async fn set_camera_input(
             Ok(true)
         }
         (Some(label), None) => {
+            let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
+            if let Some(cancel) = app.camera_feed_initialization.as_ref() {
+                // Ask currently running setup to abort
+                cancel.send(()).await.ok();
+
+                // We can assume a window was already initialized.
+                // Stop it so we can recreate it with the correct `camera_tx`
+                if let Some(win) = CapWindowId::Camera.get(&app_handle) {
+                    win.close().unwrap(); // TODO: Error handling
+                };
+            } else {
+                app.camera_feed_initialization = Some(shutdown_tx);
+            }
+
             let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
             if let Some(win) = CapWindowId::Main.get(&app_handle) {
                 win.set_focus().ok();
@@ -218,6 +235,11 @@ async fn set_camera_input(
                         match result {
                             Ok(Ok(feed)) => {
                                 let mut app = state.write().await;
+
+                                if let Some(cancel) = app.camera_feed_initialization.take() {
+                                    cancel.send(()).await.ok();
+                                }
+
                                 if app.camera_feed.is_none() {
                                     feed.attach(camera_tx);
                                     app.camera_feed = Some(Arc::new(Mutex::new(feed)));
@@ -230,17 +252,16 @@ async fn set_camera_input(
                             Err(_) => return Ok(false),
                         }
                     }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                        let app = state.read().await;
-
-                        if app.camera_feed.is_some() {
-                            return Ok(false);
-                        }
+                    _ = shutdown_rx.recv() => {
+                        return Ok(false);
                     }
                 }
             }
         }
         (None, _) => {
+            if let Some(cancel) = app.camera_feed_initialization.take() {
+                cancel.send(()).await.ok();
+            }
             app.camera_feed.take();
             if let Some(w) = CapWindowId::Camera.get(&app_handle) {
                 w.close().ok();
@@ -1964,6 +1985,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 app.manage(Arc::new(RwLock::new(App {
                     handle: app.clone(),
                     camera_feed: None,
+                    camera_feed_initialization: None,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     current_recording: None,
