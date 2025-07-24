@@ -1856,7 +1856,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .find(|arg| arg.ends_with(".cap"))
                 .map(PathBuf::from)
             else {
-                let _ = ShowCapWindow::Main.show(app);
+                tokio::spawn(ShowCapWindow::Main.show(app));
                 return;
             };
 
