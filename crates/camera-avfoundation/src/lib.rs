@@ -3,6 +3,7 @@ use std::fmt::Display;
 
 use cidre::{
     av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
+    cv::{PixelBuf, pixel_buffer::LockFlags},
     *,
 };
 
@@ -93,5 +94,39 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
         _connection: &av::CaptureConnection,
     ) {
         (self.inner_mut().callback)(_output, sample_buf, _connection);
+    }
+}
+
+pub trait ImageBufExt {
+    fn base_addr_lock<'a>(
+        &'a mut self,
+        flags: LockFlags,
+    ) -> cidre::os::Result<BaseAddrLockGuard<'a>>;
+}
+
+impl ImageBufExt for PixelBuf {
+    fn base_addr_lock<'a>(
+        &'a mut self,
+        flags: LockFlags,
+    ) -> cidre::os::Result<BaseAddrLockGuard<'a>> {
+        unsafe { self.lock_base_addr(flags) }.result()?;
+
+        Ok(BaseAddrLockGuard(self, flags))
+    }
+}
+
+pub struct BaseAddrLockGuard<'a>(&'a mut PixelBuf, LockFlags);
+
+impl<'a> BaseAddrLockGuard<'a> {
+    pub fn plane_data(&self, index: usize) -> &[u8] {
+        let base_addr = self.0.plane_base_address(index);
+        let plane_size = self.0.plane_bytes_per_row(index);
+        unsafe { std::slice::from_raw_parts(base_addr, plane_size * self.0.plane_height(index)) }
+    }
+}
+
+impl<'a> Drop for BaseAddrLockGuard<'a> {
+    fn drop(&mut self) {
+        let _ = unsafe { self.0.unlock_lock_base_addr(self.1) };
     }
 }

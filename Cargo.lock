@@ -1007,7 +1007,6 @@ version = "0.1.0"
 dependencies = [
  "cap-camera-directshow",
  "cap-camera-mediafoundation",
- "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
  "windows 0.60.0",

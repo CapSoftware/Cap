@@ -1,11 +1,9 @@
 use super::*;
 
-use cidre::{
-    cv::{PixelBuf, pixel_buffer::LockFlags},
-    *,
-};
+use cap_camera_avfoundation::*;
+use cidre::*;
 
-pub(super) fn list_cameras_impl() -> Vec<CameraInfo> {
+pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
     let devices = cap_camera_avfoundation::list_video_devices();
     devices
         .iter()
@@ -16,6 +14,7 @@ pub(super) fn list_cameras_impl() -> Vec<CameraInfo> {
             })
         })
         .collect::<Vec<_>>()
+        .into_iter()
 }
 
 impl ModelID {
@@ -32,17 +31,6 @@ impl ModelID {
             let desc = format.format_desc();
             let width = desc.dimensions().width as u32;
             let height = desc.dimensions().height as u32;
-            // let pixel_format = match cidre::cv::PixelFormat(desc.media_sub_type()) {
-            //     cidre::cv::PixelFormat::_420V => ffmpeg::format::Pixel::NV12,
-            //     cidre::cv::PixelFormat::_2VUY => ffmpeg::format::Pixel::UYVY422,
-            //     _ => match cidre::cm::PixelFormat(desc.media_sub_type()) {
-            //         cidre::cm::PixelFormat::_422_YP_CB_CR_8_YUVS => {
-            //             ffmpeg::format::Pixel::YUYV422
-            //         }
-            //         // TODO: support MJPEG
-            //         _ => continue,
-            //     },
-            // };
 
             for fr_range in format.video_supported_frame_rate_ranges().iter() {
                 let min = fr_range.min_frame_duration();
@@ -52,7 +40,6 @@ impl ModelID {
                     info: FormatInfo {
                         width,
                         height,
-                        // pixel_format,
                         frame_rate: min.scale as f32 / min.value as f32,
                     },
                 })
@@ -83,12 +70,12 @@ pub(super) fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
     mut callback: impl FnMut(CapturedFrame) + 'static,
-) -> Result<AVFoundationRecordingHandle, StartCaptureError> {
+) -> Result<AVFoundationRecordingHandle, StartCapturingError> {
     let devices = list_video_devices();
     let mut device = devices
         .iter()
         .find(|d| ModelID::from_avfoundation(d).as_ref() == Some(camera.model_id()))
-        .ok_or(StartCaptureError::DeviceNotFound)?
+        .ok_or(StartCapturingError::DeviceNotFound)?
         .retained();
 
     let input =
@@ -148,40 +135,6 @@ impl AVFoundationRecordingHandle {
     }
 }
 
-pub trait ImageBufExt {
-    fn base_addr_lock<'a>(
-        &'a mut self,
-        flags: LockFlags,
-    ) -> cidre::os::Result<BaseAddrLockGuard<'a>>;
-}
-
-impl ImageBufExt for PixelBuf {
-    fn base_addr_lock<'a>(
-        &'a mut self,
-        flags: LockFlags,
-    ) -> cidre::os::Result<BaseAddrLockGuard<'a>> {
-        unsafe { self.lock_base_addr(flags) }.result()?;
-
-        Ok(BaseAddrLockGuard(self, flags))
-    }
-}
-
-pub struct BaseAddrLockGuard<'a>(&'a mut PixelBuf, LockFlags);
-
-impl<'a> BaseAddrLockGuard<'a> {
-    pub fn plane_data(&self, index: usize) -> &[u8] {
-        let base_addr = self.0.plane_base_address(index);
-        let plane_size = self.0.plane_bytes_per_row(index);
-        unsafe { std::slice::from_raw_parts(base_addr, plane_size * self.0.plane_height(index)) }
-    }
-}
-
-impl<'a> Drop for BaseAddrLockGuard<'a> {
-    fn drop(&mut self) {
-        let _ = unsafe { self.0.unlock_lock_base_addr(self.1) };
-    }
-}
-
 #[derive(thiserror::Error)]
 pub enum AVFoundationError {
     #[error("{0}")]
@@ -201,12 +154,6 @@ impl Deref for AVFoundationError {
     }
 }
 
-impl From<AVFoundationError> for StartCaptureError {
-    fn from(err: AVFoundationError) -> Self {
-        StartCaptureError::Native(err)
-    }
-}
-
 impl Debug for AVFoundationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -216,15 +163,15 @@ impl Debug for AVFoundationError {
     }
 }
 
-pub struct NativeCapturedFrame(
-    cidre::arc::R<cidre::cv::ImageBuf>,
-    cidre::arc::R<cidre::cm::SampleBuf>,
-);
+#[derive(Debug, Clone)]
+pub struct NativeCapturedFrame(arc::R<cv::ImageBuf>, arc::R<cm::SampleBuf>);
 
-impl Deref for NativeCapturedFrame {
-    type Target = cidre::cv::ImageBuf;
+impl NativeCapturedFrame {
+    pub fn image_buf(&self) -> &arc::R<cv::ImageBuf> {
+        &self.0
+    }
 
-    fn deref(&self) -> &Self::Target {
-        &*self.0
+    pub fn sample_buf(&self) -> &arc::R<cm::SampleBuf> {
+        &self.1
     }
 }

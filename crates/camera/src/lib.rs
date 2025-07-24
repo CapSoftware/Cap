@@ -7,12 +7,11 @@ use std::{
 
 #[cfg(target_os = "macos")]
 mod macos;
-// #[cfg(target_os = "macos")]
-// use macos::*;
+#[cfg(target_os = "macos")]
+use macos::*;
 
 #[cfg(windows)]
 mod windows;
-use cap_camera_windows::GetDevicesError;
 #[cfg(windows)]
 use windows::*;
 
@@ -111,7 +110,9 @@ impl Debug for Format {
     }
 }
 
-// Modelled after Chromium
+/// A unique identifier for a camera device.
+/// This is modelled after Chromium's  VideoCaptureDeviceDescriptor::model_id,
+/// being a combination of the vendor ID and product ID.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelID {
     vid: String,
@@ -134,6 +135,7 @@ impl Display for ModelID {
 
 #[derive(thiserror::Error, Debug)]
 pub enum StartCapturingError {
+    #[cfg(windows)]
     #[error("GetDevicesFailed/{0}")]
     GetDevicesFailed(#[from] cap_camera_windows::GetDevicesError),
     #[error("Device not found")]
@@ -143,7 +145,7 @@ pub enum StartCapturingError {
     Inner(#[from] cap_camera_windows::StartCapturingError),
     #[cfg(target_os = "macos")]
     #[error("{0}")]
-    Native(AVFoundationError),
+    Native(#[from] AVFoundationError),
     #[cfg(windows)]
     #[error("{0}")]
     Native(windows_core::Error),
