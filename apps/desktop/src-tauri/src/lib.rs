@@ -227,34 +227,27 @@ async fn set_camera_input(
 
             drop(app);
 
-            let init_rx = CameraFeed::init_async(label);
+            let fut = CameraFeed::init(label);
 
-            loop {
-                tokio::select! {
-                    result = init_rx.recv_async() => {
-                        match result {
-                            Ok(Ok(feed)) => {
-                                let mut app = state.write().await;
+            tokio::select! {
+                result = fut => {
+                    let feed = result.map_err(|err| err.to_string())?;
+                    let mut app = state.write().await;
 
-                                if let Some(cancel) = app.camera_feed_initialization.take() {
-                                    cancel.send(()).await.ok();
-                                }
-
-                                if app.camera_feed.is_none() {
-                                    feed.attach(camera_tx);
-                                    app.camera_feed = Some(Arc::new(Mutex::new(feed)));
-                                    return Ok(true);
-                                } else {
-                                    return Ok(false);
-                                }
-                            }
-                            Ok(Err(e)) => return Err(e.to_string()),
-                            Err(_) => return Ok(false),
-                        }
+                    if let Some(cancel) = app.camera_feed_initialization.take() {
+                        cancel.send(()).await.ok();
                     }
-                    _ = shutdown_rx.recv() => {
+
+                    if app.camera_feed.is_none() {
+                        feed.attach(camera_tx);
+                        app.camera_feed = Some(Arc::new(Mutex::new(feed)));
+                        return Ok(true);
+                    } else {
                         return Ok(false);
                     }
+                }
+                _ = shutdown_rx.recv() => {
+                    return Ok(false);
                 }
             }
         }
