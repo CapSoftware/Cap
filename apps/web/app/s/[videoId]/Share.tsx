@@ -230,7 +230,9 @@ export const Share = ({
       </div>
 
       <div className="hidden mt-4 lg:block">
-        <Toolbar data={data} user={user} />
+        <div>
+          <Toolbar data={data} user={user} />
+        </div>
       </div>
 
       <div className="hidden mt-4 lg:block">
@@ -306,6 +308,6 @@ export const Share = ({
             </div>
           )}
       </div>
-    </div>
+    </div >
   );
 };
