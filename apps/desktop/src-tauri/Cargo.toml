@@ -112,6 +112,7 @@ cocoa = "0.26.0"
 objc = "0.2.7"
 swift-rs = "1.0.6"
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2" }
+cidre = { workspace = true }
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [

@@ -3,6 +3,7 @@
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
+    str::FromStr,
 };
 
 #[cfg(target_os = "macos")]
@@ -12,7 +13,6 @@ use macos::*;
 
 #[cfg(windows)]
 mod windows;
-use serde::Serialize;
 #[cfg(windows)]
 use windows::*;
 
@@ -155,6 +155,18 @@ impl<'de> serde::Deserialize<'de> for ModelID {
 impl ModelID {
     pub fn formats(&self) -> Option<Vec<Format>> {
         self.formats_impl()
+    }
+}
+
+impl TryFrom<String> for ModelID {
+    type Error = ();
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let (vid, pid) = value.split_once(":").ok_or(())?;
+        Ok(ModelID {
+            vid: vid.to_string(),
+            pid: pid.to_string(),
+        })
     }
 }
 

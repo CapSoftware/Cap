@@ -22,7 +22,6 @@ ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume.workspace = true
 indexmap = "2.5.0"
-# nokhwa = { workspace = true, features = ["input-native", "serialize"] }
 num-traits = "0.2.19"
 ringbuf = "0.4.7"
 scap.workspace = true
@@ -49,7 +48,6 @@ core-foundation = "0.10.0"
 objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
-nokhwa-bindings-macos.workspace = true
 screencapturekit = "0.3.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
