@@ -179,7 +179,7 @@ export function Header() {
         </Show>
         <Button
           variant="lightdark"
-          class={cx("flex gap-2 justify-center")}
+          class={cx("flex gap-1.5 justify-center h-[40px]")}
           onClick={() => {
             trackEvent("export_button_clicked");
             if (exportState.type === "done") setExportState({ type: "idle" });
@@ -187,7 +187,7 @@ export function Header() {
             setDialog({ type: "export", open: true });
           }}
         >
-          <UploadIcon class="text-gray-1 size-5" />
+          <UploadIcon class="text-gray-1 size-4" />
           Export
         </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}
