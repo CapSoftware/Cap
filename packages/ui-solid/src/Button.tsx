@@ -23,7 +23,7 @@ const styles = cva(
       },
       size: {
         xs: "text-[0.75rem] px-[0.5rem] h-[1.25rem]",
-        sm: "text-[0.800rem] px-[0.75rem] h-[1.75rem]",
+        sm: "text-xs px-[0.75rem] h-[1.75rem]",
         md: "text-[13px] px-3 py-2",
         lg: "text-[0.875rem] px-[1rem] h-[2.25rem]",
       },
