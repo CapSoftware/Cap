@@ -189,7 +189,7 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn list_cameras() -> Vec<String> {
+pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     CameraFeed::list_cameras()
 }
 

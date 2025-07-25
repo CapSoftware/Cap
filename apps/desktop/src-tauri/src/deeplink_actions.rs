@@ -16,7 +16,7 @@ pub enum CaptureMode {
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
-        camera_label: Option<String>,
+        camera_label: Option<cap_camera::ModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,

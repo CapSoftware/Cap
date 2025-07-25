@@ -22,11 +22,11 @@ ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume.workspace = true
 indexmap = "2.5.0"
-nokhwa = { workspace = true, features = ["input-native", "serialize"] }
+# nokhwa = { workspace = true, features = ["input-native", "serialize"] }
 num-traits = "0.2.19"
 ringbuf = "0.4.7"
 scap.workspace = true
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
@@ -37,6 +37,9 @@ tokio.workspace = true
 cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
+cap-camera = { path = "../camera" }
+cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

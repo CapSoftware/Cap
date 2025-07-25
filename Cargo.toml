@@ -24,6 +24,7 @@ specta = { version = "=2.0.0-rc.20", features = [
 	"serde_json",
 	"uuid",
 ] }
+serde = { version = "1", features = ["derive"] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "4d340576772c" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [

@@ -12,10 +12,13 @@ use macos::*;
 
 #[cfg(windows)]
 mod windows;
+use serde::Serialize;
 #[cfg(windows)]
 use windows::*;
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CameraInfo {
     model_id: ModelID,
     display_name: String,
@@ -46,7 +49,7 @@ pub fn list_cameras() -> impl Iterator<Item = CameraInfo> {
 #[cfg(windows)]
 pub type NativeFormat = cap_camera_windows::VideoFormatInner;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FormatInfo {
     width: u32,
     height: u32,
@@ -67,6 +70,7 @@ impl FormatInfo {
     }
 }
 
+#[derive(Clone)]
 pub struct Format {
     native: NativeFormat,
     info: FormatInfo,
@@ -117,6 +121,35 @@ impl Debug for Format {
 pub struct ModelID {
     vid: String,
     pid: String,
+}
+
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+#[cfg_attr(feature = "specta", specta(remote = ModelID))]
+struct ModelIDType(String);
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for ModelID {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&format_args!("{}:{}", &self.vid, &self.pid))
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for ModelID {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        let (vid, pid) = s.split_once(":").unwrap();
+        Ok(ModelID {
+            vid: vid.to_string(),
+            pid: pid.to_string(),
+        })
+    }
 }
 
 impl ModelID {

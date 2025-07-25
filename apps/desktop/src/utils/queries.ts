@@ -13,7 +13,13 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { authStore, generalSettingsStore } from "~/store";
 import { createQueryInvalidate } from "./events";
-import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
+import {
+  CameraInfo,
+  commands,
+  ModelIDType,
+  RecordingMode,
+  ScreenCaptureTarget,
+} from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
@@ -54,7 +60,7 @@ const listVideoDevices = queryOptions({
 export function createVideoDevicesQuery() {
   const query = createQuery(() => listVideoDevices);
 
-  const [videoDevicesStore, setVideoDevices] = createStore<string[]>([]);
+  const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
 
   createMemo(() => {
     setVideoDevices(reconcile(query.data ?? []));
@@ -84,9 +90,11 @@ export function createOptionsQuery() {
     createStore<{
       captureTarget: ScreenCaptureTarget;
       micName: string | null;
-      cameraLabel: string | null;
       mode: RecordingMode;
       captureSystemAudio?: boolean;
+      cameraModelID?: ModelIDType | null;
+      /** @deprecated */
+      cameraLabel: string | null;
     }>({
       captureTarget: { variant: "screen", id: 0 },
       micName: null,
@@ -140,13 +148,13 @@ export function createCameraMutation() {
   const { setOptions } = useRecordingOptions();
 
   const setCameraInput = createMutation(() => ({
-    mutationFn: async (label: string | null) => {
-      setOptions("cameraLabel", label);
-      if (label) {
+    mutationFn: async (model: ModelIDType | null) => {
+      setOptions("cameraModelID", model);
+      if (model) {
         await commands.showWindow("Camera");
         getCurrentWindow().setFocus();
       }
-      await commands.setCameraInput(label);
+      await commands.setCameraInput(model);
     },
   }));
 

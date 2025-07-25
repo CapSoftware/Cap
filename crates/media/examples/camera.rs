@@ -6,7 +6,7 @@ use image::{codecs::jpeg, ColorType};
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let cameras = CameraFeed::new_list_cameras();
+    let cameras = CameraFeed::list_cameras();
     let device = inquire::Select::new("Select a device", cameras)
         .prompt()
         .unwrap();

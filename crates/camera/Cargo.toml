@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 thiserror.workspace = true
+serde = { workspace = true, optional = true }
+specta = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
