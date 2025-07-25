@@ -2,7 +2,7 @@ import { cva, type VariantProps } from "cva";
 import type { ComponentProps } from "solid-js";
 
 const styles = cva(
-  "outline-offset-2 outline-2 focus-visible:outline rounded-full transition-all will-change-transform duration-200",
+  "outline-offset-2 outline-2 flex justify-center items-center focus-visible:outline rounded-full transition-all will-change-transform duration-200",
   {
     defaultVariants: {
       variant: "primary",
@@ -10,6 +10,7 @@ const styles = cva(
     },
     variants: {
       variant: {
+        blue: "bg-blue-9 text-white hover:bg-blue-10 disabled:bg-blue-400 disabled:text-gray-10 outline-blue-300 disabled:outline-blue-400",
         primary:
           "bg-gray-12 text-gray-1 hover:bg-gray-11  disabled:text-gray-10 outline-blue-300 disabled:bg-gray-4 disabled:dark:text-gray-9",
         secondary:
