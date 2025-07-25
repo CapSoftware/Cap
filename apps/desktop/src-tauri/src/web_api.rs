@@ -3,8 +3,8 @@ use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
 
 use crate::{
-    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
     ArcLock,
+    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
 };
 
 async fn do_authed_request(

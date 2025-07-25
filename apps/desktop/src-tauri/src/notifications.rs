@@ -1,4 +1,4 @@
-use crate::{general_settings::GeneralSettingsStore, AppSounds};
+use crate::{AppSounds, general_settings::GeneralSettingsStore};
 use tauri_plugin_notification::NotificationExt;
 
 pub enum NotificationType {
