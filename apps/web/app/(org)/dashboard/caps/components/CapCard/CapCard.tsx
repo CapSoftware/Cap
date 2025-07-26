@@ -36,6 +36,7 @@ export interface CapCardProps extends PropsWithChildren {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
+    duration?: number | null;
     sharedOrganizations?: {
       id: string;
       name: string;

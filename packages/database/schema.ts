@@ -238,6 +238,7 @@ export const videos = mysqlTable(
     isScreenshot: boolean("isScreenshot").notNull().default(false),
     skipProcessing: boolean("skipProcessing").notNull().default(false),
     transcriptionStatus: varchar("transcriptionStatus", { length: 255 }),
+    duration: int("duration"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     source: json("source")

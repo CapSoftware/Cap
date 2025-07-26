@@ -11,6 +11,7 @@ interface SharedCapCardProps {
     createdAt: Date;
     totalComments: number;
     totalReactions: number;
+    duration?: number | null;
     ownerName: string | null;
     metadata?: VideoMetadata;
   };

@@ -28,6 +28,7 @@ export type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
+  duration?: number | null;
   sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
   sharedSpaces: {
     id: string;

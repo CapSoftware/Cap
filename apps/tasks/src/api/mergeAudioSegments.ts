@@ -1,10 +1,10 @@
-import express from "express";
-import ffmpeg from "fluent-ffmpeg";
-import fs from "fs";
+import express from 'express';
+import ffmpeg from 'fluent-ffmpeg';
+import fs from 'fs';
 
 const router = express.Router();
 
-router.post<{}>("/", async (req, res) => {
+router.post<{}>('/', async (req, res) => {
   const body = req.body;
 
   if (
@@ -13,11 +13,11 @@ router.post<{}>("/", async (req, res) => {
     !body.uploadUrl ||
     !body.videoId
   ) {
-    res.status(400).json({ response: "FAILED" });
+    res.status(400).json({ response: 'FAILED' });
     return;
   }
 
-  const outputDir = "./output";
+  const outputDir = './output';
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir);
   }
@@ -30,34 +30,34 @@ router.post<{}>("/", async (req, res) => {
   }
 
   command
-    .audioCodec("libmp3lame")
-    .on("error", (err: any) => {
-      console.log("An error occurred: " + err.message);
+    .audioCodec('libmp3lame')
+    .on('error', (err: any) => {
+      console.log('An error occurred: ' + err.message);
     })
-    .on("end", async () => {
-      console.log("Merging finished!");
+    .on('end', async () => {
+      console.log('Merging finished!');
 
       const buffer = fs.readFileSync(filePath);
 
       const uploadResponse = await fetch(body.uploadUrl, {
-        method: "PUT",
+        method: 'PUT',
         body: buffer,
         headers: {
-          "Content-Type": "audio/mpeg",
+          'Content-Type': 'audio/mpeg',
         },
       });
 
       fs.unlinkSync(filePath);
 
       if (!uploadResponse.ok) {
-        console.error("Upload failed: ", await uploadResponse.text());
-        res.status(500).json({ response: "FAILED" });
+        console.error('Upload failed: ', await uploadResponse.text());
+        res.status(500).json({ response: 'FAILED' });
         return;
       }
 
-      res.status(200).json({ response: "COMPLETE" });
+      res.status(200).json({ response: 'COMPLETE' });
     })
-    .mergeToFile(filePath, "./");
+    .mergeToFile(filePath, './');
 });
 
 export default router;
