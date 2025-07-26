@@ -18,7 +18,7 @@ export interface VideoMetadata {
   /**
    * Duration of the video in seconds
    */
-  duration?: number;
+  duration?: string | number;
   /**
    * Resolution of the recording (e.g. 1920x1080)
    */
@@ -55,4 +55,4 @@ export interface SpaceMetadata {
  */
 export interface UserMetadata {
   [key: string]: any;
-} 
+}

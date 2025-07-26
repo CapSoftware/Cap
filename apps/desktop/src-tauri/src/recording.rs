@@ -10,7 +10,8 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        create_or_get_video, prepare_screenshot_upload, upload_video, InstantMultipartUpload,
+        build_video_meta, create_or_get_video, prepare_screenshot_upload, upload_video,
+        InstantMultipartUpload,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
@@ -272,6 +273,7 @@ pub async fn start_recording(
                             "{target_name} {}",
                             chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
                         )),
+                        None,
                     )
                     .await
                     {
@@ -723,6 +725,7 @@ async fn handle_recording_finish(
                                 }
                             }
                         } else {
+                            let meta = build_video_meta(&output_path).ok();
                             // The upload_video function handles screenshot upload, so we can pass it along
                             match upload_video(
                                 &app,
@@ -730,6 +733,7 @@ async fn handle_recording_finish(
                                 output_path,
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
+                                meta.map(|v| v.duration),
                             )
                             .await
                             {

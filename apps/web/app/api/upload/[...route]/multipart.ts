@@ -1,13 +1,14 @@
 import { Hono } from "hono";
 import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
-import { s3Buckets } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { serverEnv } from "@cap/env";
 import { withAuth } from "@/app/api/utils";
 import { parseVideoIdOrFileKey } from "../utils";
+import { VideoMetadata } from "@cap/database/types";
 
 export const app = new Hono().use(withAuth);
 
@@ -161,14 +162,18 @@ app.post(
             size: z.number(),
           })
         ),
+        duration: z.string().optional(),
+        bandwidth: z.string().optional(),
+        resolution: z.string().optional(),
+        videoCodec: z.string().optional(),
+        audioCodec: z.string().optional(),
+        framerate: z.string().optional(),
       })
       .and(
         z.union([
-          z.object({
-            // deprecated
-            fileKey: z.string(),
-          }),
           z.object({ videoId: z.string() }),
+          // deprecated
+          z.object({ fileKey: z.string() }),
         ])
       )
   ),
@@ -270,15 +275,32 @@ app.post(
             console.error(`Warning: Unable to verify object: ${headError}`);
           }
 
-          const videoId = fileKey.split("/")[1];
-          if (videoId) {
+          const videoMetadata: VideoMetadata = {
+            duration: body.duration,
+            bandwidth: body.bandwidth,
+            resolution: body.resolution,
+            videoCodec: body.videoCodec,
+            audioCodec: body.audioCodec,
+            framerate: body.framerate,
+          };
+
+          if (Object.values(videoMetadata).length > 1 && "videoId" in body)
+            await db()
+              .update(videos)
+              .set({
+                metadata: videoMetadata,
+              })
+              .where(eq(videos.id, body.videoId));
+
+          const videoIdFromFileKey = fileKey.split("/")[1];
+          if (videoIdFromFileKey) {
             try {
               await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ videoId }),
+                body: JSON.stringify({ videoId: videoIdFromFileKey }),
               });
               console.log(`Revalidation triggered for videoId: ${videoId}`);
             } catch (revalidateError) {
