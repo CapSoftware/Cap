@@ -5,19 +5,29 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
 
     devices.into_iter().filter_map(|d| {
         Some(CameraInfo {
-            model_id: ModelID::from_windows(&d)?,
+            device_id: d.id().to_string_lossy().to_string(),
+            model_id: ModelID::from_windows(&d),
             display_name: d.name().to_string_lossy().to_string(),
         })
     })
 }
 
-impl ModelID {
-    pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
-        let devices = cap_camera_windows::get_devices().ok()?;
+fn find_device(
+    info: &CameraInfo,
+) -> Result<Option<cap_camera_windows::VideoDeviceInfo>, cap_camera_windows::GetDevicesError> {
+    let devices = cap_camera_windows::get_devices()?;
+    Ok(devices.into_iter().find(
+        |d| match (ModelID::from_windows(d).as_ref(), info.model_id()) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => d.id() == info.device_id(),
+            _ => false,
+        },
+    ))
+}
 
-        let device = devices
-            .iter()
-            .find(|d| ModelID::from_windows(d).as_ref() == Some(self))?;
+impl CameraInfo {
+    pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
+        let device = find_device(self).ok()??;
 
         let mut ret = vec![];
 
@@ -34,18 +44,6 @@ impl ModelID {
 
         Some(ret)
     }
-
-    fn from_windows(device: &cap_camera_windows::VideoDeviceInfo) -> Option<Self> {
-        let model_id = device.model_id()?;
-
-        let vid = &model_id[0..4];
-        let pid = &model_id[5..9];
-
-        Some(Self {
-            vid: vid.to_string(),
-            pid: pid.to_string(),
-        })
-    }
 }
 
 pub type NativeFormat = cap_camera_windows::VideoFormat;
@@ -60,11 +58,7 @@ pub(super) fn start_capturing_impl(
     format: Format,
     mut callback: impl FnMut(CapturedFrame) + 'static,
 ) -> Result<WindowsCaptureHandle, StartCapturingError> {
-    let devices = cap_camera_windows::get_devices()?;
-    let device = devices
-        .into_iter()
-        .find(|d| ModelID::from_windows(d).as_ref() == Some(camera.model_id()))
-        .ok_or(StartCapturingError::DeviceNotFound)?;
+    let device = find_device(camera)?.ok_or(StartCapturingError::DeviceNotFound)?;
 
     Ok(WindowsCaptureHandle {
         inner: device.start_capturing(format.native(), move |frame| {

@@ -2,12 +2,12 @@
 
 use cap_camera_directshow::{AM_MEDIA_TYPEVideoExt, AMMediaType};
 use cap_camera_mediafoundation::{IMFMediaBufferExt, IMFMediaBufferLock};
-use ffmpeg::format::Pixel;
 use std::{
     ffi::{OsStr, OsString},
     fmt::{Debug, Display},
     ops::Deref,
 };
+
 use windows::Win32::Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*};
 use windows_core::GUID;
 
@@ -77,9 +77,9 @@ impl VideoDeviceInfo {
                 VideoDeviceInfoInner::MediaFoundation { device },
                 VideoFormatInner::MediaFoundation(mf_format),
             ) => {
-                // let pixel_format = format.pixel_format;
-                // let width = format.width as usize;
-                // let height = format.height as usize;
+                let size = unsafe { mf_format.GetUINT64(&MF_MT_FRAME_SIZE).unwrap() };
+                let width = (size >> 32) as usize;
+                let height = (size & 0xFFFFFFFF) as usize;
 
                 let handle = device.start_capturing(
                     &mf_format,
@@ -92,10 +92,10 @@ impl VideoDeviceInfo {
 
                             callback(Frame {
                                 inner: FrameInner::MediaFoundation(buffer),
+                                width,
+                                height,
                                 // TODO
                                 pixel_format: PixelFormat::NV12,
-                                width: 1920,
-                                height: 1080,
                             })
                         }
                     }),
@@ -103,10 +103,7 @@ impl VideoDeviceInfo {
 
                 CaptureHandle::MediaFoundation(handle)
             }
-            (
-                VideoDeviceInfoInner::DirectShow(mut device),
-                VideoFormatInner::DirectShow(format),
-            ) => {
+            (VideoDeviceInfoInner::DirectShow(device), VideoFormatInner::DirectShow(format)) => {
                 let handle = device.start_capturing(
                     format,
                     Box::new(move |sample, media_type| {
@@ -227,20 +224,6 @@ pub enum PixelFormat {
     YUYV422,
     /// Packed
     UYVY422,
-}
-
-impl PixelFormat {
-    pub fn as_ffmpeg(&self) -> ffmpeg::format::Pixel {
-        match self {
-            PixelFormat::YUV420P => Pixel::YUV420P,
-            PixelFormat::RGB24 => Pixel::RGB24,
-            PixelFormat::RGB32 => Pixel::RGB32,
-            PixelFormat::YUYV422 => Pixel::YUYV422,
-            PixelFormat::UYVY422 => Pixel::UYVY422,
-            PixelFormat::ARGB => Pixel::ARGB,
-            PixelFormat::NV12 => Pixel::NV12,
-        }
-    }
 }
 
 #[derive(Clone)]

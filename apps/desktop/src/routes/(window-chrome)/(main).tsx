@@ -159,8 +159,13 @@ function Page() {
 
       return win;
     },
-    cameraLabel: () =>
-      cameras.find((c) => c.model_id === rawOptions.cameraModelID),
+    cameraID: () =>
+      cameras.find((c) => {
+        const { cameraID } = rawOptions;
+        if (!cameraID) return;
+        if ('ModelID' in cameraID && c.model_id === cameraID.ModelID) return c
+        if ('DeviceID' in cameraID && c.device_id == cameraID.DeviceID) return c;
+      }),
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
       switch (rawOptions.captureTarget.variant) {
@@ -213,7 +218,7 @@ function Page() {
   const setCamera = createCameraMutation();
 
   onMount(() => {
-    if (rawOptions.cameraModelID) setCamera.mutate(rawOptions.cameraModelID);
+    if (rawOptions.cameraID) setCamera.mutate(rawOptions.cameraID);
   });
 
   return (
@@ -299,17 +304,16 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-lg px-1.5 py-0.5`}
+                class={`text-[0.6rem] ${license.data?.type === "pro"
+                  ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                  : "bg-gray-3 cursor-pointer hover:bg-gray-5"
+                  } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal"}
+                    ? "Pro"
+                    : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -340,7 +344,7 @@ function Page() {
             "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
             (rawOptions.captureTarget.variant === "screen" ||
               rawOptions.captureTarget.variant === "area") &&
-              "ml-[2.4rem]"
+            "ml-[2.4rem]"
           )}
           style={{
             "transition-timing-function":
@@ -414,8 +418,12 @@ function Page() {
       </div>
       <CameraSelect
         options={cameras}
-        value={options.cameraLabel() ?? null}
-        onChange={(v) => setCamera.mutate(v?.model_id ?? null)}
+        value={options.cameraID() ?? null}
+        onChange={(v) => {
+          if (!v) setCamera.mutate(null);
+          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id })
+          else setCamera.mutate({ DeviceID: v.device_id })
+        }}
       />
       <MicrophoneSelect
         disabled={mics.isPending}
@@ -579,8 +587,8 @@ function AreaSelectButton(props: {
         props.targetVariant === "area"
           ? "Remove selection"
           : areaSelection.pending
-          ? "Selecting area..."
-          : "Select area"
+            ? "Selecting area..."
+            : "Select area"
       }
       childClass="flex fixed flex-row items-center w-8 h-8"
     >
@@ -651,7 +659,7 @@ function AreaSelectButton(props: {
                 class={cx(
                   "w-[1rem] h-[1rem]",
                   areaSelection.pending &&
-                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                  "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                 )}
               />
             </button>
@@ -975,8 +983,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-        ? "On"
-        : "Off"}
+          ? "On"
+          : "Off"}
     </InfoPill>
   );
 }

@@ -19,21 +19,18 @@ use windows::*;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct CameraInfo {
-    model_id: ModelID,
+    device_id: String,
+    model_id: Option<ModelID>,
     display_name: String,
 }
 
-impl Deref for CameraInfo {
-    type Target = ModelID;
-
-    fn deref(&self) -> &Self::Target {
-        self.model_id()
-    }
-}
-
 impl CameraInfo {
-    pub fn model_id(&self) -> &ModelID {
-        &self.model_id
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    pub fn model_id(&self) -> Option<&ModelID> {
+        self.model_id.as_ref()
     }
 
     pub fn display_name(&self) -> &str {
@@ -122,6 +119,20 @@ pub struct ModelID {
     pid: String,
 }
 
+impl ModelID {
+    fn from_windows(device: &cap_camera_windows::VideoDeviceInfo) -> Option<Self> {
+        let model_id = device.model_id()?;
+
+        let vid = &model_id[0..4];
+        let pid = &model_id[5..9];
+
+        Some(Self {
+            vid: vid.to_string(),
+            pid: pid.to_string(),
+        })
+    }
+}
+
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "specta", specta(remote = ModelID))]
 struct ModelIDType(String);
@@ -148,12 +159,6 @@ impl<'de> serde::Deserialize<'de> for ModelID {
             vid: vid.to_string(),
             pid: pid.to_string(),
         })
-    }
-}
-
-impl ModelID {
-    pub fn formats(&self) -> Option<Vec<Format>> {
-        self.formats_impl()
     }
 }
 
@@ -205,6 +210,10 @@ impl CapturedFrame {
 }
 
 impl CameraInfo {
+    pub fn formats(&self) -> Option<Vec<Format>> {
+        self.formats_impl()
+    }
+
     pub fn start_capturing(
         &self,
         format: Format,

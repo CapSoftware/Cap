@@ -42,7 +42,7 @@ pub struct CameraSelectOption(CameraInfo);
 
 impl Display for CameraSelectOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.0.display_name(), self.0.model_id())
+        write!(f, "{}", self.0.display_name())
     }
 }
 

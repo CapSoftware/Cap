@@ -44,12 +44,12 @@ impl std::fmt::Display for DeviceSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?} ({})",
+            "{:?} ({}) {:?}",
             self.0.name(),
             &match self.0.is_mf() {
                 true => "Media Foundation",
                 false => "DirectShow",
-            }
+            },
         )
     }
 }

@@ -3,10 +3,15 @@ use std::{fmt::Display, ops::Deref, time::Duration};
 use cap_camera::{CameraInfo, Format};
 
 fn main() {
-    let cameras = cap_camera::list_cameras()
+    let cameras: Vec<_> = cap_camera::list_cameras()
         .into_iter()
         .map(CameraSelectOption)
         .collect();
+
+    if cameras.len() < 1 {
+        eprintln!("No cameras found");
+        return;
+    }
 
     let selected_camera = inquire::Select::new("Select a device", cameras)
         .prompt()
@@ -36,7 +41,13 @@ pub struct CameraSelectOption(CameraInfo);
 
 impl Display for CameraSelectOption {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({})", self.0.display_name(), self.0.model_id())
+        write!(f, "{}", self.0.display_name())?;
+
+        if let Some(model_id) = self.0.model_id() {
+            write!(f, " (Model ID: {})", model_id)?;
+        }
+
+        Ok(())
     }
 }
 

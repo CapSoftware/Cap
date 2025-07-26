@@ -16,7 +16,7 @@ pub enum CaptureMode {
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
-        camera_label: Option<cap_camera::ModelID>,
+        camera: Option<cap_media::feeds::DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,
@@ -99,14 +99,14 @@ impl DeepLinkAction {
         match self {
             DeepLinkAction::StartRecording {
                 capture_mode,
-                camera_label,
+                camera,
                 mic_label,
                 capture_system_audio,
                 mode,
             } => {
                 let state = app.state::<ArcLock<App>>();
 
-                crate::set_camera_input(state.clone(), camera_label).await?;
+                crate::set_camera_input(state.clone(), camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 use cap_media::sources::ScreenCaptureTarget;

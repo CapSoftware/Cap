@@ -158,7 +158,7 @@ function Page() {
 
   createEffect(
     on(
-      () => rawOptions.cameraModelID,
+      () => rawOptions.cameraID,
       (modelID) => {
         if (modelID === null) getCurrentWindow().close();
       },

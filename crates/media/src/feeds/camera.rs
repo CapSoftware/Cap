@@ -29,7 +29,7 @@ pub enum SwitchCameraError {
 }
 
 enum CameraControl {
-    Switch(ModelID, oneshot::Sender<CameraSwitchResult>),
+    Switch(DeviceOrModelID, oneshot::Sender<CameraSwitchResult>),
     AttachConsumer(Sender<RawCameraFrame>),
     Shutdown,
 }
@@ -55,6 +55,12 @@ impl CameraConnection {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone, Debug)]
+pub enum DeviceOrModelID {
+    DeviceID(String),
+    ModelID(cap_camera::ModelID),
+}
+
 pub struct CameraFeed {
     pub camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
@@ -62,18 +68,12 @@ pub struct CameraFeed {
 }
 
 impl CameraFeed {
-    pub async fn init(selected_camera: ModelID) -> Result<CameraFeed, SetupCameraError> {
-        trace!("Initializing camera feed for: {}", selected_camera);
+    pub async fn init(selected_camera: DeviceOrModelID) -> Result<CameraFeed, SetupCameraError> {
+        trace!("Initializing camera feed for: {:?}", &selected_camera);
 
-        // fail_err!(
-        //     "media::feeds::camera::init",
-        //     SetupCameraError::Initialisation
-        // );
         fail_err!(
             "media::feeds::camera::init",
-            SetupCameraError::StartCapturing(cap_camera::StartCapturingError::Native(
-                cidre::ns::Error::with_domain(cidre::ns::ErrorDomain::cocoa(), 0, None).into()
-            ))
+            SetupCameraError::Initialisation
         );
 
         let camera_info = find_camera(&selected_camera).unwrap();
@@ -94,12 +94,12 @@ impl CameraFeed {
     /// The actual initialization happens in a background task.
     /// Dropping the receiver cancels the initialization.
     pub fn init_async(
-        selected_camera: ModelID,
+        id: DeviceOrModelID,
     ) -> flume::Receiver<Result<CameraFeed, SetupCameraError>> {
         let (tx, rx) = flume::bounded(1);
 
         tokio::spawn(async move {
-            let result = Self::init(selected_camera).await;
+            let result = Self::init(id).await;
             let _ = tx.send(result);
         });
 
@@ -118,24 +118,17 @@ impl CameraFeed {
         self.video_info
     }
 
-    pub async fn switch_cameras(
-        &mut self,
-        model_id: cap_camera::ModelID,
-    ) -> Result<(), SwitchCameraError> {
+    pub async fn switch_cameras(&mut self, id: DeviceOrModelID) -> Result<(), SwitchCameraError> {
         fail_err!(
             "media::feeds::camera::switch_cameras",
             SwitchCameraError::Setup(SetupCameraError::CameraNotFound)
         );
 
-        if &model_id == self.camera_info.model_id() {
-            return Ok(());
-        }
-
         let (result_tx, result_rx) = oneshot::channel();
 
         let _ = self
             .control
-            .send_async(CameraControl::Switch(model_id, result_tx))
+            .send_async(CameraControl::Switch(id, result_tx))
             .await;
 
         let (camera_info, video_info) = result_rx
@@ -167,18 +160,21 @@ impl Drop for CameraFeed {
     }
 }
 
-fn find_camera(selected_camera: &ModelID) -> Option<cap_camera::CameraInfo> {
-    cap_camera::list_cameras().find(|c| c.model_id() == selected_camera)
+fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraInfo> {
+    cap_camera::list_cameras().find(|c| match selected_camera {
+        DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
+        DeviceOrModelID::ModelID(model_id) => c.model_id() == Some(model_id),
+    })
 }
 
 async fn start_capturing(
-    model_id: ModelID,
+    id: DeviceOrModelID,
     control: Receiver<CameraControl>,
 ) -> Result<VideoInfo, SetupCameraError> {
     let (ready_tx, ready_rx) = oneshot::channel();
 
     thread::spawn(move || {
-        run_camera_feed(model_id, control, ready_tx);
+        run_camera_feed(id, control, ready_tx);
     });
 
     let (_camera_info, video_info) = ready_rx
@@ -190,7 +186,7 @@ async fn start_capturing(
 
 // #[tracing::instrument(skip_all)]
 fn run_camera_feed(
-    model_id: ModelID,
+    id: DeviceOrModelID,
     control: Receiver<CameraControl>,
     ready_tx: oneshot::Sender<Result<(cap_camera::CameraInfo, VideoInfo), SetupCameraError>>,
 ) {
@@ -200,11 +196,11 @@ fn run_camera_feed(
 
     let (frame_tx, frame_rx) = mpsc::sync_channel(8);
 
-    let mut model_id = model_id;
+    let mut id = id;
     let mut ready_signal = ready_tx;
 
     'outer: loop {
-        let handle = match setup_camera(model_id, frame_tx.clone()) {
+        let handle = match setup_camera(id, frame_tx.clone()) {
             Ok((handle, camera, video_info)) => {
                 let _ = ready_signal.send(Ok((camera.clone(), video_info.clone())));
                 handle
@@ -230,8 +226,8 @@ fn run_camera_feed(
                 Ok(CameraControl::AttachConsumer(sender)) => {
                     senders.push(sender);
                 }
-                Ok(CameraControl::Switch(new_model_id, switch_result)) => {
-                    model_id = new_model_id;
+                Ok(CameraControl::Switch(new_id, switch_result)) => {
+                    id = new_id;
                     ready_signal = switch_result;
                     break;
                 }
@@ -282,7 +278,7 @@ pub enum SetupCameraError {
 }
 
 fn setup_camera(
-    model_id: ModelID,
+    id: DeviceOrModelID,
     frame_tx: mpsc::SyncSender<FFVideo>,
 ) -> Result<
     (
@@ -292,7 +288,7 @@ fn setup_camera(
     ),
     SetupCameraError,
 > {
-    let camera = find_camera(&model_id).ok_or(SetupCameraError::CameraNotFound)?;
+    let camera = find_camera(&id).ok_or(SetupCameraError::CameraNotFound)?;
     let mut formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
     if formats.len() < 1 {
         return Err(SetupCameraError::InvalidFormat);

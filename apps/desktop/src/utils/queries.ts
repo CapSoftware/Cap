@@ -16,6 +16,7 @@ import { createQueryInvalidate } from "./events";
 import {
   CameraInfo,
   commands,
+  DeviceOrModelID,
   ModelIDType,
   RecordingMode,
   ScreenCaptureTarget,
@@ -92,7 +93,7 @@ export function createOptionsQuery() {
       micName: string | null;
       mode: RecordingMode;
       captureSystemAudio?: boolean;
-      cameraModelID?: ModelIDType | null;
+      cameraID?: DeviceOrModelID | null;
       /** @deprecated */
       cameraLabel: string | null;
     }>({
@@ -148,8 +149,8 @@ export function createCameraMutation() {
   const { setOptions } = useRecordingOptions();
 
   const setCameraInput = createMutation(() => ({
-    mutationFn: async (model: ModelIDType | null) => {
-      setOptions("cameraModelID", model);
+    mutationFn: async (model: DeviceOrModelID | null) => {
+      setOptions("cameraID", model);
       if (model) {
         await commands.showWindow("Camera");
         getCurrentWindow().setFocus();

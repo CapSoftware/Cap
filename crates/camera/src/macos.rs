@@ -17,7 +17,7 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
         .into_iter()
 }
 
-impl ModelID {
+impl CameraInfo {
     pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
         let devices = cap_camera_avfoundation::list_video_devices();
 
