@@ -73,11 +73,8 @@ const app = new Hono()
 
       const bucket = await createBucketProvider(customBucket);
 
-      // Handle case where source is a JSON string instead of parsed object
-      const source = typeof video.source === "string" ? JSON.parse(video.source) : video.source;
-
       if (!customBucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
-        if (source.type === "desktopMP4") {
+        if (video.source.type === "desktopMP4") {
           return c.redirect(
             await bucket.getSignedObjectUrl(
               `${video.ownerId}/${videoId}/result.mp4`
@@ -85,7 +82,7 @@ const app = new Hono()
           );
         }
 
-        if (source.type === "MediaConvert") {
+        if (video.source.type === "MediaConvert") {
           return c.redirect(
             await bucket.getSignedObjectUrl(
               `${video.ownerId}/${videoId}/output/video_recording_000.m3u8`
@@ -128,7 +125,7 @@ const app = new Hono()
       const audioPrefix = `${video.ownerId}/${videoId}/audio/`;
 
       try {
-        if (source.type === "local") {
+        if (video.source.type === "local") {
           const playlistText =
             (await bucket.getObject(
               `${video.ownerId}/${videoId}/combined-source/stream.m3u8`
@@ -153,7 +150,7 @@ const app = new Hono()
           });
         }
 
-        if (source.type === "desktopMP4") {
+        if (video.source.type === "desktopMP4") {
           const playlistUrl = await bucket.getSignedObjectUrl(
             `${video.ownerId}/${videoId}/result.mp4`
           );
