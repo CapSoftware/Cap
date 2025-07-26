@@ -794,6 +794,15 @@ async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, 
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
 }
+#[tauri::command]
+#[specta::specta]
+async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> Result<(), String> {
+    let path = editor.project_path.clone();
+    let mut meta = RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())?;
+
+    meta.pretty_name = pretty_name;
+    meta.save_for_project().map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -1797,6 +1806,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
+            set_pretty_name,
             set_server_url,
             captions::create_dir,
             captions::save_model_file,
