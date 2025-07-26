@@ -455,25 +455,7 @@ pub async fn start_recording(
         }
     });
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        match GeneralSettingsStore::get(&app)
-            .ok()
-            .flatten()
-            .map(|s| s.main_window_recording_start_behaviour)
-            .unwrap_or_default()
-        {
-            MainWindowRecordingStartBehaviour::Close => {
-                let _ = window.close();
-            }
-            MainWindowRecordingStartBehaviour::Minimise => {
-                let _ = window.minimize();
-            }
-        }
-    }
-
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").ok();
-    } else {
+    if CapWindowId::InProgressRecording.get(&app).is_none() {
         let _ = ShowCapWindow::InProgressRecording { position: None }
             .show(&app)
             .await;

@@ -16,6 +16,7 @@ import {
   type GeneralSettingsStore,
   type MainWindowRecordingStartBehaviour,
   type PostStudioRecordingBehaviour,
+  type RecordingCountdown,
 } from "~/utils/tauri";
 // import { themeStore } from "~/store/theme";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
@@ -115,6 +116,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      recordingCountdown: "three",
     }
   );
 
@@ -143,8 +145,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     label: string;
     type: "select";
     description: string;
-    value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour;
-    onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) => void | Promise<void>;
+    value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | RecordingCountdown;
+    onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | RecordingCountdown) => void | Promise<void>;
   };
 
   type SettingItem = ToggleSettingItem | SelectSettingItem;
@@ -195,11 +197,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       title: "Recording",
       items: [
         {
+          label: "Recording countdown",
+          description: "Countdown before recording starts",
+          type: "select",
+          get value() { return settings.recordingCountdown ?? "three"; },
+          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | RecordingCountdown) =>
+            handleChange("recordingCountdown", value as RecordingCountdown),
+        },
+        {
           label: "Main window recording start behaviour",
           description: "The main window recording start behaviour",
           type: "select",
           get value() { return settings.mainWindowRecordingStartBehaviour ?? "close"; },
-          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) =>
+          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | RecordingCountdown) =>
             handleChange("mainWindowRecordingStartBehaviour", value as MainWindowRecordingStartBehaviour),
         },
         {
@@ -207,7 +217,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           description: "The studio recording finish behaviour",
           type: "select",
           get value() { return settings.postStudioRecordingBehaviour ?? "openEditor"; },
-          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) =>
+          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | RecordingCountdown) =>
             handleChange("postStudioRecordingBehaviour", value as PostStudioRecordingBehaviour),
         },
       ],
@@ -339,6 +349,18 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                             [
                               { text: "Open editor", value: "openEditor" },
                               { text: "Show in overlay", value: "showOverlay" },
+                            ]
+                          );
+                        } else if (item.label === "Recording countdown") {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            item.value,
+                            item.onChange,
+                            [
+                              { text: "Off", value: "off" },
+                              { text: "3 seconds", value: "three" },
+                              { text: "5 seconds", value: "five" },
                             ]
                           );
                         }
