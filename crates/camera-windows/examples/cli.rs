@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::{ops::Deref, time::Duration};
 
 use cap_camera_windows::*;
 
@@ -17,11 +17,17 @@ fn main() {
         .prompt()
         .unwrap();
 
-    for frame in selected_device.0.start_capturing(&format).unwrap() {
-        if let Ok(frame) = frame {
-            dbg!(frame.bytes.len(), frame.pixel_format);
-        }
-    }
+    let _handle = selected_device
+        .0
+        .start_capturing(&format.inner, |frame| {
+            let Ok(bytes) = frame.bytes() else {
+                return;
+            };
+            dbg!(bytes.len(), frame.pixel_format);
+        })
+        .unwrap();
+
+    std::thread::sleep(Duration::from_secs(10));
 }
 
 pub struct DeviceSelection(pub VideoDeviceInfo);
@@ -38,12 +44,12 @@ impl std::fmt::Display for DeviceSelection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:?} ({})",
+            "{:?} ({}) {:?}",
             self.0.name(),
             &match self.0.is_mf() {
                 true => "Media Foundation",
                 false => "DirectShow",
-            }
+            },
         )
     }
 }

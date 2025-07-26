@@ -386,23 +386,29 @@ impl VideoInputDevice {
         &self.stream_config
     }
 
-    pub fn set_format(&mut self, format: &AMMediaType) -> windows_core::Result<()> {
-        unsafe { self.stream_config.SetFormat(&**format) }
-    }
-
-    pub fn run(self, callback: SinkCallback) -> Result<RunHandle, RunError> {
+    pub fn start_capturing(
+        self,
+        format: &AMMediaType,
+        callback: SinkCallback,
+    ) -> Result<CaptureHandle, StartCapturingError> {
         unsafe {
+            self.stream_config
+                .SetFormat(&**format)
+                .map_err(StartCapturingError::Other)?;
+
             let sink_filter = SinkFilter::new(callback);
 
-            let input_sink_pin = sink_filter.get_pin(0).ok_or(RunError::NoInputPin)?;
+            let input_sink_pin = sink_filter
+                .get_pin(0)
+                .ok_or(StartCapturingError::NoInputPin)?;
 
             let graph_builder: IGraphBuilder =
                 CoCreateInstance(&CLSID_FilterGraph, None, CLSCTX_INPROC_SERVER)
-                    .map_err(RunError::CreateGraph)?;
+                    .map_err(StartCapturingError::CreateGraph)?;
 
             let capture_graph_builder: ICaptureGraphBuilder2 =
                 CoCreateInstance(&CLSID_CaptureGraphBuilder2, None, CLSCTX_INPROC_SERVER)
-                    .map_err(RunError::CreateGraph)?;
+                    .map_err(StartCapturingError::CreateGraph)?;
 
             let media_control = graph_builder
                 .cast::<IMediaControl>()
@@ -410,10 +416,10 @@ impl VideoInputDevice {
 
             capture_graph_builder
                 .SetFiltergraph(&graph_builder)
-                .map_err(RunError::ConfigureGraph)?;
+                .map_err(StartCapturingError::ConfigureGraph)?;
             graph_builder
                 .AddFilter(&self.filter, None)
-                .map_err(RunError::ConfigureGraph)?;
+                .map_err(StartCapturingError::ConfigureGraph)?;
 
             let sink_filter: IBaseFilter = sink_filter
                 .cast()
@@ -421,7 +427,7 @@ impl VideoInputDevice {
 
             graph_builder
                 .AddFilter(&sink_filter, None)
-                .map_err(RunError::ConfigureGraph)?;
+                .map_err(StartCapturingError::ConfigureGraph)?;
 
             let mut stream_config = null_mut();
             capture_graph_builder
@@ -432,28 +438,57 @@ impl VideoInputDevice {
                     &IAMStreamConfig::IID,
                     &mut stream_config,
                 )
-                .map_err(RunError::ConfigureGraph)?;
+                .map_err(StartCapturingError::ConfigureGraph)?;
 
             graph_builder
                 .ConnectDirect(&self.output_pin, &input_sink_pin, None)
-                .map_err(RunError::ConfigureGraph)?;
+                .map_err(StartCapturingError::ConfigureGraph)?;
 
-            media_control.Run().map_err(RunError::Run)?;
+            media_control.Run().map_err(StartCapturingError::Run)?;
 
-            Ok(RunHandle { media_control })
+            Ok(CaptureHandle {
+                media_control,
+                graph_builder,
+                output_capture_pin: self.output_pin,
+                input_sink_pin,
+            })
         }
     }
 }
 
-pub struct RunHandle {
+pub struct CaptureHandle {
     media_control: IMediaControl,
+    graph_builder: IGraphBuilder,
+    output_capture_pin: IPin,
+    input_sink_pin: IPin,
 }
 
-pub enum RunError {
+impl CaptureHandle {
+    // Chromium: VideoCaptureDeviceWin::StopAndDeallocate
+    pub fn stop_capturing(self) -> windows_core::Result<()> {
+        unsafe { self.media_control.Stop() }?;
+
+        unsafe {
+            let _ = self.graph_builder.Disconnect(&self.output_capture_pin);
+            let _ = self.graph_builder.Disconnect(&self.input_sink_pin);
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum StartCapturingError {
+    #[error("No input pin")]
     NoInputPin,
+    #[error("CreateGraph: {0}")]
     CreateGraph(windows_core::Error),
+    #[error("ConfigureGraph: {0}")]
     ConfigureGraph(windows_core::Error),
+    #[error("Run: {0}")]
     Run(windows_core::Error),
+    #[error("{0}")]
+    Other(windows_core::Error),
 }
 
 impl Deref for VideoInputDevice {
@@ -534,7 +569,7 @@ impl SinkFilter {
                 current_media_type: RefCell::new(Default::default()),
                 connected_pin: RefCell::new(None),
                 owner: RefCell::new(None),
-                callback,
+                callback: RefCell::new(callback),
             }
             .into(),
         }
@@ -702,14 +737,14 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
     }
 }
 
-pub type SinkCallback = Box<dyn Fn(&mut [u8], &AMMediaType, Option<Duration>)>;
+pub type SinkCallback = Box<dyn FnMut(&IMediaSample, &AMMediaType)>;
 
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
     current_media_type: RefCell<AMMediaType>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
-    callback: SinkCallback,
+    callback: RefCell<SinkCallback>,
 }
 
 impl SinkInputPin {
@@ -943,7 +978,7 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             .ok()
             .map(|_| Duration::from_micros(start_time as u64 / 10));
 
-        (self.callback)(buffer, &*media_type, time_delta);
+        (self.callback.borrow_mut())(&psample, &media_type);
 
         Ok(())
     }

@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 use cap_camera_avfoundation::{
     CallbackOutputDelegate, CallbackOutputDelegateInner, YCbCrMatrix, list_video_devices,
 };
@@ -121,6 +123,10 @@ pub fn main() {
         }
 
         s.add_output(&output);
+
+        let mut _lock = selected_device.config_lock().unwrap();
+
+        _lock.set_active_format(&formats[selected_format.index]);
     });
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
@@ -147,6 +153,8 @@ pub fn main() {
     std::thread::sleep(std::time::Duration::from_secs(10));
 
     session.stop_running();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
 }
 
 struct Format {
@@ -177,7 +185,12 @@ struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice, usize);
 
 impl<'a> Display for CaptureDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.localized_name().to_string())
+        write!(
+            f,
+            "{} ({})",
+            self.0.localized_name().to_string(),
+            self.0.unique_id().to_string()
+        )
     }
 }
 

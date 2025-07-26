@@ -6,7 +6,7 @@ use std::{
 };
 
 use cap_export::ExporterBase;
-use cap_media::sources::get_target_fps;
+use cap_media::{feeds::CameraFeed, sources::get_target_fps};
 use cap_project::XY;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
@@ -111,34 +111,30 @@ window {}:
                 }
             }
             Some(RecordCommands::Cameras) => {
-                use nokhwa::{
-                    pixel_format::RgbAFormat,
-                    utils::{ApiBackend, RequestedFormat, RequestedFormatType},
-                    Camera,
-                };
-
-                let cameras = nokhwa::query(ApiBackend::Auto).unwrap();
+                let cameras = CameraFeed::list_cameras();
 
                 let mut info = vec![];
                 for camera_info in cameras {
-                    let format = RequestedFormat::new::<RgbAFormat>(
-                        RequestedFormatType::AbsoluteHighestFrameRate,
-                    );
+                    // let format = RequestedFormat::new::<RgbAFormat>(
+                    //     RequestedFormatType::AbsoluteHighestFrameRate,
+                    // );
 
-                    let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
-                        continue;
-                    };
+                    // let Ok(mut camera) = Camera::new(camera_info.index().clone(), format) else {
+                    //     continue;
+                    // };
 
                     info.push(json!({
-                        "index": camera_info.index().to_string(),
-                        "name": camera_info.human_name(),
-                        "pixel_format": camera.frame_format(),
-                        "formats":  camera
-                        		.compatible_camera_formats()
-                          	.unwrap()
-                           	.into_iter()
-                            .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
-                            .collect::<Vec<_>>()
+                        "model_id": camera_info.model_id().to_string(),
+                        "display_name": camera_info.display_name()
+                        // "index": camera_info.index().to_string(),
+                        // "name": camera_info.human_name(),
+                        // "pixel_format": camera.frame_format(),
+                        // "formats":  camera
+                        // 		.compatible_camera_formats()
+                        //   	.unwrap()
+                        //    	.into_iter()
+                        //     .map(|f| format!("{}x{}@{}fps", f.resolution().x(), f.resolution().y(), f.frame_rate()))
+                        //     .collect::<Vec<_>>()
                     }));
                 }
 

@@ -35,6 +35,7 @@ import {
   listWindows,
 } from "~/utils/queries";
 import {
+  CameraInfo,
   type CaptureScreen,
   type CaptureWindow,
   commands,
@@ -157,7 +158,13 @@ function Page() {
 
       return win;
     },
-    cameraLabel: () => cameras.find((c) => c === rawOptions.cameraLabel),
+    cameraID: () =>
+      cameras.find((c) => {
+        const { cameraID } = rawOptions;
+        if (!cameraID) return;
+        if ('ModelID' in cameraID && c.model_id === cameraID.ModelID) return c
+        if ('DeviceID' in cameraID && c.device_id == cameraID.DeviceID) return c;
+      }),
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
       switch (rawOptions.captureTarget.variant) {
@@ -210,7 +217,7 @@ function Page() {
   const setCamera = createCameraMutation();
 
   onMount(() => {
-    if (rawOptions.cameraLabel) setCamera.mutate(rawOptions.cameraLabel);
+    if (rawOptions.cameraID) setCamera.mutate(rawOptions.cameraID);
   });
 
   return (
@@ -410,8 +417,12 @@ function Page() {
       </div>
       <CameraSelect
         options={cameras}
-        value={options.cameraLabel() ?? null}
-        onChange={(v) => setCamera.mutate(v)}
+        value={options.cameraID() ?? null}
+        onChange={(v) => {
+          if (!v) setCamera.mutate(null);
+          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id })
+          else setCamera.mutate({ DeviceID: v.device_id })
+        }}
       />
       <MicrophoneSelect
         disabled={mics.isPending}
@@ -662,9 +673,9 @@ const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   disabled?: boolean;
-  options: string[];
-  value: string | null;
-  onChange: (cameraLabel: string | null) => void;
+  options: CameraInfo[];
+  value: CameraInfo | null;
+  onChange: (cameraInfo: CameraInfo | null) => void;
 }) {
   const currentRecording = createCurrentRecordingQuery();
   const permissions = createQuery(() => getPermissions);
@@ -674,15 +685,15 @@ function CameraSelect(props: {
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  const onChange = (cameraLabel: string | null) => {
-    if (!cameraLabel && permissions?.data?.camera !== "granted")
+  const onChange = (cameraInfo: CameraInfo | null) => {
+    if (!cameraInfo && permissions?.data?.camera !== "granted")
       return requestPermission("camera");
 
-    props.onChange(cameraLabel);
+    props.onChange(cameraInfo);
 
     trackEvent("camera_selected", {
-      camera_name: cameraLabel,
-      enabled: !!cameraLabel,
+      camera_name: cameraInfo,
+      enabled: !!cameraInfo,
     });
   };
 
@@ -701,7 +712,7 @@ function CameraSelect(props: {
             PredefinedMenuItem.new({ item: "Separator" }),
             ...props.options.map((o) =>
               CheckMenuItem.new({
-                text: o,
+                text: o.display_name,
                 checked: o === props.value,
                 action: () => onChange(o),
               })
@@ -715,7 +726,7 @@ function CameraSelect(props: {
       >
         <IconCapCamera class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
-          {props.value ?? NO_CAMERA}
+          {props.value?.display_name ?? NO_CAMERA}
         </span>
         <TargetSelectInfoPill
           value={props.value}

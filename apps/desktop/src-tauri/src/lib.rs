@@ -183,25 +183,25 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[specta::specta]
 async fn set_camera_input(
     state: MutableState<'_, App>,
-    label: Option<String>,
+    id: Option<cap_media::feeds::DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
 
-    match (&label, app.camera_feed.as_ref()) {
-        (Some(label), Some(camera_feed)) => {
+    match (id, app.camera_feed.as_ref()) {
+        (Some(id), Some(camera_feed)) => {
             camera_feed
                 .lock()
                 .await
-                .switch_cameras(label)
+                .switch_cameras(id)
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(true)
         }
-        (Some(label), None) => {
+        (Some(id), None) => {
             let camera_tx = app.camera_tx.clone();
             drop(app);
 
-            let init_rx = CameraFeed::init_async(label);
+            let init_rx = CameraFeed::init_async(id);
 
             loop {
                 tokio::select! {

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
+use cidre::av;
+
+#[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
@@ -58,31 +61,19 @@ pub fn open_permission_settings(permission: OSPermission) {
 pub async fn request_permission(permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
-        use cap_media::platform::AVMediaType;
-
         match permission {
             OSPermission::ScreenRecording => {
                 scap::request_permission();
             }
-            OSPermission::Camera => request_av_permission(AVMediaType::Video),
-            OSPermission::Microphone => request_av_permission(AVMediaType::Audio),
+            OSPermission::Camera => {
+                av::CaptureDevice::request_access_for_media_type(av::MediaType::video());
+            }
+            OSPermission::Microphone => {
+                av::CaptureDevice::request_access_for_media_type(av::MediaType::audio());
+            }
             OSPermission::Accessibility => request_accessibility_permission(),
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-fn request_av_permission(media_type: cap_media::platform::AVMediaType) {
-    use objc::{runtime::*, *};
-    use tauri_nspanel::block::ConcreteBlock;
-
-    let callback = move |_: BOOL| {};
-    let cls = class!(AVCaptureDevice);
-    let objc_fn_block: ConcreteBlock<(BOOL,), (), _> = ConcreteBlock::new(callback);
-    let objc_fn_pass = objc_fn_block.copy();
-    unsafe {
-        let _: () = msg_send![cls, requestAccessForMediaType:media_type.into_ns_str() completionHandler:objc_fn_pass];
-    };
 }
 
 #[derive(Serialize, Deserialize, Debug, specta::Type)]
@@ -127,18 +118,14 @@ impl OSPermissionsCheck {
 pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
     #[cfg(target_os = "macos")]
     {
-        use cap_media::platform::AVMediaType;
+        use cidre::av::{AuthorizationStatus, CaptureDevice, MediaType};
 
-        fn check_av_permission(media_type: AVMediaType) -> OSPermissionStatus {
-            use cap_media::platform::AVAuthorizationStatus;
-            use objc::*;
+        fn check_av_permission(media_type: &'static MediaType) -> OSPermissionStatus {
+            let status = CaptureDevice::authorization_status_for_media_type(media_type).unwrap();
 
-            let cls = objc::class!(AVCaptureDevice);
-            let status: AVAuthorizationStatus =
-                unsafe { msg_send![cls, authorizationStatusForMediaType:media_type.into_ns_str()] };
             match status {
-                AVAuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
-                AVAuthorizationStatus::Authorized => OSPermissionStatus::Granted,
+                AuthorizationStatus::NotDetermined => OSPermissionStatus::Empty,
+                AuthorizationStatus::Authorized => OSPermissionStatus::Granted,
                 _ => OSPermissionStatus::Denied,
             }
         }
@@ -152,8 +139,8 @@ pub fn do_permissions_check(initial_check: bool) -> OSPermissionsCheck {
                     (false, false) => OSPermissionStatus::Denied,
                 }
             },
-            microphone: check_av_permission(AVMediaType::Audio),
-            camera: check_av_permission(AVMediaType::Video),
+            microphone: check_av_permission(MediaType::audio()),
+            camera: check_av_permission(MediaType::video()),
             accessibility: { check_accessibility_permission() },
         }
     }

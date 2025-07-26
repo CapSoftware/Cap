@@ -176,10 +176,9 @@ unsafe fn chromium_main(capture_filter: IBaseFilter) {
         .unwrap();
 
     trace!("creating sink filter");
-    let sink_filter = SinkFilter::new(Box::new(|buffer, media_type, time_delta| {
-        dbg!(buffer.len());
+    let sink_filter = SinkFilter::new(Box::new(|sample, media_type| {
+        unsafe { dbg!(sample.GetActualDataLength()) };
         dbg!(media_type.subtype_str());
-        dbg!(time_delta);
     }));
     trace!("created sink filter");
 

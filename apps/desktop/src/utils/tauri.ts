@@ -8,8 +8,8 @@ export const commands = {
 async setMicInput(label: string | null) : Promise<null> {
     return await TAURI_INVOKE("set_mic_input", { label });
 },
-async setCameraInput(label: string | null) : Promise<boolean> {
-    return await TAURI_INVOKE("set_camera_input", { label });
+async setCameraInput(id: DeviceOrModelID | null) : Promise<boolean> {
+    return await TAURI_INVOKE("set_camera_input", { id });
 },
 async startRecording(inputs: StartRecordingInputs) : Promise<null> {
     return await TAURI_INVOKE("start_recording", { inputs });
@@ -29,7 +29,7 @@ async restartRecording() : Promise<null> {
 async deleteRecording() : Promise<null> {
     return await TAURI_INVOKE("delete_recording");
 },
-async listCameras() : Promise<string[]> {
+async listCameras() : Promise<CameraInfo[]> {
     return await TAURI_INVOKE("list_cameras");
 },
 async listCaptureWindows() : Promise<CaptureWindow[]> {
@@ -303,6 +303,7 @@ export type BackgroundConfiguration = { source: BackgroundSource; blur: number; 
 export type BackgroundSource = { type: "wallpaper"; path: string | null } | { type: "image"; path: string | null } | { type: "color"; value: [number, number, number] } | { type: "gradient"; from: [number, number, number]; to: [number, number, number]; angle?: number }
 export type Bounds = { x: number; y: number; width: number; height: number }
 export type Camera = { hide: boolean; mirror: boolean; position: CameraPosition; size: number; zoom_size: number | null; rounding?: number; shadow?: number; advanced_shadow?: ShadowConfiguration | null; shape?: CameraShape }
+export type CameraInfo = { device_id: string; model_id: ModelIDType | null; display_name: string }
 export type CameraPosition = { x: CameraXPosition; y: CameraYPosition }
 export type CameraShape = "square" | "source"
 export type CameraXPosition = "left" | "center" | "right"
@@ -323,6 +324,7 @@ export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size:
 export type CursorMeta = { imagePath: string; hotspot: XY<number> }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
+export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
 export type DownloadProgress = { progress: number; message: string }
 export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
@@ -345,6 +347,7 @@ export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } }
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null }
 export type JsonValue<T> = [T]
 export type MainWindowRecordingStartBehaviour = "close" | "minimise"
+export type ModelIDType = string
 export type Mp4ExportSettings = { fps: number; resolution_base: XY<number>; compression: ExportCompression }
 export type MultipleSegment = { display: VideoMeta; camera?: VideoMeta | null; mic?: AudioMeta | null; system_audio?: AudioMeta | null; cursor?: string | null }
 export type MultipleSegments = { segments: MultipleSegment[]; cursors: Cursors }
