@@ -21,6 +21,20 @@ pub enum MainWindowRecordingStartBehaviour {
     Minimise,
 }
 
+#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum RecordingCountdown {
+    Off,
+    Three,
+    Five,
+}
+
+impl Default for RecordingCountdown {
+    fn default() -> Self {
+        RecordingCountdown::Three
+    }
+}
+
 #[derive(Serialize, Deserialize, Type, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
@@ -57,6 +71,8 @@ pub struct GeneralSettingsStore {
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
+    #[serde(default)]
+    pub recording_countdown: RecordingCountdown,
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
@@ -96,6 +112,7 @@ impl Default for GeneralSettingsStore {
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: false,
             server_url: default_server_url(),
+            recording_countdown: RecordingCountdown::Three,
             _open_editor_after_recording: false,
         }
     }

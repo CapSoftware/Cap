@@ -3,7 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
   createQuery,
-  useQueryClient
+  useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -191,11 +191,18 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        await commands.startRecording({
-          capture_target: options.target(),
-          mode: rawOptions.mode,
-          capture_system_audio: rawOptions.captureSystemAudio,
-        });
+        const settings = await generalSettingsStore.get();
+
+        await commands.showWindow({ InProgressRecording: { position: null } });
+
+        const mainWindow = getCurrentWindow();
+        const mainWindowBehavior =
+          settings?.mainWindowRecordingStartBehaviour ?? "close";
+        if (mainWindowBehavior === "close") {
+          await mainWindow.close();
+        } else if (mainWindowBehavior === "minimise") {
+          await mainWindow.minimize();
+        }
       } else await commands.stopRecording();
     },
   }));
@@ -296,16 +303,17 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${license.data?.type === "pro"
-                  ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                  : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                  } rounded-lg px-1.5 py-0.5`}
+                class={`text-[0.6rem] ${
+                  license.data?.type === "pro"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
+                } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                    ? "Pro"
-                    : "Personal"}
+                  ? "Pro"
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -336,7 +344,7 @@ function Page() {
             "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
             (rawOptions.captureTarget.variant === "screen" ||
               rawOptions.captureTarget.variant === "area") &&
-            "ml-[2.4rem]"
+              "ml-[2.4rem]"
           )}
           style={{
             "transition-timing-function":
@@ -575,8 +583,8 @@ function AreaSelectButton(props: {
         props.targetVariant === "area"
           ? "Remove selection"
           : areaSelection.pending
-            ? "Selecting area..."
-            : "Select area"
+          ? "Selecting area..."
+          : "Select area"
       }
       childClass="flex fixed flex-row items-center w-8 h-8"
     >
@@ -647,7 +655,7 @@ function AreaSelectButton(props: {
                 class={cx(
                   "w-[1rem] h-[1rem]",
                   areaSelection.pending &&
-                  "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                 )}
               />
             </button>
@@ -971,8 +979,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </InfoPill>
   );
 }
