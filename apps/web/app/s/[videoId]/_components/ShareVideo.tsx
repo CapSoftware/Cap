@@ -115,17 +115,20 @@ export const ShareVideo = forwardRef<
   let videoSrc: string;
   let enableCrossOrigin = false;
 
-  if (data.source.type === "desktopMP4") {
+  // Handle case where source is a JSON string instead of parsed object
+  const source = typeof data.source === "string" ? JSON.parse(data.source) : data.source;
+
+  if (source.type === "desktopMP4") {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=mp4`;
     // Start with CORS enabled for desktopMP4, but CapVideoPlayer will dynamically disable if needed
     enableCrossOrigin = true;
   } else if (
     NODE_ENV === "development" ||
     ((data.skipProcessing === true || data.jobStatus !== "COMPLETE") &&
-      data.source.type === "MediaConvert")
+      source.type === "MediaConvert")
   ) {
     videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
-  } else if (data.source.type === "MediaConvert") {
+  } else if (source.type === "MediaConvert") {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
   } else {
     videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
@@ -135,7 +138,7 @@ export const ShareVideo = forwardRef<
     <>
 
       <div className="relative h-full">
-        {data.source.type === "desktopMP4" ? (
+        {source.type === "desktopMP4" ? (
           <CapVideoPlayer
             mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
             videoSrc={videoSrc}
