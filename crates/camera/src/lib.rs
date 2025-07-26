@@ -3,7 +3,6 @@
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
-    str::FromStr,
 };
 
 #[cfg(target_os = "macos")]

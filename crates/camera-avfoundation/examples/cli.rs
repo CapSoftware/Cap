@@ -123,6 +123,10 @@ pub fn main() {
         }
 
         s.add_output(&output);
+
+        let mut _lock = selected_device.config_lock().unwrap();
+
+        _lock.set_active_format(&formats[selected_format.index]);
     });
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
@@ -149,6 +153,8 @@ pub fn main() {
     std::thread::sleep(std::time::Duration::from_secs(10));
 
     session.stop_running();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
 }
 
 struct Format {

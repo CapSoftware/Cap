@@ -121,12 +121,21 @@ pub(super) fn start_capturing_impl(
         session.start_running();
     }
 
-    Ok(AVFoundationRecordingHandle { delegate, session })
+    Ok(AVFoundationRecordingHandle {
+        _delegate: delegate,
+        session,
+        _output: output,
+        _input: input,
+        _device: device,
+    })
 }
 
 pub struct AVFoundationRecordingHandle {
-    delegate: cidre::arc::R<cap_camera_avfoundation::CallbackOutputDelegate>,
-    session: cidre::arc::R<cidre::av::capture::Session>,
+    _delegate: arc::R<cap_camera_avfoundation::CallbackOutputDelegate>,
+    session: arc::R<av::capture::Session>,
+    _output: arc::R<av::CaptureVideoDataOutput>,
+    _input: arc::R<av::CaptureDeviceInput>,
+    _device: arc::R<av::CaptureDevice>,
 }
 
 impl AVFoundationRecordingHandle {
@@ -141,6 +150,18 @@ pub enum AVFoundationError {
     Static(&'static cidre::ns::Error),
     #[error("{0}")]
     Retained(cidre::arc::R<cidre::ns::Error>),
+}
+
+impl From<&'static cidre::ns::Error> for AVFoundationError {
+    fn from(err: &'static cidre::ns::Error) -> Self {
+        AVFoundationError::Static(err)
+    }
+}
+
+impl From<cidre::arc::R<cidre::ns::Error>> for AVFoundationError {
+    fn from(err: cidre::arc::R<cidre::ns::Error>) -> Self {
+        AVFoundationError::Retained(err)
+    }
 }
 
 impl Deref for AVFoundationError {
