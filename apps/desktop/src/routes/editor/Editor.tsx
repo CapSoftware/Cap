@@ -36,7 +36,6 @@ import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 import { createCropController } from "~/utils/cropController";
-import AltSwitch from "~/components/AltSwitch";
 
 export function Editor() {
   return (
@@ -371,24 +370,18 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
-                        <AltSwitch
-                          normal={
-                            <EditorButton
-                              leftIcon={<IconCapCircleX />}
-                              onClick={() => cropController.reset()}
-                            >
-                              Reset
-                            </EditorButton>
-                          }
-                          alt={
-                            <EditorButton
-                              leftIcon={<IconLucideMaximize />}
-                              onClick={() => cropController.fill()}
-                            >
-                              Fill
-                            </EditorButton>
-                          }
-                        />
+                        <EditorButton
+                          leftIcon={<IconCapCircleX />}
+                          onClick={() => cropController.reset()}
+                        >
+                          Reset
+                        </EditorButton>
+                        <EditorButton
+                          leftIcon={<IconLucideMaximize />}
+                          onClick={() => cropController.fill()}
+                        >
+                          Fill
+                        </EditorButton>
                       </div>
                     </Dialog.Header>
                     <Dialog.Content>

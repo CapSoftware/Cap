@@ -83,6 +83,7 @@ declare global {
   const IconLucideClock: typeof import('~icons/lucide/clock.jsx')['default']
   const IconLucideDatabase: typeof import('~icons/lucide/database.jsx')['default']
   const IconLucideEdit: typeof import('~icons/lucide/edit.jsx')['default']
+  const IconLucideExpand: typeof import('~icons/lucide/expand.jsx')['default']
   const IconLucideEye: typeof import('~icons/lucide/eye.jsx')['default']
   const IconLucideFolder: typeof import('~icons/lucide/folder.jsx')['default']
   const IconLucideGift: typeof import('~icons/lucide/gift.jsx')['default']
