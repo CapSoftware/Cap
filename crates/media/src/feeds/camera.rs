@@ -192,21 +192,18 @@ fn run_camera_feed(
 
     let (frame_tx, frame_rx) = mpsc::sync_channel(8);
 
-    let mut id = id;
-    let mut ready_signal = ready_tx;
+    let mut handle = match setup_camera(id, frame_tx.clone()) {
+        Ok((handle, camera, video_info)) => {
+            let _ = ready_tx.send(Ok((camera.clone(), video_info.clone())));
+            handle
+        }
+        Err(e) => {
+            let _ = ready_tx.send(Err(e));
+            return;
+        }
+    };
 
     'outer: loop {
-        let handle = match setup_camera(id, frame_tx.clone()) {
-            Ok((handle, camera, video_info)) => {
-                let _ = ready_signal.send(Ok((camera.clone(), video_info.clone())));
-                handle
-            }
-            Err(e) => {
-                let _ = ready_signal.send(Err(e));
-                return;
-            }
-        };
-
         loop {
             match control.try_recv() {
                 Err(TryRecvError::Disconnected) => {
@@ -223,8 +220,19 @@ fn run_camera_feed(
                     senders.push(sender);
                 }
                 Ok(CameraControl::Switch(new_id, switch_result)) => {
-                    id = new_id;
-                    ready_signal = switch_result;
+                    let new_handle = match setup_camera(new_id, frame_tx.clone()) {
+                        Ok((handle, camera, video_info)) => {
+                            let _ = switch_result.send(Ok((camera.clone(), video_info.clone())));
+                            handle
+                        }
+                        Err(e) => {
+                            let _ = switch_result.send(Err(e));
+                            continue;
+                        }
+                    };
+
+                    handle = new_handle;
+
                     break;
                 }
             }

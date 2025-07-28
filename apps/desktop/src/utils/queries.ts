@@ -156,21 +156,13 @@ export function createCameraMutation() {
         await commands.showWindow("Camera");
         getCurrentWindow().setFocus();
       }
-      console.log({ before, model })
+
       await commands.setCameraInput(model).catch(async (e) => {
         if (JSON.stringify(before) === JSON.stringify(model) || !before) {
           setOptions("cameraID", null);
-          await commands.setCameraInput(null).catch(() => { })
-        }
-        else {
-          setOptions("cameraID", reconcile(before));
-          await commands.setCameraInput(before).catch((e) => {
-            setOptions("cameraID", null);
-            throw e;
-          })
-        }
+        } else setOptions("cameraID", reconcile(before));
 
-        throw e
+        throw e;
       });
     },
   }));
