@@ -19,7 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import clsx from "clsx";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
-import LoadingSpinner from "../../../_components/LoadingSpinner";
+import { LoadingSpinner } from "@cap/ui";
 
 interface AddVideosDialogBaseProps {
   open: boolean;
@@ -241,7 +241,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
           <div className="flex-1 w-full h-64">
             {isLoading ? (
               <div className="flex justify-center items-center w-full h-64">
-                <LoadingSpinner />
+                <LoadingSpinner size={36} />
               </div>
             ) : filteredVideos.length === 0 ? (
               <div className="flex flex-col justify-center items-center h-24 text-center">
