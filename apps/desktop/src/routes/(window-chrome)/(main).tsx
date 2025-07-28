@@ -431,7 +431,7 @@ function Page() {
         ) : (
           <Button
             disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "blue"}
+            variant="blue"
             size="md"
             onClick={() => toggleRecording.mutate()}
             class="flex flex-grow justify-center items-center"
@@ -441,9 +441,9 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                  <IconCapInstant class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 ) : (
-                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                  <IconCapFilmCut class={cx("size-[0.8rem] mr-2 -mt-[1.5px]", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 )}
                 Start Recording
               </>
