@@ -32,6 +32,13 @@ import { generalSettingsStore } from "~/store";
 
 type State = "countdown" | "recording" | "paused" | "stopped";
 
+async function handleErrorDialog(errorMessage: string, title: string) {
+  await dialog.message(errorMessage, {
+    title,
+    kind: "error",
+  });
+}
+
 async function handleRecordingError(err: unknown) {
   const errorMessage =
     typeof err === "string"
@@ -40,26 +47,16 @@ async function handleRecordingError(err: unknown) {
         ? err.message
         : "Unknown error";
 
-  if (errorMessage.includes("Video upload info not found")) {
-    await dialog.message(
+  if (errorMessage.startsWith("Video upload info not found")) {
+    await handleErrorDialog(
       "Unable to start instant recording. Please ensure you are connected to the internet and the Cap service is available.",
-      {
-        title: "Recording Failed",
-        kind: "error",
-      }
+      "Recording Failed"
     );
-  } else if (errorMessage.includes("Please sign in to use instant recording")) {
-    await dialog.message("Please sign in to use instant recording mode.", {
-      title: "Sign In Required",
-      kind: "error",
-    });
+  } else if (errorMessage.startsWith("Please sign in to use instant recording")) {
+    await handleErrorDialog("Please sign in to use instant recording mode.", "Sign In Required");
   } else {
-    await dialog.message(`Failed to start recording: ${errorMessage}`, {
-      title: "Recording Failed",
-      kind: "error",
-    });
+    await handleErrorDialog(`Failed to start recording: ${errorMessage}`, "Recording Failed");
   }
-
   getCurrentWindow().close();
 }
 
