@@ -37,8 +37,8 @@ async function handleRecordingError(err: unknown) {
     typeof err === "string"
       ? err
       : err instanceof Error
-      ? err.message
-      : "Unknown error";
+        ? err.message
+        : "Unknown error";
 
   if (errorMessage.includes("Video upload info not found")) {
     await dialog.message(
@@ -79,9 +79,9 @@ export default function () {
   const [pauseResumes, setPauseResumes] = createStore<
     | []
     | [
-        ...Array<{ pause: number; resume?: number }>,
-        { pause: number; resume?: number }
-      ]
+      ...Array<{ pause: number; resume?: number }>,
+      { pause: number; resume?: number }
+    ]
   >([]);
 
   onMount(async () => {
@@ -111,7 +111,7 @@ export default function () {
 
       if (countdownSetting !== "off") {
         setState("countdown");
-        const countdownSeconds = countdownSetting === "five" ? 5 : 3;
+        const countdownSeconds = countdownSetting === "five" ? 5 : countdownSetting === "ten" ? 10 : 3;
         setCountdown(countdownSeconds);
         setCountdownDuration(countdownSeconds);
 
@@ -246,71 +246,41 @@ export default function () {
     <div class="flex flex-row items-stretch w-full h-full bg-gray-1 animate-in fade-in">
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <Show when={state() === "countdown"}>
-          <div class="flex items-center gap-3 px-3 flex-1">
-            <div class="text-gray-11 text-xs flex-1">
-              Recording starting soon.
+          <div class="flex flex-1 gap-3 items-center px-3">
+            <div class="flex-1 text-[13px] text-gray-11">
+              Recording starting...
             </div>
-
-            <button
-              onClick={() => {
-                if (countdownInterval) {
-                  clearInterval(countdownInterval);
-                  countdownInterval = undefined;
-                }
-                setCountdown(0);
-                const { rawOptions } = optionsQuery;
-                if (rawOptions) {
-                  commands
-                    .startRecording({
-                      capture_target: rawOptions.captureTarget,
-                      mode: rawOptions.mode,
-                      capture_system_audio: rawOptions.captureSystemAudio,
-                    })
-                    .catch((err) => {
-                      console.error("Failed to start recording:", err);
-                      handleRecordingError(err);
-                    });
-                } else {
-                  console.error("Recording options not available");
-                }
-              }}
-              class="text-red-300 text-sm font-medium hover:text-red-400 hover:bg-gray-3 px-3 py-2 rounded-md transition-all flex items-center gap-2"
-              type="button"
-            >
-              Continue
-              <div class="relative w-5 h-5">
-                <svg
-                  class="absolute inset-0 w-5 h-5 -rotate-90"
-                  viewBox="0 0 20 20"
-                >
-                  <circle
-                    cx="10"
-                    cy="10"
-                    r="8"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    opacity="0.2"
-                  />
-                  <circle
-                    cx="10"
-                    cy="10"
-                    r="8"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-dasharray={`${
-                      (countdown() / countdownDuration()) * 50.265
+            <div class="relative w-5 h-5 text-red-300">
+              <svg
+                class="absolute inset-0 w-5 h-5 -rotate-90"
+                viewBox="0 0 20 20"
+              >
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  opacity="0.2"
+                />
+                <circle
+                  cx="10"
+                  cy="10"
+                  r="8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-dasharray={`${(countdown() / countdownDuration()) * 50.265
                     } 50.265`}
-                    stroke-linecap="round"
-                    class="transition-all duration-1000 ease-linear"
-                  />
-                </svg>
-                <span class="absolute inset-0 flex items-center justify-center text-xs">
-                  {countdown()}
-                </span>
-              </div>
-            </button>
+                  stroke-linecap="round"
+                  class="transition-all duration-1000 ease-linear"
+                />
+              </svg>
+              <span class="flex absolute inset-0 justify-center items-center text-[11px]">
+                {countdown()}
+              </span>
+            </div>
           </div>
         </Show>
         <Show when={state() !== "countdown"}>
@@ -354,17 +324,17 @@ export default function () {
           <Show when={state() !== "countdown"}>
             {(currentRecording.data?.type === "studio" ||
               ostype() === "macos") && (
-              <ActionButton
-                disabled={togglePause.isPending}
-                onClick={() => togglePause.mutate()}
-              >
-                {state() === "paused" ? (
-                  <IconCapPlayCircle />
-                ) : (
-                  <IconCapPauseCircle />
-                )}
-              </ActionButton>
-            )}
+                <ActionButton
+                  disabled={togglePause.isPending}
+                  onClick={() => togglePause.mutate()}
+                >
+                  {state() === "paused" ? (
+                    <IconCapPlayCircle />
+                  ) : (
+                    <IconCapPauseCircle />
+                  )}
+                </ActionButton>
+              )}
 
             <ActionButton
               disabled={restartRecording.isPending}

@@ -27,6 +27,7 @@ pub enum RecordingCountdown {
     Off,
     Three,
     Five,
+    Ten,
 }
 
 impl Default for RecordingCountdown {

@@ -358,6 +358,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                               { text: "Off", value: "off" },
                               { text: "3 seconds", value: "three" },
                               { text: "5 seconds", value: "five" },
+                              { text: "10 seconds", value: "ten" },
                             ]
                           );
                         }
