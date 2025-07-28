@@ -124,7 +124,7 @@ window {}:
                     // };
 
                     info.push(json!({
-                        "model_id": camera_info.model_id().to_string(),
+                        // "model_id": camera_info.model_id().to_string(),
                         "display_name": camera_info.display_name()
                         // "index": camera_info.index().to_string(),
                         // "name": camera_info.human_name(),

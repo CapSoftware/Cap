@@ -9,7 +9,8 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
         .iter()
         .filter_map(|d| {
             Some(CameraInfo {
-                model_id: ModelID::from_avfoundation(d)?,
+                device_id: d.unique_id().to_string(),
+                model_id: ModelID::from_avfoundation(d),
                 display_name: d.localized_name().to_string(),
             })
         })
@@ -19,11 +20,7 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
 
 impl CameraInfo {
     pub(super) fn formats_impl(&self) -> Option<Vec<Format>> {
-        let devices = cap_camera_avfoundation::list_video_devices();
-
-        let device = devices
-            .iter()
-            .find(|d| ModelID::from_avfoundation(d).as_ref() == Some(self))?;
+        let device = find_device(self)?;
 
         let mut ret = vec![];
 
@@ -48,7 +45,9 @@ impl CameraInfo {
 
         Some(ret)
     }
+}
 
+impl ModelID {
     fn from_avfoundation(device: &cidre::av::capture::Device) -> Option<Self> {
         let unique_id = device.unique_id().to_string();
         if unique_id.len() < 8 {
@@ -66,15 +65,26 @@ pub type NativeFormat = arc::R<av::capture::device::Format>;
 
 pub type NativeRecordingHandle = AVFoundationRecordingHandle;
 
+fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
+    let devices = list_video_devices();
+    devices
+        .iter()
+        .find(
+            |d| match (ModelID::from_avfoundation(d).as_ref(), info.model_id()) {
+                (Some(a), Some(b)) => a == b,
+                (None, None) => &d.unique_id().to_string() == info.device_id(),
+                _ => false,
+            },
+        )
+        .map(|v| v.retained())
+}
+
 pub(super) fn start_capturing_impl(
     camera: &CameraInfo,
     format: Format,
     mut callback: impl FnMut(CapturedFrame) + 'static,
 ) -> Result<AVFoundationRecordingHandle, StartCapturingError> {
-    let devices = list_video_devices();
-    let mut device = devices
-        .iter()
-        .find(|d| ModelID::from_avfoundation(d).as_ref() == Some(camera.model_id()))
+    let mut device = find_device(camera)
         .ok_or(StartCapturingError::DeviceNotFound)?
         .retained();
 
@@ -132,7 +142,7 @@ pub(super) fn start_capturing_impl(
 
 pub struct AVFoundationRecordingHandle {
     _delegate: arc::R<cap_camera_avfoundation::CallbackOutputDelegate>,
-    session: arc::R<av::capture::Session>,
+    session: arc::R<cidre::av::capture::Session>,
     _output: arc::R<av::CaptureVideoDataOutput>,
     _input: arc::R<av::CaptureDeviceInput>,
     _device: arc::R<av::CaptureDevice>,

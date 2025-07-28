@@ -119,20 +119,6 @@ pub struct ModelID {
     pid: String,
 }
 
-impl ModelID {
-    fn from_windows(device: &cap_camera_windows::VideoDeviceInfo) -> Option<Self> {
-        let model_id = device.model_id()?;
-
-        let vid = &model_id[0..4];
-        let pid = &model_id[5..9];
-
-        Some(Self {
-            vid: vid.to_string(),
-            pid: pid.to_string(),
-        })
-    }
-}
-
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "specta", specta(remote = ModelID))]
 struct ModelIDType(String);

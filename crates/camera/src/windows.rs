@@ -46,6 +46,20 @@ impl CameraInfo {
     }
 }
 
+impl ModelID {
+    fn from_windows(device: &cap_camera_windows::VideoDeviceInfo) -> Option<Self> {
+        let model_id = device.model_id()?;
+
+        let vid = &model_id[0..4];
+        let pid = &model_id[5..9];
+
+        Some(Self {
+            vid: vid.to_string(),
+            pid: pid.to_string(),
+        })
+    }
+}
+
 pub type NativeFormat = cap_camera_windows::VideoFormat;
 
 #[derive(Debug)]

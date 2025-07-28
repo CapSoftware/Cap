@@ -77,9 +77,7 @@ impl VideoDeviceInfo {
                 VideoDeviceInfoInner::MediaFoundation { device },
                 VideoFormatInner::MediaFoundation(mf_format),
             ) => {
-                let size = unsafe { mf_format.GetUINT64(&MF_MT_FRAME_SIZE).unwrap() };
-                let width = (size >> 32) as usize;
-                let height = (size & 0xFFFFFFFF) as usize;
+                let format = VideoFormat::new(mf_format).unwrap();
 
                 let handle = device.start_capturing(
                     &mf_format,
@@ -92,10 +90,9 @@ impl VideoDeviceInfo {
 
                             callback(Frame {
                                 inner: FrameInner::MediaFoundation(buffer),
-                                width,
-                                height,
-                                // TODO
-                                pixel_format: PixelFormat::NV12,
+                                width: format.width,
+                                height: format.height,
+                                pixel_format: format.pixel_format,
                             })
                         }
                     }),

@@ -48,7 +48,8 @@ impl RecordStart {
                 .try_into()
                 .map_err(|_| "Invalid model ID".to_string())?;
 
-            Some(CameraFeed::init(model_id).await.unwrap())
+            todo!()
+            // Some(CameraFeed::init(model_id).await.unwrap())
         } else {
             None
         };
