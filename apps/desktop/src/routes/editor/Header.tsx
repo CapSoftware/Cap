@@ -179,7 +179,7 @@ export function Header() {
         </Show>
         <Button
           variant="lightdark"
-          class={cx("flex gap-1.5 justify-center h-[40px]")}
+          class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
           onClick={() => {
             trackEvent("export_button_clicked");
             if (exportState.type === "done") setExportState({ type: "idle" });
