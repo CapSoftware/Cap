@@ -40,6 +40,8 @@ pub enum StartCapturingError {
     MediaFoundation(#[from] cap_camera_mediafoundation::StartCapturingError),
     #[error("{0}")]
     DirectShow(#[from] cap_camera_directshow::StartCapturingError),
+    #[error("Format/{0}")]
+    Format(#[from] VideoFormatError),
 }
 
 impl VideoDeviceInfo {
@@ -77,7 +79,7 @@ impl VideoDeviceInfo {
                 VideoDeviceInfoInner::MediaFoundation { device },
                 VideoFormatInner::MediaFoundation(mf_format),
             ) => {
-                let format = VideoFormat::new(mf_format).unwrap();
+                let format = VideoFormat::new_mf(mf_format.clone())?;
 
                 let handle = device.start_capturing(
                     &mf_format,
@@ -90,8 +92,8 @@ impl VideoDeviceInfo {
 
                             callback(Frame {
                                 inner: FrameInner::MediaFoundation(buffer),
-                                width: format.width,
-                                height: format.height,
+                                width: format.width() as usize,
+                                height: format.height() as usize,
                                 pixel_format: format.pixel_format,
                             })
                         }
