@@ -28,11 +28,13 @@ export type VideoData = {
   createdAt: Date;
   totalComments: number;
   totalReactions: number;
+  foldersData: FolderDataType[];
   sharedOrganizations: { id: string; name: string; iconUrl?: string }[];
-  sharedSpaces: {
+  sharedSpaces?: {
     id: string;
     name: string;
-    iconUrl?: string;
+    iconUrl: string;
+    isOrg: boolean;
     organizationId: string;
   }[];
   ownerName: string;

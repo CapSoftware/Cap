@@ -61,7 +61,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     if (!sharedSpacesMap[space.videoId]) {
       sharedSpacesMap[space.videoId] = [];
     }
-    sharedSpacesMap[space.videoId].push({
+    sharedSpacesMap[space.videoId]?.push({
       id: space.id,
       name: space.name,
       organizationId: space.organizationId,
@@ -75,7 +75,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     if (!sharedSpacesMap[org.videoId]) {
       sharedSpacesMap[org.videoId] = [];
     }
-    sharedSpacesMap[org.videoId].push({
+    sharedSpacesMap[org.videoId]?.push({
       id: org.id,
       name: org.name,
       organizationId: org.organizationId,
