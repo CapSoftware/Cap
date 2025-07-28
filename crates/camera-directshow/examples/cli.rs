@@ -14,7 +14,7 @@ fn main() {
     tracing_subscriber::fmt::init();
 
     unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED).unwrap();
+        CoInitialize(None).unwrap();
 
         let devices = VideoInputDeviceIterator::new().unwrap().collect::<Vec<_>>();
 
@@ -130,7 +130,12 @@ impl Display for Format {
             "{}x{} {} ({:?})",
             self.width,
             self.height,
-            unsafe { self.media_type.subtype_str().unwrap_or("unknown") },
+            unsafe {
+                self.media_type
+                    .subtype_str()
+                    .map(|v| v.to_string())
+                    .unwrap_or(format!("unknown ({:?})", self.media_type.subtype))
+            },
             &self.frame_rates
         )
     }

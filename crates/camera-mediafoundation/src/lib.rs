@@ -1,4 +1,5 @@
-#![cfg(windows)]
+// #![cfg(windows)]
+#![allow(non_snake_case)]
 
 use std::{
     ffi::OsString,
@@ -217,9 +218,9 @@ impl Device {
                 )
                 .map_err(StartCapturingError::InitializeEngine)?;
 
-            event_rx
-                .iter()
-                .find(|e| matches!(e, CaptureEngineEvent::Initialized));
+            let Ok(_) = wait_for_event(&event_rx, CaptureEngineEventVariant::Initialized) else {
+                panic!("Engine initialization failed");
+            };
 
             println!("Engine initialized.");
 
@@ -278,7 +279,6 @@ impl Device {
             source
                 .SetCurrentDeviceMediaType(stream_index, &format)
                 .map_err(StartCapturingError::ConfigureSource)?;
-            println!("Source media type set");
 
             let sink = engine
                 .GetSink(MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW)
@@ -304,6 +304,9 @@ impl Device {
             engine
                 .StartPreview()
                 .map_err(StartCapturingError::StartPreview)?;
+
+            wait_for_event(&event_rx, CaptureEngineEventVariant::PreviewStarted)
+                .map_err(|v| StartCapturingError::StartPreview(v.into()))?;
 
             Ok(CaptureHandle { engine, event_rx })
         }
@@ -583,28 +586,55 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
 
 impl IMFCaptureEngineOnEventCallback_Impl for VideoCallback_Impl {
     fn OnEvent(&self, pevent: windows_core::Ref<'_, IMFMediaEvent>) -> windows_core::Result<()> {
-        unsafe {
-            let Some(event) = pevent.as_ref() else {
-                return S_OK.ok();
-            };
+        let Some(event) = pevent.as_ref() else {
+            return S_OK.ok();
+        };
 
-            let guid = event.GetExtendedType().unwrap();
-
-            let engine_event = CaptureEngineEvent::from(&guid);
-
-            let _ = self.event_tx.send(engine_event);
-        }
+        let _ = self.event_tx.send(CaptureEngineEvent(event.clone()));
 
         Ok(())
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
-pub enum CaptureEngineEvent {
+#[derive(Clone, Debug)]
+pub struct CaptureEngineEvent(IMFMediaEvent);
+
+impl CaptureEngineEvent {
+    pub fn variant(&self) -> Option<CaptureEngineEventVariant> {
+        Some(match unsafe { self.0.GetExtendedType() }.ok()? {
+            MF_CAPTURE_ENGINE_ALL_EFFECTS_REMOVED => CaptureEngineEventVariant::AllEffectsRemoved,
+            MF_CAPTURE_ENGINE_CAMERA_STREAM_BLOCKED => {
+                CaptureEngineEventVariant::CameraStreamBlocked
+            }
+            MF_CAPTURE_ENGINE_CAMERA_STREAM_UNBLOCKED => {
+                CaptureEngineEventVariant::CameraStreamUnblocked
+            }
+            MF_CAPTURE_ENGINE_EFFECT_ADDED => CaptureEngineEventVariant::EffectAdded,
+            MF_CAPTURE_ENGINE_EFFECT_REMOVED => CaptureEngineEventVariant::EffectRemoved,
+            MF_CAPTURE_ENGINE_ERROR => CaptureEngineEventVariant::Error,
+            MF_CAPTURE_ENGINE_INITIALIZED => CaptureEngineEventVariant::Initialized,
+            MF_CAPTURE_ENGINE_PHOTO_TAKEN => CaptureEngineEventVariant::PhotoTaken,
+            MF_CAPTURE_ENGINE_PREVIEW_STARTED => CaptureEngineEventVariant::PreviewStarted,
+            MF_CAPTURE_ENGINE_PREVIEW_STOPPED => CaptureEngineEventVariant::PreviewStopped,
+            MF_CAPTURE_ENGINE_RECORD_STARTED => CaptureEngineEventVariant::RecordStarted,
+            MF_CAPTURE_ENGINE_RECORD_STOPPED => CaptureEngineEventVariant::RecordStopped,
+            MF_CAPTURE_ENGINE_OUTPUT_MEDIA_TYPE_SET => {
+                CaptureEngineEventVariant::OutputMediaTypeSet
+            }
+            MF_CAPTURE_SINK_PREPARED => CaptureEngineEventVariant::SinkPrepared,
+            MF_CAPTURE_SOURCE_CURRENT_DEVICE_MEDIA_TYPE_SET => {
+                CaptureEngineEventVariant::SourceCurrentDeviceMediaTypeSet
+            }
+            _ => return None,
+        })
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+pub enum CaptureEngineEventVariant {
     Initialized,
     Error,
     PreviewStarted,
-    Unknown,
     AllEffectsRemoved,
     CameraStreamBlocked,
     CameraStreamUnblocked,
@@ -619,29 +649,20 @@ pub enum CaptureEngineEvent {
     OutputMediaTypeSet,
 }
 
-impl From<&GUID> for CaptureEngineEvent {
-    fn from(guid: &GUID) -> Self {
-        match *guid {
-            MF_CAPTURE_ENGINE_ALL_EFFECTS_REMOVED => CaptureEngineEvent::AllEffectsRemoved,
-            MF_CAPTURE_ENGINE_CAMERA_STREAM_BLOCKED => CaptureEngineEvent::CameraStreamBlocked,
-            MF_CAPTURE_ENGINE_CAMERA_STREAM_UNBLOCKED => CaptureEngineEvent::CameraStreamUnblocked,
-            MF_CAPTURE_ENGINE_EFFECT_ADDED => CaptureEngineEvent::EffectAdded,
-            MF_CAPTURE_ENGINE_EFFECT_REMOVED => CaptureEngineEvent::EffectRemoved,
-            MF_CAPTURE_ENGINE_ERROR => CaptureEngineEvent::Error,
-            MF_CAPTURE_ENGINE_INITIALIZED => CaptureEngineEvent::Initialized,
-            MF_CAPTURE_ENGINE_PHOTO_TAKEN => CaptureEngineEvent::PhotoTaken,
-            MF_CAPTURE_ENGINE_PREVIEW_STARTED => CaptureEngineEvent::PreviewStarted,
-            MF_CAPTURE_ENGINE_PREVIEW_STOPPED => CaptureEngineEvent::PreviewStopped,
-            MF_CAPTURE_ENGINE_RECORD_STARTED => CaptureEngineEvent::RecordStarted,
-            MF_CAPTURE_ENGINE_RECORD_STOPPED => CaptureEngineEvent::RecordStopped,
-            MF_CAPTURE_ENGINE_OUTPUT_MEDIA_TYPE_SET => CaptureEngineEvent::OutputMediaTypeSet,
-            MF_CAPTURE_SINK_PREPARED => CaptureEngineEvent::SinkPrepared,
-            MF_CAPTURE_SOURCE_CURRENT_DEVICE_MEDIA_TYPE_SET => {
-                CaptureEngineEvent::SourceCurrentDeviceMediaTypeSet
+fn wait_for_event(
+    rx: &Receiver<CaptureEngineEvent>,
+    variant: CaptureEngineEventVariant,
+) -> Result<CaptureEngineEvent, windows_core::HRESULT> {
+    rx.iter()
+        .find_map(|e| match dbg!(e.variant()) {
+            Some(v) if v == variant => Some(Ok(e)),
+            Some(CaptureEngineEventVariant::Error) => {
+                Some(Err(unsafe { e.0.GetStatus() }.unwrap()))
             }
-            _ => CaptureEngineEvent::Unknown,
-        }
-    }
+            _ => None,
+        })
+        .ok_or(windows_core::HRESULT::from_win32(
+            MF_E_INVALIDREQUEST.0 as u32,
+        ))
+        .and_then(|v| v)
 }
-
-const MF_CAPTURE_ENGINE_FIRST_SOURCE_VIDEO_STREAM: u32 = 0xFFFFFFFC;

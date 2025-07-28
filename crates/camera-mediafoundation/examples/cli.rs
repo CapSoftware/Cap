@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, time::Duration};
 
 use cap_camera_mediafoundation::DeviceSourcesIterator;
 use tracing::warn;
@@ -6,7 +6,6 @@ use windows::Win32::{Media::MediaFoundation::*, System::Com::CoInitialize};
 use windows_core::GUID;
 
 pub fn main() {
-    // std::thread::spawn(||
     unsafe {
         CoInitialize(None).unwrap();
 
@@ -33,7 +32,7 @@ pub fn main() {
             .filter_map(|v| VideoFormat::new(v).ok())
             .collect::<Vec<_>>();
 
-        let mut selected_format = if formats.len() > 1 {
+        let selected_format = if formats.len() > 1 {
             inquire::Select::new("Select a format", formats)
                 .prompt()
                 .unwrap()
@@ -41,7 +40,7 @@ pub fn main() {
             formats.remove(0)
         };
 
-        let handle = selected
+        let _handle = selected
             .start_capturing(
                 &selected_format.inner,
                 Box::new(|imf_sample| {
@@ -63,69 +62,8 @@ pub fn main() {
             )
             .unwrap();
 
-        // let stream_index = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-
-        // let mut formats = reader
-        //     .native_media_types(stream_index)
-        //     .unwrap()
-        //     .filter_map(|v| VideoFormat::new(v).ok())
-        //     .collect::<Vec<_>>();
-
-        // let mut selected_format = if formats.len() > 1 {
-        //     inquire::Select::new("Select a format", formats)
-        //         .prompt()
-        //         .unwrap()
-        // } else {
-        //     formats.remove(0)
-        // };
-
-        // reader
-        //     .set_current_media_type(
-        //         MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-        //         &selected_format.inner,
-        //     )
-        //     .unwrap();
-
-        // reader.SetStreamSelection(stream_index, true).unwrap();
-
-        // loop {
-        //     let mut imf_sample = None;
-        //     let mut stream_flags = 0;
-        //     let imf_sample = loop {
-        //         reader
-        //             .ReadSample(
-        //                 stream_index,
-        //                 0,
-        //                 None,
-        //                 Some(&mut stream_flags),
-        //                 None,
-        //                 Some(&mut imf_sample),
-        //             )
-        //             .unwrap();
-
-        //         if let Some(imf_sample) = imf_sample {
-        //             break imf_sample;
-        //         }
-        //     };
-
-        //     let pts = imf_sample.GetSampleTime().unwrap();
-        //     let bytes = imf_sample.GetTotalLength().unwrap();
-        //     if stream_flags as i32 & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
-        //         == MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
-        //     {
-        //         selected_format =
-        //             VideoFormat::new(reader.GetCurrentMediaType(stream_index).unwrap()).unwrap();
-        //     }
-
-        //     println!(
-        //         "New frame: {}x{}, {pts}pts, {bytes} bytes, {}",
-        //         selected_format.width,
-        //         selected_format.height,
-        //         media_subtype_str(&selected_format.subtype).unwrap_or("unknown format")
-        //     );
-        // }
+        std::thread::sleep(Duration::from_secs(10));
     }
-    // );
 }
 
 struct VideoFormat {

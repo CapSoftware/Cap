@@ -1,18 +1,14 @@
-use cap_camera::ModelID;
 use cap_fail::{fail, fail_err};
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use futures::channel::oneshot;
 use std::{
-    sync::{mpsc, Arc},
-    thread::{self},
-    time::{Duration, Instant, SystemTime},
+    sync::mpsc,
+    thread,
+    time::{Duration, SystemTime},
 };
-use tracing::{debug, error, info, trace, warn};
+use tracing::{error, info, trace, warn};
 
-use crate::{
-    data::{FFVideo, VideoInfo},
-    MediaError,
-};
+use crate::data::{FFVideo, VideoInfo};
 
 use cap_camera_ffmpeg::*;
 
@@ -271,11 +267,15 @@ pub enum SetupCameraError {
     CameraNotFound,
     #[error("Invalid format")]
     InvalidFormat,
-    #[error("Initialisation failed")]
-    Initialisation,
+    #[error("Camera timed out")]
+    Timeout(mpsc::RecvTimeoutError),
     #[error("StartCapturing/{0}")]
     StartCapturing(#[from] cap_camera::StartCapturingError),
+    #[error("Failed to initialize camera")]
+    Initialisation,
 }
+
+const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 fn setup_camera(
     id: DeviceOrModelID,
@@ -297,7 +297,7 @@ fn setup_camera(
     let format = formats.remove(0);
     let frame_rate = format.frame_rate() as u32;
 
-    let (ready_tx, ready_rx) = oneshot::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let mut ready_signal = Some(ready_tx);
 
     let capture_handle = camera.start_capturing(format.clone(), move |frame| {
@@ -319,8 +319,9 @@ fn setup_camera(
         let _ = frame_tx.send(ff_frame);
     })?;
 
-    let video_info =
-        futures::executor::block_on(ready_rx).map_err(|_| SetupCameraError::Initialisation)?;
+    let video_info = ready_rx
+        .recv_timeout(CAMERA_INIT_TIMEOUT)
+        .map_err(SetupCameraError::Timeout)?;
 
     Ok((capture_handle, camera, video_info))
 }
