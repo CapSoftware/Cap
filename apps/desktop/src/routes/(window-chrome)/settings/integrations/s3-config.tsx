@@ -121,7 +121,7 @@ export default function S3ConfigPage() {
         <div class="flex-1">
           <Suspense
             fallback={
-              <div class="flex justify-center items-center w-full h-full">
+              <div class="flex justify-center items-center w-full h-screen">
                 <IconCapLogo class="animate-spin size-16" />
               </div>
             }
@@ -190,7 +190,7 @@ export default function S3ConfigPage() {
                             provider: e.currentTarget.value,
                           }))
                         }
-                        class="px-3 py-2 pr-10 w-full rounded-lg border transition-colors duration-200 appearance-none bg-gray-3 border-gray-4 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        class="px-3 py-2 pr-10 w-full rounded-lg border border-transparent transition-all duration-200 appearance-none outline-none bg-gray-3 focus:border-gray-8"
                       >
                         <option value="aws">AWS S3</option>
                         <option value="cloudflare">Cloudflare R2</option>
