@@ -32,6 +32,37 @@ import { generalSettingsStore } from "~/store";
 
 type State = "countdown" | "recording" | "paused" | "stopped";
 
+async function handleRecordingError(err: unknown) {
+  const errorMessage =
+    typeof err === "string"
+      ? err
+      : err instanceof Error
+      ? err.message
+      : "Unknown error";
+
+  if (errorMessage.includes("Video upload info not found")) {
+    await dialog.message(
+      "Unable to start instant recording. Please ensure you are connected to the internet and the Cap service is available.",
+      {
+        title: "Recording Failed",
+        kind: "error",
+      }
+    );
+  } else if (errorMessage.includes("Please sign in to use instant recording")) {
+    await dialog.message("Please sign in to use instant recording mode.", {
+      title: "Sign In Required",
+      kind: "error",
+    });
+  } else {
+    await dialog.message(`Failed to start recording: ${errorMessage}`, {
+      title: "Recording Failed",
+      kind: "error",
+    });
+  }
+
+  getCurrentWindow().close();
+}
+
 export default function () {
   const [countdown, setCountdown] = createSignal<number>(0);
   const [countdownDuration, setCountdownDuration] = createSignal<number>(3);
@@ -41,6 +72,7 @@ export default function () {
   const currentRecording = createCurrentRecordingQuery();
   const optionsQuery = createOptionsQuery();
   let countdownInterval: ReturnType<typeof setInterval> | undefined;
+  let hasStartedCountdown = false;
 
   const audioLevel = createAudioInputLevel();
 
@@ -63,46 +95,59 @@ export default function () {
       }
     );
 
-    const { rawOptions } = optionsQuery;
+    // Wait for options to be loaded
+    createEffect(() => {
+      const { rawOptions } = optionsQuery;
+      if (!rawOptions) {
+        console.log("Recording options not yet available");
+        return;
+      }
 
-    if (countdownSetting !== "off") {
-      setState("countdown");
-      const countdownSeconds = countdownSetting === "five" ? 5 : 3;
-      setCountdown(countdownSeconds);
-      setCountdownDuration(countdownSeconds);
+      // Only run this effect once when rawOptions becomes available
+      if (hasStartedCountdown) return;
+      hasStartedCountdown = true;
 
-      countdownInterval = setInterval(() => {
-        setCountdown((c) => {
-          if (c <= 1) {
-            clearInterval(countdownInterval!);
-            countdownInterval = undefined;
-            if (rawOptions) {
+      console.log("Starting recording with options:", rawOptions);
+
+      if (countdownSetting !== "off") {
+        setState("countdown");
+        const countdownSeconds = countdownSetting === "five" ? 5 : 3;
+        setCountdown(countdownSeconds);
+        setCountdownDuration(countdownSeconds);
+
+        countdownInterval = setInterval(() => {
+          setCountdown((c) => {
+            if (c <= 1) {
+              clearInterval(countdownInterval!);
+              countdownInterval = undefined;
               commands
                 .startRecording({
                   capture_target: rawOptions.captureTarget,
                   mode: rawOptions.mode,
                   capture_system_audio: rawOptions.captureSystemAudio,
                 })
-                .catch((err) =>
-                  console.error("Failed to start recording:", err)
-                );
+                .catch((err) => {
+                  console.error("Failed to start recording:", err);
+                  handleRecordingError(err);
+                });
+              return 0;
             }
-            return 0;
-          }
-          return c - 1;
-        });
-      }, 1000);
-    } else {
-      if (rawOptions) {
+            return c - 1;
+          });
+        }, 1000);
+      } else {
         commands
           .startRecording({
             capture_target: rawOptions.captureTarget,
             mode: rawOptions.mode,
             capture_system_audio: rawOptions.captureSystemAudio,
           })
-          .catch((err) => console.error("Failed to start recording:", err));
+          .catch((err) => {
+            console.error("Failed to start recording:", err);
+            handleRecordingError(err);
+          });
       }
-    }
+    });
 
     onCleanup(() => {
       unlistenRecordingStarted();
@@ -221,9 +266,12 @@ export default function () {
                       mode: rawOptions.mode,
                       capture_system_audio: rawOptions.captureSystemAudio,
                     })
-                    .catch((err) =>
-                      console.error("Failed to start recording:", err)
-                    );
+                    .catch((err) => {
+                      console.error("Failed to start recording:", err);
+                      handleRecordingError(err);
+                    });
+                } else {
+                  console.error("Recording options not available");
                 }
               }}
               class="text-red-300 text-sm font-medium hover:text-red-400 hover:bg-gray-3 px-3 py-2 rounded-md transition-all flex items-center gap-2"
