@@ -19,6 +19,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import clsx from "clsx";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
+import { LoadingSpinner } from "@cap/ui";
 
 interface AddVideosDialogBaseProps {
   open: boolean;
@@ -83,9 +84,8 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       return result.data;
     },
     enabled: open,
-    refetchOnWindowFocus: false, // Don't refetch when window regains focus
-    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
-    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 5,
   });
 
   const { data: entityVideoIds } = useQuery<string[]>({
@@ -98,9 +98,8 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
       return result.data;
     },
     enabled: open,
-    refetchOnWindowFocus: false, // Don't refetch when window regains focus
-    staleTime: Infinity, // Consider data fresh forever (until manually invalidated)
-    gcTime: 1000 * 60 * 5, // Cache for 5 minutes (gcTime is the new name for cacheTime)
+    refetchOnWindowFocus: false,
+    gcTime: 1000 * 60 * 5,
   });
 
   const updateVideosMutation = useMutation({
@@ -239,10 +238,10 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
             </div>
           </div>
 
-          <div className="flex-1 w-full">
+          <div className="flex-1 w-full h-64">
             {isLoading ? (
-              <div className="flex justify-center items-center h-64">
-                <div className="w-8 h-8 rounded-full border-b-2 border-blue-500 animate-spin"></div>
+              <div className="flex justify-center items-center w-full h-64">
+                <LoadingSpinner size={36} />
               </div>
             ) : filteredVideos.length === 0 ? (
               <div className="flex flex-col justify-center items-center h-24 text-center">
@@ -263,7 +262,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
                   {searchTerm
                     ? 'Try adjusting your search terms.'
                     : videoTab === 'added'
-                      ? `You haven't added any videos to this ${entityName} yet.`
+                      ? `You haven't added any videos to ${entityName} yet.`
                       : videoTab === 'notAdded'
                         ? `Record or upload videos to add them to this ${entityName}.`
                         : `Record or upload videos to see them here.`}
