@@ -182,6 +182,34 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           onChange: (value: boolean) => handleChange("hideDockIcon", value),
         },
         {
+          label: "Enable system notifications",
+          type: "toggle",
+          os: "macos",
+          description: "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
+          get value() { return !!settings.enableNotifications; },
+          onChange: async (value: boolean) => {
+            if (value) {
+              // Check current permission state
+              console.log("Checking notification permission status");
+              const permissionGranted = await isPermissionGranted();
+              console.log(`Current permission status: ${permissionGranted}`);
+
+              if (!permissionGranted) {
+                // Request permission if not granted
+                console.log("Permission not granted, requesting permission");
+                const permission = await requestPermission();
+                console.log(`Permission request result: ${permission}`);
+                if (permission !== "granted") {
+                  // If permission denied, don't enable the setting
+                  console.log("Permission denied, aborting setting change");
+                  return;
+                }
+              }
+            }
+            handleChange("enableNotifications", value);
+          },
+        },
+        {
           label: "Enable haptics",
           type: "toggle",
           os: "macos",
@@ -212,72 +240,41 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
         },
       ],
     },
-    {
-      title: "Notifications",
-      items: [
-        {
-          label: "Enable system notifications",
-          type: "toggle",
-          description: "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
-          get value() { return !!settings.enableNotifications; },
-          onChange: async (value: boolean) => {
-            if (value) {
-              // Check current permission state
-              console.log("Checking notification permission status");
-              const permissionGranted = await isPermissionGranted();
-              console.log(`Current permission status: ${permissionGranted}`);
-
-              if (!permissionGranted) {
-                // Request permission if not granted
-                console.log("Permission not granted, requesting permission");
-                const permission = await requestPermission();
-                console.log(`Permission request result: ${permission}`);
-                if (permission !== "granted") {
-                  // If permission denied, don't enable the setting
-                  console.log("Permission denied, aborting setting change");
-                  return;
-                }
-              }
-            }
-            handleChange("enableNotifications", value);
-          },
-        },
-      ],
-    }
   ];
 
   // Helper function to render select dropdown for recording behaviors
   const renderRecordingSelect = (
     label: string,
     description: string,
-    value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour,
+    getValue: () => MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour,
     onChange: (value: any) => void,
     options: { text: string; value: any }[]
   ) => {
-    const getDisplayText = () => {
-      const option = options.find(opt => opt.value === value);
-      return option ? option.text : value;
-    };
-
     return (
       <Setting label={label} description={description}>
         <button
           class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
           onClick={async () => {
+            const currentValue = getValue();
             const items = options.map(option =>
               CheckMenuItem.new({
                 text: option.text,
-                checked: value === option.value,
+                checked: currentValue === option.value,
                 action: () => onChange(option.value),
               })
             );
             const menu = await Menu.new({
               items: await Promise.all(items),
             });
-            menu.popup();
+            await menu.popup();
+            await menu.close();
           }}
         >
-          {getDisplayText()}
+          {(() => {
+            const currentValue = getValue();
+            const option = options.find(opt => opt.value === currentValue);
+            return option ? option.text : currentValue;
+          })()}
           <IconCapChevronDown class="size-4" />
         </button>
       </Setting>
@@ -323,7 +320,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                           return renderRecordingSelect(
                             item.label,
                             item.description,
-                            item.value,
+                            () => item.value,
                             item.onChange,
                             [
                               { text: "Close", value: "close" },
@@ -334,11 +331,23 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                           return renderRecordingSelect(
                             item.label,
                             item.description,
-                            item.value,
+                            () => item.value,
                             item.onChange,
                             [
                               { text: "Open editor", value: "openEditor" },
                               { text: "Show in overlay", value: "showOverlay" },
+                            ]
+                          );
+                        } else if (item.label === "Recording countdown") {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Off", value: "off" },
+                              { text: "3 seconds", value: "three" },
+                              { text: "5 seconds", value: "five" },
                             ]
                           );
                         }
