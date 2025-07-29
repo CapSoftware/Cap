@@ -8,6 +8,7 @@ export * from "./components/icons/LogoBadge";
 
 // Layout
 export * from "./components/LogoSpinner";
+export * from "./components/LoadingSpinner";
 export * from "./components/SkeletonPage";
 export * from "./components/SkeletonRows";
 
