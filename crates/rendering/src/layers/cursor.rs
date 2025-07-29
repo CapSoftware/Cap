@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+
 use bytemuck::{Pod, Zeroable};
 use cap_project::*;
-use wgpu::{include_wgsl, util::DeviceExt, BindGroup, FilterMode};
+use image::GenericImageView;
+use tracing::error;
+use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    zoom::InterpolatedZoom, DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants,
-    STANDARD_CURSOR_HEIGHT,
+    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, STANDARD_CURSOR_HEIGHT,
+    zoom::InterpolatedZoom,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -14,6 +18,7 @@ const CLICK_SHRINK_SIZE: f32 = 0.7;
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
+    cursors: HashMap<String, CursorTexture>,
 }
 
 struct Statics {
@@ -169,6 +174,7 @@ impl CursorLayer {
         Self {
             statics,
             bind_group: None,
+            cursors: Default::default(),
         }
     }
 
@@ -201,15 +207,45 @@ impl CursorLayer {
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
-        let Some(cursor_texture) = constants.cursor_texture_manager.get_texture(
-            &interpolated_cursor.cursor_id,
-            !uniforms.project.cursor.raw && uniforms.project.cursor.use_svg,
-        ) else {
+        if !self.cursors.contains_key(&interpolated_cursor.cursor_id) {
+            let mut cursor = None;
+            // We first attempt to load a high-quality SVG cursor
+            if !uniforms.project.cursor.raw && uniforms.project.cursor.use_svg {
+                cursor = CursorTexture::get_svg(&constants, &interpolated_cursor.cursor_id);
+            }
+
+            // If not we attempt to load the low-quality image cursor
+            if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
+                && cursor.is_none()
+            {
+                if let Some(c) = inner
+                    .get_cursor_image(&constants.recording_meta, &interpolated_cursor.cursor_id)
+                {
+                    if let Ok(img) = image::open(&c.path).map_err(|err| {
+                        error!("Failed to load cursor image from {:?}: {err}", c.path)
+                    }) {
+                        cursor = Some(CursorTexture::prepare(
+                            constants,
+                            &img.to_rgba8(),
+                            img.dimensions(),
+                            c.hotspot,
+                        ));
+                    }
+                }
+            }
+
+            if let Some(cursor) = cursor {
+                self.cursors
+                    .insert(interpolated_cursor.cursor_id.clone(), cursor);
+            }
+        }
+        let Some(cursor_texture) = self.cursors.get(&interpolated_cursor.cursor_id) else {
+            error!("Cursor {:?} not found!", interpolated_cursor.cursor_id);
             return;
         };
 
         let cursor_base_size_px = {
-            let cursor_texture_size = cursor_texture.inner.size();
+            let cursor_texture_size = cursor_texture.texture.size();
             let cursor_texture_size_aspect =
                 cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
 
@@ -233,8 +269,8 @@ impl CursorLayer {
             * (1.0 - CLICK_SHRINK_SIZE)
             + CLICK_SHRINK_SIZE;
 
-        let cursor_size_px =
-            cursor_base_size_px * click_scale_factor * zoom.display_amount() as f32;
+        let cursor_size_px: XY<f64> =
+            (cursor_base_size_px * click_scale_factor * zoom.display_amount() as f32).into();
 
         let hotspot_px = cursor_texture.hotspot * cursor_size_px;
 
@@ -254,7 +290,7 @@ impl CursorLayer {
 
         let uniforms = CursorUniforms {
             position: [position.x as f32, position.y as f32],
-            size: [cursor_size_px.x, cursor_size_px.y],
+            size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
             velocity,
@@ -270,7 +306,7 @@ impl CursorLayer {
 
         self.bind_group = Some(
             self.statics
-                .create_bind_group(&constants.device, &cursor_texture.inner),
+                .create_bind_group(&constants.device, &cursor_texture.texture),
         );
     }
 
@@ -362,4 +398,101 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
     }
 
     1.0
+}
+
+struct CursorTexture {
+    texture: wgpu::Texture,
+    hotspot: XY<f64>,
+}
+
+impl CursorTexture {
+    // Attempt to find and load a higher-quality SVG cursor included in Cap.
+    // These are used instead of the OS provided cursor images so the cursor is better quality.
+    fn get_svg(constants: &RenderVideoConstants, id: &str) -> Option<CursorTexture> {
+        println!("GET SVG {:?} {:?}", id, constants.recording_meta.platform);
+
+        match (id, &constants.recording_meta.platform) {
+            _ => None,
+        }
+    }
+
+    /// Prepare a cursor texture on the GPU from RGBA data.
+    fn prepare(
+        constants: &RenderVideoConstants,
+        rgba: &[u8],
+        dimensions: (u32, u32),
+        hotspot: XY<f64>,
+    ) -> Self {
+        let texture = constants.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Cursor Texture"),
+            size: wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        constants.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * dimensions.0),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        Self { texture, hotspot }
+    }
+
+    /// Prepare a cursor texture on the GPU from a raw SVG file
+    fn prepare_svg(
+        constants: &RenderVideoConstants,
+        svg_data: &str,
+        hotspot: XY<f64>,
+    ) -> Result<Self, String> {
+        let size = 64; // TODO: Should scale with the cursor size in the editor
+
+        let rtree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
+            .map_err(|e| format!("Failed to parse SVG: {}", e))?;
+
+        let pixmap_size = rtree.size().to_int_size();
+        let target_size = tiny_skia::IntSize::from_wh(size, size).ok_or("Invalid target size")?;
+
+        let mut pixmap = tiny_skia::Pixmap::new(target_size.width(), target_size.height())
+            .ok_or("Failed to create pixmap")?;
+
+        // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
+        let scale_x = target_size.width() as f32 / pixmap_size.width() as f32;
+        let scale_y = target_size.height() as f32 / pixmap_size.height() as f32;
+        let scale = scale_x.min(scale_y);
+
+        let transform = tiny_skia::Transform::from_scale(scale, scale);
+
+        resvg::render(&rtree, transform, &mut pixmap.as_mut());
+
+        let rgba: Vec<u8> = pixmap
+            .pixels()
+            .iter()
+            .flat_map(|pixel| [pixel.red(), pixel.green(), pixel.red(), pixel.alpha()])
+            .collect();
+
+        Ok(Self::prepare(constants, &rgba, (size, size), hotspot))
+    }
 }

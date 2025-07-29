@@ -60,7 +60,8 @@ impl Default for Platform {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
-    pub platform: Option<Platform>,
+    #[serde(default)]
+    pub platform: Platform,
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
@@ -249,22 +250,17 @@ impl MultipleSegments {
         meta.project_path.join(path)
     }
 
-    pub fn cursor_images(&self, meta: &RecordingMeta) -> Result<CursorImages, CursorImage> {
-        Ok(CursorImages(match &self.cursors {
-            Cursors::Old(_) => Default::default(),
-            Cursors::Correct(map) => map
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.clone(),
-                        CursorImage {
-                            path: meta.path(&v.image_path),
-                            hotspot: v.hotspot,
-                        },
-                    )
+    pub fn get_cursor_image(&self, meta: &RecordingMeta, id: &str) -> Option<CursorImage> {
+        match &self.cursors {
+            Cursors::Old(_) => None,
+            Cursors::Correct(map) => {
+                let cursor = map.get(id)?;
+                Some(CursorImage {
+                    path: meta.path(&cursor.image_path),
+                    hotspot: cursor.hotspot,
                 })
-                .collect::<_>(),
-        }))
+            }
+        }
     }
 }
 

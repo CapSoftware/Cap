@@ -65,7 +65,7 @@ impl EditorInstance {
         let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, &recording_meta, meta)
+            RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
                 .unwrap(),
         );

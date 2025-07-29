@@ -82,9 +82,13 @@ impl ExporterBuilder {
         );
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, &recording_meta, studio_meta)
-                .await
-                .unwrap(),
+            RenderVideoConstants::new(
+                &recordings.segments,
+                recording_meta.clone(),
+                studio_meta.clone(),
+            )
+            .await
+            .unwrap(),
         );
 
         let segments = cap_editor::create_segments(&recording_meta, studio_meta)

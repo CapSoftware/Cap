@@ -5,13 +5,11 @@ use cap_project::{
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
-use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
-use cursor_texture_manager::{CursorTextureManager, EnhancedCursorTexture};
-use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
+use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
+use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
-use futures::future::OptionFuture;
 use futures::FutureExt;
-use image::GenericImageView;
+use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
 };
@@ -25,9 +23,6 @@ use tracing::error;
 mod composite_frame;
 mod coord;
 mod cursor_interpolation;
-mod cursor_svg;
-mod cursor_svg_tests;
-mod cursor_texture_manager;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
@@ -172,8 +167,6 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
-    #[error("Other error: {0}")]
-    Other(String),
 }
 
 pub struct RenderSegment {
@@ -306,15 +299,16 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub cursor_texture_manager: CursorTextureManager,
-    background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    pub meta: StudioRecordingMeta,
+    pub recording_meta: RecordingMeta,
+    pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
 impl RenderVideoConstants {
     pub async fn new(
         segments: &[SegmentRecordings],
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         let options = RenderOptions {
             screen_size: XY::new(segments[0].display.width, segments[0].display.height),
@@ -336,8 +330,6 @@ impl RenderVideoConstants {
             })
             .await?;
 
-        let cursor_texture_manager =
-            Self::load_cursor_textures(&device, &queue, recording_meta, meta)?;
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -346,51 +338,10 @@ impl RenderVideoConstants {
             device,
             queue,
             options,
-            cursor_texture_manager,
             background_textures,
+            meta,
+            recording_meta,
         })
-    }
-
-    fn load_cursor_textures(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
-    ) -> Result<CursorTextureManager, RenderingError> {
-        let mut manager = CursorTextureManager::new();
-
-        // Initialize SVG cursors first
-        manager.initialize_svg_cursors(device, queue).map_err(|e| {
-            RenderingError::Other(format!("Failed to initialize SVG cursors: {}", e))
-        })?;
-
-        let cursor_images = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.cursor_images(recording_meta).unwrap_or_default()
-            }
-        };
-
-        for (cursor_id, cursor) in &cursor_images.0 {
-            if !cursor.path.exists() {
-                continue;
-            }
-
-            // Load the captured cursor and analyze its type
-            if let Err(e) = manager.load_captured_cursor(
-                device,
-                queue,
-                cursor_id.clone(),
-                &cursor.path,
-                cursor.hotspot.map(|v| v as f32),
-            ) {
-                error!("Failed to load cursor image {}: {e}", cursor.path.display());
-                // Don't return error, just skip this cursor image
-                continue;
-            }
-        }
-
-        Ok(manager)
     }
 }
 
@@ -1225,9 +1176,5 @@ fn srgb_to_linear(c: u16) -> f32 {
 }
 
 fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left {
-        a
-    } else {
-        b
-    }
+    if left { a } else { b }
 }

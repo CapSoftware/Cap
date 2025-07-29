@@ -148,6 +148,15 @@ impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
     }
 }
 
+impl Into<XY<f64>> for XY<f32> {
+    fn into(self) -> XY<f64> {
+        XY {
+            x: self.x as f64,
+            y: self.y as f64,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {
