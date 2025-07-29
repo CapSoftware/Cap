@@ -988,7 +988,7 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             .borrow_mut()
             .get_or_insert(Instant::now());
 
-        let timestamp = timestamp.get_or_insert(Instant::now() - first_ref_time);
+        let timestamp = timestamp.get_or_insert(Instant::now() - *first_ref_time);
 
         (self.callback.borrow_mut())(CallbackData {
             sample: &psample,
