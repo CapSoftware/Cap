@@ -603,9 +603,8 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
                 )
                 .unwrap_or(unsafe { MFGetSystemTime() } as u64);
 
-        let mf_time_offset = reference_time - mf_time_now;
         let capture_begin_time =
-            mf_time_offset + Duration::from_micros(raw_capture_begin_time / 10);
+            reference_time + Duration::from_micros(raw_capture_begin_time / 10) - mf_time_now;
 
         (callback)(CallbackData {
             sample: sample.clone(),

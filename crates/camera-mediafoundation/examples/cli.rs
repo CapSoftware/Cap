@@ -43,9 +43,9 @@ pub fn main() {
         let _handle = selected
             .start_capturing(
                 &selected_format.inner,
-                Box::new(|imf_sample| {
-                    let pts = imf_sample.GetSampleTime().unwrap();
-                    let bytes = imf_sample.GetTotalLength().unwrap();
+                Box::new(|data| {
+                    let pts = data.sample.GetSampleTime().unwrap();
+                    let bytes = data.sample.GetTotalLength().unwrap();
                     // if stream_flags as i32 & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
                     //     == MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0
                     // {
