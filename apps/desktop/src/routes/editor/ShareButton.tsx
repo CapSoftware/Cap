@@ -97,8 +97,8 @@ function ShareButton() {
         const result = meta().sharing
           ? await commands.uploadExportedVideo(projectPath, "Reupload")
           : await commands.uploadExportedVideo(projectPath, {
-              Initial: { pre_created_video: null },
-            });
+            Initial: { pre_created_video: null },
+          });
 
         if (result === "NotAuthenticated") {
           throw new Error("You need to sign in to share recordings");
@@ -150,8 +150,8 @@ function ShareButton() {
           const customUrl = () =>
             customDomain.data?.custom_domain
               ? new URL(
-                  customDomain.data?.custom_domain + `/s/${meta().sharing?.id}`
-                )
+                customDomain.data?.custom_domain + `/s/${meta().sharing?.id}`
+              )
               : null;
 
           const normalLink = `${normalUrl().host}${normalUrl().pathname}`;
@@ -190,7 +190,7 @@ function ShareButton() {
                   disabled={upload.isPending}
                   onClick={() => upload.mutate()}
                   variant="primary"
-                  class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1 rounded-xl"
+                  class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1"
                 >
                   {upload.isPending ? (
                     <IconLucideLoaderCircle class="animate-spin size-4" />
@@ -291,20 +291,19 @@ function ShareButton() {
               <div
                 class="bg-blue-9 h-2.5 rounded-full"
                 style={{
-                  width: `${
-                    uploadState.type === "uploading"
+                  width: `${uploadState.type === "uploading"
                       ? uploadState.progress
                       : uploadState.type === "link-copied"
-                      ? 100
-                      : uploadState.type === "rendering"
-                      ? Math.min(
-                          (uploadState.renderedFrames /
-                            uploadState.totalFrames) *
+                        ? 100
+                        : uploadState.type === "rendering"
+                          ? Math.min(
+                            (uploadState.renderedFrames /
+                              uploadState.totalFrames) *
                             100,
-                          100
-                        )
-                      : 0
-                  }%`,
+                            100
+                          )
+                          : 0
+                    }%`,
                 }}
               />
             </div>
@@ -313,10 +312,10 @@ function ShareButton() {
               {uploadState.type == "idle" || uploadState.type === "starting"
                 ? "Preparing to render..."
                 : uploadState.type === "rendering"
-                ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
-                : uploadState.type === "uploading"
-                ? `Uploading - ${Math.floor(uploadState.progress)}%`
-                : "Link copied to clipboard!"}
+                  ? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`
+                  : uploadState.type === "uploading"
+                    ? `Uploading - ${Math.floor(uploadState.progress)}%`
+                    : "Link copied to clipboard!"}
             </p>
           </div>
         </DialogContent>

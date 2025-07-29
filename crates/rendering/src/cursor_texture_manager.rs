@@ -1,5 +1,6 @@
 use crate::cursor_svg::{analyze_cursor_image, CommonCursorType};
 use cap_project::XY;
+use image::GenericImageView;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -68,7 +69,7 @@ impl CursorTextureManager {
         // Analyze the cursor image to detect its type
         let detected_type = analyze_cursor_image(image_path);
         self.cursor_type_cache
-            .insert(cursor_id.clone(), detected_type);
+            .insert(cursor_id.clone(), detected_type.clone());
 
         // Load the captured texture as fallback
         let img =
@@ -157,8 +158,10 @@ impl CursorTextureManager {
             .pixels()
             .iter()
             .flat_map(|pixel| {
-                let [b, g, r, a] = pixel.to_array();
-                [r, g, b, a]
+                // let [b, g, r, a] = pixel.to_array();
+                // [r, g, b, a]
+
+                [pixel.red(), pixel.green(), pixel.red(), pixel.alpha()]
             })
             .collect();
 
@@ -209,7 +212,7 @@ impl CursorTextureManager {
             inner: texture,
             hotspot,
             source_type: CursorSourceType::Svg,
-            cursor_type: Some(cursor_type),
+            cursor_type: Some(cursor_type.clone()),
         };
 
         self.svg_textures.insert(cursor_type, enhanced_texture);

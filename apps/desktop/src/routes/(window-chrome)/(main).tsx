@@ -3,7 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
   createQuery,
-  useQueryClient,
+  useQueryClient
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -32,7 +32,7 @@ import {
   getPermissions,
   listAudioDevices,
   listScreens,
-  listWindows
+  listWindows,
 } from "~/utils/queries";
 import {
   type CaptureScreen,
@@ -126,6 +126,11 @@ function Page() {
   const cameras = createVideoDevicesQuery();
   const mics = createQuery(() => listAudioDevices);
 
+  // these all avoid suspending
+  const _screens = () => (screens.isPending ? [] : screens.data);
+  const _windows = () => (windows.isPending ? [] : windows.data);
+  const _mics = () => (mics.isPending ? [] : mics.data);
+
   // these options take the raw config values and combine them with the available options,
   // allowing us to define fallbacks if the selected options aren't actually available
   const options = {
@@ -134,12 +139,10 @@ function Page() {
 
       if (rawOptions.captureTarget.variant === "screen") {
         const screenId = rawOptions.captureTarget.id;
-        screen =
-          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+        screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
       } else if (rawOptions.captureTarget.variant === "area") {
         const screenId = rawOptions.captureTarget.screen;
-        screen =
-          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
+        screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
       }
 
       return screen;
@@ -149,7 +152,7 @@ function Page() {
 
       if (rawOptions.captureTarget.variant === "window") {
         const windowId = rawOptions.captureTarget.id;
-        win = windows.data?.find((s) => s.id === windowId) ?? windows.data?.[0];
+        win = _windows()?.find((s) => s.id === windowId) ?? _windows()?.[0];
       }
 
       return win;
@@ -174,7 +177,7 @@ function Page() {
 
   // if target is window and no windows are available, switch to screen capture
   createEffect(() => {
-    if (options.target().variant === "window" && windows.data?.length === 0) {
+    if (options.target().variant === "window" && _windows()?.length === 0) {
       setOptions(
         "captureTarget",
         reconcile({
@@ -352,7 +355,7 @@ function Page() {
             <div class="flex-1 bg-gray-2" />
           </div>
           <TargetSelect<CaptureScreen>
-            options={screens.data ?? []}
+            options={_screens() ?? []}
             onChange={(value) => {
               if (!value) return;
 
@@ -376,7 +379,7 @@ function Page() {
             }
           />
           <TargetSelect<CaptureWindow>
-            options={windows.data ?? []}
+            options={_windows() ?? []}
             onChange={(value) => {
               if (!value) return;
 
@@ -401,7 +404,7 @@ function Page() {
                 ? value.name
                 : `${value.owner_name} | ${value.name}`
             }
-            disabled={windows.data?.length === 0}
+            disabled={_windows()?.length === 0}
           />
         </div>
       </div>
@@ -412,7 +415,7 @@ function Page() {
       />
       <MicrophoneSelect
         disabled={mics.isPending}
-        options={mics.data ?? []}
+        options={_mics() ?? []}
         // this prevents options.micName() from suspending on initial load
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
         onChange={(v) => setMicInput.mutate(v)}
@@ -428,7 +431,7 @@ function Page() {
         ) : (
           <Button
             disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "primary"}
+            variant="blue"
             size="md"
             onClick={() => toggleRecording.mutate()}
             class="flex flex-grow justify-center items-center"
@@ -438,9 +441,9 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                  <IconCapInstant class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 ) : (
-                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                  <IconCapFilmCut class={cx("size-[0.8rem] mr-2 -mt-[1.5px]", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 )}
                 Start Recording
               </>

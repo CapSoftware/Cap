@@ -39,19 +39,7 @@ image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true, default-features = false, features = [
-	"private",
-
-	"blocks",
-	"async",
-
-	"av",
-	"ca",
-	"cm",
-	"dispatch",
-
-	"macos_13_0",
-] }
+cidre = { workspace = true }
 cocoa = "0.26.0"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"

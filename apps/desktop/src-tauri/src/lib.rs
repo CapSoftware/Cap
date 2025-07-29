@@ -51,7 +51,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
-use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -1221,7 +1220,6 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
         use cap_project::*;
         RecordingMeta {
             platform: Some(Platform::default()),
-
             project_path: recording_dir.clone(),
             sharing: None,
             pretty_name: screenshot_name,

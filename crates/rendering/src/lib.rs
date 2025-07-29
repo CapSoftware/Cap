@@ -20,6 +20,7 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
+use tracing::error;
 
 mod composite_frame;
 mod coord;
@@ -323,22 +324,20 @@ impl RenderVideoConstants {
                 .map(|c| XY::new(c.width, c.height)),
         };
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
-            .ok_or(RenderingError::NoAdapter)?;
+            .map_err(|_| RenderingError::NoAdapter)?;
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-                    ..Default::default()
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
+                ..Default::default()
+            })
             .await?;
 
-        let cursor_texture_manager = Self::load_cursor_textures(&device, &queue, recording_meta, meta)?;
+        let cursor_texture_manager =
+            Self::load_cursor_textures(&device, &queue, recording_meta, meta)?;
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -361,8 +360,9 @@ impl RenderVideoConstants {
         let mut manager = CursorTextureManager::new();
 
         // Initialize SVG cursors first
-        manager.initialize_svg_cursors(device, queue)
-            .map_err(|e| RenderingError::Other(format!("Failed to initialize SVG cursors: {}", e)))?;
+        manager.initialize_svg_cursors(device, queue).map_err(|e| {
+            RenderingError::Other(format!("Failed to initialize SVG cursors: {}", e))
+        })?;
 
         let cursor_images = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => Default::default(),
@@ -378,17 +378,13 @@ impl RenderVideoConstants {
 
             // Load the captured cursor and analyze its type
             if let Err(e) = manager.load_captured_cursor(
-                device, 
-                queue, 
-                cursor_id.clone(), 
-                &cursor.path, 
-                cursor.hotspot.map(|v| v as f32)
+                device,
+                queue,
+                cursor_id.clone(),
+                &cursor.path,
+                cursor.hotspot.map(|v| v as f32),
             ) {
-                println!(
-                    "Failed to load cursor image {}: {}",
-                    cursor.path.display(),
-                    e
-                );
+                error!("Failed to load cursor image {}: {e}", cursor.path.display());
                 // Don't return error, just skip this cursor image
                 continue;
             }
@@ -1174,33 +1170,29 @@ pub fn create_shader_render_pipeline(
         push_constant_ranges: &[],
     });
 
-    let empty_constants: HashMap<String, f64> = HashMap::new();
-
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("Render Pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             buffers: &[],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &empty_constants,
+                constants: &[],
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
             compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &empty_constants,
+                constants: &[],
                 zero_initialize_workgroup_memory: false,
-                vertex_pulling_transform: false,
             },
         }),
         primitive: wgpu::PrimitiveState {
@@ -1239,4 +1231,3 @@ fn get_either<T>((a, b): (T, T), left: bool) -> T {
         b
     }
 }
-

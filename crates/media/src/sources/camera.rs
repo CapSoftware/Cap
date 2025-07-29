@@ -1,6 +1,6 @@
 use flume::{Receiver, Sender};
 use std::time::{Instant, SystemTime};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     data::{FFVideo, VideoInfo},
@@ -32,16 +32,20 @@ impl CameraSource {
 
     fn process_frame(&self, camera_frame: RawCameraFrame) -> Result<(), MediaError> {
         let RawCameraFrame { frame, captured_at } = camera_frame;
-        if let Err(_) = self.output.send((
-            frame,
-            captured_at
-                .duration_since(self.start_time)
-                .unwrap()
-                .as_secs_f64(),
-        )) {
-            return Err(MediaError::Any(
-                "Pipeline is unreachable! Stopping capture".into(),
-            ));
+        match captured_at.duration_since(self.start_time) {
+            Ok(time) => {
+                if let Err(_) = self.output.send((frame, time.as_secs_f64())) {
+                    return Err(MediaError::Any(
+                        "Pipeline is unreachable! Stopping capture".into(),
+                    ));
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Camera frame captured {} millis before start time",
+                    error.duration().as_millis()
+                );
+            }
         }
 
         Ok(())

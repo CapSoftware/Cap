@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
@@ -127,7 +125,6 @@ impl BlurPipeline {
                 include_str!("../shaders/background-blur.wgsl").into(),
             ),
         });
-        let empty_constants: HashMap<String, f64> = HashMap::new();
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Background Blur Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
@@ -138,26 +135,24 @@ impl BlurPipeline {
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main",
+                entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: "fs_main",
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8UnormSrgb,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &empty_constants,
+                    constants: &[],
                     zero_initialize_workgroup_memory: false,
-                    vertex_pulling_transform: false,
                 },
             }),
             primitive: wgpu::PrimitiveState {
