@@ -1,6 +1,7 @@
 "use client";
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
+import { newComment } from "@/actions/videos/new-comment";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
@@ -456,18 +457,6 @@ const Comments = Object.assign(
     const [optimisticComments, setOptimisticComments] = useOptimistic(
       comments,
       (state, newComment: CommentType) => {
-        if (!newComment.sending) {
-          const filteredState = state.filter(comment => {
-            if (comment.sending &&
-              comment.content === newComment.content &&
-              comment.authorId === newComment.authorId &&
-              Math.abs(new Date(comment.createdAt).getTime() - new Date(newComment.createdAt).getTime()) < 10000) {
-              return false;
-            }
-            return true;
-          });
-          return [...filteredState, newComment];
-        }
         return [...state, newComment];
       }
     );
@@ -499,8 +488,7 @@ const Comments = Object.assign(
     }, [optimisticComments]);
 
 
-    const handleNewComment = async (content: string) => {
-
+    const handleNewComment = (content: string) => {
       const optimisticComment: CommentType = {
         id: `temp-${Date.now()}`,
         authorId: user?.id || "anonymous",
@@ -517,33 +505,20 @@ const Comments = Object.assign(
 
       setOptimisticComments(optimisticComment);
 
-      try {
-        const response = await fetch("/api/video/comment", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "text",
-            content,
-            videoId: props.videoId,
-            parentCommentId: "",
-          }),
-        });
+      const formData = new FormData();
+      formData.append("content", content);
+      formData.append("videoId", props.videoId);
+      formData.append("parentCommentId", "");
+      formData.append("type", "text");
 
-        if (!response.ok) {
-          throw new Error("Failed to post comment");
-        }
-
-        const data = await response.json();
-
-        startTransition(() => {
+      startTransition(async () => {
+        try {
+          const data = await newComment(formData);
           setComments((prev) => [...prev, data]);
-        });
-
-      } catch (error) {
-        console.error("Error posting comment:", error);
-      }
+        } catch (error) {
+          console.error("Error posting comment:", error);
+        }
+      });
     }
 
     const handleReply = async (content: string) => {
