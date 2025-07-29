@@ -16,7 +16,7 @@ use serde_json::json;
 use specta::Type;
 use std::path::PathBuf;
 use std::time::Duration;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};

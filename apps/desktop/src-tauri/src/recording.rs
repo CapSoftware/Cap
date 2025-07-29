@@ -12,8 +12,8 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        InstantMultipartUpload, InstantMultipartUpload, build_video_meta, create_or_get_video,
-        prepare_screenshot_upload, upload_video, upload_video,
+        InstantMultipartUpload, build_video_meta, create_or_get_video, prepare_screenshot_upload,
+        upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
