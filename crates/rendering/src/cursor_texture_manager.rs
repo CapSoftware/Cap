@@ -9,16 +9,6 @@ use std::path::Path;
 pub struct EnhancedCursorTexture {
     pub inner: wgpu::Texture,
     pub hotspot: XY<f32>,
-    pub source_type: CursorSourceType,
-    pub cursor_type: Option<CursorType>,
-}
-
-#[derive(Debug, Clone)]
-pub enum CursorSourceType {
-    /// Original captured cursor image
-    Captured,
-    /// High-quality SVG version
-    Svg,
 }
 
 /// Enhanced cursor texture manager that prefers SVG versions when available
@@ -114,8 +104,6 @@ impl CursorTextureManager {
         let enhanced_texture = EnhancedCursorTexture {
             inner: texture,
             hotspot,
-            source_type: CursorSourceType::Captured,
-            cursor_type: detected_type,
         };
 
         self.captured_textures.insert(cursor_id, enhanced_texture);
@@ -157,12 +145,7 @@ impl CursorTextureManager {
         let rgba_data: Vec<u8> = pixmap
             .pixels()
             .iter()
-            .flat_map(|pixel| {
-                // let [b, g, r, a] = pixel.to_array();
-                // [r, g, b, a]
-
-                [pixel.red(), pixel.green(), pixel.red(), pixel.alpha()]
-            })
+            .flat_map(|pixel| [pixel.red(), pixel.green(), pixel.red(), pixel.alpha()])
             .collect();
 
         let texture_size = wgpu::Extent3d {
@@ -183,14 +166,14 @@ impl CursorTextureManager {
         });
 
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 aspect: wgpu::TextureAspect::All,
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
             },
             &rgba_data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * size),
                 rows_per_image: Some(size),
@@ -198,24 +181,14 @@ impl CursorTextureManager {
             texture_size,
         );
 
-        // Set default hotspot for SVG cursors based on type
-        let hotspot = match cursor_type {
-            CursorType::Arrow => XY::new(0.1, 0.1),     // Top-left point
-            CursorType::IBeam => XY::new(0.5, 0.5),     // Center
-            CursorType::Crosshair => XY::new(0.5, 0.5), // Center
-            CursorType::PointingHand => XY::new(0.3, 0.1), // Finger tip
-            CursorType::ResizeNWSE => XY::new(0.5, 0.5), // Center
-            CursorType::ResizeEW => XY::new(0.5, 0.5),  // Center
-        };
-
-        let enhanced_texture = EnhancedCursorTexture {
-            inner: texture,
-            hotspot,
-            source_type: CursorSourceType::Svg,
-            cursor_type: Some(cursor_type.clone()),
-        };
-
-        self.svg_textures.insert(cursor_type, enhanced_texture);
+        let hotspot = cursor_type.get_hotspot();
+        self.svg_textures.insert(
+            cursor_type,
+            EnhancedCursorTexture {
+                inner: texture,
+                hotspot,
+            },
+        );
         Ok(())
     }
 

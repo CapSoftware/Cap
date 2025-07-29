@@ -1,5 +1,6 @@
 use std::{borrow::Cow, path::Path};
 
+use cap_project::XY;
 use image::GenericImageView;
 
 static CURSOR_ARROW: &'static [u8] = include_bytes!("../assets/cursors/arrow.svg");
@@ -29,6 +30,17 @@ impl CursorType {
             CursorType::PointingHand => Cow::Borrowed(CURSOR_POINTING_HAND),
             CursorType::ResizeNWSE => Cow::Borrowed(CURSOR_RESIZE_NWSE),
             CursorType::ResizeEW => Cow::Borrowed(CURSOR_RESIZE_EW),
+        }
+    }
+
+    pub fn get_hotspot(&self) -> XY<f32> {
+        match self {
+            CursorType::Arrow => XY::new(0.1, 0.1),     // Top-left point
+            CursorType::IBeam => XY::new(0.5, 0.5),     // Center
+            CursorType::Crosshair => XY::new(0.5, 0.5), // Center
+            CursorType::PointingHand => XY::new(0.3, 0.1), // Finger tip
+            CursorType::ResizeNWSE => XY::new(0.5, 0.5), // Center
+            CursorType::ResizeEW => XY::new(0.5, 0.5),  // Center
         }
     }
 
