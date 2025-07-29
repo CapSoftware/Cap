@@ -573,10 +573,11 @@ impl SinkFilter {
             owning_graph: RefCell::new(None),
             input_pin: SinkInputPin {
                 desired_media_type,
-                current_media_type: RefCell::new(Default::default()),
-                connected_pin: RefCell::new(None),
-                owner: RefCell::new(None),
                 callback: RefCell::new(callback),
+                current_media_type: Default::default(),
+                connected_pin: Default::default(),
+                owner: Default::default(),
+                first_ref_time: Default::default(),
             }
             .into(),
         }
@@ -745,8 +746,8 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
 }
 
 pub struct CallbackData<'a> {
-    pub sample: &IMediaSample,
-    pub media_type: &AMMediaType,
+    pub sample: &'a IMediaSample,
+    pub media_type: &'a AMMediaType,
     pub reference_time: Instant,
     pub timestamp: Duration,
 }
@@ -987,13 +988,13 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             .borrow_mut()
             .get_or_insert(Instant::now());
 
-        timestamp.get_or_insert(Instant::now() - first_ref_time);
+        let timestamp = timestamp.get_or_insert(Instant::now() - first_ref_time);
 
         (self.callback.borrow_mut())(CallbackData {
             sample: &psample,
             media_type: &media_type,
             reference_time: first_ref_time.clone(),
-            timestamp,
+            timestamp: timestamp.clone(),
         });
 
         Ok(())

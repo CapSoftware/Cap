@@ -566,7 +566,7 @@ impl<'a> DerefMut for IMFMediaBufferLock<'a> {
     }
 }
 
-pub struct CallbackData<'a> {
+pub struct CallbackData {
     pub sample: IMFSample,
     pub reference_time: Instant,
     pub timestamp: Duration,
@@ -593,7 +593,7 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
         let mf_time_now = Duration::from_micros(unsafe { MFGetSystemTime() / 10 } as u64);
 
         let raw_time_stamp = unsafe { sample.GetSampleTime() }.unwrap_or(0);
-        let timestamp = Duration::from_micros(raw_time_stamp / 10);
+        let timestamp = Duration::from_micros((raw_time_stamp / 10) as u64);
 
         let mut raw_capture_begin_time =
             unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) }
