@@ -1864,7 +1864,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .find(|arg| arg.ends_with(".cap"))
                 .map(PathBuf::from)
             else {
-                let _ = ShowCapWindow::Main.show(app);
+                let app = app.clone();
+                tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
                 return;
             };
 
@@ -2111,7 +2112,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     }
                 } else {
                     let handle = handle.clone();
-                    let _ = tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
+                    tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
