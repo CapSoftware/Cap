@@ -59,7 +59,7 @@ pub struct XY<T> {
 }
 
 impl<T> XY<T> {
-    pub fn new(x: T, y: T) -> Self {
+    pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
