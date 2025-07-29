@@ -4,7 +4,7 @@ import {
   CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import { db } from "@cap/database";
-import { s3Buckets } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
 import { Hono } from "hono";
@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
+import { VideoMetadata } from "@cap/database/types";
 
 export const app = new Hono().use(withAuth);
 
@@ -27,6 +28,7 @@ app.post(
         resolution: z.string().optional(),
         videoCodec: z.string().optional(),
         audioCodec: z.string().optional(),
+        framerate: z.string().optional(),
         method: z.union([z.literal("post"), z.literal("put")]).default("post"),
       })
       .and(
@@ -45,6 +47,7 @@ app.post(
       resolution,
       videoCodec,
       audioCodec,
+      framerate,
       method,
       ...body
     } = c.req.valid("json");
@@ -154,16 +157,33 @@ app.post(
 
       console.log("Presigned URL created successfully");
 
+      const videoMetadata: VideoMetadata = {
+        duration,
+        bandwidth,
+        resolution,
+        videoCodec,
+        audioCodec,
+        framerate,
+      };
+
+      if (Object.values(videoMetadata).length > 1 && "videoIn" in body)
+        await db()
+          .update(videos)
+          .set({
+            metadata: videoMetadata,
+          })
+          .where(eq(videos.id, body.videoId));
+
       // After successful presigned URL creation, trigger revalidation
-      const videoId = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
-      if (videoId) {
+      const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
+      if (videoIdFromKey) {
         try {
           await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ videoId }),
+            body: JSON.stringify({ videoId: videoIdFromKey }),
           });
         } catch (revalidateError) {
           console.error("Failed to revalidate page:", revalidateError);

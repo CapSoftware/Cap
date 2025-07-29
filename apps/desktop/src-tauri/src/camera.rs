@@ -1,3 +1,14 @@
+use anyhow::Context;
+use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
+use ffmpeg::{
+    format::{self, Pixel},
+    frame,
+    software::scaling,
+};
+use flume::{Receiver, Sender};
+use futures::executor::block_on;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use std::{
     sync::{
         Arc,
@@ -6,22 +17,10 @@ use std::{
     thread,
     time::Duration,
 };
-
-use anyhow::Context;
-use ffmpeg::{
-    format::{self, Pixel},
-    frame,
-    software::scaling,
-};
-
-use cap_media::feeds::RawCameraFrame;
-use flume::Receiver;
-use futures::executor::block_on;
-use serde::{Deserialize, Serialize};
-use specta::Type;
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::{broadcast, oneshot};
+use tokio_util::sync::CancellationToken;
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
