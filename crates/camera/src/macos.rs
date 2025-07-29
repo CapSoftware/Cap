@@ -92,18 +92,19 @@ pub(super) fn start_capturing_impl(
         av::capture::DeviceInput::with_device(&device).map_err(AVFoundationError::Static)?;
 
     let queue = dispatch::Queue::new();
-    let delegate = CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(
-        move |_output, sample_buf, _connection| {
-            let Some(image_buf) = sample_buf.image_buf() else {
+    let delegate =
+        CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(move |data| {
+            let Some(image_buf) = data.sample_buf.image_buf() else {
                 return;
             };
 
-            callback(CapturedFrame(NativeCapturedFrame(
-                image_buf.retained(),
-                sample_buf.retained(),
-            )));
-        },
-    )));
+            callback(CapturedFrame {
+                native: NativeCapturedFrame(image_buf.retained(), data.sample_buf.retained()),
+                reference_time: Instant::now(),
+                timestamp: data.timestamp,
+                capture_begin_time: Some(data.capture_begin_time),
+            });
+        })));
 
     let mut output = av::capture::VideoDataOutput::new();
     let mut session = av::capture::Session::new();

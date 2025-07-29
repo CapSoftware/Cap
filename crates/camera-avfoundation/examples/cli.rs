@@ -3,17 +3,10 @@
 use cap_camera_avfoundation::{
     CallbackOutputDelegate, CallbackOutputDelegateInner, YCbCrMatrix, list_video_devices,
 };
-use cidre::{
-    av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
-    cv::pixel_buffer::LockFlags,
-    *,
-};
-use clap::{Args, Parser, Subcommand};
+use cidre::*;
+use clap::{Parser, Subcommand};
 use inquire::Select;
-use std::{
-    fmt::Display,
-    ops::{Deref, DerefMut},
-};
+use std::{fmt::Display, ops::Deref};
 
 #[derive(Parser)]
 struct Cli {
@@ -85,9 +78,9 @@ pub fn main() {
 
     let input = av::capture::DeviceInput::with_device(&selected_device).unwrap();
     let queue = dispatch::Queue::new();
-    let delegate = CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(
-        |_output, sample_buf, _connection| {
-            let Some(image_buf) = sample_buf.image_buf() else {
+    let delegate =
+        CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(|data| {
+            let Some(image_buf) = data.sample_buf.image_buf() else {
                 return;
             };
 
@@ -106,10 +99,9 @@ pub fn main() {
                 "New frame: {}x{}, {:.2}pts, {total_bytes} bytes, format={format_fourcc}",
                 image_buf.width(),
                 image_buf.height(),
-                sample_buf.pts().value as f64 / sample_buf.pts().scale as f64,
+                data.sample_buf.pts().value as f64 / data.sample_buf.pts().scale as f64,
             )
-        },
-    )));
+        })));
 
     let mut output = av::capture::VideoDataOutput::new();
 

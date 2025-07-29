@@ -1,4 +1,6 @@
-use cap_media::{data::FFVideo, feeds::CameraFeed};
+use std::fmt::Display;
+
+use cap_media::feeds::{CameraFeed, DeviceOrModelID};
 use ffmpeg::format::Pixel;
 use image::{codecs::jpeg, ColorType};
 
@@ -6,12 +8,17 @@ use image::{codecs::jpeg, ColorType};
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let cameras = CameraFeed::list_cameras();
+    let cameras = CameraFeed::list_cameras()
+        .into_iter()
+        .map(CameraSelection)
+        .collect();
     let device = inquire::Select::new("Select a device", cameras)
         .prompt()
         .unwrap();
 
-    let feed = CameraFeed::init(&device).await.unwrap();
+    let feed = CameraFeed::init(DeviceOrModelID::from_info(&device.0))
+        .await
+        .unwrap();
     let (tx, rx) = flume::bounded(1);
     feed.attach(tx);
     let frame = rx.recv_async().await.unwrap().frame;
@@ -31,10 +38,18 @@ async fn main() {
     let mut file = std::fs::File::create("./out.jpeg").unwrap();
     jpeg::JpegEncoder::new(&mut file)
         .encode(
-            converted_frame.data(0),
+            &converted_frame.data(0)[0..(frame.width() * frame.height() * 3) as usize],
             frame.width(),
             frame.height(),
             ColorType::Rgb8.into(),
         )
         .unwrap();
+}
+
+struct CameraSelection(cap_camera::CameraInfo);
+
+impl Display for CameraSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0.display_name())
+    }
 }

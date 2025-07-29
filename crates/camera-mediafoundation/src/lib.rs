@@ -1,4 +1,4 @@
-// #![cfg(windows)]
+#![cfg(windows)]
 #![allow(non_snake_case)]
 
 use std::{
@@ -10,7 +10,7 @@ use std::{
     ptr::{null, null_mut},
     slice::from_raw_parts,
     sync::{Mutex, mpsc::*},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use windows::Win32::{
@@ -179,7 +179,7 @@ impl Device {
     pub fn start_capturing(
         &self,
         requested_format: &IMFMediaType,
-        callback: Box<dyn FnMut(IMFSample) + 'static>,
+        callback: Box<dyn FnMut(CallbackData) + 'static>,
     ) -> Result<CaptureHandle, StartCapturingError> {
         unsafe {
             let capture_engine_factory: IMFCaptureEngineClassFactory = CoCreateInstance(
@@ -566,19 +566,53 @@ impl<'a> DerefMut for IMFMediaBufferLock<'a> {
     }
 }
 
+pub struct CallbackData<'a> {
+    pub sample: IMFSample,
+    pub reference_time: Instant,
+    pub timestamp: Duration,
+    pub capture_begin_time: Instant,
+}
+
 #[implement(IMFCaptureEngineOnSampleCallback, IMFCaptureEngineOnEventCallback)]
 struct VideoCallback {
     event_tx: Sender<CaptureEngineEvent>,
-    sample_callback: Mutex<Box<dyn FnMut(IMFSample)>>,
+    sample_callback: Mutex<Box<dyn FnMut(CallbackData)>>,
 }
 
 impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
     fn OnSample(&self, psample: windows_core::Ref<'_, IMFSample>) -> windows_core::Result<()> {
-        if let Some(sample) = psample.as_ref() {
-            if let Ok(mut lock) = self.sample_callback.lock() {
-                (lock)(sample.clone());
-            }
-        }
+        let Some(sample) = psample.as_ref() else {
+            return Ok(());
+        };
+
+        let Ok(mut callback) = self.sample_callback.lock() else {
+            return Ok(());
+        };
+
+        let reference_time = Instant::now();
+        let mf_time_now = Duration::from_micros(unsafe { MFGetSystemTime() / 10 } as u64);
+
+        let raw_time_stamp = unsafe { sample.GetSampleTime() }.unwrap_or(0);
+        let timestamp = Duration::from_micros(raw_time_stamp / 10);
+
+        let mut raw_capture_begin_time =
+            unsafe { sample.GetUINT64(MFSampleExtension_DeviceReferenceSystemTime) }
+                .or_else(
+                    // retry, it's what chromium does /shrug
+                    |_| unsafe { sample.GetUINT64(MFSampleExtension_DeviceReferenceSystemTime) },
+                )
+                .unwrap_or(unsafe { MFGetSystemTime() });
+
+        let mf_time_offset = reference_time - mf_time_now;
+        let capture_begin_time =
+            mf_time_offset + Duration::from_micros(raw_capture_begin_time / 10);
+
+        (callback)(CallbackData {
+            sample: sample.clone(),
+            reference_time,
+            timestamp,
+            capture_begin_time,
+        });
 
         Ok(())
     }

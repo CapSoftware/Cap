@@ -1,12 +1,14 @@
+use cap_camera::CameraInfo;
 use cap_fail::{fail, fail_err};
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use futures::channel::oneshot;
 use std::{
+    cmp::Ordering,
     sync::mpsc,
     thread,
     time::{Duration, SystemTime},
 };
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::data::{FFVideo, VideoInfo};
 
@@ -55,6 +57,14 @@ impl CameraConnection {
 pub enum DeviceOrModelID {
     DeviceID(String),
     ModelID(cap_camera::ModelID),
+}
+
+impl DeviceOrModelID {
+    pub fn from_info(info: &cap_camera::CameraInfo) -> Self {
+        info.model_id()
+            .map(|v| Self::ModelID(v.clone()))
+            .unwrap_or_else(|| Self::DeviceID(info.device_id().to_string()))
+    }
 }
 
 pub struct CameraFeed {
@@ -190,12 +200,10 @@ fn run_camera_feed(
 
     let mut senders: Vec<Sender<RawCameraFrame>> = vec![];
 
-    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
-
-    let mut handle = match setup_camera(id, frame_tx.clone()) {
-        Ok((handle, camera, video_info)) => {
-            let _ = ready_tx.send(Ok((camera.clone(), video_info.clone())));
-            handle
+    let mut state = match setup_camera(id) {
+        Ok(state) => {
+            let _ = ready_tx.send(Ok((state.camera_info.clone(), state.video_info.clone())));
+            state
         }
         Err(e) => {
             let _ = ready_tx.send(Err(e));
@@ -204,6 +212,8 @@ fn run_camera_feed(
     };
 
     'outer: loop {
+        debug!("Video feed camera format: {:#?}", &state.video_info);
+
         loop {
             match control.try_recv() {
                 Err(TryRecvError::Disconnected) => {
@@ -211,7 +221,7 @@ fn run_camera_feed(
                     break 'outer;
                 }
                 Ok(CameraControl::Shutdown) => {
-                    handle.stop_capturing();
+                    state.handle.stop_capturing();
                     println!("Deliberate shutdown");
                     break 'outer;
                 }
@@ -219,25 +229,24 @@ fn run_camera_feed(
                 Ok(CameraControl::AttachConsumer(sender)) => {
                     senders.push(sender);
                 }
-                Ok(CameraControl::Switch(new_id, switch_result)) => {
-                    let new_handle = match setup_camera(new_id, frame_tx.clone()) {
-                        Ok((handle, camera, video_info)) => {
-                            let _ = switch_result.send(Ok((camera.clone(), video_info.clone())));
-                            handle
-                        }
-                        Err(e) => {
-                            let _ = switch_result.send(Err(e));
-                            continue;
-                        }
-                    };
+                Ok(CameraControl::Switch(new_id, switch_result)) => match setup_camera(new_id) {
+                    Ok(new_state) => {
+                        let _ = switch_result.send(Ok((
+                            new_state.camera_info.clone(),
+                            new_state.video_info.clone(),
+                        )));
+                        state = new_state;
 
-                    handle = new_handle;
-
-                    break;
-                }
+                        break;
+                    }
+                    Err(e) => {
+                        let _ = switch_result.send(Err(e));
+                        continue;
+                    }
+                },
             }
 
-            let Ok(ff_frame) = frame_rx.recv_timeout(Duration::from_secs(5)) else {
+            let Ok(ff_frame) = state.frame_rx.recv_timeout(Duration::from_secs(5)) else {
                 return;
             };
 
@@ -285,28 +294,51 @@ pub enum SetupCameraError {
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
-fn setup_camera(
-    id: DeviceOrModelID,
-    frame_tx: mpsc::SyncSender<FFVideo>,
-) -> Result<
-    (
-        cap_camera::RecordingHandle,
-        cap_camera::CameraInfo,
-        VideoInfo,
-    ),
-    SetupCameraError,
-> {
+struct SetupCameraState {
+    handle: cap_camera::RecordingHandle,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
+    frame_rx: mpsc::Receiver<FFVideo>,
+}
+
+fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraError> {
     let camera = find_camera(&id).ok_or(SetupCameraError::CameraNotFound)?;
     let mut formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
     if formats.len() < 1 {
         return Err(SetupCameraError::InvalidFormat);
     }
 
-    let format = formats.remove(0);
+    // Sort formats to prioritize:
+    // 1. Closest to 16:9 aspect ratio
+    // 2. Highest resolution (total pixels)
+    // 3. Highest frame rate
+    // Most relevant ends up in index 0
+    formats.sort_by(|a, b| {
+        let target_aspect_ratio = 16.0 / 9.0;
+
+        let aspect_ratio_a = a.width() as f32 / a.height() as f32;
+        let aspect_ratio_b = b.width() as f32 / b.height() as f32;
+
+        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
+        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+
+        let aspect_cmp = aspect_cmp_a.partial_cmp(&aspect_cmp_b);
+        let resolution_cmp = (a.width() * a.height()).cmp(&(b.width() * b.height()));
+        let fr_cmp = a.frame_rate().partial_cmp(&b.frame_rate());
+
+        aspect_cmp
+            .unwrap_or(Ordering::Equal)
+            .then(resolution_cmp.reverse())
+            .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
+    });
+
+    let format = formats.swap_remove(0);
     let frame_rate = format.frame_rate() as u32;
 
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
     let mut ready_signal = Some(ready_tx);
+
+    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
 
     let capture_handle = camera.start_capturing(format.clone(), move |frame| {
         let Ok(ff_frame) = frame.to_ffmpeg() else {
@@ -331,5 +363,10 @@ fn setup_camera(
         .recv_timeout(CAMERA_INIT_TIMEOUT)
         .map_err(SetupCameraError::Timeout)?;
 
-    Ok((capture_handle, camera, video_info))
+    Ok(SetupCameraState {
+        handle: capture_handle,
+        camera_info: camera,
+        video_info,
+        frame_rx,
+    })
 }

@@ -1,4 +1,4 @@
-// #![cfg(windows)]
+#![cfg(windows)]
 #![allow(non_snake_case)]
 
 use std::{
@@ -8,7 +8,7 @@ use std::{
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{self, null, null_mut},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::trace;
 use windows::{
@@ -744,7 +744,14 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
     }
 }
 
-pub type SinkCallback = Box<dyn FnMut(&IMediaSample, &AMMediaType)>;
+pub struct CallbackData<'a> {
+    pub sample: &IMediaSample,
+    pub media_type: &AMMediaType,
+    pub reference_time: Instant,
+    pub timestamp: Duration,
+}
+
+pub type SinkCallback = Box<dyn FnMut(CallbackData)>;
 
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
@@ -753,6 +760,7 @@ struct SinkInputPin {
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
     callback: RefCell<SinkCallback>,
+    first_ref_time: RefCell<Option<Instant>>,
 }
 
 impl SinkInputPin {
@@ -946,15 +954,6 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             return Ok(());
         };
 
-        let mut ptimestart = 0;
-        let mut ptimeend = 0;
-        unsafe {
-            psample.GetTime(&mut ptimestart, &mut ptimeend).unwrap();
-        };
-
-        let pts = ptimestart;
-        let bytes = unsafe { psample.GetActualDataLength() };
-
         unsafe {
             if let Ok(new_media_type) = psample.GetMediaType() {
                 if !new_media_type.is_null() {
@@ -966,37 +965,36 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
 
         let media_type = self.current_media_type.borrow();
 
-        let format_str = unsafe { media_type.subtype_str() };
-
-        let video_info =
-            unsafe { &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER) };
-
-        // println!(
-        //     "New frame: {}x{}, {pts}pts, {bytes} bytes, {}",
-        //     video_info.bmiHeader.biWidth,
-        //     video_info.bmiHeader.biHeight,
-        //     format_str.unwrap_or("unknown format")
-        // );
-
         let length = unsafe { psample.GetActualDataLength() };
 
         if length <= 0 {
             return S_FALSE.ok();
         }
 
-        let ptr = match unsafe { psample.GetPointer() } {
-            Ok(ptr) => ptr,
-            Err(_) => return S_FALSE.ok(),
-        };
-
-        let buffer = unsafe { std::slice::from_raw_parts_mut(ptr, length as usize) };
+        if unsafe { psample.GetPointer() }.is_err() {
+            return S_FALSE.ok();
+        }
 
         let mut start_time = 0;
-        let time_delta = unsafe { psample.GetTime(&mut start_time, &mut 0) }
+        let mut end_time = 0;
+
+        let mut timestamp = unsafe { psample.GetTime(&mut start_time, &mut end_time) }
             .ok()
             .map(|_| Duration::from_micros(start_time as u64 / 10));
 
-        (self.callback.borrow_mut())(&psample, &media_type);
+        let first_ref_time = self
+            .first_ref_time
+            .borrow_mut()
+            .get_or_insert(Instant::now());
+
+        timestamp.get_or_insert(Instant::now() - first_ref_time);
+
+        (self.callback.borrow_mut())(CallbackData {
+            sample: &psample,
+            media_type: &media_type,
+            reference_time: first_ref_time.clone(),
+            timestamp,
+        });
 
         Ok(())
     }

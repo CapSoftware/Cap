@@ -36,7 +36,7 @@ tokio.workspace = true
 cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
-cap-camera = { path = "../camera" }
+cap-camera = { path = "../camera", features = ["specta", "serde"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 
 

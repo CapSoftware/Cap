@@ -83,7 +83,8 @@ impl VideoDeviceInfo {
 
                 let handle = device.start_capturing(
                     &mf_format,
-                    Box::new(move |sample| {
+                    Box::new(move |data| {
+                        let sample = &data.sample;
                         let len = unsafe { sample.GetBufferCount() }.unwrap();
                         for i in 0..len {
                             let Ok(buffer) = (unsafe { sample.GetBufferByIndex(i) }) else {
@@ -95,6 +96,9 @@ impl VideoDeviceInfo {
                                 width: format.width() as usize,
                                 height: format.height() as usize,
                                 pixel_format: format.pixel_format,
+                                timestamp: data.timestamp,
+                                reference_time: data.reference_time,
+                                capture_begin_time: Some(data.capture_begin_time),
                             })
                         }
                     }),
@@ -105,7 +109,10 @@ impl VideoDeviceInfo {
             (VideoDeviceInfoInner::DirectShow(device), VideoFormatInner::DirectShow(format)) => {
                 let handle = device.start_capturing(
                     format,
-                    Box::new(move |sample, media_type| {
+                    Box::new(move |data| {
+                        let sample = data.sample;
+                        let media_type = data.media_type;
+
                         let video_info = unsafe {
                             &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER)
                         };
@@ -119,6 +126,9 @@ impl VideoDeviceInfo {
                             pixel_format: format,
                             width: video_info.bmiHeader.biWidth as usize,
                             height: video_info.bmiHeader.biHeight as usize,
+                            timestamp: data.timestamp,
+                            reference_time: data.reference_time,
+                            capture_begin_time: None,
                         });
                     }),
                 )?;
@@ -167,6 +177,9 @@ pub struct Frame {
     pub pixel_format: PixelFormat,
     pub width: usize,
     pub height: usize,
+    pub reference_time: Instant,
+    pub timestamp: Duration,
+    pub capture_begin_time: Option<Instant>,
     inner: FrameInner,
 }
 
