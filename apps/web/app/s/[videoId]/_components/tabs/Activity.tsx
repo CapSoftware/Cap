@@ -456,6 +456,18 @@ const Comments = Object.assign(
     const [optimisticComments, setOptimisticComments] = useOptimistic(
       comments,
       (state, newComment: CommentType) => {
+        if (!newComment.sending) {
+          const filteredState = state.filter(comment => {
+            if (comment.sending &&
+              comment.content === newComment.content &&
+              comment.authorId === newComment.authorId &&
+              Math.abs(new Date(comment.createdAt).getTime() - new Date(newComment.createdAt).getTime()) < 10000) {
+              return false;
+            }
+            return true;
+          });
+          return [...filteredState, newComment];
+        }
         return [...state, newComment];
       }
     );
