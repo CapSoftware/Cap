@@ -487,7 +487,7 @@ const Comments = Object.assign(
     }, [optimisticComments]);
 
 
-    const handleNewComment = (content: string) => {
+    const handleNewComment = async (content: string) => {
 
       const optimisticComment: CommentType = {
         id: `temp-${Date.now()}`,
@@ -505,39 +505,36 @@ const Comments = Object.assign(
 
       setOptimisticComments(optimisticComment);
 
-      startTransition(async () => {
-        try {
-          const response = await fetch("/api/video/comment", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: "text",
-              content,
-              videoId: props.videoId,
-              parentCommentId: "",
-            }),
-          });
+      try {
+        const response = await fetch("/api/video/comment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "text",
+            content,
+            videoId: props.videoId,
+            parentCommentId: "",
+          }),
+        });
 
-          if (!response.ok) {
-            throw new Error("Failed to post comment");
-          }
-
-          const data = await response.json();
-
-          setComments((prev) => [...prev, {
-            ...data,
-            sending: false
-          }]);
-
-        } catch (error) {
-          console.error("Error posting comment:", error);
+        if (!response.ok) {
+          throw new Error("Failed to post comment");
         }
-      });
+
+        const data = await response.json();
+
+        startTransition(() => {
+          setComments((prev) => [...prev, data]);
+        });
+
+      } catch (error) {
+        console.error("Error posting comment:", error);
+      }
     }
 
-    const handleReply = (content: string) => {
+    const handleReply = async (content: string) => {
       if (!replyingTo) return;
 
       const parentComment = optimisticComments.find((c) => c.id === replyingTo);
@@ -561,44 +558,41 @@ const Comments = Object.assign(
 
       setOptimisticComments(optimisticReply);
 
-      startTransition(async () => {
-        try {
-          const response = await fetch("/api/video/comment", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              type: "text",
-              content,
-              videoId: props.videoId,
-              parentCommentId: actualParentId,
-            }),
-          });
+      try {
+        const response = await fetch("/api/video/comment", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            type: "text",
+            content,
+            videoId: props.videoId,
+            parentCommentId: actualParentId,
+          }),
+        });
 
-          if (!response.ok) {
-            throw new Error("Failed to post reply");
-          }
-
-          const data = await response.json();
-
-          setComments((prev) => [...prev, {
-            ...data,
-            sending: false
-          }]);
-
-          const newReplyElement = document.getElementById(`comment-${data.id}`);
-          if (newReplyElement) {
-            newReplyElement.scrollIntoView({
-              behavior: "smooth",
-              block: "center",
-            });
-          }
-          setReplyingTo(null);
-        } catch (error) {
-          console.error("Error posting reply:", error);
+        if (!response.ok) {
+          throw new Error("Failed to post reply");
         }
-      });
+
+        const data = await response.json();
+
+        startTransition(() => {
+          setComments((prev) => [...prev, data]);
+        });
+
+        const newReplyElement = document.getElementById(`comment-${data.id}`);
+        if (newReplyElement) {
+          newReplyElement.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+        }
+        setReplyingTo(null);
+      } catch (error) {
+        console.error("Error posting reply:", error);
+      }
     };
 
     const handleCancelReply = () => {
