@@ -6,23 +6,26 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema } from "@cap/database/schema";
 import { Avatar, Button } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
-import {
+import React, {
   ComponentProps,
-  PropsWithChildren,
-  Suspense,
+  PropsWithChildren, startTransition, Suspense,
   use,
   useEffect,
   useMemo,
+  useOptimistic,
   useRef,
-  useState,
+  useState
 } from "react";
-import { Tooltip } from "react-tooltip";
+import { Tooltip } from "@/components/Tooltip";
 
 import { AuthOverlay } from "../AuthOverlay";
 import clsx from "clsx";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
+  sending?: boolean;
 };
 
 interface ActivityProps {
@@ -82,7 +85,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
   return (
     <div className="flex items-start space-x-3">
       <div className="flex-1">
-        <div className="p-2 rounded-lg bg-gray-1">
+        <div className="p-2 rounded-lg border bg-gray-1 border-gray-3">
           <textarea
             ref={inputRef}
             value={content}
@@ -92,9 +95,9 @@ const CommentInput: React.FC<CommentInputProps> = ({
             placeholder={placeholder || "Leave a comment"}
             className="w-full text-[15px] leading-[22px] text-gray-12 bg-transparent focus:outline-none"
           />
-          <div className="flex mt-2 space-x-2">
+          <div className="flex items-center mt-2 space-x-2">
             <Button
-              size="sm"
+              size="xs"
               variant="primary"
               onClick={() => handleSubmit()}
               disabled={disabled}
@@ -102,7 +105,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
               {buttonLabel}
             </Button>
             {showCancelButton && onCancel && (
-              <Button size="sm" variant="white" onClick={onCancel}>
+              <Button size="xs" variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
             )}
@@ -193,28 +196,27 @@ const Comment: React.FC<{
 
     return (
       <motion.div
-        id={`comment-${comment.id}`}
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -20 }}
-        transition={{ duration: 0.2 }}
-        className={clsx(`space-y-3`, level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "")}
+        key={`comment-${comment.id}`}
+        // initial={{ opacity: 0, y: 20 }}
+        // animate={{ opacity: 1, y: 0 }}
+        // exit={{ opacity: 0, y: -20 }}
+        // transition={{ duration: 0.2 }}
+        className={clsx(`space-y-3`, level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "", comment.sending ? "opacity-20" : "opacity-100")}
       >
-        <div className="flex items-start space-x-3">
-          <Avatar className="size-8" letterClass="text-sm" name={comment.authorName} />
-          <div className="flex-1">
+        <div className="flex items-start space-x-2.5">
+          <Avatar className="size-6" letterClass="text-sm" name={comment.authorName} />
+          <div className="flex-1 p-3 rounded-xl border bg-gray-2 border-gray-3">
             <div className="flex items-center space-x-2">
-              <span className="font-medium text-gray-12">
+              <p className="text-base font-medium text-gray-12">
                 {comment.authorName || "Anonymous"}
-              </span>
-              <span
-                className="text-sm text-gray-8"
-                data-tooltip-id={`comment-${comment.id}-timestamp`}
-                data-tooltip-content={formatTimestamp(commentDate)}
-              >
-                {formatTimeAgo(commentDate)}
-              </span>
-              <Tooltip id={`comment-${comment.id}-timestamp`} />
+              </p>
+              <Tooltip content={formatTimestamp(commentDate)}>
+                <p
+                  className="text-sm text-gray-8"
+                >
+                  {formatTimeAgo(commentDate)}
+                </p>
+              </Tooltip>
               {comment.timestamp && (
                 <button
                   onClick={() => onSeek?.(comment.timestamp!)}
@@ -224,23 +226,29 @@ const Comment: React.FC<{
                 </button>
               )}
             </div>
-            <p className="mt-1 text-gray-11">{comment.content}</p>
-            <div className="flex items-center mt-2 space-x-4">
+            <p className="text-sm text-gray-11">{comment.content}</p>
+            <div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
               {user && !isReplying && canReply && (
-                <button
-                  onClick={() => onReply(comment.id)}
-                  className="text-sm text-gray-10 hover:text-gray-12"
-                >
-                  Reply
-                </button>
+                <Tooltip content="Reply">
+                  <Button
+                    onClick={() => onReply(comment.id)}
+                    size="icon"
+                    variant="outline"
+                    icon={<FontAwesomeIcon className="size-[10px]" icon={faReply} />}
+                    className="text-[13px] p-0 size-6"
+                  />
+                </Tooltip>
               )}
               {isOwnComment && (
-                <button
-                  onClick={handleDelete}
-                  className="text-sm text-red-500 hover:text-red-700"
-                >
-                  Delete
-                </button>
+                <Tooltip content="Delete comment">
+                  <Button
+                    onClick={handleDelete}
+                    size="icon"
+                    variant="outline"
+                    icon={<FontAwesomeIcon className="size-[10px]" icon={faTrash} />}
+                    className="text-[13px] p-0 size-6"
+                  />
+                </Tooltip>
               )}
             </div>
           </div>
@@ -309,16 +317,14 @@ const EmptyState = () => (
 
 export const Activity = Object.assign(
   ({ user, videoId, isOwnerOrMember = false, ...props }: ActivityProps) => {
-    const initialComments =
+    const initialComments: CommentType[] =
       props.comments instanceof Promise ? use(props.comments) : props.comments;
 
-    // Lift comments state up so both Analytics and Comments can share it
-    const [comments, setComments] = useState(initialComments);
+    const [comments, setComments] = useState<CommentType[]>(initialComments);
 
-    // Sync local state with props when they change (after revalidation)
-    useEffect(() => {
-      setComments(initialComments);
-    }, [initialComments]);
+    // useEffect(() => {
+    //   setComments(initialComments);
+    // }, [initialComments]);
 
     return (
       <Activity.Shell
@@ -447,12 +453,14 @@ const Comments = Object.assign(
 
     const { user } = props;
     const [replyingTo, setReplyingTo] = useState<string | null>(null);
-    const [optimisticComments, setOptimisticComments] = useState<CommentType[]>(
-      []
+    const [optimisticComments, setOptimisticComments] = useOptimistic(
+      comments,
+      (state, newComment: CommentType) => {
+        return [...state, newComment];
+      }
     );
 
-    const allComments = [...comments, ...optimisticComments];
-    const rootComments = allComments.filter(
+    const rootComments = optimisticComments.filter(
       (comment) => !comment.parentCommentId || comment.parentCommentId === ""
     );
 
@@ -476,14 +484,11 @@ const Comments = Object.assign(
 
     useEffect(() => {
       setTimeout(scrollToBottom, 100);
-    }, [comments]);
+    }, [optimisticComments]);
 
 
-    const addOptimisticComment = (newComment: CommentType) => {
-      setOptimisticComments((prev) => [...prev, newComment]);
-    };
+    const handleNewComment = (content: string) => {
 
-    const handleNewComment = async (content: string) => {
       const optimisticComment: CommentType = {
         id: `temp-${Date.now()}`,
         authorId: user?.id || "anonymous",
@@ -495,113 +500,111 @@ const Comments = Object.assign(
         type: "text",
         timestamp: null,
         updatedAt: new Date(),
+        sending: true,
       };
 
-      addOptimisticComment(optimisticComment);
+      setOptimisticComments(optimisticComment);
 
-      try {
-        const response = await fetch("/api/video/comment", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "text",
-            content,
-            videoId: props.videoId,
-            parentCommentId: "",
-          }),
-        });
+      startTransition(async () => {
+        try {
+          const response = await fetch("/api/video/comment", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "text",
+              content,
+              videoId: props.videoId,
+              parentCommentId: "",
+            }),
+          });
 
-        if (!response.ok) {
-          throw new Error("Failed to post comment");
+          if (!response.ok) {
+            throw new Error("Failed to post comment");
+          }
+
+          const data = await response.json();
+
+          setComments((prev) => [...prev, {
+            ...data,
+            sending: false
+          }]);
+
+        } catch (error) {
+          console.error("Error posting comment:", error);
         }
+      });
+    }
 
-        const data = await response.json();
-
-        setOptimisticComments((prev) =>
-          prev.filter((c) => c.id !== optimisticComment.id)
-        );
-
-        setComments((prev) => [...prev, data]);
-
-      } catch (error) {
-        console.error("Error posting comment:", error);
-        setOptimisticComments((prev) =>
-          prev.filter((c) => c.id !== optimisticComment.id)
-        );
-      }
-    };
-
-    const handleReply = async (content: string) => {
+    const handleReply = (content: string) => {
       if (!replyingTo) return;
 
-      const parentComment = comments.find((c) => c.id === replyingTo);
+      const parentComment = optimisticComments.find((c) => c.id === replyingTo);
       const actualParentId = parentComment?.parentCommentId
         ? parentComment.parentCommentId
         : replyingTo;
 
       const optimisticReply: CommentType = {
-        id: `temp-${Date.now()}`,
+        id: `temp-reply-${Date.now()}`,
         authorId: user?.id || "anonymous",
         authorName: user?.name || "Anonymous",
         content,
         createdAt: new Date(),
-        videoId: comments[0]?.videoId || "",
+        videoId: props.videoId,
         parentCommentId: actualParentId,
         type: "text",
         timestamp: null,
         updatedAt: new Date(),
+        sending: true,
       };
 
-      addOptimisticComment(optimisticReply);
+      setOptimisticComments(optimisticReply);
 
-      try {
-        const response = await fetch("/api/video/comment", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "text",
-            content,
-            videoId: comments[0]?.videoId,
-            parentCommentId: actualParentId,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error("Failed to post reply");
-        }
-
-        const data = await response.json();
-
-        setOptimisticComments((prev) =>
-          prev.filter((c) => c.id !== optimisticReply.id)
-        );
-
-        setComments((prev) => [...prev, data]);
-
-        const newReplyElement = document.getElementById(`comment-${data.id}`);
-        if (newReplyElement) {
-          newReplyElement.scrollIntoView({
-            behavior: "smooth",
-            block: "center",
+      startTransition(async () => {
+        try {
+          const response = await fetch("/api/video/comment", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "text",
+              content,
+              videoId: props.videoId,
+              parentCommentId: actualParentId,
+            }),
           });
-        }
 
-        setReplyingTo(null);
-      } catch (error) {
-        console.error("Error posting reply:", error);
-        setOptimisticComments((prev) =>
-          prev.filter((c) => c.id !== optimisticReply.id)
-        );
-      }
+          if (!response.ok) {
+            throw new Error("Failed to post reply");
+          }
+
+          const data = await response.json();
+
+          setComments((prev) => [...prev, {
+            ...data,
+            sending: false
+          }]);
+
+          const newReplyElement = document.getElementById(`comment-${data.id}`);
+          if (newReplyElement) {
+            newReplyElement.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          }
+          setReplyingTo(null);
+        } catch (error) {
+          console.error("Error posting reply:", error);
+        }
+      });
     };
 
     const handleCancelReply = () => {
       setReplyingTo(null);
     };
+
 
     const handleDeleteComment = async (commentId: string) => {
       try {
@@ -616,17 +619,9 @@ const Comments = Object.assign(
           const data = await response.json();
           throw new Error(data.error || "Failed to delete comment");
         }
-
-        // Remove the comment and its replies from the state
-        setComments((prev) =>
-          prev.filter(
-            (comment) =>
-              comment.id !== commentId && comment.parentCommentId !== commentId
-          )
-        );
+        setComments((prev) => prev.filter((c) => c.id !== commentId));
       } catch (error) {
         console.error("Error deleting comment:", error);
-        // You might want to show an error toast here
       }
     };
 
@@ -641,7 +636,7 @@ const Comments = Object.assign(
           <EmptyState />
         ) : (
           <div className="p-4 space-y-6">
-            <AnimatePresence mode="sync">
+            <AnimatePresence>
               {rootComments
                 .sort(
                   (a, b) =>
@@ -652,7 +647,7 @@ const Comments = Object.assign(
                   <Comment
                     key={comment.id}
                     comment={comment}
-                    replies={allComments.sort(
+                    replies={optimisticComments.sort(
                       (a, b) =>
                         new Date(a.createdAt).getTime() -
                         new Date(b.createdAt).getTime()
