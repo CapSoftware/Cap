@@ -190,9 +190,9 @@ pub enum StartCapturingError {
 #[derive(Debug)]
 pub struct CapturedFrame {
     native: NativeCapturedFrame,
-    reference_time: Instant,
-    timestamp: Duration,
-    capture_begin_time: Option<Instant>,
+    pub reference_time: Instant,
+    pub timestamp: Duration,
+    pub capture_begin_time: Option<Instant>,
 }
 
 impl CapturedFrame {

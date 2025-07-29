@@ -1,4 +1,3 @@
-use cap_camera::CameraInfo;
 use cap_fail::{fail, fail_err};
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use futures::channel::oneshot;
@@ -6,7 +5,7 @@ use std::{
     cmp::Ordering,
     sync::mpsc,
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -14,7 +13,11 @@ use crate::data::{FFVideo, VideoInfo};
 
 use cap_camera_ffmpeg::*;
 
-type CameraSwitchResult = Result<(cap_camera::CameraInfo, VideoInfo), SetupCameraError>;
+pub struct CameraFeedInfo {
+    pub camera: cap_camera::CameraInfo,
+    pub video_info: VideoInfo,
+    pub reference_time: Instant,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SwitchCameraError {
@@ -27,7 +30,10 @@ pub enum SwitchCameraError {
 }
 
 enum CameraControl {
-    Switch(DeviceOrModelID, oneshot::Sender<CameraSwitchResult>),
+    Switch(
+        DeviceOrModelID,
+        oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
+    ),
     AttachConsumer(Sender<RawCameraFrame>),
     Shutdown,
 }
@@ -35,7 +41,8 @@ enum CameraControl {
 #[derive(Clone)]
 pub struct RawCameraFrame {
     pub frame: FFVideo,
-    pub captured_at: SystemTime,
+    pub timestamp: Duration,
+    pub refrence_time: Instant,
 }
 
 pub struct CameraConnection {
@@ -70,6 +77,7 @@ impl DeviceOrModelID {
 pub struct CameraFeed {
     pub camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    reference_time: Instant,
     control: Sender<CameraControl>,
 }
 
@@ -85,12 +93,21 @@ impl CameraFeed {
         let camera_info = find_camera(&selected_camera).unwrap();
         let (control, control_receiver) = flume::bounded(1);
 
-        let video_info = start_capturing(selected_camera, control_receiver).await?;
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        thread::spawn(move || {
+            run_camera_feed(selected_camera, control_receiver, ready_tx);
+        });
+
+        let state = ready_rx
+            .await
+            .map_err(|_| SetupCameraError::Initialisation)??;
 
         let camera_feed = Self {
             camera_info,
-            video_info,
             control,
+            video_info: state.video_info,
+            reference_time: state.reference_time,
         };
 
         Ok(camera_feed)
@@ -137,12 +154,13 @@ impl CameraFeed {
             .send_async(CameraControl::Switch(id, result_tx))
             .await;
 
-        let (camera_info, video_info) = result_rx
+        let data = result_rx
             .await
             .map_err(SwitchCameraError::RequestFailed)??;
 
-        self.camera_info = camera_info;
-        self.video_info = video_info;
+        self.camera_info = data.camera;
+        self.video_info = data.video_info;
+        self.reference_time = data.reference_time;
 
         Ok(())
     }
@@ -173,28 +191,11 @@ fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraIn
     })
 }
 
-async fn start_capturing(
-    id: DeviceOrModelID,
-    control: Receiver<CameraControl>,
-) -> Result<VideoInfo, SetupCameraError> {
-    let (ready_tx, ready_rx) = oneshot::channel();
-
-    thread::spawn(move || {
-        run_camera_feed(id, control, ready_tx);
-    });
-
-    let (_camera_info, video_info) = ready_rx
-        .await
-        .map_err(|_| SetupCameraError::Initialisation)??;
-
-    Ok(video_info)
-}
-
 // #[tracing::instrument(skip_all)]
 fn run_camera_feed(
     id: DeviceOrModelID,
     control: Receiver<CameraControl>,
-    ready_tx: oneshot::Sender<Result<(cap_camera::CameraInfo, VideoInfo), SetupCameraError>>,
+    ready_tx: oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
 ) {
     fail!("media::feeds::camera::run panic");
 
@@ -202,7 +203,11 @@ fn run_camera_feed(
 
     let mut state = match setup_camera(id) {
         Ok(state) => {
-            let _ = ready_tx.send(Ok((state.camera_info.clone(), state.video_info.clone())));
+            let _ = ready_tx.send(Ok(CameraFeedInfo {
+                camera: state.camera_info.clone(),
+                video_info: state.video_info.clone(),
+                reference_time: state.reference_time,
+            }));
             state
         }
         Err(e) => {
@@ -231,10 +236,11 @@ fn run_camera_feed(
                 }
                 Ok(CameraControl::Switch(new_id, switch_result)) => match setup_camera(new_id) {
                     Ok(new_state) => {
-                        let _ = switch_result.send(Ok((
-                            new_state.camera_info.clone(),
-                            new_state.video_info.clone(),
-                        )));
+                        let _ = switch_result.send(Ok(CameraFeedInfo {
+                            camera: new_state.camera_info.clone(),
+                            video_info: new_state.video_info.clone(),
+                            reference_time: new_state.reference_time,
+                        }));
                         state = new_state;
 
                         break;
@@ -246,15 +252,8 @@ fn run_camera_feed(
                 },
             }
 
-            let Ok(ff_frame) = state.frame_rx.recv_timeout(Duration::from_secs(5)) else {
+            let Ok(frame) = state.frame_rx.recv_timeout(Duration::from_secs(5)) else {
                 return;
-            };
-
-            let captured_at = SystemTime::now();
-
-            let frame = RawCameraFrame {
-                frame: ff_frame,
-                captured_at,
             };
 
             let mut to_remove = vec![];
@@ -298,7 +297,8 @@ struct SetupCameraState {
     handle: cap_camera::RecordingHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
-    frame_rx: mpsc::Receiver<FFVideo>,
+    frame_rx: mpsc::Receiver<RawCameraFrame>,
+    reference_time: Instant,
 }
 
 fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraError> {
@@ -341,9 +341,11 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
     let (frame_tx, frame_rx) = mpsc::sync_channel(8);
 
     let capture_handle = camera.start_capturing(format.clone(), move |frame| {
-        let Ok(ff_frame) = frame.to_ffmpeg() else {
+        let Ok(mut ff_frame) = frame.to_ffmpeg() else {
             return;
         };
+
+        ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 
         ready_signal.take().map(|signal| {
             let video_info = VideoInfo::from_raw_ffmpeg(
@@ -353,13 +355,17 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
                 frame_rate,
             );
 
-            signal.send(video_info).ok();
+            let _ = signal.send((video_info, frame.reference_time));
         });
 
-        let _ = frame_tx.send(ff_frame);
+        let _ = frame_tx.send(RawCameraFrame {
+            frame: ff_frame,
+            timestamp: frame.timestamp,
+            refrence_time: frame.reference_time,
+        });
     })?;
 
-    let video_info = ready_rx
+    let (video_info, reference_time) = ready_rx
         .recv_timeout(CAMERA_INIT_TIMEOUT)
         .map_err(SetupCameraError::Timeout)?;
 
@@ -368,5 +374,6 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
         camera_info: camera,
         video_info,
         frame_rx,
+        reference_time,
     })
 }
