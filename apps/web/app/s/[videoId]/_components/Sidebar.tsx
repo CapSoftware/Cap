@@ -1,5 +1,3 @@
-"use client";
-
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
@@ -24,7 +22,10 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 interface SidebarProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: MaybePromise<CommentType[]>;
+  commentsData: CommentType[];
+  optimisticComments: CommentType[];
+  setOptimisticComments: (newComment: CommentType) => void;
+  setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
   views: MaybePromise<number>;
   onSeek?: (time: number) => void;
   videoId: string;
@@ -64,7 +65,10 @@ const tabTransition = {
 export const Sidebar: React.FC<SidebarProps> = ({
   data,
   user,
-  comments,
+  commentsData,
+  setCommentsData,
+  optimisticComments,
+  setOptimisticComments,
   views,
   onSeek,
   videoId,
@@ -89,7 +93,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "transcript", label: "Transcript" },
   ];
 
-  const paginate = (newDirection: number, tabId: TabType) => {
+  const paginate = (tabId: TabType) => {
     const currentIndex = tabs.findIndex((tab) => tab.id === activeTab);
     const newIndex = tabs.findIndex((tab) => tab.id === tabId);
     const direction = newIndex > currentIndex ? 1 : -1;
@@ -112,8 +116,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             <Activity
               views={views}
-              comments={comments}
+              comments={commentsData}
+              setComments={setCommentsData}
               user={user}
+              optimisticComments={optimisticComments}
+              setOptimisticComments={setOptimisticComments}
               isOwnerOrMember={isOwnerOrMember}
               onSeek={onSeek}
               videoId={videoId}
@@ -149,7 +156,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               key={tab.id}
               onClick={() =>
-                paginate(tab.id === activeTab ? 0 : 1, tab.id as TabType)
+                paginate(tab.id as TabType)
               }
               className={classNames(
                 "flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",

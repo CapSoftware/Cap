@@ -2,9 +2,9 @@
 
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { newComment } from "@/actions/videos/new-comment";
+import { deleteComment } from "@/actions/videos/delete-comment";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import { userSelectProps } from "@cap/database/auth/session";
-import { comments as commentsSchema } from "@cap/database/schema";
 import { Avatar, Button } from "@cap/ui";
 import { AnimatePresence, motion } from "framer-motion";
 import React, {
@@ -12,9 +12,7 @@ import React, {
   PropsWithChildren, startTransition, Suspense,
   use,
   useEffect,
-  useMemo,
-  useOptimistic,
-  useRef,
+  useMemo, useRef,
   useState
 } from "react";
 import { Tooltip } from "@/components/Tooltip";
@@ -23,19 +21,19 @@ import { AuthOverlay } from "../AuthOverlay";
 import clsx from "clsx";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
+import { CommentType } from "../../Share";
 
-type CommentType = typeof commentsSchema.$inferSelect & {
-  authorName?: string | null;
-  sending?: boolean;
-};
 
 interface ActivityProps {
   views: MaybePromise<number>;
-  comments: MaybePromise<CommentType[]>;
+  comments: CommentType[];
+  setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
   user: typeof userSelectProps | null;
   onSeek?: (time: number) => void;
   videoId: string;
-  isOwnerOrMember?: boolean;
+  optimisticComments: CommentType[];
+  setOptimisticComments: (newComment: CommentType) => void;
+  isOwnerOrMember: boolean;
 }
 
 interface CommentInputProps {
@@ -198,10 +196,6 @@ const Comment: React.FC<{
     return (
       <motion.div
         key={`comment-${comment.id}`}
-        // initial={{ opacity: 0, y: 20 }}
-        // animate={{ opacity: 1, y: 0 }}
-        // exit={{ opacity: 0, y: -20 }}
-        // transition={{ duration: 0.2 }}
         className={clsx(`space-y-3`, level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "", comment.sending ? "opacity-20" : "opacity-100")}
       >
         <div className="flex items-start space-x-2.5">
@@ -317,11 +311,7 @@ const EmptyState = () => (
 );
 
 export const Activity = Object.assign(
-  ({ user, videoId, isOwnerOrMember = false, ...props }: ActivityProps) => {
-    const initialComments: CommentType[] =
-      props.comments instanceof Promise ? use(props.comments) : props.comments;
-
-    const [comments, setComments] = useState<CommentType[]>(initialComments);
+  ({ user, videoId, isOwnerOrMember, comments, optimisticComments, setOptimisticComments, setComments, ...props }: ActivityProps) => {
 
     // useEffect(() => {
     //   setComments(initialComments);
@@ -344,6 +334,8 @@ export const Activity = Object.assign(
         {({ setShowAuthOverlay }) => (
           <Comments
             comments={comments}
+            optimisticComments={optimisticComments}
+            setOptimisticComments={setOptimisticComments}
             setComments={setComments}
             user={user}
             videoId={videoId}
@@ -446,20 +438,16 @@ const Comments = Object.assign(
     setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
     user: typeof userSelectProps | null;
     videoId: string;
+    optimisticComments: CommentType[];
+    setOptimisticComments: (newComment: CommentType) => void;
     onSeek?: (time: number) => void;
     setShowAuthOverlay: (v: boolean) => void;
   }) => {
     // Use shared state from parent instead of local state
-    const { comments, setComments } = props;
+    const { optimisticComments, setOptimisticComments, comments, setComments } = props;
 
     const { user } = props;
     const [replyingTo, setReplyingTo] = useState<string | null>(null);
-    const [optimisticComments, setOptimisticComments] = useOptimistic(
-      comments,
-      (state, newComment: CommentType) => {
-        return [...state, newComment];
-      }
-    );
 
     const rootComments = optimisticComments.filter(
       (comment) => !comment.parentCommentId || comment.parentCommentId === ""
@@ -505,14 +493,13 @@ const Comments = Object.assign(
 
       setOptimisticComments(optimisticComment);
 
-      const formData = new FormData();
-      formData.append("content", content);
-      formData.append("videoId", props.videoId);
-      formData.append("parentCommentId", "");
-      formData.append("type", "text");
-
       try {
-        const data = await newComment(formData);
+        const data = await newComment({
+          content,
+          videoId: props.videoId,
+          parentCommentId: "",
+          type: "text",
+        });
         startTransition(() => {
           setComments((prev) => [...prev, data]);
         });
@@ -547,14 +534,12 @@ const Comments = Object.assign(
 
       try {
 
-
-        const formData = new FormData();
-        formData.append("content", content);
-        formData.append("videoId", props.videoId);
-        formData.append("parentCommentId", actualParentId);
-        formData.append("type", "text");
-
-        const data = await newComment(formData);
+        const data = await newComment({
+          content,
+          videoId: props.videoId,
+          parentCommentId: actualParentId,
+          type: "text",
+        });
 
         startTransition(() => {
           setComments((prev) => [...prev, data]);
@@ -579,20 +564,13 @@ const Comments = Object.assign(
 
     const handleDeleteComment = async (commentId: string) => {
       try {
-        const response = await fetch(
-          `/api/video/comment/delete?commentId=${commentId}`,
-          {
-            method: "DELETE",
-          }
-        );
-
-        if (!response.ok) {
-          const data = await response.json();
-          throw new Error(data.error || "Failed to delete comment");
-        }
+        await deleteComment({
+          commentId,
+          videoId: props.videoId,
+        });
         setComments((prev) => prev.filter((c) => c.id !== commentId));
       } catch (error) {
-        console.error("Error deleting comment:", error);
+        console.error("Failed to delete comment:", error);
       }
     };
 

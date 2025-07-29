@@ -6,16 +6,22 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { revalidatePath } from "next/cache";
 import { nanoId } from "@cap/database/helpers";
 
-export async function newComment(formData: FormData) {
+export async function newComment(data: {
+  content: string;
+  videoId: string;
+  type: "text" | "emoji";
+  parentCommentId: string;
+}) {
   const user = await getCurrentUser();
 
   if (!user) {
     throw new Error("User not authenticated");
   }
 
-  const content = formData.get("content") as string;
-  const videoId = formData.get("videoId") as string;
-  const type = formData.get("type") as "text" | "emoji";
+  const content = data.content;
+  const videoId = data.videoId;
+  const type = data.type;
+  const parentCommentId = data.parentCommentId;
 
   if (!content || !videoId) {
     throw new Error("Content and videoId are required");
@@ -29,7 +35,7 @@ export async function newComment(formData: FormData) {
     content: content,
     videoId: videoId,
     timestamp: null,
-    parentCommentId: "",
+    parentCommentId: parentCommentId,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
