@@ -596,12 +596,12 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
         let timestamp = Duration::from_micros(raw_time_stamp / 10);
 
         let mut raw_capture_begin_time =
-            unsafe { sample.GetUINT64(MFSampleExtension_DeviceReferenceSystemTime) }
+            unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) }
                 .or_else(
                     // retry, it's what chromium does /shrug
-                    |_| unsafe { sample.GetUINT64(MFSampleExtension_DeviceReferenceSystemTime) },
+                    |_| unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) },
                 )
-                .unwrap_or(unsafe { MFGetSystemTime() });
+                .unwrap_or(unsafe { MFGetSystemTime() } as u64);
 
         let mf_time_offset = reference_time - mf_time_now;
         let capture_begin_time =
