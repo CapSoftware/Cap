@@ -71,9 +71,10 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Calculate the crop region dimensions using window dimensions directly
+    // Calculate the effective rendering dimensions (accounting for toolbar)
+    let effective_height = window_uniforms.window_height * (1.0 - window_uniforms.toolbar_percentage);
     let crop_width = window_uniforms.window_width;
-    let crop_height = window_uniforms.window_height;
+    let crop_height = effective_height;
     let crop_aspect = crop_width / crop_height;
     let camera_aspect = camera_uniforms.camera_aspect_ratio;
 
@@ -138,10 +139,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Full shape with aspect ratio-corrected rounded corners
         let window_aspect = window_uniforms.window_width / window_uniforms.window_height;
         let corner_radius = select(0.08, 0.1, size == 1.0); // radius based on size (8% for small, 10% for large)
-        
+
         let abs_uv = abs(center_uv);
         let corner_pos = abs_uv - (1.0 - corner_radius);
-        
+
         // Use aspect-ratio aware distance calculation for circular corners
         var adjusted_corner_pos = max(corner_pos, vec2<f32>(0.0, 0.0));
         if (window_aspect > 1.0) {
@@ -151,7 +152,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // For tall windows, scale Y component to make distance calculation circular
             adjusted_corner_pos.y /= window_aspect;
         }
-        
+
         let corner_dist = length(adjusted_corner_pos);
 
         // Enhanced anti-aliasing for corners
