@@ -15,14 +15,7 @@
       "csp": "default-src 'self' ws: ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; media-src 'self' asset: http://asset.localhost; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPDATA/**",
-          "**/*.jpg",
-          "**/*.webp",
-          "$RESOURCE/**",
-          "**/*.riv",
-          "$HOME/**"
-        ]
+        "scope": ["$APPDATA/**", "**/*.jpg", "**/*.webp", "$RESOURCE/**", "**/*.riv", "$HOME/**"]
       }
     }
   },
