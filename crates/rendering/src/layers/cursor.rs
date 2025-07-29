@@ -257,19 +257,20 @@ impl CursorLayer {
             let cursor_texture_size_aspect =
                 cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
 
-            let screen_size = constants.options.screen_size;
             let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
                 100.0
             } else {
                 uniforms.cursor_size / 100.0
             };
+            let factor = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
+                * uniforms.output_size.1 as f32;
 
-            let factor =
-                STANDARD_CURSOR_HEIGHT / screen_size.y as f32 * uniforms.output_size.1 as f32;
+            let cursor_size_constant =
+                factor * cursor_size_percentage * zoom.display_amount() as f32;
 
             XY::new(
-                factor * cursor_texture_size_aspect * cursor_size_percentage,
-                factor * cursor_size_percentage,
+                cursor_size_constant * cursor_texture_size_aspect,
+                cursor_size_constant,
             )
         };
 
@@ -277,8 +278,7 @@ impl CursorLayer {
             * (1.0 - CLICK_SHRINK_SIZE)
             + CLICK_SHRINK_SIZE;
 
-        let cursor_size_px: XY<f64> =
-            (cursor_base_size_px * click_scale_factor * zoom.display_amount() as f32).into();
+        let cursor_size_px: XY<f64> = (cursor_base_size_px * click_scale_factor).into();
 
         let hotspot_px = cursor_texture.hotspot * cursor_size_px;
 
@@ -434,6 +434,9 @@ static CURSOR_RESIZE_EW: (&'static str, XY<f64>) = (
     XY::new(0.5, 0.5),
 );
 
+/// The size to render the svg to.
+static SVG_OUTPUT_HEIGHT: u32 = 255;
+
 struct CursorTexture {
     texture: wgpu::Texture,
     hotspot: XY<f64>,
@@ -509,22 +512,24 @@ impl CursorTexture {
         svg_data: &str,
         hotspot: XY<f64>,
     ) -> Result<Self, String> {
-        let size = 64; // TODO: Should scale with the cursor size in the editor
-
         let rtree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
             .map_err(|e| format!("Failed to parse SVG: {}", e))?;
 
-        let pixmap_size = rtree.size().to_int_size();
-        let target_size = tiny_skia::IntSize::from_wh(size, size).ok_or("Invalid target size")?;
+        // Although we could probably determine the size that the cursor is going to be render,
+        // that would depend on the cursor size the user selects.
+        //
+        // This would require reinitializing the texture every time that changes which would be more complicated.
+        // So we trade a small about VRAM for only initializing it once.
+        let aspect_ratio = rtree.size().width() / rtree.size().height();
+        let width = (aspect_ratio * SVG_OUTPUT_HEIGHT as f32) as u32;
 
-        let mut pixmap = tiny_skia::Pixmap::new(target_size.width(), target_size.height())
+        let mut pixmap = tiny_skia::Pixmap::new(width as u32, SVG_OUTPUT_HEIGHT as u32)
             .ok_or("Failed to create pixmap")?;
 
         // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
-        let scale_x = target_size.width() as f32 / pixmap_size.width() as f32;
-        let scale_y = target_size.height() as f32 / pixmap_size.height() as f32;
+        let scale_x = width as f32 / rtree.size().width();
+        let scale_y = SVG_OUTPUT_HEIGHT as f32 / rtree.size().height();
         let scale = scale_x.min(scale_y);
-
         let transform = tiny_skia::Transform::from_scale(scale, scale);
 
         resvg::render(&rtree, transform, &mut pixmap.as_mut());
@@ -532,9 +537,14 @@ impl CursorTexture {
         let rgba: Vec<u8> = pixmap
             .pixels()
             .iter()
-            .flat_map(|pixel| [pixel.red(), pixel.green(), pixel.red(), pixel.alpha()])
+            .flat_map(|p| [p.red(), p.green(), p.red(), p.alpha()])
             .collect();
 
-        Ok(Self::prepare(constants, &rgba, (size, size), hotspot))
+        Ok(Self::prepare(
+            constants,
+            &rgba,
+            (pixmap.width(), pixmap.height()),
+            hotspot,
+        ))
     }
 }
