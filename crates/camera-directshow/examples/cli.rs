@@ -104,9 +104,11 @@ fn main() {
         device
             .start_capturing(
                 &selected_format.media_type,
-                Box::new(|sample, media_type| {
-                    unsafe { dbg!(sample.GetActualDataLength()) };
-                    dbg!(media_type.subtype_str());
+                Box::new(|frame| {
+                    unsafe { dbg!(frame.sample.GetActualDataLength()) };
+                    dbg!(frame.media_type.subtype_str());
+                    dbg!(frame.reference_time);
+                    dbg!(frame.timestamp);
                 }),
             )
             .unwrap();
