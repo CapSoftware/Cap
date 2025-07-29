@@ -1,11 +1,8 @@
 use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
 use flume::Sender;
+use tokio_util::sync::CancellationToken;
 
-pub async fn create_camera_preview_ws() -> (
-    Sender<RawCameraFrame>,
-    u16,
-    tauri::async_runtime::Sender<()>,
-) {
+pub async fn create_camera_preview_ws() -> (Sender<RawCameraFrame>, u16, CancellationToken) {
     let (camera_tx, mut _camera_rx) = flume::bounded::<RawCameraFrame>(4);
     let (_camera_tx, camera_rx) = flume::bounded::<WSFrame>(4);
     std::thread::spawn(move || {
