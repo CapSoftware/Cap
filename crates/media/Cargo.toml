@@ -15,8 +15,9 @@ debug-logging = [] # Feature flag to control debug logging
 [dependencies]
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
-# cap-gpu-converters = { path = "../gpu-converters" }
 cap-audio = { path = "../audio" }
+cap-camera = { path = "../camera", features = ["specta", "serde"] }
+cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
@@ -36,9 +37,7 @@ tokio.workspace = true
 cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
-cap-camera = { path = "../camera", features = ["specta", "serde"] }
-cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
-
+tokio-util = "0.7.15"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

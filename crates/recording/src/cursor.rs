@@ -14,6 +14,7 @@ use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
 use futures::future::Either;
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub struct Cursor {
@@ -33,13 +34,13 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    shutdown_tx: oneshot::Sender<()>,
+    stop: CancellationToken,
     rx: oneshot::Receiver<CursorActorResponse>,
 }
 
 impl CursorActor {
     pub async fn stop(self) -> CursorActorResponse {
-        let _ = self.shutdown_tx.send(());
+        self.stop.cancel();
         self.rx.await.unwrap()
     }
 }
@@ -54,9 +55,10 @@ pub fn spawn_cursor_recorder(
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
 
+    let stop_token_child = stop_token.child_token();
     spawn_actor(async move {
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
@@ -76,7 +78,8 @@ pub fn spawn_cursor_recorder(
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(10));
-            let Either::Right(_) = futures::future::select(&mut shutdown_rx, pin!(sleep)).await
+            let Either::Right(_) =
+                futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
             else {
                 break;
             };
@@ -227,7 +230,10 @@ pub fn spawn_cursor_recorder(
         let _ = tx.send(response);
     });
 
-    CursorActor { shutdown_tx, rx }
+    CursorActor {
+        stop: stop_token,
+        rx,
+    }
 }
 
 #[derive(Debug)]

@@ -19,6 +19,7 @@ import {
 import { Tooltip } from "react-tooltip";
 
 import { AuthOverlay } from "../AuthOverlay";
+import clsx from "clsx";
 
 type CommentType = typeof commentsSchema.$inferSelect & {
   authorName?: string | null;
@@ -197,11 +198,10 @@ const Comment: React.FC<{
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -20 }}
         transition={{ duration: 0.2 }}
-        className={`space-y-3 ${level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : ""
-          }`}
+        className={clsx(`space-y-3`, level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "")}
       >
         <div className="flex items-start space-x-3">
-          <Avatar name={comment.authorName} />
+          <Avatar className="size-8" letterClass="text-sm" name={comment.authorName} />
           <div className="flex-1">
             <div className="flex items-center space-x-2">
               <span className="font-medium text-gray-12">
@@ -224,12 +224,12 @@ const Comment: React.FC<{
                 </button>
               )}
             </div>
-            <p className="mt-1 text-gray-700">{comment.content}</p>
+            <p className="mt-1 text-gray-11">{comment.content}</p>
             <div className="flex items-center mt-2 space-x-4">
               {user && !isReplying && canReply && (
                 <button
                   onClick={() => onReply(comment.id)}
-                  className="text-sm text-gray-1 hover:text-gray-700"
+                  className="text-sm text-gray-10 hover:text-gray-12"
                 >
                   Reply
                 </button>
@@ -309,8 +309,16 @@ const EmptyState = () => (
 
 export const Activity = Object.assign(
   ({ user, videoId, isOwnerOrMember = false, ...props }: ActivityProps) => {
-    const comments =
+    const initialComments =
       props.comments instanceof Promise ? use(props.comments) : props.comments;
+
+    // Lift comments state up so both Analytics and Comments can share it
+    const [comments, setComments] = useState(initialComments);
+
+    // Sync local state with props when they change (after revalidation)
+    useEffect(() => {
+      setComments(initialComments);
+    }, [initialComments]);
 
     return (
       <Activity.Shell
@@ -329,6 +337,7 @@ export const Activity = Object.assign(
         {({ setShowAuthOverlay }) => (
           <Comments
             comments={comments}
+            setComments={setComments}
             user={user}
             videoId={videoId}
             setShowAuthOverlay={setShowAuthOverlay}
@@ -386,10 +395,9 @@ function Analytics(props: {
   views: MaybePromise<number>;
   comments: CommentType[];
 }) {
-  const [_views, setViews] = useState(
+  const [views, setViews] = useState(
     props.views instanceof Promise ? use(props.views) : props.views
   );
-  const views = _views === 0 ? props.comments.length : _views;
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -403,7 +411,7 @@ function Analytics(props: {
     };
 
     fetchAnalytics();
-  }, [props.videoId, props.comments.length]);
+  }, [props.videoId]);
 
   const totalComments = useMemo(
     () => props.comments.filter((c) => c.type === "text").length,
@@ -427,15 +435,15 @@ function Analytics(props: {
 
 const Comments = Object.assign(
   (props: {
-    comments: MaybePromise<CommentType[]>;
+    comments: CommentType[];
+    setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
     user: typeof userSelectProps | null;
     videoId: string;
     onSeek?: (time: number) => void;
     setShowAuthOverlay: (v: boolean) => void;
   }) => {
-    const [comments, setComments] = useState(
-      props.comments instanceof Promise ? use(props.comments) : props.comments
-    );
+    // Use shared state from parent instead of local state
+    const { comments, setComments } = props;
 
     const { user } = props;
     const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -466,9 +474,13 @@ const Comments = Object.assign(
       }
     };
 
+    useEffect(() => {
+      setTimeout(scrollToBottom, 100);
+    }, [comments]);
+
+
     const addOptimisticComment = (newComment: CommentType) => {
       setOptimisticComments((prev) => [...prev, newComment]);
-      setTimeout(scrollToBottom, 100);
     };
 
     const handleNewComment = async (content: string) => {
@@ -512,6 +524,7 @@ const Comments = Object.assign(
         );
 
         setComments((prev) => [...prev, data]);
+
       } catch (error) {
         console.error("Error posting comment:", error);
         setOptimisticComments((prev) =>

@@ -19,7 +19,7 @@ import {
   MediaPlayerVolume,
   MediaPlayerVolumeIndicator,
 } from "./video/media-player";
-import { useEffect, useCallback, useState } from "react";
+import { useEffect, useCallback, useState, useRef } from "react";
 import clsx from "clsx";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -56,6 +56,13 @@ export function CapVideoPlayer({
   const [resolvedVideoSrc, setResolvedVideoSrc] = useState<string>(videoSrc);
   const [useCrossOrigin, setUseCrossOrigin] = useState(enableCrossOrigin);
   const [urlResolved, setUrlResolved] = useState(false);
+  const retryCount = useRef(0);
+  const retryTimeout = useRef<NodeJS.Timeout | null>(null);
+  const startTime = useRef<number>(Date.now());
+  const [hasError, setHasError] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const isRetryingRef = useRef(false);
+  const maxRetries = 3;
 
   useEffect(() => {
     const checkMobile = () => {
@@ -68,7 +75,6 @@ export function CapVideoPlayer({
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Fetch new URL with redirect resolution and pre-emptive CORS detection
   const fetchNewUrl = useCallback(async () => {
     try {
       const timestamp = new Date().getTime();
@@ -97,8 +103,6 @@ export function CapVideoPlayer({
       return finalUrl;
     } catch (error) {
       console.error("CapVideoPlayer: Error fetching new video URL:", error);
-      // On fetch error, disable CORS to be safe
-      setUseCrossOrigin(false);
       const timestamp = new Date().getTime();
       const fallbackUrl = videoSrc.includes("?")
         ? `${videoSrc}&_t=${timestamp}`
@@ -109,16 +113,95 @@ export function CapVideoPlayer({
     }
   }, [videoSrc, enableCrossOrigin]);
 
+  const reloadVideo = useCallback(async () => {
+    const video = videoRef.current;
+    if (!video || retryCount.current >= maxRetries) return;
+
+    console.log(
+      `Reloading video (attempt ${retryCount.current + 1}/${maxRetries})`
+    );
+
+    const currentPosition = video.currentTime;
+    const wasPlaying = !video.paused;
+
+    video.load();
+
+    if (currentPosition > 0) {
+      const restorePosition = () => {
+        video.currentTime = currentPosition;
+        if (wasPlaying) {
+          video
+            .play()
+            .catch((err) => console.error("Error resuming playback:", err));
+        }
+        video.removeEventListener("canplay", restorePosition);
+      };
+      video.addEventListener("canplay", restorePosition);
+    }
+
+    retryCount.current += 1;
+  }, [fetchNewUrl, maxRetries]);
+
+  const setupRetry = useCallback(() => {
+    if (retryTimeout.current) {
+      clearTimeout(retryTimeout.current);
+    }
+
+    if (retryCount.current >= maxRetries) {
+      console.error(`Video failed to load after ${maxRetries} attempts`);
+      setHasError(true);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
+      return;
+    }
+
+    const elapsedMs = Date.now() - startTime.current;
+    if (elapsedMs > 60000) {
+      console.error("Video failed to load after 1 minute");
+      setHasError(true);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
+      return;
+    }
+
+    let retryInterval: number;
+    if (retryCount.current === 0) {
+      retryInterval = 2000; // 2 seconds
+    } else if (retryCount.current === 1) {
+      retryInterval = 5000; // 5 seconds
+    } else {
+      retryInterval = 10000; // 10 seconds
+    }
+
+    console.log(`Retrying video load in ${retryInterval}ms (attempt ${retryCount.current + 1}/${maxRetries})`);
+    
+    retryTimeout.current = setTimeout(() => {
+      reloadVideo();
+    }, retryInterval);
+  }, [reloadVideo, maxRetries]);
+
+  // Reset state when video source changes
+  useEffect(() => {
+    setResolvedVideoSrc(videoSrc);
+    setVideoLoaded(false);
+    setHasError(false);
+    isRetryingRef.current = false;
+    setIsRetrying(false);
+    retryCount.current = 0;
+    startTime.current = Date.now();
+    setUrlResolved(false);
+    setUseCrossOrigin(enableCrossOrigin);
+
+    if (retryTimeout.current) {
+      clearTimeout(retryTimeout.current);
+      retryTimeout.current = null;
+    }
+  }, [videoSrc, enableCrossOrigin]);
+
   // Resolve video URL on mount and when videoSrc changes
   useEffect(() => {
     fetchNewUrl();
   }, [fetchNewUrl]);
-
-  // Reset URL resolution state when video source changes
-  useEffect(() => {
-    setUrlResolved(false);
-    setUseCrossOrigin(enableCrossOrigin);
-  }, [videoSrc, enableCrossOrigin]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -126,42 +209,46 @@ export function CapVideoPlayer({
 
     const handleLoadedData = () => {
       setVideoLoaded(true);
+      setHasError(false);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
       if (!hasPlayedOnce) {
         setShowPlayButton(true);
+      }
+      if (retryTimeout.current) {
+        clearTimeout(retryTimeout.current);
+        retryTimeout.current = null;
       }
     };
 
     const handleCanPlay = () => {
       setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
+      setHasError(false);
+      isRetryingRef.current = false;
+      setIsRetrying(false);
+      if (retryTimeout.current) {
+        clearTimeout(retryTimeout.current);
+        retryTimeout.current = null;
       }
     };
 
     const handleLoad = () => {
       setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
-      }
     };
 
     const handlePlay = () => {
-      setShowPlayButton(false);
       setHasPlayedOnce(true);
     };
 
     const handleError = (e: Event) => {
       const error = (e.target as HTMLVideoElement).error;
-      console.error('CapVideoPlayer: Video error detected:', {
-        error,
-        code: error?.code,
-        message: error?.message,
-        videoSrc
-      });
-
-      // CORS errors are now handled at the ShareVideo level via enableCrossOrigin prop
-      if (error && (error.code === 4 || error.message?.includes('CORS'))) {
-        console.log('CapVideoPlayer: CORS error detected - this should be prevented by ShareVideo logic');
+      console.error('CapVideoPlayer: Video error detected:', error);
+      if (!videoLoaded && !hasError) {
+        // Set both ref and state immediately to prevent any flash of error UI
+        isRetryingRef.current = true;
+        setIsRetrying(true);
+        setHasError(false);
+        setupRetry();
       }
     };
 
@@ -204,33 +291,55 @@ export function CapVideoPlayer({
     video.addEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
     video.addEventListener('load', handleLoad);
     video.addEventListener('play', handlePlay);
-    video.addEventListener('error', handleError);
+    video.addEventListener('error', handleError as EventListener);
+    video.addEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
 
-    if (video.readyState >= 2) {
-      setVideoLoaded(true);
-      if (!hasPlayedOnce) {
-        setShowPlayButton(true);
-      }
+    if (video.readyState === 4) {
+      handleLoadedData();
     }
 
-    // Setup tracks immediately if video is already loaded
-    if (video.readyState >= 1) {
-      setupTracks();
+    // Initial timeout to catch videos that take too long to load
+    if (!videoLoaded && !hasError && retryCount.current === 0) {
+      const initialTimeout = setTimeout(() => {
+        if (!videoLoaded && !hasError) {
+          console.log(
+            "Video taking longer than expected to load, attempting reload"
+          );
+          isRetryingRef.current = true;
+          setIsRetrying(true);
+          setupRetry();
+        }
+      }, 10000);
+
+      return () => {
+        clearTimeout(initialTimeout);
+        video.removeEventListener('loadeddata', handleLoadedData);
+        video.removeEventListener('canplay', handleCanPlay);
+        video.removeEventListener('load', handleLoad);
+        video.removeEventListener('play', handlePlay);
+        video.removeEventListener('error', handleError as EventListener);
+        video.removeEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
+        if (retryTimeout.current) {
+          clearTimeout(retryTimeout.current);
+        }
+      };
     }
 
     return () => {
       video.removeEventListener('loadeddata', handleLoadedData);
       video.removeEventListener('canplay', handleCanPlay);
-      video.removeEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
       video.removeEventListener('load', handleLoad);
       video.removeEventListener('play', handlePlay);
-      video.removeEventListener('error', handleError);
+      video.removeEventListener('error', handleError as EventListener);
+      video.removeEventListener('loadedmetadata', handleLoadedMetadataWithTracks);
+      if (retryTimeout.current) {
+        clearTimeout(retryTimeout.current);
+      }
       if (captionTrack) {
         captionTrack.removeEventListener('cuechange', handleCueChange);
       }
     };
   }, [hasPlayedOnce, videoSrc, urlResolved]);
-
 
 
   const generateVideoFrameThumbnail = useCallback((time: number): string => {
@@ -269,7 +378,14 @@ export function CapVideoPlayer({
         <div
           className={clsx("flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300", videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100")}
         >
-          <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+          <div className="flex flex-col items-center gap-2">
+            <LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+            {retryCount.current > 0 && (
+              <p className="text-white text-sm opacity-75">
+                Preparing video... ({retryCount.current}/{maxRetries})
+              </p>
+            )}
+          </div>
         </div>
         {urlResolved && (
           <MediaPlayerVideo
@@ -327,7 +443,7 @@ export function CapVideoPlayer({
           </div>
         )}
         <MediaPlayerLoading />
-        <MediaPlayerError />
+        {!isRetrying && !isRetryingRef.current && <MediaPlayerError />}
         <MediaPlayerVolumeIndicator />
         <MediaPlayerControls className="flex-col items-start gap-2.5">
           <MediaPlayerControlsOverlay />

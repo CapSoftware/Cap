@@ -1094,6 +1094,7 @@ dependencies = [
  "serde",
  "specta",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1181,6 +1182,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "windows 0.60.0",
@@ -1228,6 +1230,7 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "windows 0.60.0",

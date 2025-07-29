@@ -61,6 +61,7 @@ percent-encoding = "2.3.1"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
+let_underscore_future = "deny"
 
 [patch.crates-io]
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"

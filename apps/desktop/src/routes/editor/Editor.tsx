@@ -386,20 +386,21 @@ function Dialogs() {
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
                           <Tooltip content="Rule of Thirds">
-                            <button
-                              type="button"
+                            <Button
+                              variant="secondary"
+                              size="xs"
                               class={cx(
-                                "flex items-center bg-gray-3 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9 outline-none transition-colors duration-200",
+                                "flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",
                                 cropOptions.showGrid
-                                  ? "bg-gray-3 text-blue-9 border-blue-9"
-                                  : "text-gray-12"
+                                  ? "border-blue-9"
+                                  : "border-transparent"
                               )}
                               onClick={() =>
                                 setCropOptions("showGrid", (s) => !s)
                               }
                             >
-                              <IconCapPadding class="w-4" />
-                            </button>
+                              <IconCapPadding class={cx("w-4", cropOptions.showGrid ? "text-blue-9" : "text-gray-12")} />
+                            </Button>
                           </Tooltip>
                         </div>
                         <EditorButton

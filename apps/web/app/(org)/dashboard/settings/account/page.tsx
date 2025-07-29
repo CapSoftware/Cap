@@ -6,8 +6,6 @@ export const metadata: Metadata = {
   title: "Settings — Cap",
 };
 
-export const revalidate = 0;
-
 export default async function SettingsPage() {
   const user = await getCurrentUser();
 

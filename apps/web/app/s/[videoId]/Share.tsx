@@ -1,6 +1,5 @@
 "use client";
 
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
@@ -120,19 +119,6 @@ const useVideoStatus = (
   });
 };
 
-const useVideoAnalytics = (videoId: string, initialCount: number) => {
-  return useQuery({
-    queryKey: ["videoAnalytics", videoId],
-    queryFn: async () => {
-      const result = await getVideoAnalytics(videoId);
-      return result.count || 0;
-    },
-    initialData: initialCount,
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-  });
-};
-
 export const Share = ({
   data,
   user,
@@ -244,7 +230,9 @@ export const Share = ({
       </div>
 
       <div className="hidden mt-4 lg:block">
-        <Toolbar data={data} user={user} />
+        <div>
+          <Toolbar data={data} user={user} />
+        </div>
       </div>
 
       <div className="hidden mt-4 lg:block">
@@ -320,6 +308,6 @@ export const Share = ({
             </div>
           )}
       </div>
-    </div>
+    </div >
   );
 };

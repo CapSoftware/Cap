@@ -22,3 +22,4 @@ sentry.workspace = true
 futures = "0.3.31"
 tracing.workspace = true
 flume.workspace = true
+tokio-util = "0.7.15"
