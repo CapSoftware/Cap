@@ -1,4 +1,4 @@
-use crate::cursor_svg::{analyze_cursor_image, CommonCursorType};
+use crate::cursor_svg::{analyze_cursor_image, CursorType};
 use cap_project::XY;
 use image::GenericImageView;
 use std::collections::HashMap;
@@ -10,7 +10,7 @@ pub struct EnhancedCursorTexture {
     pub inner: wgpu::Texture,
     pub hotspot: XY<f32>,
     pub source_type: CursorSourceType,
-    pub cursor_type: Option<CommonCursorType>,
+    pub cursor_type: Option<CursorType>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,9 +24,9 @@ pub enum CursorSourceType {
 /// Enhanced cursor texture manager that prefers SVG versions when available
 pub struct CursorTextureManager {
     /// Map of cursor_id to detected cursor type
-    cursor_type_cache: HashMap<String, Option<CommonCursorType>>,
+    cursor_type_cache: HashMap<String, Option<CursorType>>,
     /// Loaded SVG textures by cursor type
-    svg_textures: HashMap<CommonCursorType, EnhancedCursorTexture>,
+    svg_textures: HashMap<CursorType, EnhancedCursorTexture>,
     /// Fallback captured textures by cursor_id
     captured_textures: HashMap<String, EnhancedCursorTexture>,
 }
@@ -96,14 +96,14 @@ impl CursorTextureManager {
         });
 
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 aspect: wgpu::TextureAspect::All,
                 texture: &texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
             },
             &rgba,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * dimensions.0),
                 rows_per_image: Some(dimensions.1),
@@ -127,7 +127,7 @@ impl CursorTextureManager {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        cursor_type: CommonCursorType,
+        cursor_type: CursorType,
         svg_content: &[u8],
         size: u32,
     ) -> Result<(), String> {
@@ -200,12 +200,12 @@ impl CursorTextureManager {
 
         // Set default hotspot for SVG cursors based on type
         let hotspot = match cursor_type {
-            CommonCursorType::Arrow => XY::new(0.1, 0.1), // Top-left point
-            CommonCursorType::IBeam => XY::new(0.5, 0.5), // Center
-            CommonCursorType::Crosshair => XY::new(0.5, 0.5), // Center
-            CommonCursorType::PointingHand => XY::new(0.3, 0.1), // Finger tip
-            CommonCursorType::ResizeNWSE => XY::new(0.5, 0.5), // Center
-            CommonCursorType::ResizeEW => XY::new(0.5, 0.5), // Center
+            CursorType::Arrow => XY::new(0.1, 0.1),     // Top-left point
+            CursorType::IBeam => XY::new(0.5, 0.5),     // Center
+            CursorType::Crosshair => XY::new(0.5, 0.5), // Center
+            CursorType::PointingHand => XY::new(0.3, 0.1), // Finger tip
+            CursorType::ResizeNWSE => XY::new(0.5, 0.5), // Center
+            CursorType::ResizeEW => XY::new(0.5, 0.5),  // Center
         };
 
         let enhanced_texture = EnhancedCursorTexture {
@@ -225,28 +225,22 @@ impl CursorTextureManager {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
     ) -> Result<(), String> {
-        use crate::cursor_svg::{load_cursor_svg, CommonCursorType};
+        use crate::cursor_svg::CursorType;
 
         // Load all the SVG cursors we have
         let cursor_types = vec![
-            CommonCursorType::Arrow,
-            CommonCursorType::IBeam,
-            CommonCursorType::Crosshair,
-            CommonCursorType::PointingHand,
-            CommonCursorType::ResizeNWSE,
-            CommonCursorType::ResizeEW,
+            CursorType::Arrow,
+            CursorType::IBeam,
+            CursorType::Crosshair,
+            CursorType::PointingHand,
+            CursorType::ResizeNWSE,
+            CursorType::ResizeEW,
         ];
 
         for cursor_type in cursor_types {
-            if let Some(svg_content) = load_cursor_svg(&cursor_type) {
-                // Use a higher resolution for SVG cursors (64x64) for better quality
-                self.load_svg_cursor(device, queue, cursor_type, &svg_content, 64)?;
-            } else {
-                return Err(format!(
-                    "Failed to load SVG content for cursor type: {:?}",
-                    cursor_type
-                ));
-            }
+            let svg_content = cursor_type.load();
+            // Use a higher resolution for SVG cursors (64x64) for better quality
+            self.load_svg_cursor(device, queue, cursor_type, &svg_content, 64)?;
         }
 
         Ok(())

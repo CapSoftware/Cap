@@ -51,8 +51,7 @@
       "assets/backgrounds/dark/*": "assets/backgrounds/dark/",
       "assets/backgrounds/orange/*": "assets/backgrounds/orange/",
       "assets/backgrounds/purple/*": "assets/backgrounds/purple/",
-      "../src/assets/rive/*.riv": "assets/rive/",
-      "../src/cursors/*.svg": "cursors/"
+      "../src/assets/rive/*.riv": "assets/rive/"
     },
     "macOS": {
       "dmg": {

@@ -1,30 +1,34 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::{borrow::Cow, path::Path};
 
 use image::GenericImageView;
 
-// Common cursor types that we support with SVG versions
+static CURSOR_ARROW: &'static [u8] = include_bytes!("../assets/cursors/arrow.svg");
+static CURSOR_IBEAM: &'static [u8] = include_bytes!("../assets/cursors/ibeam.svg");
+static CURSOR_CROSSHAIR: &'static [u8] = include_bytes!("../assets/cursors/crosshair.svg");
+static CURSOR_POINTING_HAND: &'static [u8] = include_bytes!("../assets/cursors/pointing-hand.svg");
+static CURSOR_RESIZE_NWSE: &'static [u8] = include_bytes!("../assets/cursors/resize-nwse.svg");
+static CURSOR_RESIZE_EW: &'static [u8] = include_bytes!("../assets/cursors/resize-ew.svg");
+
+/// The type of cursor to use
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum CommonCursorType {
+pub enum CursorType {
     Arrow,
     IBeam,
     Crosshair,
     PointingHand,
-    ResizeNWSE, // Diagonal resize (northwest-southeast)
-    ResizeEW,   // Horizontal resize (east-west)
-                // Add more as needed
+    ResizeNWSE,
+    ResizeEW,
 }
 
-impl CommonCursorType {
-    /// Get the SVG filename for this cursor type
-    pub fn svg_filename(&self) -> &'static str {
+impl CursorType {
+    pub fn load(&self) -> Cow<'static, [u8]> {
         match self {
-            CommonCursorType::Arrow => "arrow.svg",
-            CommonCursorType::IBeam => "ibeam.svg",
-            CommonCursorType::Crosshair => "crosshair.svg",
-            CommonCursorType::PointingHand => "pointing-hand.svg",
-            CommonCursorType::ResizeNWSE => "resize-nwse.svg",
-            CommonCursorType::ResizeEW => "resize-ew.svg",
+            CursorType::Arrow => Cow::Borrowed(CURSOR_ARROW),
+            CursorType::IBeam => Cow::Borrowed(CURSOR_IBEAM),
+            CursorType::Crosshair => Cow::Borrowed(CURSOR_CROSSHAIR),
+            CursorType::PointingHand => Cow::Borrowed(CURSOR_POINTING_HAND),
+            CursorType::ResizeNWSE => Cow::Borrowed(CURSOR_RESIZE_NWSE),
+            CursorType::ResizeEW => Cow::Borrowed(CURSOR_RESIZE_EW),
         }
     }
 
@@ -38,28 +42,28 @@ impl CommonCursorType {
         if width <= 40 && height <= 40 {
             // Simple pattern matching - this could be made more sophisticated
             if Self::matches_arrow_pattern(image_data, width, height) {
-                return Some(CommonCursorType::Arrow);
+                return Some(CursorType::Arrow);
             }
         }
 
         // I-beam cursors are typically thin and tall
         if width < height && width <= 20 && height >= 20 {
             if Self::matches_ibeam_pattern(image_data, width, height) {
-                return Some(CommonCursorType::IBeam);
+                return Some(CursorType::IBeam);
             }
         }
 
         // Crosshair cursors are typically square and have cross pattern
         if (width as i32 - height as i32).abs() <= 5 && width >= 20 && width <= 40 {
             if Self::matches_crosshair_pattern(image_data, width, height) {
-                return Some(CommonCursorType::Crosshair);
+                return Some(CursorType::Crosshair);
             }
         }
 
         // Pointing hand cursors are typically wider and have a specific shape
         if width >= 20 && height >= 20 && width <= 40 && height <= 40 {
             if Self::matches_hand_pattern(image_data, width, height) {
-                return Some(CommonCursorType::PointingHand);
+                return Some(CursorType::PointingHand);
             }
         }
 
@@ -68,7 +72,7 @@ impl CommonCursorType {
             if Self::matches_resize_pattern(image_data, width, height) {
                 // For simplicity, default to diagonal resize
                 // More sophisticated detection could distinguish between different resize types
-                return Some(CommonCursorType::ResizeNWSE);
+                return Some(CursorType::ResizeNWSE);
             }
         }
 
@@ -248,41 +252,13 @@ impl CommonCursorType {
     }
 }
 
-/// Map to store detected cursor types for cached lookup
-pub type CursorTypeMap = HashMap<String, CommonCursorType>;
-
-static CURSOR_ARROW: &[u8] = include_bytes!("../../../apps/desktop/src/cursors/arrow.svg");
-static CURSOR_IBEAM: &[u8] = include_bytes!("../../../apps/desktop/src/cursors/ibeam.svg");
-static CURSOR_CROSSHAIR: &[u8] = include_bytes!("../../../apps/desktop/src/cursors/crosshair.svg");
-static CURSOR_POINTING_HAND: &[u8] =
-    include_bytes!("../../../apps/desktop/src/cursors/pointing-hand.svg");
-static CURSOR_RESIZE_NWSE: &[u8] =
-    include_bytes!("../../../apps/desktop/src/cursors/resize-nwse.svg");
-static CURSOR_RESIZE_EW: &[u8] = include_bytes!("../../../apps/desktop/src/cursors/resize-ew.svg");
-
-/// Load SVG content for a cursor type from bundled resources
-pub fn load_cursor_svg(cursor_type: &CommonCursorType) -> Option<Vec<u8>> {
-    // In a Tauri app, we would use the resource API to load bundled SVGs
-    // For now, return the embedded SVG content as a fallback
-    let svg_content = match cursor_type {
-        CommonCursorType::Arrow => CURSOR_ARROW,
-        CommonCursorType::IBeam => CURSOR_IBEAM,
-        CommonCursorType::Crosshair => CURSOR_CROSSHAIR,
-        CommonCursorType::PointingHand => CURSOR_POINTING_HAND,
-        CommonCursorType::ResizeNWSE => CURSOR_RESIZE_NWSE,
-        CommonCursorType::ResizeEW => CURSOR_RESIZE_EW,
-    };
-
-    Some(svg_content.to_vec())
-}
-
 /// Analyze a cursor image and try to detect its type
-pub fn analyze_cursor_image(image_path: &Path) -> Option<CommonCursorType> {
+pub fn analyze_cursor_image(image_path: &Path) -> Option<CursorType> {
     // Load the image and analyze it
     if let Ok(img) = image::open(image_path) {
         let rgba = img.to_rgba8();
         let (width, height) = img.dimensions();
-        CommonCursorType::detect_from_image(&rgba.into_raw(), width, height)
+        CursorType::detect_from_image(&rgba.into_raw(), width, height)
     } else {
         None
     }

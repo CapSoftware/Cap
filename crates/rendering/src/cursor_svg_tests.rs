@@ -22,8 +22,8 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
-        assert_eq!(detected, Some(CommonCursorType::Arrow));
+        let detected = CursorType::detect_from_image(&image_data, width, height);
+        assert_eq!(detected, Some(CursorType::Arrow));
     }
 
     #[test]
@@ -47,8 +47,8 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
-        assert_eq!(detected, Some(CommonCursorType::IBeam));
+        let detected = CursorType::detect_from_image(&image_data, width, height);
+        assert_eq!(detected, Some(CursorType::IBeam));
     }
 
     #[test]
@@ -77,8 +77,8 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
-        assert_eq!(detected, Some(CommonCursorType::Crosshair));
+        let detected = CursorType::detect_from_image(&image_data, width, height);
+        assert_eq!(detected, Some(CursorType::Crosshair));
     }
 
     #[test]
@@ -113,8 +113,8 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
-        assert_eq!(detected, Some(CommonCursorType::PointingHand));
+        let detected = CursorType::detect_from_image(&image_data, width, height);
+        assert_eq!(detected, Some(CursorType::PointingHand));
     }
 
     #[test]
@@ -147,8 +147,8 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
-        assert_eq!(detected, Some(CommonCursorType::ResizeNWSE));
+        let detected = CursorType::detect_from_image(&image_data, width, height);
+        assert_eq!(detected, Some(CursorType::ResizeNWSE));
     }
 
     #[test]
@@ -165,7 +165,7 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
+        let detected = CursorType::detect_from_image(&image_data, width, height);
         assert_eq!(detected, None);
     }
 
@@ -176,36 +176,20 @@ mod tests {
         let height = 32;
         let image_data = vec![0u8; (width * height * 4) as usize]; // All transparent
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
+        let detected = CursorType::detect_from_image(&image_data, width, height);
         assert_eq!(detected, None);
-    }
-
-    #[test]
-    fn test_svg_filename_mapping() {
-        assert_eq!(CommonCursorType::Arrow.svg_filename(), "arrow.svg");
-        assert_eq!(CommonCursorType::IBeam.svg_filename(), "ibeam.svg");
-        assert_eq!(CommonCursorType::Crosshair.svg_filename(), "crosshair.svg");
-        assert_eq!(
-            CommonCursorType::PointingHand.svg_filename(),
-            "pointing-hand.svg"
-        );
-        assert_eq!(
-            CommonCursorType::ResizeNWSE.svg_filename(),
-            "resize-nwse.svg"
-        );
-        assert_eq!(CommonCursorType::ResizeEW.svg_filename(), "resize-ew.svg");
     }
 
     #[test]
     fn test_svg_loading() {
         // Test that we can load SVG content for all cursor types
         for cursor_type in [
-            CommonCursorType::Arrow,
-            CommonCursorType::IBeam,
-            CommonCursorType::Crosshair,
-            CommonCursorType::PointingHand,
-            CommonCursorType::ResizeNWSE,
-            CommonCursorType::ResizeEW,
+            CursorType::Arrow,
+            CursorType::IBeam,
+            CursorType::Crosshair,
+            CursorType::PointingHand,
+            CursorType::ResizeNWSE,
+            CursorType::ResizeEW,
         ] {
             let svg_content = load_cursor_svg(&cursor_type);
             assert!(
@@ -250,7 +234,7 @@ mod tests {
             }
         }
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
+        let detected = CursorType::detect_from_image(&image_data, width, height);
         // Should not crash and return None for very small images
         assert_eq!(detected, None);
     }
@@ -262,7 +246,7 @@ mod tests {
         let height = 32;
         let image_data = vec![0u8; 10]; // Much smaller than required
 
-        let detected = CommonCursorType::detect_from_image(&image_data, width, height);
+        let detected = CursorType::detect_from_image(&image_data, width, height);
         // Should handle gracefully and return None
         assert_eq!(detected, None);
     }
