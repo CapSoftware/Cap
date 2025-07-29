@@ -809,7 +809,6 @@ async fn create_segment_pipeline(
 
             let mut start = None;
             while let Ok(mut frame) = rx.recv() {
-                dbg!(frame.1);
                 if let Some(timestamp_tx) = timestamp_tx.take() {
                     timestamp_tx.send(frame.1).unwrap();
                 }
