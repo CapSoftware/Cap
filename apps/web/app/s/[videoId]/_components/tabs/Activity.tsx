@@ -488,7 +488,7 @@ const Comments = Object.assign(
     }, [optimisticComments]);
 
 
-    const handleNewComment = (content: string) => {
+    const handleNewComment = async (content: string) => {
       const optimisticComment: CommentType = {
         id: `temp-${Date.now()}`,
         authorId: user?.id || "anonymous",
@@ -511,14 +511,14 @@ const Comments = Object.assign(
       formData.append("parentCommentId", "");
       formData.append("type", "text");
 
-      startTransition(async () => {
-        try {
-          const data = await newComment(formData);
+      try {
+        const data = await newComment(formData);
+        startTransition(() => {
           setComments((prev) => [...prev, data]);
-        } catch (error) {
-          console.error("Error posting comment:", error);
-        }
-      });
+        });
+      } catch (error) {
+        console.error("Error posting comment:", error);
+      }
     }
 
     const handleReply = async (content: string) => {
@@ -546,24 +546,15 @@ const Comments = Object.assign(
       setOptimisticComments(optimisticReply);
 
       try {
-        const response = await fetch("/api/video/comment", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            type: "text",
-            content,
-            videoId: props.videoId,
-            parentCommentId: actualParentId,
-          }),
-        });
 
-        if (!response.ok) {
-          throw new Error("Failed to post reply");
-        }
 
-        const data = await response.json();
+        const formData = new FormData();
+        formData.append("content", content);
+        formData.append("videoId", props.videoId);
+        formData.append("parentCommentId", actualParentId);
+        formData.append("type", "text");
+
+        const data = await newComment(formData);
 
         startTransition(() => {
           setComments((prev) => [...prev, data]);
@@ -585,7 +576,6 @@ const Comments = Object.assign(
     const handleCancelReply = () => {
       setReplyingTo(null);
     };
-
 
     const handleDeleteComment = async (commentId: string) => {
       try {
