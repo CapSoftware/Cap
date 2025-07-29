@@ -983,7 +983,7 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
             .ok()
             .map(|_| Duration::from_micros(start_time as u64 / 10));
 
-        let first_ref_time = self.first_ref_time.borrow_mut();
+        let mut first_ref_time = self.first_ref_time.borrow_mut();
         let first_ref_time = first_ref_time.get_or_insert(Instant::now());
 
         let timestamp = timestamp.get_or_insert(Instant::now() - *first_ref_time);

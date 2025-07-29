@@ -6,6 +6,7 @@ use std::{
     ffi::{OsStr, OsString},
     fmt::{Debug, Display},
     ops::Deref,
+    time::{Instant, Duration}
 };
 
 use windows::Win32::Media::{DirectShow::*, KernelStreaming::*, MediaFoundation::*};
