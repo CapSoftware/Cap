@@ -1,4 +1,4 @@
-use cap_project::{ZoomSegment, XY};
+use cap_project::{XY, ZoomSegment};
 
 use crate::{Coord, RawDisplayUVSpace};
 

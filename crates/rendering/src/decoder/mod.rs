@@ -1,7 +1,7 @@
 use ::ffmpeg::Rational;
 use std::{
     path::PathBuf,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 use tokio::sync::oneshot;
 
