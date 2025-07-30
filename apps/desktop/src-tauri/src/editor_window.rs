@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf, sync::Arc};
 
 use cap_editor::EditorInstance;
-use tauri::{ipc::CommandArg, Manager, Runtime, Window};
+use tauri::{Manager, Runtime, Window, ipc::CommandArg};
 use tokio::sync::RwLock;
 
 use crate::create_editor_instance_impl;

@@ -30,7 +30,7 @@ pub fn get_ns_window_number(ns_window: *mut c_void) -> isize {
 }
 
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     pub fn CGRectMakeWithDictionaryRepresentation(
         dict: CFDictionaryRef,
         rect: *mut CGRect,

@@ -2,10 +2,9 @@ use anyhow::Result;
 use cap_audio::AudioData;
 use cap_project;
 use ffmpeg::{
-    codec as avcodec,
+    ChannelLayout, codec as avcodec,
     format::{self as avformat},
     software::resampling,
-    ChannelLayout,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

@@ -1,17 +1,20 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
+use crate::{
+    App, ArcLock, camera::CameraPreview, fake_window, general_settings::AppTheme, permissions,
+};
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
-use futures::pin_mut;
+use futures::{executor::block_on, pin_mut};
 use serde::Deserialize;
 use specta::Type;
 use std::{
+    borrow::Cow,
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicU32, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32, mpsc},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -317,8 +320,6 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-
                 let mut window_builder = self
                     .window_builder(app, "/camera")
                     .maximized(false)
@@ -334,13 +335,8 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .initialization_script(&format!(
-                        "
-			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {port};
-		                ",
-                    ))
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
 
@@ -662,7 +658,7 @@ fn position_traffic_lights_impl(
     window: &tauri::Window,
     controls_inset: Option<LogicalPosition<f64>>,
 ) {
-    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {
