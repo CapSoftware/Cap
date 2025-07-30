@@ -255,6 +255,9 @@ fn get_cursor_data() -> Option<CursorData> {
     autoreleasepool(|| unsafe {
         let cursor = NSCursor::currentCursor();
 
+        let shape = CursorShape::try_from(&*cursor).ok();
+        println!("{:?} {:?}", cursor, shape);
+
         let image = cursor.image();
         let size = image.size();
         let hotspot = cursor.hotSpot();
@@ -263,7 +266,7 @@ fn get_cursor_data() -> Option<CursorData> {
         };
 
         Some(CursorData {
-            shape: CursorShape::try_from(&*cursor).ok(),
+            shape: None, // TODO
             image: image_data.as_bytes_unchecked().to_vec(),
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
         })

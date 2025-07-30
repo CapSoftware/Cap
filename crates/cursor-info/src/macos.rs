@@ -46,26 +46,75 @@ impl CursorShapeMacOS {
     pub fn info(&self) -> Option<ResolvedCursor> {
         Some(match self {
             CursorShapeMacOS::Arrow => ResolvedCursor {
-                raw: include_str!("../assets/mac/left_ptr.svg"),
-                hotspot: todo!(),
+                raw: include_str!("../assets/mac/arrow.svg"),
+                hotspot: (0.235, 0.174), // 40.0/170.0, 40.0/230.0
             },
-            CursorShapeMacOS::ContextualMenu => todo!(),
-            CursorShapeMacOS::ClosedHand => todo!(),
-            CursorShapeMacOS::Crosshair => todo!(),
-            CursorShapeMacOS::DisappearingItem => todo!(),
-            CursorShapeMacOS::DragCopy => todo!(),
-            CursorShapeMacOS::DragLink => todo!(),
-            CursorShapeMacOS::IBeam => todo!(),
-            CursorShapeMacOS::OpenHand => todo!(),
-            CursorShapeMacOS::OperationNotAllowed => todo!(),
-            CursorShapeMacOS::PointingHand => todo!(),
-            CursorShapeMacOS::ResizeDown => todo!(),
-            CursorShapeMacOS::ResizeLeft => todo!(),
-            CursorShapeMacOS::ResizeLeftRight => todo!(),
-            CursorShapeMacOS::ResizeRight => todo!(),
-            CursorShapeMacOS::ResizeUp => todo!(),
-            CursorShapeMacOS::ResizeUpDown => todo!(),
-            CursorShapeMacOS::IBeamVerticalForVerticalLayout => todo!(),
+            CursorShapeMacOS::ContextualMenu => ResolvedCursor {
+                raw: include_str!("../assets/mac/contextual_menu.svg"),
+                hotspot: (0.179, 0.125), // 10.0/56.0, 10.0/80.0
+            },
+            CursorShapeMacOS::ClosedHand => ResolvedCursor {
+                raw: include_str!("../assets/mac/closed_hand.svg"),
+                hotspot: (0.5, 0.5), // 32.0/64.0, 32.0/64.0
+            },
+            CursorShapeMacOS::Crosshair => ResolvedCursor {
+                raw: include_str!("../assets/mac/crosshair.svg"),
+                hotspot: (0.458, 0.458), // 22.0/48.0, 22.0/48.0
+            },
+            CursorShapeMacOS::DragCopy => ResolvedCursor {
+                raw: include_str!("../assets/mac/drag_copy.svg"),
+                hotspot: (0.179, 0.125), // 10.0/56.0, 10.0/80.0
+            },
+            CursorShapeMacOS::DragLink => ResolvedCursor {
+                raw: include_str!("../assets/mac/drag_link.svg"),
+                hotspot: (0.688, 0.143), // 22.0/32.0, 6.0/42.0
+            },
+            CursorShapeMacOS::IBeam => ResolvedCursor {
+                raw: include_str!("../assets/mac/ibeam.svg"),
+                hotspot: (0.444, 0.5), // 40.0/90.0, 90.0/180.0
+            },
+            CursorShapeMacOS::OpenHand => ResolvedCursor {
+                raw: include_str!("../assets/mac/open_hand.svg"),
+                hotspot: (0.5, 0.5), // 32.0/64.0, 32.0/64.0
+            },
+            CursorShapeMacOS::OperationNotAllowed => ResolvedCursor {
+                raw: include_str!("../assets/mac/operation_not_allowed.svg"),
+                hotspot: (0.179, 0.125), // 10.0/56.0, 10.0/80.0
+            },
+            CursorShapeMacOS::PointingHand => ResolvedCursor {
+                raw: include_str!("../assets/mac/pointing_hand.svg"),
+                hotspot: (0.406, 0.25), // 26.0/64.0, 16.0/64.0
+            },
+            CursorShapeMacOS::ResizeDown => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_down.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::ResizeLeft => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_left.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::ResizeLeftRight => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_left_right.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::ResizeRight => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_right.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::ResizeUp => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_up.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::ResizeUpDown => ResolvedCursor {
+                raw: include_str!("../assets/mac/resize_up_down.svg"),
+                hotspot: (0.5, 0.5), // 24.0/48.0, 24.0/48.0
+            },
+            CursorShapeMacOS::IBeamVerticalForVerticalLayout => ResolvedCursor {
+                raw: include_str!("../assets/mac/ibeam_vertical.svg"),
+                hotspot: (0.389, 0.25), // 14.0/36.0, 8.0/32.0
+            },
+            // Missing asset for it
+            CursorShapeMacOS::DisappearingItem => return None,
             _ => return None,
         })
     }
