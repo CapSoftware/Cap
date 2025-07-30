@@ -3,8 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
   createQuery,
-  useQueryClient,
-  UseQueryResult,
+  useQueryClient
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -297,17 +296,16 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-lg px-1.5 py-0.5`}
+                class={`text-[0.6rem] ${license.data?.type === "pro"
+                  ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                  : "bg-gray-3 cursor-pointer hover:bg-gray-5"
+                  } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal"}
+                    ? "Pro"
+                    : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -338,7 +336,7 @@ function Page() {
             "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
             (rawOptions.captureTarget.variant === "screen" ||
               rawOptions.captureTarget.variant === "area") &&
-              "ml-[2.4rem]"
+            "ml-[2.4rem]"
           )}
           style={{
             "transition-timing-function":
@@ -433,7 +431,7 @@ function Page() {
         ) : (
           <Button
             disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "primary"}
+            variant="blue"
             size="md"
             onClick={() => toggleRecording.mutate()}
             class="flex flex-grow justify-center items-center"
@@ -443,9 +441,9 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                  <IconCapInstant class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 ) : (
-                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                  <IconCapFilmCut class={cx("size-[0.8rem] mr-2 -mt-[1.5px]", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
                 )}
                 Start Recording
               </>
@@ -577,8 +575,8 @@ function AreaSelectButton(props: {
         props.targetVariant === "area"
           ? "Remove selection"
           : areaSelection.pending
-          ? "Selecting area..."
-          : "Select area"
+            ? "Selecting area..."
+            : "Select area"
       }
       childClass="flex fixed flex-row items-center w-8 h-8"
     >
@@ -649,7 +647,7 @@ function AreaSelectButton(props: {
                 class={cx(
                   "w-[1rem] h-[1rem]",
                   areaSelection.pending &&
-                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                  "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                 )}
               />
             </button>
@@ -973,8 +971,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-        ? "On"
-        : "Off"}
+          ? "On"
+          : "Off"}
     </InfoPill>
   );
 }

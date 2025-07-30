@@ -1,13 +1,21 @@
 "use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { sharedVideos, organizations, videos, organizationMembers } from "@cap/database/schema";
+import {
+  sharedVideos,
+  organizations,
+  videos,
+  organizationMembers,
+} from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, and, inArray } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { revalidatePath } from "next/cache";
 
-export async function addVideosToOrganization(organizationId: string, videoIds: string[]) {
+export async function addVideosToOrganization(
+  organizationId: string,
+  videoIds: string[]
+) {
   try {
     const user = await getCurrentUser();
 
@@ -47,7 +55,9 @@ export async function addVideosToOrganization(organizationId: string, videoIds: 
     }
 
     if (!hasAccess) {
-      throw new Error("You don't have permission to add videos to this organization");
+      throw new Error(
+        "You don't have permission to add videos to this organization"
+      );
     }
 
     const userVideos = await db()
@@ -55,7 +65,7 @@ export async function addVideosToOrganization(organizationId: string, videoIds: 
       .from(videos)
       .where(and(eq(videos.ownerId, user.id), inArray(videos.id, videoIds)));
 
-    const validVideoIds = userVideos.map(v => v.id);
+    const validVideoIds = userVideos.map((v) => v.id);
 
     if (validVideoIds.length === 0) {
       throw new Error("No valid videos found");
@@ -64,19 +74,26 @@ export async function addVideosToOrganization(organizationId: string, videoIds: 
     const existingSharedVideos = await db()
       .select({ videoId: sharedVideos.videoId })
       .from(sharedVideos)
-      .where(and(
-        eq(sharedVideos.organizationId, organizationId),
-        inArray(sharedVideos.videoId, validVideoIds)
-      ));
+      .where(
+        and(
+          eq(sharedVideos.organizationId, organizationId),
+          inArray(sharedVideos.videoId, validVideoIds)
+        )
+      );
 
-    const existingVideoIds = existingSharedVideos.map(sv => sv.videoId);
-    const newVideoIds = validVideoIds.filter(id => !existingVideoIds.includes(id));
+    const existingVideoIds = existingSharedVideos.map((sv) => sv.videoId);
+    const newVideoIds = validVideoIds.filter(
+      (id) => !existingVideoIds.includes(id)
+    );
 
     if (newVideoIds.length === 0) {
-      return { success: true, message: "Videos already shared with organization" };
+      return {
+        success: true,
+        message: "Videos already shared with organization",
+      };
     }
 
-    const sharedVideoEntries = newVideoIds.map(videoId => ({
+    const sharedVideoEntries = newVideoIds.map((videoId) => ({
       id: nanoId(),
       videoId,
       organizationId,
@@ -85,18 +102,29 @@ export async function addVideosToOrganization(organizationId: string, videoIds: 
 
     await db().insert(sharedVideos).values(sharedVideoEntries);
 
+    // Clear folderId for videos added to organization so they appear in main view
+    await db()
+      .update(videos)
+      .set({ folderId: null })
+      .where(inArray(videos.id, newVideoIds));
+
     revalidatePath(`/dashboard/spaces/${organizationId}`);
     revalidatePath("/dashboard/caps");
 
-    return { 
-      success: true, 
-      message: `${newVideoIds.length} video${newVideoIds.length === 1 ? '' : 's'} shared with organization` 
+    return {
+      success: true,
+      message: `${newVideoIds.length} video${
+        newVideoIds.length === 1 ? "" : "s"
+      } shared with organization`,
     };
   } catch (error) {
     console.error("Error adding videos to organization:", error);
-    return { 
-      success: false, 
-      error: error instanceof Error ? error.message : "Failed to add videos to organization" 
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to add videos to organization",
     };
   }
-} 
+}

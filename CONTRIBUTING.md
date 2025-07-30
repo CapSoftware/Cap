@@ -29,7 +29,7 @@ There are many ways to contribute to Cap. You can:
 Before anything else, make sure you have the following installed:
 
 - Node Version 20+
-- Rust 1.84.0+
+- Rust 1.88.0+
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
