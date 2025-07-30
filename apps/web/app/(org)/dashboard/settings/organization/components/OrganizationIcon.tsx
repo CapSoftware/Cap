@@ -8,15 +8,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
 
-interface OrganizationIconProps {
-  isOwner: boolean;
-  showOwnerToast: () => void;
-}
-
-export const OrganizationIcon = ({
-  isOwner,
-  showOwnerToast,
-}: OrganizationIconProps) => {
+export const OrganizationIcon = () => {
   const { activeOrganization } = useDashboardContext();
   const organizationId = activeOrganization?.organization.id;
   const existingIconUrl = activeOrganization?.organization.iconUrl;
@@ -24,11 +16,6 @@ export const OrganizationIcon = ({
   const [isUploading, setIsUploading] = useState(false);
 
   const handleFileChange = async (file: File | null) => {
-    if (!isOwner) {
-      showOwnerToast();
-      return;
-    }
-
     // If file is null, it means the user removed the file
     if (!file || !organizationId) return;
 
@@ -54,7 +41,7 @@ export const OrganizationIcon = ({
   };
 
   const handleRemoveIcon = async () => {
-    if (!isOwner || !organizationId) return;
+    if (!organizationId) return;
 
     try {
       const result = await removeOrganizationIcon(organizationId);
@@ -71,24 +58,24 @@ export const OrganizationIcon = ({
   };
 
   return (
-    <div className="flex-1">
+    <div className="space-y-4">
       <div className="space-y-1">
         <Label htmlFor="icon">Organization Icon</Label>
-        <CardDescription className="w-full max-w-[400px]">
+        <CardDescription className="w-full">
           Upload a custom logo or icon for your organization and make it unique.
         </CardDescription>
       </div>
-      <div className="relative mt-4">
-        <FileInput
-          id="icon"
-          name="icon"
-          onChange={handleFileChange}
-          disabled={!isOwner || isUploading}
-          isLoading={isUploading}
-          initialPreviewUrl={existingIconUrl || null}
-          onRemove={handleRemoveIcon}
-        />
-      </div>
+      <FileInput
+        height={62}
+        previewIconSize={32}
+        id="icon"
+        name="icon"
+        onChange={handleFileChange}
+        disabled={isUploading}
+        isLoading={isUploading}
+        initialPreviewUrl={existingIconUrl || null}
+        onRemove={handleRemoveIcon}
+      />
     </div>
   );
 };

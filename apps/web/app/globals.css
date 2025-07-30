@@ -67,8 +67,13 @@ html {
   border-radius: 10px;
 }
 
+.dark ::selection {
+  background: #ffffff;
+  color: #000000;
+}
+
 ::selection {
-  background: black;
+  background: #000000;
   color: #ffffff;
 }
 
