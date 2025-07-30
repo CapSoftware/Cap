@@ -64,301 +64,250 @@ export default function Loading() {
                 </span>
               </div>
             </div>
+
           </div>
 
-          <div className="flex flex-col gap-6 items-stretch xl:flex-row">
-            {/* Organization details card */}
-            <div className="flex flex-col flex-1 justify-between p-5 rounded-2xl border bg-gray-3 border-gray-4">
-              <div className="flex flex-col gap-6 lg:flex-row">
-                {/* Name field */}
-                <div className="flex-1 space-y-2">
-                  <div>
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width={60}
-                      height={16}
-                      className="mb-1"
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width={200}
-                      height={12}
-                    />
-                  </div>
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    height={48}
-                    className="mt-4 rounded-xl"
-                  />
-                </div>
-
-                {/* Email domain field */}
-                <div className="flex-1 space-y-2">
-                  <div>
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width={120}
-                      height={16}
-                      className="mb-1"
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width={200}
-                      height={12}
-                    />
-                  </div>
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    height={48}
-                    className="mt-4 rounded-xl"
-                  />
-                </div>
-              </div>
-
-              {/* Save button */}
-              <div className="mt-8 mb-2">
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={80}
-                  height={36}
-                  className="rounded-xl"
-                />
-              </div>
-            </div>
-
-            {/* Custom domain card */}
-            <div className="flex-1 p-5 rounded-2xl border bg-gray-3 border-gray-4">
+          {/* Main content cards - Organization Details and Cap Settings side by side */}
+          <div className="flex flex-col gap-6 justify-center items-stretch xl:flex-row">
+            {/* Organization Details Card */}
+            <div className="flex flex-col flex-1 gap-6 p-6 w-full rounded-2xl border min-h-fit bg-gray-3 border-gray-4">
+              {/* Card Header */}
               <div className="space-y-2">
                 <Skeleton
                   baseColor="var(--gray-4)"
                   highlightColor="var(--gray-5)"
-                  width={100}
-                  height={16}
-                  className="mb-1"
+                  className="h-[24px] w-[100px]"
                 />
                 <Skeleton
                   baseColor="var(--gray-4)"
                   highlightColor="var(--gray-5)"
-                  width={300}
-                  height={12}
-                />
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={280}
-                  height={12}
+                  className="h-[16px] w-[280px]"
                 />
               </div>
 
-              <div className="mt-4 space-y-4">
-                {/* Domain input */}
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  height={48}
-                  className="rounded-xl"
-                />
-
-                {/* Status and buttons */}
-                <div className="flex justify-between items-center">
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width={150}
-                    height={24}
-                    className="rounded-md"
-                  />
-                </div>
-
-                <div className="flex flex-wrap justify-between mt-4">
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width={80}
-                    height={36}
-                    className="rounded-xl"
-                  />
-                  <div className="flex gap-3">
+              {Array(5).fill(0).map((_, index) => (
+                <div key={index} className="grid grid-cols-4 w-full">
+                  <div className="col-span-3">
                     <Skeleton
                       baseColor="var(--gray-4)"
                       highlightColor="var(--gray-5)"
-                      width={100}
-                      height={36}
-                      className="rounded-xl"
+                      className="h-[16px] w-[320px]"
                     />
                     <Skeleton
                       baseColor="var(--gray-4)"
                       highlightColor="var(--gray-5)"
-                      width={100}
-                      height={36}
-                      className="rounded-xl"
+                      className="h-[14px] w-[320px]"
                     />
                   </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Members table */}
-          <div className="p-5 rounded-2xl border bg-gray-3 border-gray-4">
-            <div className="flex flex-wrap justify-between items-center mb-6">
-              <div>
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={80}
-                  height={20}
-                  className="mb-2"
-                />
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={180}
-                  height={12}
-                />
-              </div>
-              <div className="flex gap-3">
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={140}
-                  height={36}
-                  className="rounded-xl"
-                />
-                <Skeleton
-                  baseColor="var(--gray-4)"
-                  highlightColor="var(--gray-5)"
-                  width={100}
-                  height={36}
-                  className="rounded-xl"
-                />
-              </div>
-            </div>
-
-            {/* Table */}
-            <div className="mt-5">
-              {/* Header */}
-              <div className="py-3 border-b border-gray-5">
-                <div className="flex gap-2">
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                  <Skeleton
-                    baseColor="var(--gray-4)"
-                    highlightColor="var(--gray-5)"
-                    width="16%"
-                    height={16}
-                  />
-                </div>
-              </div>
-
-              {/* Rows */}
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="py-4 border-b border-gray-5">
-                  <div className="flex gap-2">
+                  <div className="flex justify-end w-full">
                     <Skeleton
                       baseColor="var(--gray-4)"
                       highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
-                    />
-                    <Skeleton
-                      baseColor="var(--gray-4)"
-                      highlightColor="var(--gray-5)"
-                      width="16%"
-                      height={16}
+                      className="!h-[40px] !w-[60px] !rounded-full"
                     />
                   </div>
                 </div>
               ))}
+              {/* Upload Icon */}
+              <div className="flex justify-center items-center w-full h-[100px] border border-gray-5 rounded-xl">
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="!h-[40px] !w-[60px] !rounded-full"
+                />
+              </div>
+            </div>
+
+
+            {/* Cap Settings Card */}
+            <div className="flex relative flex-col flex-1 gap-6 p-6 w-full rounded-2xl border min-h-fit bg-gray-3 border-gray-4">
+              {/* Card Header */}
+              <div className="space-y-2">
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[24px] w-[120px]"
+                />
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[16px] w-[250px]"
+                />
+              </div>
+
+              {/* Coming Soon Overlay */}
+              <div className="relative">
+                <div className="absolute top-0 left-0 z-[20] rounded-xl flex items-center justify-center w-full h-full backdrop-blur-md bg-zinc-900/20">
+                  <Skeleton
+                    baseColor="var(--gray-4)"
+                    highlightColor="var(--gray-5)"
+                    className="!h-[32px] !w-[120px] !rounded-full"
+                  />
+                </div>
+
+                {/* Tabs */}
+                <div className="flex gap-4 pb-4 mt-3 border-b border-gray-4">
+                  <Skeleton
+                    baseColor="var(--gray-4)"
+                    highlightColor="var(--gray-5)"
+                    className="!h-[32px] !w-[100px] !rounded-xl"
+                  />
+                  <Skeleton
+                    baseColor="var(--gray-4)"
+                    highlightColor="var(--gray-5)"
+                    className="!h-[32px] !w-[80px] !rounded-xl"
+                  />
+                </div>
+
+                {/* Settings Items */}
+                <div className="mt-4 space-y-3">
+                  {Array(6)
+                    .fill(0)
+                    .map((_, index) => (
+                      <div
+                        key={index}
+                        className="flex justify-between items-center p-3 rounded-xl border border-gray-4"
+                      >
+                        <Skeleton
+                          baseColor="var(--gray-4)"
+                          highlightColor="var(--gray-5)"
+                          className="h-[16px] w-[150px]"
+                        />
+                        <Skeleton
+                          baseColor="var(--gray-4)"
+                          highlightColor="var(--gray-5)"
+                          className="!h-[24px] !w-[44px] !rounded-full"
+                        />
+                      </div>
+                    ))}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Billing section */}
-          <div className="flex flex-wrap justify-between items-center p-5 rounded-2xl border bg-gray-3 border-gray-4">
-            <div>
+          {/* Members Card */}
+          <div className="p-6 rounded-2xl border bg-gray-3 border-gray-4">
+            {/* Card Header */}
+            <div className="flex justify-between items-start mb-6">
+              <div className="space-y-2">
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[24px] w-[80px]"
+                />
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[16px] w-[200px]"
+                />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="!h-[40px] !w-[150px] !rounded-full"
+                />
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="!h-[40px] !w-[120px] !rounded-full"
+                />
+              </div>
+            </div>
+
+            {/* Members List */}
+            <div className="space-y-4">
+              {Array(3)
+                .fill(0)
+                .map((_, index) => (
+                  <div key={index} className="flex justify-between items-center p-4 rounded-xl border border-gray-4">
+                    <div className="flex gap-3 items-center">
+                      <Skeleton
+                        baseColor="var(--gray-4)"
+                        highlightColor="var(--gray-5)"
+                        circle
+                        width={40}
+                        height={40}
+                      />
+                      <div className="space-y-1">
+                        <Skeleton
+                          baseColor="var(--gray-4)"
+                          highlightColor="var(--gray-5)"
+                          className="h-[16px] w-[120px]"
+                        />
+                        <Skeleton
+                          baseColor="var(--gray-4)"
+                          highlightColor="var(--gray-5)"
+                          className="h-[14px] w-[160px]"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2 items-center">
+                      <Skeleton
+                        baseColor="var(--gray-4)"
+                        highlightColor="var(--gray-5)"
+                        className="!h-[32px] !w-[80px] !rounded-full"
+                      />
+                      <Skeleton
+                        baseColor="var(--gray-4)"
+                        highlightColor="var(--gray-5)"
+                        className="!h-[32px] !w-[32px] !rounded-md"
+                      />
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Billing Card */}
+          <div className="p-6 rounded-2xl border bg-gray-3 border-gray-4">
+            {/* Card Header */}
+            <div className="flex justify-between items-start mb-6">
+              <div className="space-y-2">
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[24px] w-[80px]"
+                />
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[16px] w-[180px]"
+                />
+              </div>
               <Skeleton
                 baseColor="var(--gray-4)"
                 highlightColor="var(--gray-5)"
-                width={220}
-                height={20}
-                className="mb-2"
-              />
-              <Skeleton
-                baseColor="var(--gray-4)"
-                highlightColor="var(--gray-5)"
-                width={300}
-                height={12}
+                className="!h-[40px] !w-[140px] !rounded-full"
               />
             </div>
-            <Skeleton
-              baseColor="var(--gray-4)"
-              highlightColor="var(--gray-5)"
-              width={120}
-              height={36}
-              className="rounded-xl"
-            />
+
+            {/* Billing Info */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center p-4 rounded-xl border border-gray-4">
+                <div className="space-y-1">
+                  <Skeleton
+                    baseColor="var(--gray-4)"
+                    highlightColor="var(--gray-5)"
+                    className="h-[16px] w-[100px]"
+                  />
+                  <Skeleton
+                    baseColor="var(--gray-4)"
+                    highlightColor="var(--gray-5)"
+                    className="h-[14px] w-[140px]"
+                  />
+                </div>
+                <Skeleton
+                  baseColor="var(--gray-4)"
+                  highlightColor="var(--gray-5)"
+                  className="h-[20px] w-[60px]"
+                />
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        </div >
+      )
+      }
     />
   );
 }
