@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 hex = "0.4.3"
+image = "0.25.6"
 serde = { version = "1.0.219", features = ["derive"] }
 sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
@@ -16,6 +17,7 @@ objc2 = "0.6.1"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
+	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
 

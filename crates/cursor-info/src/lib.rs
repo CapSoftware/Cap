@@ -104,6 +104,36 @@ impl ResolvedCursor {
                 raw: include_str!("../assets/mac/ibeam_vertical.svg"),
                 hotspot: (0.389, 0.25), // 14.0/36.0, 8.0/32.0
             },
+            // Running `target\debug\examples\cli.exe`
+            // IDC_ARROW: 19502718917bb8a86b83ffb168021cf90517b5c5e510c33423060d230c9e2d20
+            // IDC_IBEAM: 77cc4cedcf68f3e1d41bfe16c567961b2306c6236b35b966cd3d5c9516565e33
+            // IDC_WAIT: 5991d86a0d4e915dd0cb0fdd9bef3bf37ed6a3b321256fcb5b240db7ac1a6324
+            // IDC_CROSS: cd2c775b1a124e4deaed1ed345efae25eb28a9133fc39691555902a2c1d7d578
+            // IDC_UPARROW: 823d642acdc51ffbc29c2710303606270ed24936daf45215ead531333df102ba
+            // IDC_SIZENWSE: 2daf2a40e4c7ecadec3270fbdb243a12ac22a14bb0b3a08a56b38a38322f9296
+            // IDC_SIZENESW: 47b4d609cb404feae70c7e20b525ac901d1e7a5f1a2e8a240418b3710ee43473
+            // IDC_SIZEWE: 8a024cf4bec4d58a4c149af2320206088981357312b3d82fbfcc07bee38c71ac
+            // IDC_SIZENS: 253b9e5360de1e12561be6a8f84484d4b108fd54d31e7d2c8f3b66d1c71b9880
+            // IDC_SIZEALL: 8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903
+            // IDC_NO: 7df883a459aced72acf32b969ff1119676d334d9acfcbe668ef92fe01094a7d6
+            // IDC_HAND: 44a554b439a681410d337d239bf08afe7c66486538563ebb93dc1c309f0a9209
+            // IDC_APPSTARTING: 1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf
+            // IDC_HELP: 5d0b4df6188bc8d540abfbd4235199cc0f67fb41d5e0dcbfd40a3011f8808fea
+            // IDC_PIN: cb74a2d34774dbc43004882e43f9c058b2d2ee60184185567d0328ca013f5bc3
+            // IDC_PERSON: 1f5209791a75916697c26cf2d018d267ae1102c71dbd196de6c83132f5627f09
+            // Pen: 7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2
+            // ScrolNS: 4c89e1d64c35cc88d09aaddcc78ab685ceab8d974006d3d94af23a9e888a74d7
+            // ScrollWE: c5b16cfc625082dfdaa8e43111909baf9201fca39433ee8cdd117221f66cb4d1
+            // ScrollNSEW: 65527a0605a3bf225f90b9fe5b27b1c70743f4fa017b780abe27d5910cfdf69d
+            // ScrollN: fe1b1ac207a874a452b4dd28949008282e6038c3ca903aba5da151d718e3d811
+            // ScrollS: 1d7c1ea6ecedfa467c8b082f4082a8382c76d01033222f59f367267ba04c2b18
+            // ScrollW: 81fc32f5284680bf9503fe6af204f4a2494da213de935e5e0a59e85ce3ed7685
+            // ScrollE: c0a4f452e2f564bfa0193523e47ab4fbdcb9ac2c475566c01ef8df61752ab8af
+            // ScrollNW: b5c891535897b0665553d8ec1217a9919a1ca6147144d8b142516c9e829ca15a
+            // ScrollNE: 7b6008d5752a204e0aca2e45db3ea8d0901419b4d772c49bcb46821f9c23b85b
+            // ScrollSW: 56b8ae43318dd75770a10786e60b9f12f9ba8408eee8cb3a946a56ebbace7297
+            // ScrollSE: 178f8c96aaace35760dd01d5a7d4341b0690f7e3de45919bfd696d0c60c14895
+            // ArrowCD: a8bcbabdbb363b9be601cbeaa29b46e0e64834ff1ae0812646ad6d0c64efb2da
             _ => return None,
         })
     }

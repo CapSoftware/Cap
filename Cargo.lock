@@ -218,7 +218,7 @@ checksum = "df099ccb16cd014ff054ac1bf392c67feeef57164b05c42f037cd40f5d4357f4"
 dependencies = [
  "clipboard-win",
  "core-graphics 0.23.2",
- "image 0.25.5",
+ "image 0.25.6",
  "log",
  "objc2 0.5.2",
  "objc2-app-kit 0.2.2",
@@ -1004,6 +1004,7 @@ name = "cap-cursor-info"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "image 0.25.6",
  "objc2 0.6.1",
  "objc2-app-kit 0.3.1",
  "serde",
@@ -1045,7 +1046,7 @@ dependencies = [
  "futures",
  "futures-intrusive",
  "global-hotkey",
- "image 0.25.5",
+ "image 0.25.6",
  "keyed_priority_queue",
  "lazy_static",
  "log",
@@ -1144,7 +1145,7 @@ dependencies = [
  "clap 4.5.41",
  "ffmpeg-next",
  "futures",
- "image 0.25.5",
+ "image 0.25.6",
  "inquire",
  "mp4",
  "serde",
@@ -1198,7 +1199,7 @@ dependencies = [
  "flume 0.11.0",
  "futures",
  "gif",
- "image 0.25.5",
+ "image 0.25.6",
  "indexmap 2.10.0",
  "nokhwa",
  "nokhwa-bindings-macos",
@@ -1252,7 +1253,7 @@ dependencies = [
  "flume 0.11.0",
  "futures",
  "hex",
- "image 0.25.5",
+ "image 0.25.6",
  "objc",
  "objc2-app-kit 0.3.1",
  "relative-path",
@@ -1289,7 +1290,7 @@ dependencies = [
  "futures",
  "futures-intrusive",
  "glyphon",
- "image 0.25.5",
+ "image 0.25.6",
  "log",
  "pretty_assertions",
  "reactive_graph",
@@ -1571,7 +1572,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afede46921767868c5c7f8f55202bdd8bec0bab6bc9605174200f45924f93c62"
 dependencies = [
  "clipboard-win",
- "image 0.25.5",
+ "image 0.25.6",
  "objc2 0.6.1",
  "objc2-app-kit 0.3.1",
  "objc2-foundation 0.3.1",
@@ -3904,9 +3905,9 @@ dependencies = [
 
 [[package]]
 name = "image"
-version = "0.25.5"
+version = "0.25.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd6f44aed642f18953a158afeb30206f4d50da59fbc66ecb53c66488de73563b"
+checksum = "db35664ce6b9810857a38a906215e75a9c879f0696556a39f59c62829710251a"
 dependencies = [
  "bytemuck",
  "byteorder-lite",
@@ -7922,7 +7923,7 @@ dependencies = [
  "heck 0.5.0",
  "http",
  "http-range",
- "image 0.25.5",
+ "image 0.25.6",
  "jni",
  "libc",
  "log",

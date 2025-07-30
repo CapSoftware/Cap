@@ -2,15 +2,15 @@ use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
 
-#[allow(deprecated)]
 fn main() {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
-    run();
-    #[cfg(not(target_os = "macos"))]
+    return run();
+    #[allow(unreachable_code)]
     panic!("Unsupported platform!");
 }
 
 #[cfg(target_os = "macos")]
+#[allow(deprecated)]
 fn run() {
     use objc2::{MainThreadMarker, rc::Retained};
     use objc2_app_kit::{NSApplication, NSCursor};
@@ -82,27 +82,27 @@ fn run() {
 #[cfg(target_os = "windows")]
 fn run() {
     use windows::{
-        Win32::{
+        core::PCWSTR, Win32::{
             Foundation::POINT,
             UI::WindowsAndMessaging::{
-                CURSORINFO, CURSORINFO_FLAGS, GetCursorInfo, IDC_ARROW, LoadCursorW,
+                GetCursorInfo, GetIconInfo, LoadCursorW, CURSORINFO, CURSORINFO_FLAGS, HCURSOR, ICONINFO, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT
             },
-        },
-        core::PCWSTR,
+        }
     };
 
     #[inline]
-    fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
+    fn load_cursor(lpcursorname: PCWSTR) -> HCURSOR {
         unsafe { LoadCursorW(None, lpcursorname) }
             .expect("Failed to load default system cursors")
-            .0
     }
 
-    fn get_icon(cursor_info: CURSORINFO) -> Vec<u8> {
+    fn get_icon(hCursor: HCURSOR) -> Vec<u8> {
+        unsafe {
         // Get icon info
+        use windows::Win32::{Foundation::HWND, Graphics::Gdi::{CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC, SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS}, UI::WindowsAndMessaging::{DrawIconEx, DI_NORMAL}};
         let mut icon_info = ICONINFO::default();
-        if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_err() {
-            return None;
+        if GetIconInfo(hCursor, &mut icon_info).is_err() {
+            panic!("Error getting icon info");
         }
 
         // Get bitmap info for the cursor
@@ -121,12 +121,16 @@ fn run() {
         {
             // Clean up handles
             if !icon_info.hbmColor.is_invalid() {
+                use windows::Win32::Graphics::Gdi::DeleteObject;
+
                 DeleteObject(icon_info.hbmColor);
             }
             if !icon_info.hbmMask.is_invalid() {
+                use windows::Win32::Graphics::Gdi::DeleteObject;
+
                 DeleteObject(icon_info.hbmMask);
             }
-            return None;
+            panic!("Error");
         }
 
         // Create DCs
@@ -168,15 +172,21 @@ fn run() {
 
         if dib.is_err() {
             // Clean up
+
+            use windows::Win32::Graphics::Gdi::{DeleteDC, ReleaseDC};
             DeleteDC(mem_dc);
             ReleaseDC(HWND::default(), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
+                use windows::Win32::Graphics::Gdi::DeleteObject;
+
                 DeleteObject(icon_info.hbmColor);
             }
             if !icon_info.hbmMask.is_invalid() {
+                use windows::Win32::Graphics::Gdi::DeleteObject;
+
                 DeleteObject(icon_info.hbmMask);
             }
-            return None;
+            panic!("Error");
         }
 
         let dib = dib.unwrap();
@@ -189,7 +199,7 @@ fn run() {
             mem_dc,
             0,
             0,
-            cursor_info.hCursor,
+            hCursor,
             0, // Use actual size
             0, // Use actual size
             0,
@@ -199,6 +209,8 @@ fn run() {
         .is_err()
         {
             // Clean up
+
+            use windows::Win32::Graphics::Gdi::{DeleteDC, DeleteObject, ReleaseDC};
             SelectObject(mem_dc, old_bitmap);
             DeleteObject(dib);
             DeleteDC(mem_dc);
@@ -209,7 +221,7 @@ fn run() {
             if !icon_info.hbmMask.is_invalid() {
                 DeleteObject(icon_info.hbmMask);
             }
-            return None;
+            panic!("Error");
         }
 
         // Get image data
@@ -255,7 +267,7 @@ fn run() {
         }
 
         // Convert to RGBA image
-        let mut rgba_image = image::RgbaImage::from_raw(width as u32, height as u32, image_data)?;
+        let mut rgba_image = image::RgbaImage::from_raw(width as u32, height as u32, image_data).unwrap();
 
         // For text cursor (I-beam), enhance visibility by adding a shadow/outline
         // Check if this is likely a text cursor by examining dimensions and pixels
@@ -356,7 +368,8 @@ fn run() {
             trimmed
         } else {
             rgba_image
-        }
+        }.to_vec()
+    }
     }
 
     let cursors = vec![
@@ -391,10 +404,16 @@ fn run() {
         ("ArrowCD", load_cursor(PCWSTR(32663u16 as _))),
     ];
 
+    let mut cursor_lookup = HashMap::new();
+
     for (name, cursor) in cursors {
         let icon = get_icon(cursor);
-        println!("{}: {}", name, hex::encode(Sha256::digest(icon)));
+        let hash = hex::encode(Sha256::digest(icon));
+        println!("{name}: {hash}");
+        cursor_lookup.insert(hash, name);
     }
+
+    return;
 
     loop {
         let mut cursor_info = CURSORINFO {
@@ -412,17 +431,14 @@ fn run() {
             panic!("Hcursor is invalid")
         }
 
-        let trimmed_image = get_icon(cursor_info);
+        let trimmed_image = get_icon(cursor_info.hCursor);
 
-        // Convert to PNG format
-        // let mut png_data = Vec::new();
-        // trimmed_image
-        //     .write_to(
-        //         &mut std::io::Cursor::new(&mut png_data),
-        //         image::ImageFormat::Png,
-        //     )
-        //     .ok()?;
+        let hash = hex::encode(Sha256::digest(&trimmed_image));
 
-        println!("{}", hex::encode(Sha256::encode(&trimmed_image)));
+        if !cursor_lookup.contains_key(&*hash) {
+            panic!("Found unknown cursor hash {hash}");
+        }
+
+        println!("{hash} {}", cursor_lookup.get(&*hash).unwrap_or(&"Unknown"));
     }
 }
