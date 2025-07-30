@@ -13,7 +13,6 @@ cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 cap-displays = { path = "../displays" }
 cap-cursor-capture = { path = "../cursor-capture" }
-# cap-cursor-info = { path = "../cursor-info" }
 
 specta.workspace = true
 tokio.workspace = true
