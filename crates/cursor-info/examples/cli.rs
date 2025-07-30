@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 use sha2::{Digest, Sha256};
 
 #[allow(deprecated)]
@@ -82,7 +81,15 @@ fn run() {
 
 #[cfg(target_os = "windows")]
 fn run() {
-    use windows::{core::PCWSTR, Win32::{Foundation::POINT, UI::WindowsAndMessaging::{LoadCursorW, IDC_ARROW, GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS}}};
+    use windows::{
+        Win32::{
+            Foundation::POINT,
+            UI::WindowsAndMessaging::{
+                CURSORINFO, CURSORINFO_FLAGS, GetCursorInfo, IDC_ARROW, LoadCursorW,
+            },
+        },
+        core::PCWSTR,
+    };
 
     #[inline]
     fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
@@ -91,29 +98,8 @@ fn run() {
             .0
     }
 
-    let cursors = vec![
-        load_cursor(IDC_ARROW),
-        load_cursor(IDC_IBEAM),
-        load_cursor(IDC_WAIT),
-    ];
-
-    loop {
-        let mut cursor_info = CURSORINFO {
-            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-            flags: CURSORINFO_FLAGS(0),
-            hCursor: Default::default(),
-            ptScreenPos: POINT::default(),
-        };
-
-        if unsafe { GetCursorInfo(&mut cursor_info).is_err() } {
-            panic!("Failed to get cursor info")
-        }
-
-        if cursor_info.hCursor.is_invalid() {
-            panic!("Hcursor is invalid")
-        }
-
-            // Get icon info
+    fn get_icon(cursor_info: CURSORINFO) -> Vec<u8> {
+        // Get icon info
         let mut icon_info = ICONINFO::default();
         if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_err() {
             return None;
@@ -337,7 +323,7 @@ fn run() {
         }
 
         // Only trim if we found content and there's actually whitespace to trim
-        let trimmed_image = if has_content
+        if has_content
             && (min_x > 0 || min_y > 0 || max_x < width as u32 - 1 || max_y < height as u32 - 1)
         {
             // Add a small padding (2 pixels) around the content
@@ -370,7 +356,63 @@ fn run() {
             trimmed
         } else {
             rgba_image
+        }
+    }
+
+    let cursors = vec![
+        ("IDC_ARROW", load_cursor(IDC_ARROW)),
+        ("IDC_IBEAM", load_cursor(IDC_IBEAM)),
+        ("IDC_WAIT", load_cursor(IDC_WAIT)),
+        ("IDC_CROSS", load_cursor(IDC_CROSS)),
+        ("IDC_UPARROW", load_cursor(IDC_UPARROW)),
+        ("IDC_SIZENWSE", load_cursor(IDC_SIZENWSE)),
+        ("IDC_SIZENESW", load_cursor(IDC_SIZENESW)),
+        ("IDC_SIZEWE", load_cursor(IDC_SIZEWE)),
+        ("IDC_SIZENS", load_cursor(IDC_SIZENS)),
+        ("IDC_SIZEALL", load_cursor(IDC_SIZEALL)),
+        ("IDC_NO", load_cursor(IDC_NO)),
+        ("IDC_HAND", load_cursor(IDC_HAND)),
+        ("IDC_APPSTARTING", load_cursor(IDC_APPSTARTING)),
+        ("IDC_HELP", load_cursor(IDC_HELP)),
+        ("IDC_PIN", load_cursor(IDC_PIN)),
+        ("IDC_PERSON", load_cursor(IDC_PERSON)),
+        ("Pen", load_cursor(PCWSTR(32631u16 as _))),
+        ("ScrolNS", load_cursor(PCWSTR(32652u16 as _))),
+        ("ScrollWE", load_cursor(PCWSTR(32653u16 as _))),
+        ("ScrollNSEW", load_cursor(PCWSTR(32654u16 as _))),
+        ("ScrollN", load_cursor(PCWSTR(32655u16 as _))),
+        ("ScrollS", load_cursor(PCWSTR(32656u16 as _))),
+        ("ScrollW", load_cursor(PCWSTR(32657u16 as _))),
+        ("ScrollE", load_cursor(PCWSTR(32658u16 as _))),
+        ("ScrollNW", load_cursor(PCWSTR(32659u16 as _))),
+        ("ScrollNE", load_cursor(PCWSTR(32660u16 as _))),
+        ("ScrollSW", load_cursor(PCWSTR(32661u16 as _))),
+        ("ScrollSE", load_cursor(PCWSTR(32662u16 as _))),
+        ("ArrowCD", load_cursor(PCWSTR(32663u16 as _))),
+    ];
+
+    for (name, cursor) in cursors {
+        let icon = get_icon(cursor);
+        println!("{}: {}", name, hex::encode(Sha256::digest(icon)));
+    }
+
+    loop {
+        let mut cursor_info = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            flags: CURSORINFO_FLAGS(0),
+            hCursor: Default::default(),
+            ptScreenPos: POINT::default(),
         };
+
+        if unsafe { GetCursorInfo(&mut cursor_info).is_err() } {
+            panic!("Failed to get cursor info")
+        }
+
+        if cursor_info.hCursor.is_invalid() {
+            panic!("Hcursor is invalid")
+        }
+
+        let trimmed_image = get_icon(cursor_info);
 
         // Convert to PNG format
         // let mut png_data = Vec::new();

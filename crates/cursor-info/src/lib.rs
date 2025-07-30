@@ -13,6 +13,8 @@ impl ResolvedCursor {
     /// Resolve the SVG asset from a given cursor hash
     ///
     /// We hash the cursor's image on macOS as `NSCursor`'s can't be reliably compared.
+    /// On Windows we technically don't need to but storing a hash is useful as it means we can modify the cursors,
+    /// interpretation without rerecording if we were to support custom cursors or add new OS cursors.
     pub fn from_hash(s: String) -> Option<ResolvedCursor> {
         Some(match s.as_str() {
             //  https://developer.apple.com/documentation/appkit/nscursor/arrow
