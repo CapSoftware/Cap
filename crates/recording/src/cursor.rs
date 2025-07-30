@@ -7,13 +7,13 @@ use std::{
 };
 
 use cap_cursor_capture::RawCursorPosition;
-use cap_cursor_info::CursorShape;
 use cap_displays::Display;
 use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
 use futures::future::Either;
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -22,7 +22,7 @@ pub struct Cursor {
     pub file_name: String,
     pub id: u32,
     pub hotspot: XY<f64>,
-    pub shape: Option<CursorShape>,
+    pub hash: String,
 }
 
 pub type Cursors = HashMap<u64, Cursor>;
@@ -107,6 +107,7 @@ pub fn spawn_cursor_recorder(
                     let file_name = format!("cursor_{}.png", cursor_id);
                     let cursor_path = cursors_dir.join(&file_name);
 
+                    let hash = hex::encode(Sha256::digest(&data.image));
                     if let Ok(image) = image::load_from_memory(&data.image) {
                         // Convert to RGBA
                         let rgba_image = image.into_rgba8();
@@ -120,8 +121,8 @@ pub fn spawn_cursor_recorder(
                                 Cursor {
                                     file_name,
                                     id: response.next_cursor_id,
-                                    shape: data.shape,
                                     hotspot: data.hotspot,
+                                    hash,
                                 },
                             );
                             response.next_cursor_id += 1;
@@ -243,36 +244,16 @@ pub fn spawn_cursor_recorder(
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
-    // Optional as we can fallback to png if an SVG isn't available
-    shape: Option<CursorShape>,
 }
 
 #[cfg(target_os = "macos")]
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
     use objc2_app_kit::NSCursor;
-    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
-        // let class: *const AnyObject = unsafe { msg_send![cursor, class] };
-        // let description: *const AnyObject = unsafe { msg_send![cursor, description] };
-        // println!("Cursor class: {:?}, desc: {:?}", class, description);
-
-        println!(
-            "GET {:?} {:?} {:?} {:?}",
-            NSCursor::currentSystemCursor(),
-            NSCursor::currentCursor(),
-            NSCursor::currentSystemCursor()
-                .as_deref()
-                .map(|v| CursorShape::try_from(v).ok()),
-            CursorShape::try_from(&*NSCursor::currentCursor()).ok()
-        );
-
         #[allow(deprecated)]
         let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
-
-        let shape = CursorShape::try_from(&*cursor).ok();
-        println!("{:?} {:?}", cursor, shape);
 
         let image = cursor.image();
         let size = image.size();
@@ -283,10 +264,7 @@ fn get_cursor_data() -> Option<CursorData> {
 
         let image = image_data.as_bytes_unchecked().to_vec();
 
-        println!("CURSOR: {:?}", hex::encode(Sha256::digest(&image)));
-
         Some(CursorData {
-            shape: None, // TODO
             image,
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
         })

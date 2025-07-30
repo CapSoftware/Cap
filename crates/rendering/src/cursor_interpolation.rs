@@ -1,4 +1,3 @@
-use cap_cursor_info::CursorShape;
 use cap_project::{CursorEvents, CursorMoveEvent, XY};
 
 use crate::{

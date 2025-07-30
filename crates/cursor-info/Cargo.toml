@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+hex = "0.4.3"
 serde = { version = "1.0.219", features = ["derive"] }
+sha2 = "0.10.9"
 specta = { workspace = true, features = ["derive"] }
 strum = { version = "0.27", features = ["derive"] }
 

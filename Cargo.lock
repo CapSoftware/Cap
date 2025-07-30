@@ -1003,9 +1003,11 @@ dependencies = [
 name = "cap-cursor-info"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "objc2 0.6.1",
  "objc2-app-kit 0.3.1",
  "serde",
+ "sha2",
  "specta",
  "strum 0.27.2",
  "windows 0.58.0",
@@ -1222,7 +1224,6 @@ dependencies = [
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
- "cap-cursor-info",
  "either",
  "log",
  "relative-path",
@@ -1237,7 +1238,6 @@ name = "cap-recording"
 version = "0.1.0"
 dependencies = [
  "cap-cursor-capture",
- "cap-cursor-info",
  "cap-displays",
  "cap-flags",
  "cap-media",
