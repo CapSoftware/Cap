@@ -118,22 +118,22 @@ impl ResolvedCursor {
             // IDC_ARROW
             "19502718917bb8a86b83ffb168021cf90517b5c5e510c33423060d230c9e2d20" => ResolvedCursor {
                 raw: include_str!("../assets/windows/arrow.svg"),
-                hotspot: todo!(),
+                hotspot: (0.027, 0.041), // Arrow tip at top-left
             },
             // IDC_IBEAM
             "77cc4cedcf68f3e1d41bfe16c567961b2306c6236b35b966cd3d5c9516565e33" => ResolvedCursor {
                 raw: include_str!("../assets/windows/ibeam.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of I-beam
             },
             // IDC_WAIT
             "5991d86a0d4e915dd0cb0fdd9bef3bf37ed6a3b321256fcb5b240db7ac1a6324" => ResolvedCursor {
                 raw: include_str!("../assets/windows/wait.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of hourglass
             },
             // IDC_CROSS
             "cd2c775b1a124e4deaed1ed345efae25eb28a9133fc39691555902a2c1d7d578" => ResolvedCursor {
                 raw: include_str!("../assets/windows/cross.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of crosshair
             },
             // // IDC_UPARROW
             // "823d642acdc51ffbc29c2710303606270ed24936daf45215ead531333df102ba" => todo!(),
@@ -142,26 +142,26 @@ impl ResolvedCursor {
             // IDC_SIZENESW
             "47b4d609cb404feae70c7e20b525ac901d1e7a5f1a2e8a240418b3710ee43473" => ResolvedCursor {
                 raw: include_str!("../assets/windows/size-nesw.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of resize cursor
             },
             // // IDC_SIZEWE
             // "8a024cf4bec4d58a4c149af2320206088981357312b3d82fbfcc07bee38c71ac" => todo!(),
             // IDC_SIZENS
             "253b9e5360de1e12561be6a8f84484d4b108fd54d31e7d2c8f3b66d1c71b9880" => ResolvedCursor {
                 raw: include_str!("../assets/windows/size-ns.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of vertical resize cursor
             },
             // // IDC_SIZEALL
             // "8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903" => todo!(),
             // IDC_NO
             "7df883a459aced72acf32b969ff1119676d334d9acfcbe668ef92fe01094a7d6" => ResolvedCursor {
                 raw: include_str!("../assets/windows/no.svg"),
-                hotspot: todo!(),
+                hotspot: (0.5, 0.5), // Center of "not allowed" symbol
             },
             // IDC_HAND
             "44a554b439a681410d337d239bf08afe7c66486538563ebb93dc1c309f0a9209" => ResolvedCursor {
                 raw: include_str!("../assets/windows/hand.svg"),
-                hotspot: todo!(),
+                hotspot: (0.421, 0.009), // Tip of pointing finger
             },
             // // IDC_APPSTARTING
             // "1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf" => todo!(),
@@ -174,7 +174,7 @@ impl ResolvedCursor {
             // MAKEINTRESOURCE(32631) - Pen
             "7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2" => ResolvedCursor {
                 raw: include_str!("../assets/windows/pen.svg"),
-                hotspot: todo!(),
+                hotspot: (0.03, 0.97), // Tip of pen at bottom-left
             },
             // // MAKEINTRESOURCE(32652) - ScrolNS
             // "4c89e1d64c35cc88d09aaddcc78ab685ceab8d974006d3d94af23a9e888a74d7" => todo!(),
