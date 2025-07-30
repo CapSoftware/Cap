@@ -99,7 +99,7 @@ const CommentInput: React.FC<CommentInputProps> = ({
               size="xs"
               variant="primary"
               onClick={() => handleSubmit()}
-              disabled={disabled}
+              disabled={!content}
             >
               {buttonLabel}
             </Button>
@@ -313,9 +313,6 @@ const EmptyState = () => (
 export const Activity = Object.assign(
   ({ user, videoId, isOwnerOrMember, comments, optimisticComments, setOptimisticComments, setComments, ...props }: ActivityProps) => {
 
-    // useEffect(() => {
-    //   setComments(initialComments);
-    // }, [initialComments]);
 
     return (
       <Activity.Shell
