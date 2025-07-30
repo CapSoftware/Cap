@@ -3,7 +3,7 @@ import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
   createQuery,
-  useQueryClient
+  useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -162,8 +162,9 @@ function Page() {
       cameras.find((c) => {
         const { cameraID } = rawOptions;
         if (!cameraID) return;
-        if ('ModelID' in cameraID && c.model_id === cameraID.ModelID) return c
-        if ('DeviceID' in cameraID && c.device_id == cameraID.DeviceID) return c;
+        if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
+        if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
+          return c;
       }),
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
@@ -303,16 +304,17 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${license.data?.type === "pro"
-                  ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                  : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                  } rounded-lg px-1.5 py-0.5`}
+                class={`text-[0.6rem] ${
+                  license.data?.type === "pro"
+                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
+                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
+                } rounded-lg px-1.5 py-0.5`}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                    ? "Pro"
-                    : "Personal"}
+                  ? "Pro"
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -343,7 +345,7 @@ function Page() {
             "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
             (rawOptions.captureTarget.variant === "screen" ||
               rawOptions.captureTarget.variant === "area") &&
-            "ml-[2.4rem]"
+              "ml-[2.4rem]"
           )}
           style={{
             "transition-timing-function":
@@ -419,9 +421,10 @@ function Page() {
         options={cameras}
         value={options.cameraID() ?? null}
         onChange={(v) => {
+          console.log({ v });
           if (!v) setCamera.mutate(null);
-          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id })
-          else setCamera.mutate({ DeviceID: v.device_id })
+          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
+          else setCamera.mutate({ DeviceID: v.device_id });
         }}
       />
       <MicrophoneSelect
@@ -452,9 +455,19 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
+                  <IconCapInstant
+                    class={cx(
+                      "size-[0.8rem] mr-1.5",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 ) : (
-                  <IconCapFilmCut class={cx("size-[0.8rem] mr-2 -mt-[1.5px]", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
+                  <IconCapFilmCut
+                    class={cx(
+                      "size-[0.8rem] mr-2 -mt-[1.5px]",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 )}
                 Start Recording
               </>
@@ -586,8 +599,8 @@ function AreaSelectButton(props: {
         props.targetVariant === "area"
           ? "Remove selection"
           : areaSelection.pending
-            ? "Selecting area..."
-            : "Select area"
+          ? "Selecting area..."
+          : "Select area"
       }
       childClass="flex fixed flex-row items-center w-8 h-8"
     >
@@ -658,7 +671,7 @@ function AreaSelectButton(props: {
                 class={cx(
                   "w-[1rem] h-[1rem]",
                   areaSelection.pending &&
-                  "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                 )}
               />
             </button>
@@ -686,8 +699,7 @@ function CameraSelect(props: {
     permissions?.data?.camera === "notNeeded";
 
   const onChange = (cameraInfo: CameraInfo | null) => {
-    if (!cameraInfo && permissions?.data?.camera !== "granted")
-      return requestPermission("camera");
+    if (!cameraInfo && !permissionGranted()) return requestPermission("camera");
 
     props.onChange(cameraInfo);
 
@@ -982,8 +994,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </InfoPill>
   );
 }
