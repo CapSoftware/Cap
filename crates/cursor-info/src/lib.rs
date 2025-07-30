@@ -49,7 +49,7 @@ impl fmt::Display for CursorShape {
             CursorShape::Windows(cursor) => cursor.into(),
         };
 
-        writeln!(f, "{kind}|{variant}")
+        write!(f, "{kind}|{variant}")
     }
 }
 
