@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, ChannelLayout};
+use ffmpeg::{format::Sample};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
@@ -10,7 +10,7 @@ use scap::{
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, ops::ControlFlow, sync::{Arc}, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -530,9 +530,16 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                     ));
 
-                    if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
-                        error!("Pipeline is unreachable. Shutting down recording.");
-                        return ControlFlow::Break(());
+                    match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
+                        Err(flume::TrySendError::Disconnected(_)) => {
+                            error!("Pipeline is unreachable. Shutting down recording.");
+                            return ControlFlow::Break(());
+                        }
+                        Err(flume::TrySendError::Full(_)) => {
+                            warn!("Screen capture sender is full, dropping frame");
+
+                        }
+                        _ => {}
                     }
 
                     ControlFlow::Continue(())

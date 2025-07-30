@@ -56,7 +56,7 @@ impl H264EncoderBuilder {
             .unwrap()
             .any(|f| f == input_config.pixel_format)
         {
-            let format = ffmpeg::format::Pixel::YUV420P;
+            let format = ffmpeg::format::Pixel::NV12;
             tracing::debug!(
                 "Converting from {:?} to {:?} for H264 encoding",
                 input_config.pixel_format,
@@ -72,7 +72,7 @@ impl H264EncoderBuilder {
                     )
                     .map_err(|e| {
                         tracing::error!(
-                            "Failed to create converter from {:?} to YUV420P: {:?}",
+                            "Failed to create converter from {:?} to NV12: {:?}",
                             input_config.pixel_format,
                             e
                         );
@@ -202,7 +202,7 @@ fn get_codec_and_options(
             // looks terrible rn :(
             // "h264_videotoolbox"
         } else {
-            "libx264"
+            "h264_mf"
         }
     };
 
@@ -211,7 +211,7 @@ fn get_codec_and_options(
 
         if encoder_name == "h264_videotoolbox" {
             options.set("realtime", "true");
-        } else {
+        } else if encoder_name == "libx264" {
             let keyframe_interval_secs = 2;
             let keyframe_interval = keyframe_interval_secs * config.frame_rate.numerator();
             let keyframe_interval_str = keyframe_interval.to_string();
@@ -230,6 +230,11 @@ fn get_codec_and_options(
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);
+        }
+        else if encoder_name == "h264_mf" {
+            options.set("hw_encoding", "true");
+            options.set("scenario", "4");
+            options.set("quality", "1");
         }
 
         return Ok((codec, options));
