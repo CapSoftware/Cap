@@ -4,7 +4,7 @@ import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { useQuery } from "@tanstack/react-query";
-import { startTransition, use, useMemo, useOptimistic, useRef, useState } from "react";
+import { startTransition, use, useCallback, useMemo, useOptimistic, useRef, useState } from "react";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
@@ -137,6 +137,7 @@ export const Share = ({
     : data.createdAt;
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
+  const activityRef = useRef<{ scrollToBottom: () => void }>(null);
   const initialComments: CommentType[] =
     comments instanceof Promise ? use(comments) : comments;
   const [commentsData, setCommentsData] = useState<CommentType[]>(initialComments);
@@ -202,15 +203,21 @@ export const Share = ({
     }
   };
 
-  const handleOptimisticComment = (comment: CommentType) => {
+  const handleOptimisticComment = useCallback((comment: CommentType) => {
     setOptimisticComments(comment);
-  };
+    setTimeout(() => {
+      activityRef.current?.scrollToBottom();
+    }, 100);
+  }, [setOptimisticComments]);
 
-  const handleCommentSuccess = (realComment: CommentType) => {
+  const handleCommentSuccess = useCallback((realComment: CommentType) => {
     startTransition(() => {
       setCommentsData((prev) => [...prev, realComment]);
     });
-  };
+    setTimeout(() => {
+      activityRef.current?.scrollToBottom();
+    }, 100);
+  }, []);
 
   return (
     <div className="mt-4">
@@ -252,11 +259,13 @@ export const Share = ({
             setCommentsData={setCommentsData}
             optimisticComments={optimisticComments}
             setOptimisticComments={setOptimisticComments}
+            handleCommentSuccess={handleCommentSuccess}
             views={views}
             onSeek={handleSeek}
             videoId={data.id}
             aiData={aiData}
             aiGenerationEnabled={aiGenerationEnabled}
+            ref={activityRef}
           />
         </div>
       </div>

@@ -2,7 +2,7 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { Suspense, useState } from "react";
+import { Suspense, useState, forwardRef } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -24,6 +24,7 @@ interface SidebarProps {
   user: typeof userSelectProps | null;
   commentsData: CommentType[];
   optimisticComments: CommentType[];
+  handleCommentSuccess: (comment: CommentType) => void;
   setOptimisticComments: (newComment: CommentType) => void;
   setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
   views: MaybePromise<number>;
@@ -62,19 +63,20 @@ const tabTransition = {
   opacity: { duration: 0.2 },
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(({
   data,
   user,
   commentsData,
   setCommentsData,
   optimisticComments,
+  handleCommentSuccess,
   setOptimisticComments,
   views,
   onSeek,
   videoId,
   aiData,
   aiGenerationEnabled = false,
-}) => {
+}, ref) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
     (data.organizationId &&
@@ -115,12 +117,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }
           >
             <Activity
+              ref={ref}
               views={views}
               comments={commentsData}
               setComments={setCommentsData}
               user={user}
               optimisticComments={optimisticComments}
               setOptimisticComments={setOptimisticComments}
+              handleCommentSuccess={handleCommentSuccess}
               isOwnerOrMember={isOwnerOrMember}
               onSeek={onSeek}
               videoId={videoId}
@@ -208,4 +212,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
     </div>
   );
-};
+});
