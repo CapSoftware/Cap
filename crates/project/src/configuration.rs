@@ -157,6 +157,15 @@ impl Into<XY<f64>> for XY<f32> {
     }
 }
 
+impl<T> Into<XY<T>> for (T, T) {
+    fn into(self) -> XY<T> {
+        XY {
+            x: self.0,
+            y: self.1,
+        }
+    }
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Crop {

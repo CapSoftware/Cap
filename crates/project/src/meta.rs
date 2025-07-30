@@ -10,7 +10,7 @@ use std::{
 use tracing::{debug, info, warn};
 // use tracing::{debug, warn};
 
-use crate::{CaptionsData, CursorEvents, CursorImage, CursorImages, ProjectConfiguration, XY};
+use crate::{CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct VideoMeta {
@@ -243,6 +243,8 @@ pub struct CursorMeta {
     #[specta(type = String)]
     pub image_path: RelativePathBuf,
     pub hotspot: XY<f64>,
+    #[serde(default)]
+    pub shape: Option<cap_cursor_info::CursorShape>,
 }
 
 impl MultipleSegments {

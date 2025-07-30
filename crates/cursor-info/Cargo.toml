@@ -1,0 +1,20 @@
+[package]
+name = "cap-cursor-info"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+specta = { workspace = true, features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = "0.3.1"
+
+[target.'cfg(target_os= "windows")'.dependencies]
+windows = { workspace = true, features = [
+	"Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

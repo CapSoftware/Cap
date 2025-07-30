@@ -7,6 +7,8 @@ edition = "2021"
 workspace = true
 
 [dependencies]
+cap-cursor-info = { path = "../cursor-info" }
+
 specta.workspace = true
 
 serde = { version = "1", features = ["derive"] }

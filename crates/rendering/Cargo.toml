@@ -12,6 +12,7 @@ bytemuck = { version = "1.7", features = ["derive"] }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
 cap-video-decode = { path = "../video-decode" }
+cap-cursor-info = { path = "../cursor-info" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true

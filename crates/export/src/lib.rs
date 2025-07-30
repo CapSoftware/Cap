@@ -2,7 +2,7 @@ pub mod gif;
 pub mod mp4;
 
 use cap_editor::Segment;
-use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY};
+use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
 use tracing::error;

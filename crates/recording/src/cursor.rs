@@ -7,6 +7,7 @@ use std::{
 };
 
 use cap_cursor_capture::RawCursorPosition;
+use cap_cursor_info::CursorShape;
 use cap_displays::Display;
 use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
@@ -21,6 +22,7 @@ pub struct Cursor {
     pub file_name: String,
     pub id: u32,
     pub hotspot: XY<f64>,
+    pub shape: Option<CursorShape>,
 }
 
 pub type Cursors = HashMap<u64, Cursor>;
@@ -90,7 +92,7 @@ pub fn spawn_cursor_recorder(
             let elapsed = elapsed.as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let cursor_data = get_cursor_image_data();
+            let cursor_data = get_cursor_data();
             let cursor_id = if let Some(data) = cursor_data {
                 let mut hasher = DefaultHasher::default();
                 data.image.hash(&mut hasher);
@@ -118,6 +120,7 @@ pub fn spawn_cursor_recorder(
                                 Cursor {
                                     file_name,
                                     id: response.next_cursor_id,
+                                    shape: data.shape,
                                     hotspot: data.hotspot,
                                 },
                             );
@@ -240,67 +243,35 @@ pub fn spawn_cursor_recorder(
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
+    // Optional as we can fallback to png if an SVG isn't available
+    shape: Option<CursorShape>,
 }
 
 #[cfg(target_os = "macos")]
-fn get_cursor_image_data() -> Option<CursorData> {
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSPoint, NSSize, NSUInteger};
+fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
-    use objc::runtime::Class;
-    use objc::*;
+    use objc2_app_kit::NSCursor;
 
-    autoreleasepool(|| {
-        let nscursor_class = match Class::get("NSCursor") {
-            Some(cls) => cls,
-            None => return None,
+    autoreleasepool(|| unsafe {
+        let cursor = NSCursor::currentCursor();
+
+        let image = cursor.image();
+        let size = image.size();
+        let hotspot = cursor.hotSpot();
+        let Some(image_data) = image.TIFFRepresentation() else {
+            return None;
         };
 
-        unsafe {
-            // Get the current system cursor
-            let current_cursor: id = msg_send![nscursor_class, currentSystemCursor];
-            if current_cursor == nil {
-                return None;
-            }
-
-            // Get the image of the cursor
-            let cursor_image: id = msg_send![current_cursor, image];
-            if cursor_image == nil {
-                return None;
-            }
-
-            let cursor_size: NSSize = msg_send![cursor_image, size];
-            let cursor_hotspot: NSPoint = msg_send![current_cursor, hotSpot];
-
-            // Get the TIFF representation of the image
-            let image_data: id = msg_send![cursor_image, TIFFRepresentation];
-            if image_data == nil {
-                return None;
-            }
-
-            // Get the length of the data
-            let length: NSUInteger = msg_send![image_data, length];
-
-            // Get the bytes of the data
-            let bytes: *const u8 = msg_send![image_data, bytes];
-
-            // Copy the data into a Vec<u8>
-            let slice = std::slice::from_raw_parts(bytes, length as usize);
-            let data = slice.to_vec();
-
-            Some(CursorData {
-                image: data,
-                hotspot: XY::new(
-                    cursor_hotspot.x / cursor_size.width,
-                    cursor_hotspot.y / cursor_size.height,
-                ),
-            })
-        }
+        Some(CursorData {
+            shape: CursorShape::try_from(&*cursor).ok(),
+            image: image_data.as_bytes_unchecked().to_vec(),
+            hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
+        })
     })
 }
 
 #[cfg(windows)]
-fn get_cursor_image_data() -> Option<CursorData> {
+fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC,
@@ -595,6 +566,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
             .ok()?;
 
         Some(CursorData {
+            shape: CursorShape::try_from(&cursor_info).ok(),
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
         })

@@ -209,17 +209,34 @@ impl CursorLayer {
 
         if !self.cursors.contains_key(&interpolated_cursor.cursor_id) {
             let mut cursor = None;
-            // We first attempt to load a high-quality SVG cursor
-            if !uniforms.project.cursor.raw && uniforms.project.cursor.use_svg {
-                cursor = CursorTexture::get_svg(&constants, &interpolated_cursor.cursor_id)
-                    .map_err(|err| {
-                        error!(
-                            "Error loading SVG cursor {:?}: {err}",
-                            interpolated_cursor.cursor_id
-                        )
-                    })
-                    .ok()
-                    .flatten();
+
+            let cursor_shape = match &constants.recording_meta.inner {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                    inner:
+                        MultipleSegments {
+                            cursors: Cursors::Correct(cursors),
+                            ..
+                        },
+                }) => cursors.get(&interpolated_cursor.cursor_id).unwrap().shape,
+                _ => None,
+            };
+
+            // Attempt to find and load a higher-quality SVG cursor included in Cap.
+            // These are used instead of the OS provided cursor images when possible as the quality is better.
+            if let Some(cursor_shape) = cursor_shape
+                && !uniforms.project.cursor.raw
+                && uniforms.project.cursor.use_svg
+            {
+                if let Some(info) = cursor_shape.info() {
+                    cursor = CursorTexture::prepare_svg(&constants, info.raw, info.hotspot.into())
+                        .map_err(|err| {
+                            error!(
+                                "Error loading SVG cursor {:?}: {err}",
+                                interpolated_cursor.cursor_id
+                            )
+                        })
+                        .ok();
+                }
             }
 
             // If not we attempt to load the low-quality image cursor
@@ -408,32 +425,6 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
     1.0
 }
 
-static CURSOR_ARROW: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/arrow.svg"),
-    XY::new(0.1, 0.1),
-);
-
-static CURSOR_IBEAM: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/ibeam.svg"),
-    XY::new(0.5, 0.5),
-);
-static CURSOR_CROSSHAIR: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/crosshair.svg"),
-    XY::new(0.5, 0.5),
-);
-static CURSOR_POINTING_HAND: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/pointing-hand.svg"),
-    XY::new(0.3, 0.1),
-);
-static CURSOR_RESIZE_NWSE: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/resize-nwse.svg"),
-    XY::new(0.5, 0.5),
-);
-static CURSOR_RESIZE_EW: (&'static str, XY<f64>) = (
-    include_str!("../../assets/cursors/resize-ew.svg"),
-    XY::new(0.5, 0.5),
-);
-
 /// The size to render the svg to.
 static SVG_OUTPUT_HEIGHT: u32 = 255;
 
@@ -443,24 +434,6 @@ struct CursorTexture {
 }
 
 impl CursorTexture {
-    /// Attempt to find and load a higher-quality SVG cursor included in Cap.
-    /// These are used instead of the OS provided cursor images when possible as the quality is better.
-    fn get_svg(
-        constants: &RenderVideoConstants,
-        id: &str,
-    ) -> Result<Option<CursorTexture>, String> {
-        println!("GET SVG {:?} {:?}", id, constants.recording_meta.platform);
-
-        Ok(match (id, &constants.recording_meta.platform) {
-            (_, _) => Some(Self::prepare_svg(
-                constants,
-                CURSOR_RESIZE_NWSE.0,
-                CURSOR_RESIZE_NWSE.1,
-            )?),
-            _ => None,
-        })
-    }
-
     /// Prepare a cursor texture on the GPU from RGBA data.
     fn prepare(
         constants: &RenderVideoConstants,
