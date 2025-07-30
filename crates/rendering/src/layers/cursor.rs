@@ -16,6 +16,9 @@ const CURSOR_CLICK_DURATION: f64 = 0.25;
 const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 
+/// The size to render the svg to.
+static SVG_CURSOR_RASTERIZED_HEIGHT: u32 = 200;
+
 pub struct CursorLayer {
     statics: Statics,
     bind_group: Option<BindGroup>,
@@ -441,9 +444,6 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
     1.0
 }
 
-/// The size to render the svg to.
-static SVG_OUTPUT_HEIGHT: u32 = 300;
-
 struct CursorTexture {
     texture: wgpu::Texture,
     hotspot: XY<f64>,
@@ -510,16 +510,23 @@ impl CursorTexture {
         // This would require reinitializing the texture every time that changes which would be more complicated.
         // So we trade a small about VRAM for only initializing it once.
         let aspect_ratio = rtree.size().width() / rtree.size().height();
-        let width = (aspect_ratio * SVG_OUTPUT_HEIGHT as f32) as u32;
+        let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
 
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, SVG_OUTPUT_HEIGHT as u32)
+        let mut pixmap = tiny_skia::Pixmap::new(width as u32, SVG_CURSOR_RASTERIZED_HEIGHT as u32)
             .ok_or("Failed to create pixmap")?;
 
         // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
         let scale_x = width as f32 / rtree.size().width();
-        let scale_y = SVG_OUTPUT_HEIGHT as f32 / rtree.size().height();
-        let scale = scale_x.min(scale_y);
-        let transform = tiny_skia::Transform::from_scale(scale, scale);
+        let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / rtree.size().height();
+        let scale = scale_x.min(scale_y) * 1.5;
+        let transform = tiny_skia::Transform::from_row(
+            scale,
+            0.0,
+            0.0,
+            scale,
+            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
+            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
+        );
 
         resvg::render(&rtree, transform, &mut pixmap.as_mut());
 
