@@ -89,8 +89,6 @@ export const Toolbar = ({
       setCommentBoxOpen(false);
       setComment("");
     }
-
-    // Remove router.refresh() to rely on optimistic updates for immediate UI response
   };
 
   const handleCommentSubmit = async () => {
