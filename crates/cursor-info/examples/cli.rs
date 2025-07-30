@@ -1,19 +1,21 @@
 use std::collections::HashMap;
 
-use objc2::{MainThreadMarker, rc::Retained};
-use objc2_app_kit::{NSApplication, NSCursor};
+
 use sha2::{Digest, Sha256};
 
 #[allow(deprecated)]
 fn main() {
-    #[cfg(target_os = "macos")]
-    run_macos();
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    run();
     #[cfg(not(target_os = "macos"))]
     panic!("Unsupported platform!");
 }
 
 #[cfg(target_os = "macos")]
-fn run_macos() {
+fn run() {
+    use objc2::{MainThreadMarker, rc::Retained};
+    use objc2_app_kit::{NSApplication, NSCursor};
+
     let mtm = MainThreadMarker::new().expect("Not on main thread");
     let _app: Retained<NSApplication> = NSApplication::sharedApplication(mtm);
 
@@ -76,4 +78,38 @@ fn run_macos() {
             );
         }
     };
+}
+
+#[cfg(target_os = "windows")]
+fn run() {
+    use windows::{core::PCWSTR, Win32::{Foundation::POINT, UI::WindowsAndMessaging::{LoadCursorW, IDC_ARROW, GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS}};
+
+    #[inline]
+    fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
+        unsafe { LoadCursorW(None, lpcursorname) }
+            .expect("Failed to load default system cursors")
+            .0
+    }
+
+    let arrow = load_cursor(IDC_ARROW);
+
+    loop {
+        let mut cursor_info = CURSORINFO {
+            cbSize: std::mem::size_of::<CURSORINFO>() as u32,
+            flags: CURSORINFO_FLAGS(0),
+            hCursor: Default::default(),
+            ptScreenPos: POINT::default(),
+        };
+
+        if unsafe { GetCursorInfo(&mut cursor_info).is_err() } {
+            panic!("Failed to get cursor info")
+        }
+
+        if cursor_info.hCursor.is_invalid() {
+            panic!("Hcursor is invalid")
+        }
+
+        println!("{}", cursor_info.hCursor.0 == arrow);
+    }
+
 }
