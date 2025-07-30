@@ -566,7 +566,7 @@ fn get_cursor_data() -> Option<CursorData> {
             .ok()?;
 
         Some(CursorData {
-            shape: CursorShape::try_from(&cursor_info).ok(),
+            shape: CursorShape::try_from(&cursor_info.hCursor).ok(),
             image: png_data,
             hotspot: XY::new(hotspot_x, hotspot_y),
         })

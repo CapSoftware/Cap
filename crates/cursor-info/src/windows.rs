@@ -141,7 +141,9 @@ impl CursorShapeWindows {
 impl TryFrom<&windows::Win32::UI::WindowsAndMessaging::HCURSOR> for super::CursorShape {
     type Error = ();
 
-    fn try_from(cursor: &objc2_app_kit::NSCursor) -> Result<Self, Self::Error> {
+    fn try_from(cursor: &windows::Win32::UI::WindowsAndMessaging::HCURSOR) -> Result<Self, Self::Error> {
+        use windows::{core::PCWSTR, Win32::UI::WindowsAndMessaging::{LoadCursorW, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT}};
+
         #[inline]
         fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
             unsafe { LoadCursorW(None, lpcursorname) }
@@ -150,101 +152,39 @@ impl TryFrom<&windows::Win32::UI::WindowsAndMessaging::HCURSOR> for super::Curso
         }
 
         Ok(super::CursorShape::Windows(match cursor.0 {
-            ptr if ptr == load_cursor(IDC_ARROW) => CursorShape::Arrow,
-            ptr if ptr == cursors.ibeam => CursorShape::IBeam,
-            ptr if ptr == cursors.wait => CursorShape::Wait,
-            ptr if ptr == cursors.cross => CursorShape::Crosshair,
-            ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
-            ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
-            ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
-            ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
-            ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
-            ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
-            ptr if ptr == cursors.hand => CursorShape::OpenHand,
-            ptr if ptr == cursors.no => CursorShape::NotAllowed,
-            ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
-            ptr if ptr == cursors.help => CursorShape::Help,
-            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
-            // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
-            // as the user is using touch input instead.
-            _ => CursorShape::Hidden,
+            ptr if ptr == load_cursor(IDC_ARROW) => CursorShapeWindows::Arrow,
+            ptr if ptr == load_cursor(IDC_IBEAM) => CursorShapeWindows::IBeam,
+            ptr if ptr == load_cursor(IDC_WAIT) => CursorShapeWindows::Wait,
+            ptr if ptr == load_cursor(IDC_CROSS) => CursorShapeWindows::Cross,
+            ptr if ptr == load_cursor(IDC_UPARROW) => CursorShapeWindows::UpArrow,
+            ptr if ptr == load_cursor(IDC_SIZENWSE) => CursorShapeWindows::SizeNWSE,
+            ptr if ptr == load_cursor(IDC_SIZENESW) => CursorShapeWindows::SizeNESW,
+            ptr if ptr == load_cursor(IDC_SIZEWE) => CursorShapeWindows::SizeWE,
+            ptr if ptr == load_cursor(IDC_SIZENS) => CursorShapeWindows::SizeNS,
+            ptr if ptr == load_cursor(IDC_SIZEALL) => CursorShapeWindows::SizeAll,
+            ptr if ptr == load_cursor(IDC_NO) => CursorShapeWindows::No,
+            ptr if ptr == load_cursor(IDC_HAND) => CursorShapeWindows::Hand,
+            ptr if ptr == load_cursor(IDC_APPSTARTING) => CursorShapeWindows::AppStarting,
+            ptr if ptr == load_cursor(IDC_HELP) => CursorShapeWindows::Help,
+            ptr if ptr == load_cursor(IDC_PIN) => CursorShapeWindows::Pin,
+            ptr if ptr == load_cursor(IDC_PERSON) => CursorShapeWindows::Person,
+            ptr if ptr == load_cursor(PCWSTR(32631u16 as _)) => CursorShapeWindows::Pen,
+            ptr if ptr == load_cursor(PCWSTR(32652u16 as _)) => CursorShapeWindows::ScrolNS,
+            ptr if ptr == load_cursor(PCWSTR(32653u16 as _)) => CursorShapeWindows::ScrollWE,
+            ptr if ptr == load_cursor(PCWSTR(32654u16 as _)) => CursorShapeWindows::ScrollNSEW,
+            ptr if ptr == load_cursor(PCWSTR(32655u16 as _)) => CursorShapeWindows::ScrollN,
+            ptr if ptr == load_cursor(PCWSTR(32656u16 as _)) => CursorShapeWindows::ScrollS,
+            ptr if ptr == load_cursor(PCWSTR(32657u16 as _)) => CursorShapeWindows::ScrollW,
+            ptr if ptr == load_cursor(PCWSTR(32658u16 as _)) => CursorShapeWindows::ScrollE,
+            ptr if ptr == load_cursor(PCWSTR(32659u16 as _)) => CursorShapeWindows::ScrollNW,
+            ptr if ptr == load_cursor(PCWSTR(32660u16 as _)) => CursorShapeWindows::ScrollNE,
+            ptr if ptr == load_cursor(PCWSTR(32661u16 as _)) => CursorShapeWindows::ScrollSW,
+            ptr if ptr == load_cursor(PCWSTR(32662u16 as _)) => CursorShapeWindows::ScrollSE,
+            ptr if ptr == load_cursor(PCWSTR(32663u16 as _)) => CursorShapeWindows::ArrowCD,
+
+            // TODO: REST
+            _ => return Err(()),
         }))
     }
 }
 
-// TODO: #[cfg(target_os = "windows")]
-
-// pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
-//     let mut cursor_info = CURSORINFO {
-//         cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-//         ..Default::default()
-//     };
-//     match unsafe { GetCursorInfo(&mut cursor_info) } {
-//         Ok(_) => match cursor_info.hCursor.0 {
-//             ptr if ptr == cursors.arrow => CursorShape::Arrow,
-//             ptr if ptr == cursors.ibeam => CursorShape::IBeam,
-//             ptr if ptr == cursors.wait => CursorShape::Wait,
-//             ptr if ptr == cursors.cross => CursorShape::Crosshair,
-//             ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
-//             ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
-//             ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
-//             ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
-//             ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
-//             ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
-//             ptr if ptr == cursors.hand => CursorShape::OpenHand,
-//             ptr if ptr == cursors.no => CursorShape::NotAllowed,
-//             ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
-//             ptr if ptr == cursors.help => CursorShape::Help,
-//             ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
-//             // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
-//             // as the user is using touch input instead.
-//             _ => CursorShape::Hidden,
-//         },
-//         Err(_) => CursorShape::Unknown,
-//     }
-// }
-
-// /// Keeps handles to default cursor.
-// /// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
-// pub struct DefaultCursors {
-//     arrow: *mut c_void,
-//     ibeam: *mut c_void,
-//     wait: *mut c_void,
-//     cross: *mut c_void,
-//     up_arrow: *mut c_void,
-//     size_nwse: *mut c_void,
-//     size_nesw: *mut c_void,
-//     size_we: *mut c_void,
-//     size_ns: *mut c_void,
-//     size_all: *mut c_void,
-//     no: *mut c_void,
-//     hand: *mut c_void,
-//     appstarting: *mut c_void,
-//     help: *mut c_void,
-//     pin: *mut c_void,
-//     person: *mut c_void,
-// }
-
-// impl Default for DefaultCursors {
-//     fn default() -> Self {
-
-//         DefaultCursors {
-//             arrow: load_cursor(IDC_ARROW),
-//             ibeam: load_cursor(IDC_IBEAM),
-//             cross: load_cursor(IDC_CROSS),
-//             hand: load_cursor(IDC_HAND),
-//             help: load_cursor(IDC_HELP),
-//             no: load_cursor(IDC_NO),
-//             size_all: load_cursor(IDC_SIZEALL),
-//             size_ns: load_cursor(IDC_SIZENS),
-//             size_we: load_cursor(IDC_SIZEWE),
-//             size_nwse: load_cursor(IDC_SIZENWSE),
-//             size_nesw: load_cursor(IDC_SIZENESW),
-//             up_arrow: load_cursor(IDC_UPARROW),
-//             wait: load_cursor(IDC_WAIT),
-//             appstarting: load_cursor(IDC_APPSTARTING),
-//             pin: load_cursor(IDC_PIN),
-//             person: load_cursor(IDC_PERSON),
-//         }
-//     }
-// }

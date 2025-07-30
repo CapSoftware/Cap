@@ -3,7 +3,7 @@ use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use super::{Bounds, CursorShape, LogicalBounds, LogicalPosition, LogicalSize, Window};
+use super::{Bounds, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
 use windows::core::{PCWSTR, PWSTR};
