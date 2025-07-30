@@ -126,6 +126,26 @@ impl TryFrom<&objc2_app_kit::NSCursor> for super::CursorShape {
 
     #[allow(deprecated)]
     fn try_from(cursor: &objc2_app_kit::NSCursor) -> Result<Self, Self::Error> {
+        use objc2::rc::Id;
+
+        println!(
+            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
+            cursor,
+            *cursor == *objc2_app_kit::NSCursor::resizeLeftRightCursor(),
+            *cursor == *objc2_app_kit::NSCursor::arrowCursor(),
+            cursor
+                .class()
+                .eq(objc2_app_kit::NSCursor::resizeLeftRightCursor().class()),
+            cursor
+                .class()
+                .eq(objc2_app_kit::NSCursor::arrowCursor().class()),
+            cursor.class().name(),
+            objc2_app_kit::NSCursor::resizeLeftRightCursor()
+                .class()
+                .name(),
+            objc2_app_kit::NSCursor::arrowCursor().class().name(),
+        );
+
         Ok(super::CursorShape::MacOS(
             if *cursor == *objc2_app_kit::NSCursor::arrowCursor() {
                 CursorShapeMacOS::Arrow

@@ -1003,6 +1003,7 @@ dependencies = [
 name = "cap-cursor-info"
 version = "0.1.0"
 dependencies = [
+ "objc2 0.6.1",
  "objc2-app-kit 0.3.1",
  "serde",
  "specta",
@@ -1250,6 +1251,7 @@ dependencies = [
  "ffmpeg-next",
  "flume 0.11.0",
  "futures",
+ "hex",
  "image 0.25.5",
  "objc",
  "objc2-app-kit 0.3.1",
@@ -1257,6 +1259,7 @@ dependencies = [
  "screencapturekit",
  "serde",
  "serde_json",
+ "sha2",
  "specta",
  "tempfile",
  "thiserror 1.0.69",
@@ -7247,9 +7250,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.10.8"
+version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "793db75ad2bcafc3ffa7c68b215fee268f537982cd901d132f89c6343f3a3dc8"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if 1.0.0",
  "cpufeatures",

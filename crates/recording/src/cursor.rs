@@ -251,9 +251,25 @@ struct CursorData {
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
     use objc2_app_kit::NSCursor;
+    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
-        let cursor = NSCursor::currentCursor();
+        // let class: *const AnyObject = unsafe { msg_send![cursor, class] };
+        // let description: *const AnyObject = unsafe { msg_send![cursor, description] };
+        // println!("Cursor class: {:?}, desc: {:?}", class, description);
+
+        println!(
+            "GET {:?} {:?} {:?} {:?}",
+            NSCursor::currentSystemCursor(),
+            NSCursor::currentCursor(),
+            NSCursor::currentSystemCursor()
+                .as_deref()
+                .map(|v| CursorShape::try_from(v).ok()),
+            CursorShape::try_from(&*NSCursor::currentCursor()).ok()
+        );
+
+        #[allow(deprecated)]
+        let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
 
         let shape = CursorShape::try_from(&*cursor).ok();
         println!("{:?} {:?}", cursor, shape);
@@ -265,9 +281,13 @@ fn get_cursor_data() -> Option<CursorData> {
             return None;
         };
 
+        let image = image_data.as_bytes_unchecked().to_vec();
+
+        println!("CURSOR: {:?}", hex::encode(Sha256::digest(&image)));
+
         Some(CursorData {
             shape: None, // TODO
-            image: image_data.as_bytes_unchecked().to_vec(),
+            image,
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
         })
     })
