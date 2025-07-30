@@ -66,7 +66,7 @@ export const Toolbar = ({
       videoId: data.id,
       parentCommentId: "",
       type: "emoji",
-      timestamp: getTimestamp(),
+      timestamp: null,
       updatedAt: new Date(),
       sending: true,
     };
