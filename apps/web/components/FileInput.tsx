@@ -211,8 +211,9 @@ export const FileInput: React.FC<FileInputProps> = ({
                       {previewUrl && (
                         <Image
                           src={previewUrl}
+                          width={36}
+                          height={36}
                           alt="File preview"
-                          fill
                           className="object-cover rounded-full"
                         />
                       )}
@@ -227,11 +228,11 @@ export const FileInput: React.FC<FileInputProps> = ({
               <Button
                 variant="outline"
                 size="xs"
-                className="!p-0 size-8 mr-2"
+                className="!p-0 size-8 group mr-2"
                 disabled={isLoading || disabled}
                 onClick={handleRemove}
               >
-                <FontAwesomeIcon className="size-2.5 text-gray-12" icon={faTrash} />
+                <FontAwesomeIcon className="size-2.5 text-gray-12 group-hover:text-gray-1" icon={faTrash} />
               </Button>
             </Tooltip>
           </div>
