@@ -29,7 +29,7 @@ const Tooltip = ({
         <TooltipPrimitive.Content
           side={position}
           className={classNames(
-            "select-none rounded-lg z-[60] text-gray-12 font-medium flex items-center gap-2 TooltipContent bg-gray-2 border border-gray-3 px-3 py-2 text-xs leading-none shadow-sm shadow-gray-3/50 data-[state=delayed-open]:data-[side=bottom]:animate-slideUpAndFade data-[state=delayed-open]:data-[side=left]:animate-slideRightAndFade data-[state=delayed-open]:data-[side=right]:animate-slideLeftAndFade data-[state=delayed-open]:data-[side=top]:animate-slideDownAndFade",
+            "select-none rounded-lg z-[60] text-gray-12 font-medium flex items-center gap-2 TooltipContent bg-gray-1 border border-gray-3 px-3 py-2 text-xs leading-none shadow-sm shadow-gray-3/50 data-[state=delayed-open]:data-[side=bottom]:animate-slideUpAndFade data-[state=delayed-open]:data-[side=left]:animate-slideRightAndFade data-[state=delayed-open]:data-[side=right]:animate-slideLeftAndFade data-[state=delayed-open]:data-[side=top]:animate-slideDownAndFade",
             className
           )}
           sideOffset={5}

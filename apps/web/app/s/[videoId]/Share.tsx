@@ -1,11 +1,10 @@
 "use client";
 
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { getVideoStatus, VideoStatusResult } from "@/actions/videos/get-status";
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import { startTransition, use, useCallback, useMemo, useOptimistic, useRef, useState } from "react";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
@@ -20,6 +19,11 @@ const formatTime = (time: number) => {
 
 type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
   authorName: string | null;
+};
+
+export type CommentType = typeof commentsSchema.$inferSelect & {
+  authorName?: string | null;
+  sending?: boolean;
 };
 
 type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
@@ -120,19 +124,6 @@ const useVideoStatus = (
   });
 };
 
-const useVideoAnalytics = (videoId: string, initialCount: number) => {
-  return useQuery({
-    queryKey: ["videoAnalytics", videoId],
-    queryFn: async () => {
-      const result = await getVideoAnalytics(videoId);
-      return result.count || 0;
-    },
-    initialData: initialCount,
-    staleTime: 30000,
-    refetchOnWindowFocus: false,
-  });
-};
-
 export const Share = ({
   data,
   user,
@@ -146,6 +137,16 @@ export const Share = ({
     : data.createdAt;
 
   const playerRef = useRef<HTMLVideoElement | null>(null);
+  const activityRef = useRef<{ scrollToBottom: () => void }>(null);
+  const initialComments: CommentType[] =
+    comments instanceof Promise ? use(comments) : comments;
+  const [commentsData, setCommentsData] = useState<CommentType[]>(initialComments);
+  const [optimisticComments, setOptimisticComments] = useOptimistic(
+    commentsData,
+    (state, newComment: CommentType) => {
+      return [...state, newComment];
+    }
+  );
 
   const { data: videoStatus } = useVideoStatus(data.id, aiGenerationEnabled, {
     transcriptionStatus: data.transcriptionStatus,
@@ -202,6 +203,22 @@ export const Share = ({
     }
   };
 
+  const handleOptimisticComment = useCallback((comment: CommentType) => {
+    setOptimisticComments(comment);
+    setTimeout(() => {
+      activityRef.current?.scrollToBottom();
+    }, 100);
+  }, [setOptimisticComments]);
+
+  const handleCommentSuccess = useCallback((realComment: CommentType) => {
+    startTransition(() => {
+      setCommentsData((prev) => [...prev, realComment]);
+    });
+    setTimeout(() => {
+      activityRef.current?.scrollToBottom();
+    }, 100);
+  }, []);
+
   return (
     <div className="mt-4">
       <div className="flex flex-col gap-4 lg:flex-row">
@@ -221,7 +238,12 @@ export const Share = ({
             </div>
           </div>
           <div className="mt-4 lg:hidden">
-            <Toolbar data={data} user={user} />
+            <Toolbar
+              onOptimisticComment={handleOptimisticComment}
+              onCommentSuccess={handleCommentSuccess}
+              data={data}
+              user={user}
+            />
           </div>
         </div>
 
@@ -233,18 +255,30 @@ export const Share = ({
               transcriptionStatus,
             }}
             user={user}
-            comments={comments}
+            commentsData={commentsData}
+            setCommentsData={setCommentsData}
+            optimisticComments={optimisticComments}
+            setOptimisticComments={setOptimisticComments}
+            handleCommentSuccess={handleCommentSuccess}
             views={views}
             onSeek={handleSeek}
             videoId={data.id}
             aiData={aiData}
             aiGenerationEnabled={aiGenerationEnabled}
+            ref={activityRef}
           />
         </div>
       </div>
 
       <div className="hidden mt-4 lg:block">
-        <Toolbar data={data} user={user} />
+        <div>
+          <Toolbar
+            onOptimisticComment={handleOptimisticComment}
+            onCommentSuccess={handleCommentSuccess}
+            data={data}
+            user={user}
+          />
+        </div>
       </div>
 
       <div className="hidden mt-4 lg:block">
@@ -320,6 +354,6 @@ export const Share = ({
             </div>
           )}
       </div>
-    </div>
+    </div >
   );
 };

@@ -93,11 +93,6 @@ export const CapCard = ({
   const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
 
-  const displayCount =
-    analytics === 0
-      ? Math.max(cap.totalComments, cap.totalReactions)
-      : analytics;
-
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
 
@@ -350,7 +345,7 @@ export const CapCard = ({
                   <FontAwesomeIcon
                     className="size-3"
                     icon={faCopy}
-                  />f
+                  />
                   <p className="text-sm text-gray-12">Duplicate</p>
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -459,7 +454,7 @@ export const CapCard = ({
           {children}
           <CapCardAnalytics
             capId={cap.id}
-            displayCount={displayCount}
+            displayCount={analytics}
             totalComments={cap.totalComments}
             totalReactions={cap.totalReactions}
           />

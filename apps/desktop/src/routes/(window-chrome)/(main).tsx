@@ -4,7 +4,6 @@ import {
   createMutation,
   createQuery,
   useQueryClient,
-  UseQueryResult,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -193,7 +192,7 @@ function Page() {
     mutationFn: async () => {
       if (!isRecording()) {
         await commands.startRecording({
-          capture_target: options.target(),
+          capture_target: rawOptions.captureTarget,
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
@@ -297,11 +296,12 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${
+                class={cx(
+                  "text-[0.6rem] rounded-lg px-1 py-0.5",
                   license.data?.type === "pro"
                     ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
                     : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-lg px-1.5 py-0.5`}
+                )}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"
@@ -433,7 +433,7 @@ function Page() {
         ) : (
           <Button
             disabled={toggleRecording.isPending}
-            variant={isRecording() ? "destructive" : "primary"}
+            variant="blue"
             size="md"
             onClick={() => toggleRecording.mutate()}
             class="flex flex-grow justify-center items-center"
@@ -443,9 +443,19 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class="size-[0.8rem] mr-1.5" />
+                  <IconCapInstant
+                    class={cx(
+                      "size-[0.8rem] mr-1.5",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 ) : (
-                  <IconCapFilmCut class="size-[0.8rem] mr-2 -mt-[1.5px]" />
+                  <IconCapFilmCut
+                    class={cx(
+                      "size-[0.8rem] mr-2 -mt-[1.5px]",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 )}
                 Start Recording
               </>

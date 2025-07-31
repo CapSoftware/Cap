@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
+use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
@@ -11,7 +11,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicU32, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -128,14 +128,6 @@ impl CapWindowId {
     pub fn get(&self, app: &AppHandle<Wry>) -> Option<WebviewWindow> {
         let label = self.label();
         app.get_webview_window(&label)
-    }
-
-    #[cfg(target_os = "windows")]
-    pub fn should_have_decorations(&self) -> bool {
-        matches!(
-            self,
-            Self::Setup | Self::Settings | Self::Editor { .. } | Self::ModeSelect
-        )
     }
 
     #[cfg(target_os = "macos")]
@@ -443,7 +435,8 @@ impl ShowCapWindow {
             Self::InProgressRecording {
                 position: _position,
             } => {
-                let width = 244.0;
+                let mut width = 180.0 + 32.0;
+
                 let height = 40.0;
 
                 let window = self
@@ -662,7 +655,7 @@ fn position_traffic_lights_impl(
     window: &tauri::Window,
     controls_inset: Option<LogicalPosition<f64>>,
 ) {
-    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {

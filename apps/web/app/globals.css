@@ -67,9 +67,18 @@ html {
   border-radius: 10px;
 }
 
+.dark ::selection {
+  background: #ffffff;
+  color: #000000;
+}
+
 ::selection {
-  background: black;
+  background: #000000;
   color: #ffffff;
+}
+
+input:-webkit-autofill {
+  transition: all 5000s ease-in-out 0s;
 }
 
 .wrapper {
