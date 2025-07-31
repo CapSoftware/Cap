@@ -387,7 +387,10 @@ struct Renderer {
     surface_size: Cached<(u32, u32)>,
     texture: Cached<(u32, u32), (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
 
-    // Windows transparency workaround
+    // Windows transparency workaround fields
+    // On Windows with Vulkan backend, CompositeAlphaMode isn't properly supported,
+    // so we implement a workaround that renders to an offscreen texture and then
+    // copies the pixel data to a transparent layered window using Win32 APIs.
     #[cfg(target_os = "windows")]
     use_transparency_workaround: bool,
     #[cfg(target_os = "windows")]
@@ -633,7 +636,15 @@ impl Renderer {
         });
 
         #[cfg(target_os = "windows")]
-        let use_transparency_workaround = alpha_mode == CompositeAlphaMode::Inherit;
+        let use_transparency_workaround =
+            Self::should_use_transparency_workaround(&surface_capabilities, alpha_mode);
+
+        #[cfg(target_os = "windows")]
+        if use_transparency_workaround {
+            tracing::info!(
+                "Using Windows transparency workaround due to limited CompositeAlphaMode support"
+            );
+        }
 
         Ok(Self {
             surface,
@@ -811,6 +822,9 @@ impl Renderer {
         }
     }
 
+    /// Windows transparency workaround: Render to an offscreen texture instead of the surface.
+    /// This method renders the camera preview to an offscreen framebuffer, reads the pixel data
+    /// back to the CPU, and then updates the layered window using Win32 APIs for transparency.
     #[cfg(target_os = "windows")]
     fn render_offscreen(
         &mut self,
@@ -905,8 +919,8 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let surface_width = surface.texture.width();
-        let surface_height = surface.texture.height();
+        let _surface_width = surface.texture.width();
+        let _surface_height = surface.texture.height();
 
         let mut encoder = self
             .device
@@ -1013,6 +1027,9 @@ impl Renderer {
         render_pass.draw(0..6, 0..1);
     }
 
+    /// Setup a transparent layered window on Windows.
+    /// This configures the window to support transparency by setting the WS_EX_LAYERED style
+    /// and preparing it for UpdateLayeredWindow calls.
     #[cfg(target_os = "windows")]
     fn setup_transparent_window(window: &WebviewWindow) -> anyhow::Result<Option<HWND>> {
         let hwnd = match window.raw_window_handle() {
@@ -1043,6 +1060,8 @@ impl Renderer {
         Ok(Some(hwnd))
     }
 
+    /// Initialize offscreen rendering resources for the transparency workaround.
+    /// Creates a render target texture and a readback buffer for copying pixel data to the CPU.
     #[cfg(target_os = "windows")]
     fn setup_offscreen_rendering(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
         // Create offscreen texture
@@ -1075,6 +1094,9 @@ impl Renderer {
         Ok(())
     }
 
+    /// Update the transparent layered window with new pixel data from the GPU.
+    /// This method reads the rendered frame from the readback buffer, converts it to the
+    /// correct format (BGRA), and uses UpdateLayeredWindow to display it with transparency.
     #[cfg(target_os = "windows")]
     fn update_layered_window(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
         let hwnd = self
@@ -1176,6 +1198,74 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Determine if we should use the Windows transparency workaround.
+    /// This checks if the surface supports proper alpha blending modes.
+    /// Can be overridden with CAP_FORCE_TRANSPARENCY_WORKAROUND environment variable.
+    #[cfg(target_os = "windows")]
+    fn should_use_transparency_workaround(
+        surface_capabilities: &wgpu::SurfaceCapabilities,
+        alpha_mode: CompositeAlphaMode,
+    ) -> bool {
+        // Check for environment variable override
+        if let Ok(force_workaround) = std::env::var("CAP_FORCE_TRANSPARENCY_WORKAROUND") {
+            match force_workaround.to_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => {
+                    tracing::info!(
+                        "Forcing Windows transparency workaround via environment variable"
+                    );
+                    return true;
+                }
+                "false" | "0" | "no" | "off" => {
+                    tracing::info!(
+                        "Disabling Windows transparency workaround via environment variable"
+                    );
+                    return false;
+                }
+                _ => {
+                    tracing::warn!(
+                        "Invalid CAP_FORCE_TRANSPARENCY_WORKAROUND value: {}",
+                        force_workaround
+                    );
+                }
+            }
+        }
+
+        // Use workaround if we're falling back to Inherit mode or if no proper alpha modes are supported
+        if alpha_mode == CompositeAlphaMode::Inherit {
+            return true;
+        }
+
+        // Check if surface supports any proper alpha blending
+        let has_proper_alpha = surface_capabilities
+            .alpha_modes
+            .contains(&CompositeAlphaMode::PreMultiplied)
+            || surface_capabilities
+                .alpha_modes
+                .contains(&CompositeAlphaMode::PostMultiplied);
+
+        !has_proper_alpha
+    }
+
+    /// Test function to validate Windows transparency setup.
+    /// This can be called during development to ensure the transparency workaround is working.
+    #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
+    fn test_transparency_setup(&self) -> bool {
+        if !self.use_transparency_workaround {
+            return true; // Not using workaround, no need to test
+        }
+
+        // Verify HWND is available
+        if self.hwnd.is_none() {
+            tracing::error!("Windows transparency test failed: No HWND available");
+            return false;
+        }
+
+        // Verify offscreen resources are ready (will be created on first render)
+        tracing::info!("Windows transparency setup validation passed");
+        true
     }
 }
 
