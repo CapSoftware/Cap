@@ -52,7 +52,6 @@ export function Header() {
     meta,
     exportState,
     setExportState,
-    refetchMeta,
     customDomain,
   } = useEditorContext();
 
@@ -61,19 +60,6 @@ export function Header() {
     unlistenTitlebar = await initializeTitlebar();
   });
   onCleanup(() => unlistenTitlebar?.());
-
-  let prettyNameRef: HTMLInputElement | undefined;
-  let prettyNameMeasureRef: HTMLSpanElement | undefined;
-  const [truncated, setTruncated] = createSignal(false);
-  const [prettyName, setPrettyName] = createSignal(meta().prettyName);
-
-  createEffect(() => {
-    if (!prettyNameRef || !prettyNameMeasureRef) return;
-    prettyNameMeasureRef.textContent = prettyName();
-    const inputWidth = prettyNameRef.offsetWidth;
-    const textWidth = prettyNameMeasureRef.offsetWidth;
-    setTruncated(inputWidth < textWidth);
-  });
 
   return (
     <div
@@ -106,64 +92,9 @@ export function Header() {
         />
 
         <div class="flex flex-row items-center">
-          <Tooltip disabled={!truncated()} content={meta().prettyName}>
-            <input
-              ref={prettyNameRef}
-              class={cx(
-                "text-sm text-gray-12 max-w-[300px] bg-transparent focus:border-b focus:border-gray-7 focus:outline-none",
-                truncated() && "truncate",
-                (prettyName().length < 5 || prettyName().length > 100) &&
-                  "focus:border-red-500"
-              )}
-              value={prettyName()}
-              onInput={(e) => setPrettyName(e.currentTarget.value)}
-              onBlur={async () => {
-                const trimmed = prettyName().trim();
-                if (trimmed.length < 5 || trimmed.length > 100) {
-                  setPrettyName(meta().prettyName);
-                  return;
-                }
-                if (trimmed && trimmed !== meta().prettyName) {
-                  await commands.setPrettyName(trimmed);
-                  refetchMeta();
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === "Escape") {
-                  prettyNameRef?.blur();
-                }
-              }}
-            />
-            {/* Hidden span for measuring text width */}
-            <span
-              ref={prettyNameMeasureRef}
-              class="invisible absolute pointer-events-none whitespace-pre h-0 overflow-hidden text-sm font-inherit font-normal tracking-inherit p-0 m-0"
-            />
-          </Tooltip>
+          <NameEditor name={meta().prettyName} />
           <span class="text-sm text-gray-11">.cap</span>
         </div>
-        {/* <ErrorBoundary fallback={<></>}>
-            <Suspense>
-              <span
-                onClick={async () => {
-                  if (license.data?.type !== "pro") {
-                    await commands.showWindow("Upgrade");
-                  }
-                }}
-                class={`text-[0.8rem] ${
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-[0.55rem] px-2 py-1`}
-              >
-                {license.data?.type === "commercial"
-                  ? "Commercial License"
-                  : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal License"}
-              </span>
-            </Suspense>
-          </ErrorBoundary> */}
         <div data-tauri-drag-region class="flex-1 h-full" />
         <EditorButton
           tooltipText="Captions"
@@ -261,3 +192,59 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
     </svg>
   );
 };
+
+function NameEditor(props: { name: string }) {
+  const { refetchMeta } = useEditorContext();
+
+  let prettyNameRef: HTMLInputElement | undefined;
+  let prettyNameMeasureRef: HTMLSpanElement | undefined;
+  const [truncated, setTruncated] = createSignal(false);
+  const [prettyName, setPrettyName] = createSignal(props.name);
+
+  createEffect(() => {
+    if (!prettyNameRef || !prettyNameMeasureRef) return;
+    prettyNameMeasureRef.textContent = prettyName();
+    const inputWidth = prettyNameRef.offsetWidth;
+    const textWidth = prettyNameMeasureRef.offsetWidth;
+    setTruncated(inputWidth < textWidth);
+  });
+
+  return (
+    <Tooltip disabled={!truncated()} content={props.name}>
+      <div class="flex flex-row items-center relative text-sm font-inherit font-normal tracking-inherit text-gray-12">
+        <input
+          ref={prettyNameRef}
+          class={cx(
+            "absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-none peer whitespace-pre",
+            truncated() && "truncate",
+            (prettyName().length < 5 || prettyName().length > 100) &&
+              "focus:border-red-500"
+          )}
+          value={prettyName()}
+          onInput={(e) => setPrettyName(e.currentTarget.value)}
+          onBlur={async () => {
+            const trimmed = prettyName().trim();
+            if (trimmed.length < 5 || trimmed.length > 100) {
+              setPrettyName(props.name);
+              return;
+            }
+            if (trimmed && trimmed !== props.name) {
+              await commands.setPrettyName(trimmed);
+              refetchMeta();
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") {
+              prettyNameRef?.blur();
+            }
+          }}
+        />
+        {/* Hidden span for measuring text width */}
+        <span
+          ref={prettyNameMeasureRef}
+          class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
+        />
+      </div>
+    </Tooltip>
+  );
+}
