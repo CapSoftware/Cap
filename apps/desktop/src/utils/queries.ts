@@ -97,7 +97,6 @@ export function createOptionsQuery() {
   );
 
   createEventListener(window, "storage", (e) => {
-    console.log(e);
     if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
   });
 
@@ -142,10 +141,6 @@ export function createCameraMutation() {
   const setCameraInput = createMutation(() => ({
     mutationFn: async (label: string | null) => {
       setOptions("cameraLabel", label);
-      if (label) {
-        await commands.showWindow("Camera");
-        getCurrentWindow().setFocus();
-      }
       await commands.setCameraInput(label);
     },
   }));

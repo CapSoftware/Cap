@@ -5,6 +5,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import { Testimonials } from "../ui/Testimonials";
 import { CommercialCard, ProCard } from "./HomePage/Pricing";
+import Faq from "./HomePage/Faq";
 
 // Animation variants
 const fadeIn = {
@@ -61,7 +62,7 @@ export const PricingPage = () => {
 
   return (
     <motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-      <div className="py-12 mt-16 space-y-24 wrapper">
+      <div className="py-32 space-y-24 md:py-40 wrapper">
         <div>
           <motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
             <motion.h1
@@ -109,10 +110,20 @@ export const PricingPage = () => {
         </div>
 
         <motion.div
+          variants={fadeIn}
+          custom={4}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, margin: "-100px" }}
+        >
+          <Faq />
+        </motion.div>
+
+        <motion.div
           className="mb-32 wrapper"
           id="testimonials"
           variants={fadeIn}
-          custom={4}
+          custom={5}
         >
           <Testimonials
             amount={24}
@@ -123,7 +134,7 @@ export const PricingPage = () => {
 
         <motion.div
           variants={fadeIn}
-          custom={5}
+          custom={6}
           initial="hidden"
           whileInView="visible"
           viewport={{ once: true, margin: "-100px" }}

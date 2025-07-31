@@ -89,4 +89,4 @@ const CapIcon = forwardRef<CapIconHandle, CapIconProps>(
 
 CapIcon.displayName = 'CapIcon';
 
-export { CapIcon };
+export default CapIcon;

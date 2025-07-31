@@ -24,7 +24,10 @@ async function getPagePaths(
       (entry.name === "page.tsx" || entry.name === "page.mdx")
     ) {
       const relativePath = path.relative(process.cwd(), dir);
-      const routePath = "/" + relativePath.split(path.sep).slice(1).join("/");
+      // Filter out route groups (directories wrapped in parentheses) and construct clean path
+      const pathSegments = relativePath.split(path.sep).slice(1).filter(segment => !(segment.startsWith('(') && segment.endsWith(')')));
+      const routePath = pathSegments.length > 0 ? "/" + pathSegments.join("/") : "/";
+      
       if (!routePath.includes("/dashboard") && !routePath.includes("[")) {
         const stats = await fs.stat(fullPath);
         paths.push({

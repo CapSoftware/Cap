@@ -100,4 +100,4 @@ const LogoutIcon = forwardRef<LogoutIconHandle, LogoutIconProps>(
 
 LogoutIcon.displayName = 'LogoutIcon';
 
-export { LogoutIcon };
+export default LogoutIcon;

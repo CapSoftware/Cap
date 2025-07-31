@@ -1,11 +1,8 @@
-export const revalidate = 0;
-export const fetchCache = "force-no-store";
-
 import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { Button, Input } from "@cap/ui";
+import { Button, Input, Label } from "@cap/ui";
 import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -33,12 +30,7 @@ type DomainConfig = {
   requiredAValue?: string;
 };
 
-interface CustomDomainProps {
-  isOwner: boolean;
-  showOwnerToast: () => void;
-}
-
-export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
+export function CustomDomain() {
   const router = useRouter();
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [domain, setDomain] = useState(
@@ -236,73 +228,82 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
 
 
   return (
-    <div className="flex flex-wrap mt-4 space-y-6">
-      <div className="flex-1">
-        <div className="flex flex-col justify-between items-start">
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <Label htmlFor="customDomain">Custom Domain</Label>
+        <p className="text-sm text-gray-10">
+          Set up a custom domain for your organization's shared caps and make
+          it unique.
+        </p>
+      </div>
+      <div className="flex flex-col gap-3 items-start">
+        <div className="flex gap-3 items-center w-full h-fit">
           <Input
             type="text"
             id="customDomain"
-            placeholder={isOwner ? "your-domain.com" : "Only the owner of the organization can change this"}
+            placeholder="your-domain.com"
             value={domain}
             onChange={(e) => setDomain(e.target.value)}
-            disabled={!isOwner}
             className="flex-1 min-h-[44px]"
           />
+          <Button
+            type="submit"
+            size="sm"
+            className="min-w-fit"
+            variant="dark"
+            onClick={handleSubmit}
+            spinner={loading}
+            disabled={loading || domain === activeOrganization?.organization.customDomain || domain === ""}
+          >
+            {loading ? "Saving..." : "Save"}
+          </Button>
+        </div>
+
+        {activeOrganization?.organization.customDomain &&
           <div className="flex gap-2 justify-between items-center mt-4">
-            {activeOrganization?.organization.customDomain &&
-              (isVerified ? (
-                <>
-                  <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
-                    <CheckCircle className="size-3" />
-                    <span className="text-xs font-medium text-white">
-                      Domain verified
-                    </span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
-                    <XCircle className="size-3" />
-                    <span className="text-xs font-medium text-white">
-                      Domain not verified
-                    </span>
-                  </div>
-                </>
-              ))}
+            {isVerified ? (
+              <>
+                <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
+                  <CheckCircle className="size-3" />
+                  <span className="text-xs font-medium text-white">
+                    Domain verified
+                  </span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
+                  <XCircle className="size-3" />
+                  <span className="text-xs font-medium text-white">
+                    Domain not verified
+                  </span>
+                </div>
+              </>
+            )}
           </div>
-          <div className="flex gap-3 justify-between items-center mt-8 w-full">
-            <Button
-              type="submit"
-              size="sm"
-              variant="dark"
-              className="px-[1.5rem]"
-              onClick={handleSubmit}
-              spinner={loading}
-              disabled={loading}
-            >
-              {loading ? "Saving..." : "Save"}
-            </Button>
+        }
+
+        {activeOrganization?.organization.customDomain && (
+          <div className="flex gap-3 justify-between items-center w-full">
             <div className="flex gap-3 items-center">
-              {activeOrganization?.organization.customDomain && (
-                <Button
-                  type="button"
-                  variant="gray"
-                  size="sm"
-                  onClick={() => checkVerification(true)}
-                  disabled={verifying}
-                  className="w-[105px]"
-                >
-                  {verifying ? (
-                    <FontAwesomeIcon
-                      className="animate-spin size-4 mr-0.5"
-                      icon={faRefresh}
-                    />
-                  ) : (
-                    <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
-                  )}
-                  Refresh
-                </Button>
-              )}
+              <Button
+                type="button"
+                variant="gray"
+                size="sm"
+                onClick={() => checkVerification(true)}
+                disabled={verifying}
+                className="w-[105px]"
+              >
+                {verifying ? (
+                  <FontAwesomeIcon
+                    className="animate-spin size-4 mr-0.5"
+                    icon={faRefresh}
+                  />
+                ) : (
+                  <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
+                )}
+                Refresh
+              </Button>
               {activeOrganization?.organization.customDomain && (
                 <Button
                   type="button"
@@ -317,72 +318,169 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
               )}
             </div>
           </div>
-        </div>
-        {activeOrganization?.organization.customDomain && (
-          <div className="mt-4 space-y-4">
-            {!isVerified && domainConfig?.verification?.[0] && (
+        )}
+
+
+      </div>
+      {activeOrganization?.organization.customDomain && (
+        <div className="mt-4 space-y-4">
+          {!isVerified && domainConfig?.verification?.[0] && (
+            <div className="overflow-hidden rounded-lg border border-gray-4">
+              <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+                <p className="font-medium text-md text-gray-12">
+                  DNS Configuration Required
+                </p>
+                <p className="mt-1 text-sm text-gray-10">
+                  To verify your domain ownership, add the following TXT
+                  record to your DNS configuration:
+                </p>
+              </div>
+              <div className="px-4 py-3">
+                <dl className="grid gap-4">
+                  <div className="grid grid-cols-[100px,1fr] items-center">
+                    <dt className="text-sm font-medium text-gray-12">Type</dt>
+                    <dd className="text-sm text-gray-10">
+                      {domainConfig?.verification?.[0]?.type}
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-[100px,1fr] items-center">
+                    <dt className="text-sm font-medium text-gray-12">Name</dt>
+                    <dd className="flex gap-2 items-center text-sm text-gray-10">
+                      <div className="flex items-center justify-between gap-1.5
+                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
+                        <code className="text-xs truncate">
+                          {domainConfig?.verification?.[0]?.domain}
+                        </code>
+                        {domainConfig?.verification?.[0]?.domain && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const domain =
+                                domainConfig?.verification?.[0]?.domain;
+                              if (domain) handleCopy(domain, "name");
+                            }}
+                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+                            title="Copy to clipboard"
+                          >
+                            {copiedField === "name" ? (
+                              <Check className="size-3.5 text-green-500" />
+                            ) : (
+                              <Copy className="size-3.5 text-gray-10" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </dd>
+                  </div>
+                  <div className="grid grid-cols-[100px,1fr] items-center">
+                    <dt className="text-sm font-medium text-gray-12">Value</dt>
+                    <dd className="flex gap-2 items-center text-sm text-gray-10">
+                      <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-4 border-gray-6">
+                        <code className="font-mono text-xs break-all">
+                          {domainConfig?.verification?.[0]?.value}
+                        </code>
+                        {domainConfig?.verification?.[0]?.value && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const value =
+                                domainConfig?.verification?.[0]?.value;
+                              if (value) handleCopy(value, "value");
+                            }}
+                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+                            title="Copy to clipboard"
+                          >
+                            {copiedField === "value" ? (
+                              <Check className="size-3.5 text-green-500" />
+                            ) : (
+                              <Copy className="size-3.5 text-gray-10" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          )}
+
+
+
+          {!isVerified &&
+            !domainConfig?.verification?.[0] &&
+            domainConfig?.requiredAValue && (
               <div className="overflow-hidden rounded-lg border border-gray-4">
                 <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                   <p className="font-medium text-md text-gray-12">
                     DNS Configuration Required
                   </p>
                   <p className="mt-1 text-sm text-gray-10">
-                    To verify your domain ownership, add the following TXT
+                    To verify your domain ownership, add the following A
                     record to your DNS configuration:
                   </p>
                 </div>
                 <div className="px-4 py-3">
                   <dl className="grid gap-4">
+                    {domainConfig.currentAValues &&
+                      domainConfig.currentAValues.length > 0 && (
+                        <div className="grid grid-cols-[100px,1fr] items-center">
+                          <dt className="text-sm font-medium text-gray-12">
+                            Current
+                          </dt>
+                          <dd className="space-y-1.5 text-sm text-gray-10">
+                            {domainConfig.currentAValues.map(
+                              (value, index) => (
+                                <div
+                                  key={index}
+                                  className={clsx(
+                                    value === domainConfig.requiredAValue
+                                      ? "flex items-center gap-2 text-green-300"
+                                      : "flex items-center gap-2 text-red-200"
+                                  )}
+                                >
+                                  <code
+                                    className={clsx(
+                                      value === domainConfig.requiredAValue
+                                        ? "px-2 py-1 rounded-lg bg-green-900"
+                                        : "px-2 py-1 rounded-lg bg-red-900",
+                                      "text-xs"
+                                    )
+                                    }
+                                  >
+                                    {value}
+                                  </code>
+                                  {value === domainConfig.requiredAValue && (
+                                    <span className="text-xs text-green-600">
+                                      (Correct)
+                                    </span>
+                                  )}
+                                </div>
+                              )
+                            )}
+                          </dd>
+                        </div>
+                      )}
                     <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-12">Type</dt>
-                      <dd className="text-sm text-gray-10">
-                        {domainConfig?.verification?.[0]?.type}
-                      </dd>
-                    </div>
-                    <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-12">Name</dt>
+                      <dt className="text-sm font-medium text-gray-12">
+                        Required
+                      </dt>
                       <dd className="flex gap-2 items-center text-sm text-gray-10">
                         <div className="flex items-center justify-between gap-1.5
                        bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
-                          <code className="text-xs truncate">
-                            {domainConfig?.verification?.[0]?.domain}
+                          <code className="text-xs text-gray-10">
+                            {domainConfig.requiredAValue || "Loading..."}
                           </code>
-                          {domainConfig?.verification?.[0]?.domain && (
+                          {domainConfig.requiredAValue && (
                             <button
                               type="button"
-                              onClick={() => {
-                                const domain =
-                                  domainConfig?.verification?.[0]?.domain;
-                                if (domain) handleCopy(domain, "name");
-                              }}
-                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                              title="Copy to clipboard"
-                            >
-                              {copiedField === "name" ? (
-                                <Check className="size-3.5 text-green-500" />
-                              ) : (
-                                <Copy className="size-3.5 text-gray-10" />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </dd>
-                    </div>
-                    <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-12">Value</dt>
-                      <dd className="flex gap-2 items-center text-sm text-gray-10">
-                        <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-4 border-gray-6">
-                          <code className="font-mono text-xs break-all">
-                            {domainConfig?.verification?.[0]?.value}
-                          </code>
-                          {domainConfig?.verification?.[0]?.value && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const value =
-                                  domainConfig?.verification?.[0]?.value;
-                                if (value) handleCopy(value, "value");
-                              }}
+                              onClick={() =>
+                                domainConfig.requiredAValue &&
+                                handleCopy(
+                                  domainConfig.requiredAValue,
+                                  "value"
+                                )
+                              }
                               className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                               title="Copy to clipboard"
                             >
@@ -400,103 +498,8 @@ export function CustomDomain({ isOwner, showOwnerToast }: CustomDomainProps) {
                 </div>
               </div>
             )}
-
-
-
-            {!isVerified &&
-              !domainConfig?.verification?.[0] &&
-              domainConfig?.requiredAValue && (
-                <div className="overflow-hidden rounded-lg border border-gray-4">
-                  <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
-                    <p className="font-medium text-md text-gray-12">
-                      DNS Configuration Required
-                    </p>
-                    <p className="mt-1 text-sm text-gray-10">
-                      To verify your domain ownership, add the following A
-                      record to your DNS configuration:
-                    </p>
-                  </div>
-                  <div className="px-4 py-3">
-                    <dl className="grid gap-4">
-                      {domainConfig.currentAValues &&
-                        domainConfig.currentAValues.length > 0 && (
-                          <div className="grid grid-cols-[100px,1fr] items-center">
-                            <dt className="text-sm font-medium text-gray-12">
-                              Current
-                            </dt>
-                            <dd className="space-y-1.5 text-sm text-gray-10">
-                              {domainConfig.currentAValues.map(
-                                (value, index) => (
-                                  <div
-                                    key={index}
-                                    className={clsx(
-                                      value === domainConfig.requiredAValue
-                                        ? "flex items-center gap-2 text-green-300"
-                                        : "flex items-center gap-2 text-red-200"
-                                    )}
-                                  >
-                                    <code
-                                      className={clsx(
-                                        value === domainConfig.requiredAValue
-                                          ? "px-2 py-1 rounded-lg bg-green-900"
-                                          : "px-2 py-1 rounded-lg bg-red-900",
-                                        "text-xs"
-                                      )
-                                      }
-                                    >
-                                      {value}
-                                    </code>
-                                    {value === domainConfig.requiredAValue && (
-                                      <span className="text-xs text-green-600">
-                                        (Correct)
-                                      </span>
-                                    )}
-                                  </div>
-                                )
-                              )}
-                            </dd>
-                          </div>
-                        )}
-                      <div className="grid grid-cols-[100px,1fr] items-center">
-                        <dt className="text-sm font-medium text-gray-12">
-                          Required
-                        </dt>
-                        <dd className="flex gap-2 items-center text-sm text-gray-10">
-                          <div className="flex items-center justify-between gap-1.5
-                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
-                            <code className="text-xs text-gray-10">
-                              {domainConfig.requiredAValue || "Loading..."}
-                            </code>
-                            {domainConfig.requiredAValue && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  domainConfig.requiredAValue &&
-                                  handleCopy(
-                                    domainConfig.requiredAValue,
-                                    "value"
-                                  )
-                                }
-                                className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                                title="Copy to clipboard"
-                              >
-                                {copiedField === "value" ? (
-                                  <Check className="size-3.5 text-green-500" />
-                                ) : (
-                                  <Copy className="size-3.5 text-gray-10" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </dd>
-                      </div>
-                    </dl>
-                  </div>
-                </div>
-              )}
-          </div>
-        )}
-      </div>
+        </div>
+      )}
       {showUpgradeModal && (
         <UpgradeModal
           open={showUpgradeModal}

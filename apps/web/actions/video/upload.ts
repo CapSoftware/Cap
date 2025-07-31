@@ -1,7 +1,7 @@
 "use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { createBucketProvider, getS3Bucket, getS3Config } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
@@ -11,6 +11,7 @@ import {
   CloudFrontClient,
   CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
+import { revalidatePath } from "next/cache";
 
 async function getVideoUploadPresignedUrl({
   fileKey,
@@ -151,6 +152,7 @@ export async function createVideoAndGetUploadUrl({
   audioCodec,
   isScreenshot = false,
   isUpload = false,
+  folderId,
 }: {
   videoId?: string;
   duration?: number;
@@ -159,6 +161,7 @@ export async function createVideoAndGetUploadUrl({
   audioCodec?: string;
   isScreenshot?: boolean;
   isUpload?: boolean;
+  folderId?: string;
 }) {
   const user = await getCurrentUser();
 
@@ -222,6 +225,7 @@ export async function createVideoAndGetUploadUrl({
       source: { type: "desktopMP4" as const },
       isScreenshot,
       bucket: customBucket?.id,
+      ...(folderId ? { folderId } : {}),
     };
 
     await db().insert(videos).values(videoData);
@@ -236,6 +240,8 @@ export async function createVideoAndGetUploadUrl({
       videoCodec,
       audioCodec,
     });
+
+    revalidatePath("/dashboard/folder");
 
     return {
       id: idToUse,

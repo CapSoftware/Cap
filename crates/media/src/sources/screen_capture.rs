@@ -242,9 +242,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             start_time,
         };
 
-        let options = this
-            .create_options(scap_target, crop_area, captures_audio)
-            .await?;
+        let options = this.create_options(scap_target, crop_area, captures_audio)?;
 
         this.options = Arc::new(options);
 
@@ -254,7 +252,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             (x, y)
         };
         #[cfg(windows)]
-        let video_size = (bounds.width as u32, bounds.height as u32);
+        // not sure how reliable this is for the general case so just use it for screen capture for now
+        let video_size = if matches!(target, ScreenCaptureTarget::Screen { .. }) {
+            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+            (x, y)
+        } else {
+            (bounds.width as u32, bounds.height as u32)
+        };
 
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
@@ -396,7 +400,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         })
     }
 
-    async fn create_options(
+    fn create_options(
         &self,
         target: scap::Target,
         crop_area: Option<Area>,
@@ -463,17 +467,25 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         let start_time = self.start_time;
 
+        let mut video_i = 0;
+        let mut audio_i = 0;
+
         inner(
             self,
             ready_signal,
             control_signal,
             |capturer| match capturer.get_next_frame() {
                 Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
+                    video_i += 1;
+
                     if frame.height == 0 || frame.width == 0 {
                         return ControlFlow::Continue(());
                     }
 
-                    let elapsed = frame.display_time.duration_since(start_time).unwrap();
+                    let Ok(elapsed) = frame.display_time.duration_since(start_time) else {
+                        warn!("Skipping video frame {video_i} as elapsed time is invalid");
+                        return ControlFlow::Continue(());
+                    };
 
                     let mut buffer =
                         FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
@@ -527,12 +539,16 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 }
                 Ok(Frame::Audio(frame)) => {
                     if let Some(audio_tx) = &audio_tx {
-                        let elapsed = frame.time().duration_since(start_time).unwrap();
+                        let Ok(elapsed) = frame.time().duration_since(start_time) else {
+                            warn!("Skipping audio frame {audio_i} as elapsed time is invalid");
+                            return ControlFlow::Continue(());
+                        };
                         let mut frame = scap_audio_to_ffmpeg(frame);
                         frame.set_pts(Some(
                             (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                         ));
                         let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
+                        audio_i += 1;
                     }
                     ControlFlow::Continue(())
                 }
@@ -572,6 +588,8 @@ fn inner<T: ScreenCaptureFormat>(
 
     let mut capturing = false;
     let _ = ready_signal.send(Ok(()));
+
+    cap_fail::fail!("macos screen_capture start panic");
 
     loop {
         match control_signal.last() {
@@ -637,8 +655,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) {
-        use screencapturekit::stream::output_type::SCStreamOutputType;
-
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 

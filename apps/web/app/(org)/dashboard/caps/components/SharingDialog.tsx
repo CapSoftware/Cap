@@ -318,7 +318,7 @@ const SpaceCard = ({
     >
       <div
         className={clsx(
-          "flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-1",
+          "flex items-center relative overflow-visible flex-col justify-center gap-2 border transition-colors bg-gray-2",
           "duration-200 w-full p-2.5 rounded-xl cursor-pointer",
           isSelected
             ? "bg-gray-3 border-green-500"

@@ -31,13 +31,13 @@ import { motion } from "framer-motion";
 import { Check, ChevronDown, Plus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cloneElement, useRef, useState } from "react";
 import { useDashboardContext } from "../../Contexts";
-import { CapIcon } from "../AnimatedIcons/Cap";
-import { CogIcon, CogIconHandle } from "../AnimatedIcons/Cog";
+import { CogIcon, CapIcon } from "../AnimatedIcons";
 import { updateActiveOrganization } from "./server";
 import SpacesList from "./SpacesList";
+import { CogIconHandle } from "../AnimatedIcons/Cog";
 
 interface Props {
   toggleMobileNav?: () => void;
@@ -51,7 +51,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [open, setOpen] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const { user, sidebarCollapsed } = useDashboardContext();
-
 
   const manageNavigation = [
     {
@@ -77,7 +76,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
         },
       ]
       : []),
-  ]
+  ];
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const {
@@ -90,6 +89,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
   const [organizationName, setOrganizationName] = useState("");
   const isOwner = activeOrg?.organization.ownerId === user.id;
   const [openAIDialog, setOpenAIDialog] = useState(false);
+  const router = useRouter();
 
   const isPathActive = (path: string) => pathname.includes(path);
 
@@ -198,6 +198,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
                               organization.organization.id
                             );
                             setOpen(false);
+                            router.push("/dashboard/caps");
                           }}
                         >
                           <div className="flex gap-2 items-center w-full">
@@ -265,59 +266,61 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
             sidebarCollapsed ? "flex flex-col justify-center items-center" : ""
           )}
         >
-          {manageNavigation.filter((item) => !item.ownerOnly || isOwner).map((item) => (
-            <div
-              key={item.name}
-              className="flex relative justify-center items-center mb-1.5 w-full"
-            >
-              {isPathActive(item.href) && (
-                <motion.div
-                  animate={{
-                    width: sidebarCollapsed ? 36 : "100%",
-                  }}
-                  transition={{
-                    layout: {
-                      type: "tween",
-                      duration: 0.15,
-                    },
-                    width: {
-                      type: "tween",
-                      duration: 0.05,
-                    },
-                  }}
-                  layoutId="navlinks"
-                  id="navlinks"
-                  className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
-                />
-              )}
+          {manageNavigation
+            .filter((item) => !item.ownerOnly || isOwner)
+            .map((item) => (
+              <div
+                key={item.name}
+                className="flex relative justify-center items-center mb-1.5 w-full"
+              >
+                {isPathActive(item.href) && (
+                  <motion.div
+                    animate={{
+                      width: sidebarCollapsed ? 36 : "100%",
+                    }}
+                    transition={{
+                      layout: {
+                        type: "tween",
+                        duration: 0.15,
+                      },
+                      width: {
+                        type: "tween",
+                        duration: 0.05,
+                      },
+                    }}
+                    layoutId="navlinks"
+                    id="navlinks"
+                    className="absolute h-[36px] w-full rounded-xl pointer-events-none bg-gray-3"
+                  />
+                )}
 
-              {hoveredItem === item.name && !isPathActive(item.href) && (
-                <motion.div
-                  layoutId="hoverIndicator"
-                  className={clsx(
-                    "absolute bg-transparent rounded-xl",
-                    sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0"
-                  )}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{
-                    type: "spring",
-                    bounce: 0.2,
-                    duration: 0.2,
-                  }}
+                {hoveredItem === item.name && !isPathActive(item.href) && (
+                  <motion.div
+                    layoutId="hoverIndicator"
+                    className={clsx(
+                      "absolute bg-transparent rounded-xl",
+                      sidebarCollapsed ? "inset-0 mx-auto w-9 h-9" : "inset-0"
+                    )}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{
+                      type: "spring",
+                      bounce: 0.2,
+                      duration: 0.2,
+                    }}
+                  />
+                )}
+                <NavItem
+                  name={item.name}
+                  href={item.href}
+                  icon={item.icon}
+                  sidebarCollapsed={sidebarCollapsed}
+                  toggleMobileNav={toggleMobileNav}
+                  isPathActive={isPathActive}
                 />
-              )}
-              <NavItem
-                name={item.name}
-                href={item.href}
-                icon={item.icon}
-                sidebarCollapsed={sidebarCollapsed}
-                toggleMobileNav={toggleMobileNav}
-                isPathActive={isPathActive}
-              />
-            </div>
-          ))}
+              </div>
+            ))}
 
           <SpacesList toggleMobileNav={() => toggleMobileNav?.()} />
         </div>
@@ -345,7 +348,17 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
             toggleMobileNav={() => toggleMobileNav?.()}
             subscribed={userIsSubscribed}
           />
-          <p className="mt-4 text-xs text-center truncate text-gray-10">
+          {buildEnv.NEXT_PUBLIC_IS_CAP && (
+            <div className="flex justify-center items-center mt-2">
+              <Link
+                href="/dashboard/refer"
+                className="text-sm underline text-gray-10 hover:text-gray-12"
+              >
+                Earn 40% Referral
+              </Link>
+            </div>
+          )}
+          <p className="mt-2 text-xs text-center truncate text-gray-10">
             Cap Software, Inc. {new Date().getFullYear()}.
           </p>
         </div>
@@ -386,7 +399,6 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
     </Dialog>
   );
 };
-
 
 const NavItem = ({
   name,
@@ -430,7 +442,9 @@ const NavItem = ({
       >
         {cloneElement(icon, {
           ref: iconRef,
-          className: clsx(sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"),
+          className: clsx(
+            sidebarCollapsed ? "text-gray-12 mx-auto" : "text-gray-10"
+          ),
           size: sidebarCollapsed ? 18 : 16,
         })}
         <p
@@ -443,8 +457,7 @@ const NavItem = ({
         </p>
       </Link>
     </Tooltip>
-  )
-}
-
+  );
+};
 
 export default AdminNavItems;

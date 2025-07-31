@@ -156,8 +156,6 @@ const app = new Hono()
           );
           if (!playlistUrl) return new Response(null, { status: 404 });
 
-          console.log(`Got signed url for desktop: ${playlistUrl}`);
-
           return c.redirect(playlistUrl);
         }
 

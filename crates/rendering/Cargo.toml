@@ -26,7 +26,7 @@ thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
-glyphon = "0.6.0"
+glyphon = "0.9.0"
 tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -62,7 +62,7 @@ const conversionTools: ConversionTool[] = [
 
 export default function ConvertToolsPage() {
   return (
-    <div className="py-20 md:py-28">
+    <div className="py-32 md:py-40">
       <div className="wrapper">
         <div className="mb-8">
           <Link
@@ -70,7 +70,7 @@ export default function ConvertToolsPage() {
             className="inline-flex items-center text-sm text-blue-600 hover:text-blue-800"
           >
             <svg
-              className="w-5 h-5 mr-1"
+              className="mr-1 w-5 h-5"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -87,7 +87,7 @@ export default function ConvertToolsPage() {
           </Link>
         </div>
 
-        <h1 className="text-3xl font-medium tracking-tight text-gray-900 mb-8">
+        <h1 className="mb-8 text-3xl font-medium tracking-tight text-gray-900">
           File Conversion Tools
         </h1>
         <p className="mb-12 text-lg text-gray-600">
@@ -102,7 +102,7 @@ export default function ConvertToolsPage() {
             <Link
               key={tool.href}
               href={tool.href}
-              className="group block p-6 border border-gray-200 rounded-lg hover:border-blue-500 transition-colors"
+              className="block p-6 rounded-lg border border-gray-200 transition-colors group hover:border-blue-500"
             >
               <div className="flex items-center mb-4">
                 <div className="flex-shrink-0 p-2 bg-blue-100 rounded-lg">
@@ -120,7 +120,7 @@ export default function ConvertToolsPage() {
                     />
                   </svg>
                 </div>
-                <h2 className="ml-3 text-xl font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+                <h2 className="ml-3 text-xl font-semibold text-gray-900 transition-colors group-hover:text-blue-600">
                   {tool.title}
                 </h2>
               </div>

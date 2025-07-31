@@ -1,10 +1,8 @@
-"use client";
-
 import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import { AnimatePresence, motion } from "framer-motion";
-import { Suspense, useState } from "react";
+import { Suspense, useState, forwardRef } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -24,7 +22,11 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 interface SidebarProps {
   data: VideoWithOrganizationInfo;
   user: typeof userSelectProps | null;
-  comments: MaybePromise<CommentType[]>;
+  commentsData: CommentType[];
+  optimisticComments: CommentType[];
+  handleCommentSuccess: (comment: CommentType) => void;
+  setOptimisticComments: (newComment: CommentType) => void;
+  setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
   views: MaybePromise<number>;
   onSeek?: (time: number) => void;
   videoId: string;
@@ -61,20 +63,24 @@ const tabTransition = {
   opacity: { duration: 0.2 },
 };
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(({
   data,
   user,
-  comments,
+  commentsData,
+  setCommentsData,
+  optimisticComments,
+  handleCommentSuccess,
+  setOptimisticComments,
   views,
   onSeek,
   videoId,
   aiData,
   aiGenerationEnabled = false,
-}) => {
+}, ref) => {
   const isOwnerOrMember: boolean = Boolean(
     user?.id === data.ownerId ||
-      (data.organizationId &&
-        data.organizationMembers?.includes(user?.id ?? ""))
+    (data.organizationId &&
+      data.organizationMembers?.includes(user?.id ?? ""))
   );
 
   const [activeTab, setActiveTab] = useState<TabType>("activity");
@@ -89,7 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: "transcript", label: "Transcript" },
   ];
 
-  const paginate = (newDirection: number, tabId: TabType) => {
+  const paginate = (tabId: TabType) => {
     const currentIndex = tabs.findIndex((tab) => tab.id === activeTab);
     const newIndex = tabs.findIndex((tab) => tab.id === tabId);
     const direction = newIndex > currentIndex ? 1 : -1;
@@ -111,9 +117,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }
           >
             <Activity
+              ref={ref}
               views={views}
-              comments={comments}
+              comments={commentsData}
+              setComments={setCommentsData}
               user={user}
+              optimisticComments={optimisticComments}
+              setOptimisticComments={setOptimisticComments}
+              handleCommentSuccess={handleCommentSuccess}
               isOwnerOrMember={isOwnerOrMember}
               onSeek={onSeek}
               videoId={videoId}
@@ -140,14 +151,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <div className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
+    <div
+      className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video"
+    >
       <div className="flex-none">
         <div className="flex border-b border-gray-200">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() =>
-                paginate(tab.id === activeTab ? 0 : 1, tab.id as TabType)
+                paginate(tab.id as TabType)
               }
               className={classNames(
                 "flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
@@ -180,7 +193,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <div className="h-full relative overflow-hidden">
+        <div className="overflow-hidden relative h-full">
           <AnimatePresence initial={false} custom={direction}>
             <TabContent
               key={activeTab}
@@ -190,7 +203,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               animate="center"
               exit="exit"
               transition={tabTransition}
-              className="absolute inset-0 overflow-auto"
+              className="overflow-auto absolute inset-0"
             >
               <div className="h-full">{renderTabContent()}</div>
             </TabContent>
@@ -199,4 +212,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
     </div>
   );
-};
+});
