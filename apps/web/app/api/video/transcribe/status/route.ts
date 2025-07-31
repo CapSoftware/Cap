@@ -1,4 +1,3 @@
-import { isUserOnProPlan } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { NextRequest } from "next/server";
 import { count, eq } from "drizzle-orm";
@@ -37,12 +36,14 @@ export async function GET(request: NextRequest) {
   if (video[0].transcriptionStatus === "COMPLETE") {
     if (await isAiGenerationEnabled(user)) {
       Promise.resolve().then(() => {
-        generateAiMetadata(videoId, user.id).catch(error => {
+        generateAiMetadata(videoId, user.id).catch((error) => {
           console.error("Error generating AI metadata:", error);
         });
       });
     } else {
-      console.log(`[transcribe-status] AI generation feature disabled for user ${user.id} (email: ${user.email}, pro: ${user.stripeSubscriptionStatus})`);
+      console.log(
+        `[transcribe-status] AI generation feature disabled for user ${user.id} (email: ${user.email}, pro: ${user.stripeSubscriptionStatus})`
+      );
     }
   }
 

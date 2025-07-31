@@ -263,17 +263,6 @@ impl ShowCapWindow {
                     .shadow(true)
                     .center();
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::ModeSelect => {
@@ -292,17 +281,6 @@ impl ShowCapWindow {
                     .center()
                     .focused(true)
                     .shadow(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
 
                 builder.build()?
             }
@@ -424,9 +402,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let mut width = 180.0 + 32.0;
 
                 let height = 40.0;
@@ -447,6 +423,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]

@@ -1,4 +1,4 @@
-import { isUserOnProPlan, stripe } from "@cap/utils";
+import { stripe, userIsPro } from "@cap/utils";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
@@ -26,11 +26,7 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: true, auth: false }, { status: 401 });
   }
 
-  if (
-    isUserOnProPlan({
-      subscriptionStatus: user.stripeSubscriptionStatus as string,
-    })
-  ) {
+  if (userIsPro(user)) {
     console.error("User already has pro plan");
     return Response.json({ error: true, subscription: true }, { status: 400 });
   }
