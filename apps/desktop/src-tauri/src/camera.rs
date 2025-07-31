@@ -24,6 +24,27 @@ use tokio::sync::{broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
+#[cfg(target_os = "windows")]
+use {
+    raw_window_handle::{HasRawWindowHandle, RawWindowHandle},
+    std::ffi::c_void,
+    windows::{
+        Win32::{
+            Foundation::{HWND, LPARAM, WPARAM},
+            Graphics::Gdi::{
+                BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
+                DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HDC, HGDIOBJ, ReleaseDC,
+                SelectObject, SetDIBits, UpdateLayeredWindow,
+            },
+            UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GetWindowLongW, LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongW,
+                WS_EX_LAYERED, WS_EX_TRANSPARENT,
+            },
+        },
+        core::*,
+    },
+};
+
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
 // We scale up the GPU surfaces resolution by this amount from the OS window's size.
@@ -196,11 +217,69 @@ impl CameraPreview {
                     continue;
                 }
 
-                if let Ok(surface) = renderer
+                #[cfg(target_os = "windows")]
+                let use_transparency_workaround = renderer.use_transparency_workaround;
+                #[cfg(not(target_os = "windows"))]
+                let use_transparency_workaround = false;
+
+                if use_transparency_workaround {
+                    // Windows transparency workaround - render offscreen
+                    let output_width = 1280;
+                    let output_height = (1280.0 / camera_aspect_ratio) as u32;
+
+                    let new_texture_value = if let Some(frame) = frame {
+                        if loading == true {
+                            loading_state.store(false, Ordering::Relaxed);
+                            loading = false;
+                        }
+
+                        let resampler_frame = resampler_frame
+                            .get_or_init((output_width, output_height), || frame::Video::empty());
+
+                        scaler.cached(
+                            frame.format(),
+                            frame.width(),
+                            frame.height(),
+                            format::Pixel::RGBA,
+                            output_width,
+                            output_height,
+                            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+                        );
+
+                        if let Err(err) = scaler.run(&frame, resampler_frame) {
+                            error!("Error rescaling frame with ffmpeg: {err:?}");
+                            continue;
+                        }
+
+                        Some((
+                            resampler_frame.data(0).to_vec(),
+                            resampler_frame.stride(0) as u32,
+                        ))
+                    } else if loading {
+                        let (buffer, stride) = render_solid_frame(
+                            [0x11, 0x11, 0x11, 0xFF], // #111111
+                            output_width,
+                            output_height,
+                        );
+                        Some((buffer, stride))
+                    } else {
+                        None
+                    };
+
+                    renderer.render(
+                        None,
+                        new_texture_value
+                            .as_ref()
+                            .map(|(buf, stride)| (buf.as_slice(), *stride)),
+                        output_width,
+                        output_height,
+                    );
+                } else if let Ok(surface) = renderer
                     .surface
                     .get_current_texture()
                     .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
                 {
+                    // Normal surface rendering
                     let output_width = 1280;
                     let output_height = (1280.0 / camera_aspect_ratio) as u32;
 
@@ -245,7 +324,7 @@ impl CameraPreview {
                     };
 
                     renderer.render(
-                        surface,
+                        Some(surface),
                         new_texture_value.as_ref().map(|(b, s)| (&**b, *s)),
                         output_width,
                         output_height,
@@ -307,11 +386,23 @@ struct Renderer {
     frame_info: Cached<(format::Pixel, u32, u32)>,
     surface_size: Cached<(u32, u32)>,
     texture: Cached<(u32, u32), (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
+
+    // Windows transparency workaround
+    #[cfg(target_os = "windows")]
+    use_transparency_workaround: bool,
+    #[cfg(target_os = "windows")]
+    offscreen_texture: Option<wgpu::Texture>,
+    #[cfg(target_os = "windows")]
+    readback_buffer: Option<wgpu::Buffer>,
+    #[cfg(target_os = "windows")]
+    hwnd: Option<HWND>,
 }
 
 impl Renderer {
     /// Initialize a new renderer for a specific Tauri window.
     async fn init(window: WebviewWindow) -> anyhow::Result<Self> {
+        #[cfg(target_os = "windows")]
+        let hwnd = Self::setup_transparent_window(&window)?;
         let size = window
             .inner_size()
             .with_context(|| "Error getting the window size")?
@@ -541,6 +632,9 @@ impl Renderer {
             ..Default::default()
         });
 
+        #[cfg(target_os = "windows")]
+        let use_transparency_workaround = alpha_mode == CompositeAlphaMode::Inherit;
+
         Ok(Self {
             surface,
             surface_config,
@@ -559,6 +653,15 @@ impl Renderer {
             frame_info: Cached::default(),
             surface_size: Cached::default(),
             texture: Cached::default(),
+
+            #[cfg(target_os = "windows")]
+            use_transparency_workaround,
+            #[cfg(target_os = "windows")]
+            offscreen_texture: None,
+            #[cfg(target_os = "windows")]
+            readback_buffer: None,
+            #[cfg(target_os = "windows")]
+            hwnd,
         })
     }
 
@@ -692,6 +795,107 @@ impl Renderer {
     /// Render the camera preview to the window.
     fn render(
         &mut self,
+        surface: Option<SurfaceTexture>,
+        new_texture_value: Option<(&[u8], u32)>,
+        width: u32,
+        height: u32,
+    ) {
+        #[cfg(target_os = "windows")]
+        if self.use_transparency_workaround {
+            self.render_offscreen(new_texture_value, width, height);
+            return;
+        }
+
+        if let Some(surface) = surface {
+            self.render_to_surface(surface, new_texture_value, width, height);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn render_offscreen(
+        &mut self,
+        new_texture_value: Option<(&[u8], u32)>,
+        width: u32,
+        height: u32,
+    ) {
+        let surface_width = width;
+        let surface_height = height;
+
+        // Setup offscreen rendering if not already done
+        if self.offscreen_texture.is_none() || self.readback_buffer.is_none() {
+            if let Err(err) = self.setup_offscreen_rendering(surface_width, surface_height) {
+                error!("Failed to setup offscreen rendering: {err:?}");
+                return;
+            }
+        }
+
+        let offscreen_texture = self.offscreen_texture.as_ref().unwrap();
+        let readback_buffer = self.readback_buffer.as_ref().unwrap();
+
+        let surface_view = offscreen_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 0.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            self.render_scene(&mut render_pass, new_texture_value, width, height);
+        }
+
+        // Copy texture to readback buffer
+        encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                texture: offscreen_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: readback_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * surface_width),
+                    rows_per_image: Some(surface_height),
+                },
+            },
+            wgpu::Extent3d {
+                width: surface_width,
+                height: surface_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.queue.submit(Some(encoder.finish()));
+
+        // Update the layered window
+        if let Err(err) = self.update_layered_window(surface_width, surface_height) {
+            error!("Failed to update layered window: {err:?}");
+        }
+    }
+
+    fn render_to_surface(
+        &mut self,
         surface: SurfaceTexture,
         new_texture_value: Option<(&[u8], u32)>,
         width: u32,
@@ -730,73 +934,248 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Get or reinitialize the texture if necessary
-            let (texture, _, bind_group) = &*self.texture.get_or_init((width, height), || {
-                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Camera Texture"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Texture Bind Group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
-
-                (texture, texture_view, bind_group)
-            });
-
-            if let Some((buffer, stride)) = new_texture_value {
-                self.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &buffer,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(stride),
-                        rows_per_image: Some(height),
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, bind_group, &[]);
-            render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
-            render_pass.draw(0..6, 0..1);
+            self.render_scene(&mut render_pass, new_texture_value, width, height);
         }
 
         self.queue.submit(Some(encoder.finish()));
         surface.present();
+    }
+
+    fn render_scene(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass,
+        new_texture_value: Option<(&[u8], u32)>,
+        width: u32,
+        height: u32,
+    ) {
+        // Get or reinitialize the texture if necessary
+        let (texture, _, bind_group) = &*self.texture.get_or_init((width, height), || {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Camera Texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Texture Bind Group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&texture_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+
+            (texture, texture_view, bind_group)
+        });
+
+        if let Some((buffer, stride)) = new_texture_value {
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &buffer,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        render_pass.set_pipeline(&self.render_pipeline);
+        render_pass.set_bind_group(0, bind_group, &[]);
+        render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
+        render_pass.draw(0..6, 0..1);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn setup_transparent_window(window: &WebviewWindow) -> anyhow::Result<Option<HWND>> {
+        let hwnd = match window.raw_window_handle() {
+            Ok(handle) => match handle {
+                RawWindowHandle::Win32(win32_handle) => {
+                    HWND(win32_handle.hwnd.get() as *mut c_void)
+                }
+                _ => return Ok(None),
+            },
+            Err(_) => return Ok(None),
+        };
+
+        unsafe {
+            // Make the window layered and transparent
+            let current_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            SetWindowLongW(hwnd, GWL_EXSTYLE, current_style | WS_EX_LAYERED.0 as i32);
+
+            // Set the window to be fully opaque by default
+            SetLayeredWindowAttributes(
+                hwnd,
+                windows::Win32::Foundation::COLORREF(0),
+                255,
+                LWA_ALPHA,
+            )
+            .map_err(|e| anyhow::anyhow!("Failed to set layered window attributes: {}", e))?;
+        }
+
+        Ok(Some(hwnd))
+    }
+
+    #[cfg(target_os = "windows")]
+    fn setup_offscreen_rendering(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        // Create offscreen texture
+        let offscreen_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Offscreen Framebuffer"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        // Create readback buffer
+        let readback_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Readback Buffer"),
+            size: (width * height * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        self.offscreen_texture = Some(offscreen_texture);
+        self.readback_buffer = Some(readback_buffer);
+
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn update_layered_window(&mut self, width: u32, height: u32) -> anyhow::Result<()> {
+        let hwnd = self
+            .hwnd
+            .ok_or_else(|| anyhow::anyhow!("No HWND available"))?;
+        let readback_buffer = self
+            .readback_buffer
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No readback buffer available"))?;
+
+        // Map the buffer and read the data synchronously
+        let buffer_slice = readback_buffer.slice(..);
+
+        // Use blocking map for synchronous operation
+        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+
+        let data = buffer_slice.get_mapped_range();
+        let rgba_data: Vec<u8> = data.to_vec();
+        drop(data);
+        readback_buffer.unmap();
+
+        // Convert RGBA to BGRA for Windows
+        let mut bgra_data = Vec::with_capacity(rgba_data.len());
+        for chunk in rgba_data.chunks_exact(4) {
+            bgra_data.push(chunk[2]); // B
+            bgra_data.push(chunk[1]); // G
+            bgra_data.push(chunk[0]); // R
+            bgra_data.push(chunk[3]); // A
+        }
+
+        // Update the layered window with the new bitmap
+        unsafe {
+            let hdc_dest = GetDC(hwnd);
+            let hdc_src = CreateCompatibleDC(hdc_dest);
+
+            let bitmap_info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width as i32,
+                    biHeight: -(height as i32), // Negative for top-down bitmap
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [Default::default(); 1],
+            };
+
+            let hbitmap = CreateCompatibleBitmap(hdc_dest, width as i32, height as i32);
+
+            SetDIBits(
+                hdc_src,
+                hbitmap,
+                0,
+                height,
+                Some(bgra_data.as_ptr() as *const std::ffi::c_void),
+                &bitmap_info,
+                DIB_RGB_COLORS,
+            );
+
+            let old_bitmap = SelectObject(hdc_src, hbitmap);
+
+            let blend_function = windows::Win32::Graphics::Gdi::BLENDFUNCTION {
+                BlendOp: windows::Win32::Graphics::Gdi::AC_SRC_OVER,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: windows::Win32::Graphics::Gdi::AC_SRC_ALPHA,
+            };
+
+            let window_pos = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+            let window_size = windows::Win32::Foundation::SIZE {
+                cx: width as i32,
+                cy: height as i32,
+            };
+            let source_pos = windows::Win32::Foundation::POINT { x: 0, y: 0 };
+
+            UpdateLayeredWindow(
+                hwnd,
+                hdc_dest,
+                Some(&window_pos),
+                &window_size,
+                hdc_src,
+                &source_pos,
+                windows::Win32::Foundation::COLORREF(0),
+                &blend_function,
+                windows::Win32::UI::WindowsAndMessaging::ULW_ALPHA,
+            )?;
+
+            // Cleanup
+            SelectObject(hdc_src, old_bitmap);
+            DeleteObject(hbitmap);
+            DeleteDC(hdc_src);
+            ReleaseDC(hwnd, hdc_dest);
+        }
+
+        Ok(())
     }
 }
 
