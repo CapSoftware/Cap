@@ -151,6 +151,22 @@ impl App {
             }
         }
     }
+
+    async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
+        let logfile =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
+
+        self.recording_logging_handle
+            .reload(Some(Box::new(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_writer(logfile),
+            ) as DynLoggingLayer))
+            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -1882,6 +1898,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
+            recording::RecordingEvent
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
