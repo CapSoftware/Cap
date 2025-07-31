@@ -772,7 +772,7 @@ async fn handle_recording_finish(
     };
 
     let meta = RecordingMeta {
-        platform: Platform::default(),
+        platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
         sharing,
         pretty_name: format!(

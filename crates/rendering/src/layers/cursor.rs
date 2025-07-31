@@ -304,10 +304,18 @@ impl CursorLayer {
             let cursor_size_constant =
                 factor * cursor_size_percentage * zoom.display_amount() as f32;
 
-            XY::new(
-                cursor_size_constant * cursor_texture_size_aspect,
-                cursor_size_constant,
-            )
+            if cursor_texture_size_aspect > 1.0 {
+                // Wide cursor: base sizing on width to prevent excessive width
+                let width = cursor_size_constant;
+                let height = cursor_size_constant / cursor_texture_size_aspect;
+                XY::new(width, height)
+            } else {
+                // Tall or square cursor: base sizing on height (current behavior)
+                XY::new(
+                    cursor_size_constant * cursor_texture_size_aspect,
+                    cursor_size_constant,
+                )
+            }
         };
 
         let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)

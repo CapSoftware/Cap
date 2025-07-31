@@ -61,7 +61,7 @@ impl Default for Platform {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct RecordingMeta {
     #[serde(default)]
-    pub platform: Platform,
+    pub platform: Option<Platform>,
     // this field is just for convenience, it shouldn't be persisted
     #[serde(skip_serializing, default)]
     pub project_path: PathBuf,
