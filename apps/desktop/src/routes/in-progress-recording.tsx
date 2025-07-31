@@ -27,13 +27,6 @@ type State =
   | { variant: "paused" }
   | { variant: "stopped" };
 
-async function handleErrorDialog(errorMessage: string, title: string) {
-  await dialog.message(errorMessage, {
-    title,
-    kind: "error",
-  });
-}
-
 declare global {
   interface Window {
     COUNTDOWN: number;
