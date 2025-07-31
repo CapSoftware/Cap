@@ -327,12 +327,12 @@ impl Renderer {
                 let window = window.clone();
                 move || {
                     let instance = if cfg!(windows) {
-                        Instance::new(wgpu::InstanceDescriptor {
-                            backends,
-                            dx12_shader_compiler: Default::default(), // Unused for GL
-                        });
+                        wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                            backends: wgpu::Backends::DX12,
+                            ..Default::default()
+                        })
                     } else {
-                        wgpu::Instance::default();
+                        wgpu::Instance::default()
                     };
                     let surface = instance.create_surface(window.clone());
                     tx.send((instance, surface)).ok();
