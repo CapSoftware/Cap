@@ -75,4 +75,7 @@ debug = true
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
 # https://github.com/gfx-rs/wgpu/pull/7550
-wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
+# wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
+# TODO: This is cursed
+# https://github.com/oscartbeaumont/wgpu/tree/drop-validation
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "dd9cd5263e1527197283f16209d90f8eab45f775" }
