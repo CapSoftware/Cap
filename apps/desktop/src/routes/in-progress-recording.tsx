@@ -9,28 +9,23 @@ import {
   createSignal,
   type ComponentProps,
   Show,
-  onMount,
   onCleanup,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
-
-import IconCapStopCircle from "~icons/cap/stop-circle";
-import IconCapMicrophone from "~icons/cap/microphone";
-import IconLucideMicOff from "~icons/lucide/mic-off";
-import IconCapPlayCircle from "~icons/cap/play-circle";
-import IconCapPauseCircle from "~icons/cap/pause-circle";
-import IconCapRestart from "~icons/cap/restart";
-import IconCapTrash from "~icons/cap/trash";
-import IconCapMoreVertical from "~icons/cap/more-vertical";
+import createPresence from "solid-presence";
 
 import {
   createCurrentRecordingQuery,
   createOptionsQuery,
 } from "~/utils/queries";
 import { commands, events } from "~/utils/tauri";
-import { generalSettingsStore } from "~/store";
+import { createMemo } from "solid-js";
 
-type State = "countdown" | "recording" | "paused" | "stopped";
+type State =
+  | { variant: "countdown"; from: number; current: number }
+  | { variant: "recording" }
+  | { variant: "paused" }
+  | { variant: "stopped" };
 
 async function handleErrorDialog(errorMessage: string, title: string) {
   await dialog.message(errorMessage, {
@@ -39,124 +34,55 @@ async function handleErrorDialog(errorMessage: string, title: string) {
   });
 }
 
-async function handleRecordingError(err: unknown) {
-  const errorMessage =
-    typeof err === "string"
-      ? err
-      : err instanceof Error
-        ? err.message
-        : "Unknown error";
-
-  if (errorMessage.startsWith("Video upload info not found")) {
-    await handleErrorDialog(
-      "Unable to start instant recording. Please ensure you are connected to the internet and the Cap service is available.",
-      "Recording Failed"
-    );
-  } else if (errorMessage.startsWith("Please sign in to use instant recording")) {
-    await handleErrorDialog("Please sign in to use instant recording mode.", "Sign In Required");
-  } else {
-    await handleErrorDialog(`Failed to start recording: ${errorMessage}`, "Recording Failed");
+declare global {
+  interface Window {
+    COUNTDOWN: number;
   }
-  getCurrentWindow().close();
 }
 
 export default function () {
-  const [countdown, setCountdown] = createSignal<number>(0);
-  const [countdownDuration, setCountdownDuration] = createSignal<number>(3);
+  const [state, setState] = createSignal<State>(
+    window.COUNTDOWN === 0
+      ? { variant: "recording" }
+      : {
+          variant: "countdown",
+          from: window.COUNTDOWN,
+          current: window.COUNTDOWN,
+        }
+  );
   const [start, setStart] = createSignal(Date.now());
   const [time, setTime] = createSignal(Date.now());
-  const [state, setState] = createSignal<State>("recording");
   const currentRecording = createCurrentRecordingQuery();
   const optionsQuery = createOptionsQuery();
-  let countdownInterval: ReturnType<typeof setInterval> | undefined;
-  let hasStartedCountdown = false;
 
   const audioLevel = createAudioInputLevel();
 
   const [pauseResumes, setPauseResumes] = createStore<
     | []
     | [
-      ...Array<{ pause: number; resume?: number }>,
-      { pause: number; resume?: number }
-    ]
+        ...Array<{ pause: number; resume?: number }>,
+        { pause: number; resume?: number }
+      ]
   >([]);
 
-  onMount(async () => {
-    const settings = await generalSettingsStore.get();
-    const countdownSetting = settings?.recordingCountdown ?? "three";
+  const unlisten = events.recordingEvent.listen((data) => {
+    const payload = data.payload;
+    if (payload.variant === "Countdown") {
+      setState((s) => {
+        if (s.variant === "countdown") return { ...s, current: payload.value };
 
-    const unlistenRecordingStarted = await events.recordingStarted.listen(
-      () => {
-        setState("recording");
-        setStart(Date.now());
-      }
-    );
-
-    // Wait for options to be loaded
-    createEffect(() => {
-      const { rawOptions } = optionsQuery;
-      if (!rawOptions) {
-        console.log("Recording options not yet available");
-        return;
-      }
-
-      // Only run this effect once when rawOptions becomes available
-      if (hasStartedCountdown) return;
-      hasStartedCountdown = true;
-
-      console.log("Starting recording with options:", rawOptions);
-
-      if (countdownSetting !== "off") {
-        setState("countdown");
-        const countdownSeconds = countdownSetting === "five" ? 5 : countdownSetting === "ten" ? 10 : 3;
-        setCountdown(countdownSeconds);
-        setCountdownDuration(countdownSeconds);
-
-        countdownInterval = setInterval(() => {
-          setCountdown((c) => {
-            if (c <= 1) {
-              clearInterval(countdownInterval!);
-              countdownInterval = undefined;
-              commands
-                .startRecording({
-                  capture_target: rawOptions.captureTarget,
-                  mode: rawOptions.mode,
-                  capture_system_audio: rawOptions.captureSystemAudio,
-                })
-                .catch((err) => {
-                  console.error("Failed to start recording:", err);
-                  handleRecordingError(err);
-                });
-              return 0;
-            }
-            return c - 1;
-          });
-        }, 1000);
-      } else {
-        commands
-          .startRecording({
-            capture_target: rawOptions.captureTarget,
-            mode: rawOptions.mode,
-            capture_system_audio: rawOptions.captureSystemAudio,
-          })
-          .catch((err) => {
-            console.error("Failed to start recording:", err);
-            handleRecordingError(err);
-          });
-      }
-    });
-
-    onCleanup(() => {
-      unlistenRecordingStarted();
-      if (countdownInterval) {
-        clearInterval(countdownInterval);
-      }
-    });
+        return s;
+      });
+    } else if (payload.variant === "Started") {
+      setState({ variant: "recording" });
+      setStart(Date.now());
+    }
   });
+  onCleanup(() => unlisten.then((f) => f()));
 
   createTimer(
     () => {
-      if (state() !== "recording") return;
+      if (state().variant !== "recording") return;
       setTime(Date.now());
     },
     100,
@@ -165,7 +91,7 @@ export default function () {
 
   createEffect(() => {
     if (
-      state() === "stopped" &&
+      state().variant === "stopped" &&
       !currentRecording.isPending &&
       (currentRecording.data === undefined || currentRecording.data === null)
     )
@@ -174,14 +100,14 @@ export default function () {
 
   const stopRecording = createMutation(() => ({
     mutationFn: async () => {
-      setState("stopped");
+      setState({ variant: "stopped" });
       await commands.stopRecording();
     },
   }));
 
   const togglePause = createMutation(() => ({
     mutationFn: async () => {
-      if (state() === "paused") {
+      if (state().variant === "paused") {
         await commands.resumeRecording();
         setPauseResumes(
           produce((a) => {
@@ -189,11 +115,11 @@ export default function () {
             a[a.length - 1].resume = Date.now();
           })
         );
-        setState("recording");
+        setState({ variant: "recording" });
       } else {
         await commands.pauseRecording();
         setPauseResumes((a) => [...a, { pause: Date.now() }]);
-        setState("paused");
+        setState({ variant: "paused" });
       }
       setTime(Date.now());
     },
@@ -210,7 +136,7 @@ export default function () {
 
       await commands.restartRecording();
 
-      setState("recording");
+      setState({ variant: "recording" });
       setTime(Date.now());
     },
   }));
@@ -226,12 +152,12 @@ export default function () {
 
       await commands.deleteRecording();
 
-      setState("stopped");
+      setState({ variant: "stopped" });
     },
   }));
 
   const adjustedTime = () => {
-    if (state() === "countdown") return 0;
+    if (state().variant === "countdown") return 0;
     let t = time() - start();
     for (const { pause, resume } of pauseResumes) {
       if (pause && resume) t -= resume - pause;
@@ -239,123 +165,106 @@ export default function () {
     return t;
   };
 
+  let [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
+    null
+  );
+  const showCountdown = () => state().variant === "countdown";
+  const countdownPresence = createPresence({
+    show: showCountdown,
+    element: countdownRef,
+  });
+  const countdownState = createMemo<
+    Extract<State, { variant: "countdown" }> | undefined
+  >((prev) => {
+    const s = state();
+    if (s.variant === "countdown") return s;
+    if (prev && countdownPresence.present()) return prev;
+  });
+
   return (
     <div class="flex flex-row items-stretch w-full h-full bg-gray-1 animate-in fade-in">
-      <div class="flex flex-row justify-between p-[0.25rem] flex-1">
-        <Show when={state() === "countdown"}>
-          <div class="flex flex-1 gap-3 items-center px-3">
-            <div class="flex-1 text-[13px] text-gray-11">
-              Recording starting...
-            </div>
-            <div class="relative w-5 h-5 text-red-300">
-              <svg
-                class="absolute inset-0 w-5 h-5 -rotate-90"
-                viewBox="0 0 20 20"
-              >
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="8"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  opacity="0.2"
-                />
-                <circle
-                  cx="10"
-                  cy="10"
-                  r="8"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-dasharray={`${(countdown() / countdownDuration()) * 50.265
-                    } 50.265`}
-                  stroke-linecap="round"
-                  class="transition-all duration-1000 ease-linear"
-                />
-              </svg>
-              <span class="flex absolute inset-0 justify-center items-center text-[11px]">
-                {countdown()}
-              </span>
-            </div>
-          </div>
-        </Show>
-        <Show when={state() !== "countdown"}>
-          <button
-            disabled={stopRecording.isPending}
-            class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
-            type="button"
-            onClick={() => stopRecording.mutate()}
+      <Show when={countdownState()}>
+        {(state) => (
+          <div
+            ref={setCountdownRef}
+            class={cx(
+              "transition-opacity",
+              showCountdown() ? "opacity-100" : "opacity-0"
+            )}
           >
-            <IconCapStopCircle />
-            <span class="font-[500] text-[0.875rem] tabular-nums">
-              {formatTime(adjustedTime() / 1000)}
-            </span>
-          </button>
-        </Show>
+            <Countdown from={state().from} current={state().current} />
+          </div>
+        )}
+      </Show>
+      <div class="flex flex-row justify-between p-[0.25rem] flex-1">
+        <button
+          disabled={stopRecording.isPending}
+          class="py-[0.25rem] px-[0.5rem] text-red-300 gap-[0.25rem] flex flex-row items-center rounded-lg transition-opacity disabled:opacity-60"
+          type="button"
+          onClick={() => stopRecording.mutate()}
+        >
+          <IconCapStopCircle />
+          <span class="font-[500] text-[0.875rem] tabular-nums">
+            {formatTime(adjustedTime() / 1000)}
+          </span>
+        </button>
 
         <div class="flex gap-1 items-center">
-          <Show when={state() !== "countdown"}>
-            <div class="flex relative justify-center items-center w-8 h-8">
-              {optionsQuery.rawOptions.micName != null ? (
-                <>
-                  <IconCapMicrophone class="size-5 text-gray-12" />
-                  <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
-                    <div
-                      class="absolute inset-0 transition-transform duration-100 bg-blue-9"
-                      style={{
-                        transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
-                      }}
-                    />
-                  </div>
-                </>
+          <div class="flex relative justify-center items-center w-8 h-8">
+            {optionsQuery.rawOptions.micName != null ? (
+              <>
+                <IconCapMicrophone class="size-5 text-gray-12" />
+                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
+                  <div
+                    class="absolute inset-0 transition-transform duration-100 bg-blue-9"
+                    style={{
+                      transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
+                    }}
+                  />
+                </div>
+              </>
+            ) : (
+              <IconLucideMicOff
+                class="text-gray-7 size-5"
+                data-tauri-drag-region
+              />
+            )}
+          </div>
+
+          {(currentRecording.data?.type === "studio" ||
+            ostype() === "macos") && (
+            <ActionButton
+              disabled={togglePause.isPending}
+              onClick={() => togglePause.mutate()}
+            >
+              {state().variant === "paused" ? (
+                <IconCapPlayCircle />
               ) : (
-                <IconLucideMicOff
-                  class="text-gray-7 size-5"
-                  data-tauri-drag-region
-                />
+                <IconCapPauseCircle />
               )}
-            </div>
-          </Show>
-
-          <Show when={state() !== "countdown"}>
-            {(currentRecording.data?.type === "studio" ||
-              ostype() === "macos") && (
-                <ActionButton
-                  disabled={togglePause.isPending}
-                  onClick={() => togglePause.mutate()}
-                >
-                  {state() === "paused" ? (
-                    <IconCapPlayCircle />
-                  ) : (
-                    <IconCapPauseCircle />
-                  )}
-                </ActionButton>
-              )}
-
-            <ActionButton
-              disabled={restartRecording.isPending}
-              onClick={() => restartRecording.mutate()}
-            >
-              <IconCapRestart />
             </ActionButton>
-            <ActionButton
-              disabled={deleteRecording.isPending}
-              onClick={() => deleteRecording.mutate()}
-            >
-              <IconCapTrash />
-            </ActionButton>
-          </Show>
+          )}
+
+          <ActionButton
+            disabled={restartRecording.isPending}
+            onClick={() => restartRecording.mutate()}
+          >
+            <IconCapRestart />
+          </ActionButton>
+          <ActionButton
+            disabled={deleteRecording.isPending}
+            onClick={() => deleteRecording.mutate()}
+          >
+            <IconCapTrash />
+          </ActionButton>
         </div>
       </div>
-      <Show when={state() !== "countdown"}>
-        <div
-          class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
-          data-tauri-drag-region
-        >
-          <IconCapMoreVertical class="pointer-events-none text-gray-10" />
-        </div>
-      </Show>
+      <div
+        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
+        data-tauri-drag-region
+      >
+        <IconCapMoreVertical class="pointer-events-none text-gray-10" />
+      </div>
     </div>
   );
 }
@@ -399,4 +308,47 @@ function createAudioInputLevel() {
   });
 
   return level;
+}
+
+function Countdown(props: { from: number; current: number }) {
+  const [animation, setAnimation] = createSignal(1);
+  setTimeout(() => setAnimation(0), 10);
+
+  return (
+    <div class="flex flex-row justify-between p-[0.25rem] flex-1 bg-gray-1 fixed inset-0 z-10">
+      <div class="flex flex-1 gap-3 items-center px-3">
+        <div class="flex-1 text-[13px] text-gray-11">Recording starting...</div>
+        <div class="relative w-5 h-5 text-red-300">
+          <svg class="absolute inset-0 w-5 h-5 -rotate-90" viewBox="0 0 20 20">
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              opacity="0.2"
+            />
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-dasharray={`${animation() * 50.265} 50.265`}
+              stroke-linecap="round"
+              class="transition-all duration-1000 ease-linear"
+              style={{
+                "transition-duration": `${props.from * 1000}ms`,
+              }}
+            />
+          </svg>
+          <span class="flex absolute inset-0 justify-center items-center text-[11px]">
+            {props.current}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }

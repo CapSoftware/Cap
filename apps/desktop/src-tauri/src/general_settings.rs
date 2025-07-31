@@ -5,7 +5,7 @@ use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
-#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum PostStudioRecordingBehaviour {
     #[default]
@@ -13,7 +13,7 @@ pub enum PostStudioRecordingBehaviour {
     ShowOverlay,
 }
 
-#[derive(Default, Serialize, Deserialize, Type, Debug)]
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum MainWindowRecordingStartBehaviour {
     #[default]
@@ -21,22 +21,19 @@ pub enum MainWindowRecordingStartBehaviour {
     Minimise,
 }
 
-#[derive(Serialize, Deserialize, Type, Debug, Clone, Copy)]
-#[serde(rename_all = "camelCase")]
-pub enum RecordingCountdown {
-    Off,
-    Three,
-    Five,
-    Ten,
-}
-
-impl Default for RecordingCountdown {
-    fn default() -> Self {
-        RecordingCountdown::Three
+impl MainWindowRecordingStartBehaviour {
+    pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
+        match self {
+            Self::Close => window.close(),
+            Self::Minimise => window.minimize(),
+        }
     }
 }
 
-#[derive(Serialize, Deserialize, Type, Debug)]
+// When adding fields here, #[serde(default)] defines the value to use for existing configurations,
+// and `Default::default` defines the value to use for new configurations.
+// Things that affect the user experience should only be enabled by default for new configurations.
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettingsStore {
     #[serde(default = "uuid::Uuid::new_v4")]
@@ -73,7 +70,7 @@ pub struct GeneralSettingsStore {
     #[serde(default = "default_server_url")]
     pub server_url: String,
     #[serde(default)]
-    pub recording_countdown: RecordingCountdown,
+    pub recording_countdown: Option<u32>,
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
@@ -85,7 +82,7 @@ fn default_server_url() -> String {
         .to_string()
 }
 
-#[derive(Serialize, Deserialize, Type, Debug)]
+#[derive(Serialize, Deserialize, Type, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CommercialLicense {
     license_key: String,
@@ -113,7 +110,7 @@ impl Default for GeneralSettingsStore {
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
             custom_cursor_capture: false,
             server_url: default_server_url(),
-            recording_countdown: RecordingCountdown::Three,
+            recording_countdown: Some(3),
             _open_editor_after_recording: false,
         }
     }

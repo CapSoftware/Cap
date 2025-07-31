@@ -191,18 +191,11 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
-        const settings = await generalSettingsStore.get();
-
-        await commands.showWindow({ InProgressRecording: { position: null } });
-
-        const mainWindow = getCurrentWindow();
-        const mainWindowBehavior =
-          settings?.mainWindowRecordingStartBehaviour ?? "close";
-        if (mainWindowBehavior === "close") {
-          await mainWindow.close();
-        } else if (mainWindowBehavior === "minimise") {
-          await mainWindow.minimize();
-        }
+        await commands.startRecording({
+          capture_target: rawOptions.captureTarget,
+          mode: rawOptions.mode,
+          capture_system_audio: rawOptions.captureSystemAudio,
+        });
       } else await commands.stopRecording();
     },
   }));
@@ -304,7 +297,7 @@ function Page() {
                   }
                 }}
                 class={cx(
-                  "text-[0.6rem]",
+                  "text-[0.6rem] rounded-lg px-1 py-0.5",
                   license.data?.type === "pro"
                     ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
                     : "bg-gray-3 cursor-pointer hover:bg-gray-5"
@@ -313,8 +306,8 @@ function Page() {
                 {license.data?.type === "commercial"
                   ? "Commercial"
                   : license.data?.type === "pro"
-                    ? "Pro"
-                    : "Personal"}
+                  ? "Pro"
+                  : "Personal"}
               </span>
             </Suspense>
           </ErrorBoundary>
@@ -345,7 +338,7 @@ function Page() {
             "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
             (rawOptions.captureTarget.variant === "screen" ||
               rawOptions.captureTarget.variant === "area") &&
-            "ml-[2.4rem]"
+              "ml-[2.4rem]"
           )}
           style={{
             "transition-timing-function":
@@ -450,9 +443,19 @@ function Page() {
             ) : (
               <>
                 {rawOptions.mode === "instant" ? (
-                  <IconCapInstant class={cx("size-[0.8rem] mr-1.5", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
+                  <IconCapInstant
+                    class={cx(
+                      "size-[0.8rem] mr-1.5",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 ) : (
-                  <IconCapFilmCut class={cx("size-[0.8rem] mr-2 -mt-[1.5px]", toggleRecording.isPending ? "opacity-50" : "opacity-100")} />
+                  <IconCapFilmCut
+                    class={cx(
+                      "size-[0.8rem] mr-2 -mt-[1.5px]",
+                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
+                    )}
+                  />
                 )}
                 Start Recording
               </>
@@ -584,8 +587,8 @@ function AreaSelectButton(props: {
         props.targetVariant === "area"
           ? "Remove selection"
           : areaSelection.pending
-            ? "Selecting area..."
-            : "Select area"
+          ? "Selecting area..."
+          : "Select area"
       }
       childClass="flex fixed flex-row items-center w-8 h-8"
     >
@@ -656,7 +659,7 @@ function AreaSelectButton(props: {
                 class={cx(
                   "w-[1rem] h-[1rem]",
                   areaSelection.pending &&
-                  "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
+                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
                 )}
               />
             </button>
@@ -980,8 +983,8 @@ function TargetSelectInfoPill<T>(props: {
       {!props.permissionGranted
         ? "Request Permission"
         : props.value !== null
-          ? "On"
-          : "Off"}
+        ? "On"
+        : "Off"}
     </InfoPill>
   );
 }

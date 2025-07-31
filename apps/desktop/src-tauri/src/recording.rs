@@ -4,9 +4,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{
-        GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
-    },
+    general_settings::{GeneralSettingsStore, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     upload::{
@@ -201,6 +199,15 @@ pub struct StartRecordingInputs {
     pub mode: RecordingMode,
 }
 
+#[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
+#[serde(tag = "variant")]
+pub enum RecordingEvent {
+    Countdown { value: u32 },
+    Started,
+    Stopped,
+    Failed { error: String },
+}
+
 #[tauri::command]
 #[specta::specta]
 #[tracing::instrument(name = "recording", skip_all)]
@@ -210,6 +217,8 @@ pub async fn start_recording(
     inputs: StartRecordingInputs,
 ) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
+    let general_settings = general_settings.as_ref();
 
     let recording_dir = app
         .path()
@@ -219,20 +228,11 @@ pub async fn start_recording(
         .join(format!("{id}.cap"));
 
     ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
-    let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
-        .map_err(|e| format!("Failed to create logfile: {e}"))?;
-
     state_mtx
         .write()
         .await
-        .recording_logging_handle
-        .reload(Some(Box::new(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(logfile),
-        ) as DynLoggingLayer))
-        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+        .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
+        .await?;
 
     let target_name = {
         let title = inputs.capture_target.get_title();
@@ -323,6 +323,29 @@ pub async fn start_recording(
         _ => {}
     }
 
+    if let Some(window) = CapWindowId::Main.get(&app) {
+        let _ = general_settings
+            .map(|v| v.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+            .perform(&window);
+    }
+
+    let countdown = general_settings.and_then(|v| v.recording_countdown);
+    dbg!(countdown);
+    let _ = ShowCapWindow::InProgressRecording { countdown }
+        .show(&app)
+        .await;
+
+    if let Some(countdown) = countdown {
+        for t in 0..countdown {
+            let _ = RecordingEvent::Countdown {
+                value: countdown - t,
+            }
+            .emit(&app);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
     let progressive_upload = video_upload_info
         .as_ref()
@@ -342,7 +365,7 @@ pub async fn start_recording(
     // done in spawn to catch panics just in case
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
-        let app = app.clone();
+        let general_settings = general_settings.cloned();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
@@ -360,9 +383,7 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         base_inputs,
                         state.camera_feed.clone(),
-                        GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
+                        general_settings
                             .map(|s| s.custom_cursor_capture)
                             .unwrap_or_default(),
                     )
@@ -421,6 +442,8 @@ pub async fn start_recording(
     .await
     .map_err(|e| format!("Failed to spawn recording actor: {}", e))??;
 
+    let _ = RecordingEvent::Started.emit(&app);
+
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
@@ -429,10 +452,13 @@ pub async fn start_recording(
             match actor_done_rx.await {
                 Ok(Ok(_)) => {
                     let _ = finish_upload_tx.send(());
+                    let _ = RecordingEvent::Stopped.emit(&app);
                     return;
                 }
                 Ok(Err(e)) => {
                     let mut state = state_mtx.write().await;
+
+                    let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
@@ -454,12 +480,6 @@ pub async fn start_recording(
             }
         }
     });
-
-    if CapWindowId::InProgressRecording.get(&app).is_none() {
-        let _ = ShowCapWindow::InProgressRecording { position: None }
-            .show(&app)
-            .await;
-    }
 
     AppSounds::StartRecording.play();
 
@@ -574,8 +594,11 @@ async fn handle_recording_end(
     // Clear current recording, just in case :)
     app.current_recording.take();
 
-    if let Some(recording) = recording {
-        handle_recording_finish(&handle, recording).await?;
+    let res = if let Some(recording) = recording {
+        // we delay reporting errors here so that everything else happens first
+        Some(handle_recording_finish(&handle, recording).await)
+    } else {
+        None
     };
 
     let _ = RecordingStopped.emit(&handle);
@@ -597,6 +620,10 @@ async fn handle_recording_end(
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
+
+    if let Some(res) = res {
+        res?;
+    }
 
     Ok(())
 }

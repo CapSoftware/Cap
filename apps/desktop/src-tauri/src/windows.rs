@@ -175,7 +175,7 @@ pub enum ShowCapWindow {
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -440,9 +440,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let width = 244.0;
                 let height = 40.0;
 
@@ -462,6 +460,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        dbg!(countdown.unwrap_or_default())
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]

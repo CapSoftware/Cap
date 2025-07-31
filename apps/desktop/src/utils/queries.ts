@@ -97,7 +97,6 @@ export function createOptionsQuery() {
   );
 
   createEventListener(window, "storage", (e) => {
-    console.log(e);
     if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
   });
 
