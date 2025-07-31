@@ -21,7 +21,7 @@ async fn main() {
         .unwrap();
     let (tx, rx) = flume::bounded(1);
     feed.attach(tx);
-    let frame = rx.recv_async().await.unwrap().0;
+    let frame = rx.recv_async().await.unwrap().frame;
     dbg!(frame.format(), frame.width(), frame.height());
 
     let mut converter = ffmpeg::software::converter(

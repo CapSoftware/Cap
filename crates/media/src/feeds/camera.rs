@@ -303,17 +303,27 @@ struct SetupCameraState {
 
 fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraError> {
     let camera = find_camera(&id).ok_or(SetupCameraError::CameraNotFound)?;
-    let mut formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
-    if formats.len() < 1 {
+    let formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
+    if formats.is_empty() {
         return Err(SetupCameraError::InvalidFormat);
     }
+
+    let mut ideal_formats = formats
+        .clone()
+        .into_iter()
+        .filter(|f| f.frame_rate() >= 30.0)
+        .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats;
+    };
 
     // Sort formats to prioritize:
     // 1. Closest to 16:9 aspect ratio
     // 2. Highest resolution (total pixels)
     // 3. Highest frame rate
     // Most relevant ends up in index 0
-    formats.sort_by(|a, b| {
+    ideal_formats.sort_by(|a, b| {
         let target_aspect_ratio = 16.0 / 9.0;
 
         let aspect_ratio_a = a.width() as f32 / a.height() as f32;
@@ -332,7 +342,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
             .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
     });
 
-    let format = formats.swap_remove(0);
+    let format = ideal_formats.swap_remove(0);
     let frame_rate = format.frame_rate() as u32;
 
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
