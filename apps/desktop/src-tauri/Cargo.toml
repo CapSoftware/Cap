@@ -8,8 +8,6 @@ edition = "2024"
 [lints]
 workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
 name = "cap_desktop"
 crate-type = ["lib", "cdylib", "staticlib"]
@@ -66,7 +64,7 @@ ffmpeg.workspace = true
 chrono = { version = "0.4.31", features = ["serde"] }
 rodio = "0.19.0"
 png = "0.17.13"
-device_query = "2.1.0"
+device_query = "4.0.1"
 base64 = "0.22.1"
 reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
@@ -127,11 +125,3 @@ windows-sys = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["fs"] }
-
-# Optimize for smaller binary size
-[profile.release]
-panic = "abort"   # Strip expensive panic clean-up logic
-codegen-units = 1 # Compile crates one after another so the compiler can optimize better
-lto = true        # Enables link to optimizations
-opt-level = "s"   # Optimize for binary size
-debug = true
