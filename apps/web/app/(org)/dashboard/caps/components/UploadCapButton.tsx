@@ -5,12 +5,12 @@ import { Button } from "@cap/ui";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { isUserOnProPlan } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
+import { userIsPro } from "@cap/utils";
 
 export const UploadCapButton = ({
   onStart,
@@ -26,22 +26,17 @@ export const UploadCapButton = ({
   grey?: boolean;
   folderId?: string;
 }) => {
-  const { user, isSubscribed } = useDashboardContext();
+  const { user } = useDashboardContext();
   const inputRef = useRef<HTMLInputElement>(null);
-  const {
-    isUploading,
-    setIsUploading,
-    setUploadProgress,
-  } = useUploadingContext();
+  const { isUploading, setIsUploading, setUploadProgress } =
+    useUploadingContext();
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const router = useRouter();
 
   const handleClick = () => {
     if (!user) return;
 
-    const isCapPro = isUserOnProPlan({
-      subscriptionStatus: user.stripeSubscriptionStatus,
-    });
+    const isCapPro = userIsPro(user);
 
     if (!isCapPro) {
       setUpgradeModalOpen(true);
@@ -191,7 +186,7 @@ export const UploadCapButton = ({
             resolve(false);
           });
 
-          testVideo.addEventListener("loadstart", () => { });
+          testVideo.addEventListener("loadstart", () => {});
 
           testVideo.src = URL.createObjectURL(optimizedBlob);
         });
@@ -282,7 +277,7 @@ export const UploadCapButton = ({
             resolve(null);
           });
 
-          video.addEventListener("loadstart", () => { });
+          video.addEventListener("loadstart", () => {});
         });
       };
 
