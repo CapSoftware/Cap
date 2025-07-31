@@ -77,7 +77,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
               style={{ backgroundImage: randomGradient }}
             />
           ) : (
-            (imageUrl.isPending || imageStatus === "loading") && (
+            imageUrl.isPending && (
               <LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
             )
           )}
