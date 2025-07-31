@@ -345,7 +345,11 @@ export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?
 /**
  * @deprecated
  */
-openEditorAfterRecording?: boolean }
+openEditorAfterRecording?: boolean; 
+/**
+ * @deprecated can be removed when native camera preview is ready
+ */
+enableNativeCameraPreview: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"

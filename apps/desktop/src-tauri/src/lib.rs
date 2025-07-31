@@ -2,6 +2,7 @@ mod audio;
 mod audio_meter;
 mod auth;
 mod camera;
+mod camera_legacy;
 mod captions;
 mod deeplink_actions;
 mod editor_window;
@@ -48,6 +49,7 @@ use scap::capturer::Capturer;
 use scap::frame::Frame;
 use scap::frame::VideoFrame;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
@@ -68,6 +70,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
@@ -85,6 +88,11 @@ use windows::{CapWindowId, ShowCapWindow};
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
+    #[serde(skip)]
+    #[deprecated = "can be removed when native camera preview is ready"]
+    camera_tx: flume::Sender<RawCameraFrame>,
+    #[deprecated = "can be removed when native camera preview is ready"]
+    camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
@@ -219,12 +227,22 @@ async fn set_camera_input(
                 win.set_focus().ok();
             };
 
-            let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
-            camera_preview
-                .init_preview_window(window, camera_rx)
-                .await
-                .unwrap();
+            let camera_tx = if GeneralSettingsStore::get(&app_handle)
+                .ok()
+                .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                .unwrap_or_default()
+            {
+                let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+                camera_preview
+                    .init_preview_window(window, camera_rx)
+                    .await
+                    .unwrap();
+                Some(camera_tx)
+            } else {
+                None
+            };
 
+            let legacy_camera_tx = app.camera_tx.clone();
             drop(app);
 
             let fut = CameraFeed::init(id);
@@ -239,7 +257,11 @@ async fn set_camera_input(
                     }
 
                     if app.camera_feed.is_none() {
-                        feed.attach(camera_tx);
+                        if let Some(camera_tx) = camera_tx {
+                            feed.attach(camera_tx);
+                        } else {
+                            feed.attach(legacy_camera_tx);
+                        }
                         app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                         return Ok(true);
                     } else {
@@ -1899,6 +1921,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         )
         .expect("Failed to export typescript bindings");
 
+    let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
+
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
@@ -1985,6 +2009,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             {
                 app.manage(Arc::new(RwLock::new(App {
+                    camera_tx,
+                    camera_ws_port,
                     handle: app.clone(),
                     camera_feed: None,
                     camera_feed_initialization: None,
