@@ -6509,7 +6509,7 @@ dependencies = [
 [[package]]
 name = "scap"
 version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=4d340576772c#4d340576772c4ee53352962b40102cc1de3444d6"
+source = "git+https://github.com/CapSoftware/scap?rev=6ec1fad428c0#6ec1fad428c0353c9360218450c6354624239dae"
 dependencies = [
  "cidre",
  "cocoa 0.25.0",
