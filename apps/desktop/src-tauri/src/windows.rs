@@ -1,20 +1,17 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{
-    App, ArcLock, camera::CameraPreview, fake_window, general_settings::AppTheme, permissions,
-};
+use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
-use futures::{executor::block_on, pin_mut};
+use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
 use std::{
-    borrow::Cow,
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, Mutex, atomic::AtomicU32, mpsc},
+    sync::{Arc, Mutex, atomic::AtomicU32},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -133,14 +130,6 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
-    #[cfg(target_os = "windows")]
-    pub fn should_have_decorations(&self) -> bool {
-        matches!(
-            self,
-            Self::Setup | Self::Settings | Self::Editor { .. } | Self::ModeSelect
-        )
-    }
-
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
@@ -178,7 +167,7 @@ pub enum ShowCapWindow {
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -274,17 +263,6 @@ impl ShowCapWindow {
                     .shadow(true)
                     .center();
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::ModeSelect => {
@@ -303,17 +281,6 @@ impl ShowCapWindow {
                     .center()
                     .focused(true)
                     .shadow(true);
-
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
 
                 builder.build()?
             }
@@ -443,10 +410,9 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
-                let width = 244.0;
+            Self::InProgressRecording { countdown } => {
+                let mut width = 180.0 + 32.0;
+
                 let height = 40.0;
 
                 let window = self
@@ -465,6 +431,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]

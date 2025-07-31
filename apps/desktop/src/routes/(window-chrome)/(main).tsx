@@ -200,7 +200,7 @@ function Page() {
     mutationFn: async () => {
       if (!isRecording()) {
         await commands.startRecording({
-          capture_target: options.target(),
+          capture_target: rawOptions.captureTarget,
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
@@ -304,11 +304,12 @@ function Page() {
                     await commands.showWindow("Upgrade");
                   }
                 }}
-                class={`text-[0.6rem] ${
+                class={cx(
+                  "text-[0.6rem] rounded-lg px-1 py-0.5",
                   license.data?.type === "pro"
                     ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
                     : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                } rounded-lg px-1.5 py-0.5`}
+                )}
               >
                 {license.data?.type === "commercial"
                   ? "Commercial"

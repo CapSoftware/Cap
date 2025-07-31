@@ -12,6 +12,7 @@ import {
   CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
 import { revalidatePath } from "next/cache";
+import { userIsPro } from "@cap/utils";
 
 async function getVideoUploadPresignedUrl({
   fileKey,
@@ -170,9 +171,7 @@ export async function createVideoAndGetUploadUrl({
   }
 
   try {
-    const isUpgraded = user.stripeSubscriptionStatus === "active";
-
-    if (!isUpgraded && duration && duration > 300) {
+    if (!userIsPro(user) && duration && duration > 300) {
       throw new Error("upgrade_required");
     }
 

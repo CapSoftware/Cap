@@ -13,7 +13,7 @@ import { Copy, Globe2 } from "lucide-react";
 import { buildEnv } from "@cap/env";
 import { editTitle } from "@/actions/videos/edit-title";
 import { usePublicEnv } from "@/utils/public-env";
-import { isUserOnProPlan } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import clsx from "clsx";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -95,7 +95,11 @@ export const ShareHeader = ({
       return `${webUrl}/s/${data.id}`;
     } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
       return `https://${customDomain}/s/${data.id}`;
-    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+    } else if (
+      buildEnv.NEXT_PUBLIC_IS_CAP &&
+      !customDomain &&
+      !domainVerified
+    ) {
       return `https://cap.link/${data.id}`;
     } else {
       return `${webUrl}/s/${data.id}`;
@@ -109,18 +113,18 @@ export const ShareHeader = ({
       return `${webUrl}/s/${data.id}`;
     } else if (buildEnv.NEXT_PUBLIC_IS_CAP && customDomain && domainVerified) {
       return `${customDomain}/s/${data.id}`;
-    } else if (buildEnv.NEXT_PUBLIC_IS_CAP && !customDomain && !domainVerified) {
+    } else if (
+      buildEnv.NEXT_PUBLIC_IS_CAP &&
+      !customDomain &&
+      !domainVerified
+    ) {
       return `cap.link/${data.id}`;
     } else {
       return `${webUrl}/s/${data.id}`;
     }
   };
 
-  const isUserPro = user
-    ? isUserOnProPlan({
-      subscriptionStatus: user.stripeSubscriptionStatus,
-    })
-    : false;
+  const isUserPro = userIsPro(user);
 
   const handleSharingUpdated = () => {
     refresh();

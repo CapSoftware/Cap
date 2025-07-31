@@ -159,6 +159,22 @@ impl App {
             }
         }
     }
+
+    async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
+        let logfile =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
+
+        self.recording_logging_handle
+            .reload(Some(Box::new(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_writer(logfile),
+            ) as DynLoggingLayer))
+            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -841,6 +857,13 @@ async fn create_editor_instance(window: Window) -> Result<SerializedEditorInstan
 async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, String> {
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
+}
+#[tauri::command]
+#[specta::specta]
+async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> Result<(), String> {
+    let mut meta = editor.meta().clone();
+    meta.pretty_name = pretty_name;
+    meta.save_for_project().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1874,6 +1897,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
+            set_pretty_name,
             set_server_url,
             set_camera_preview_state,
             await_camera_preview_ready,
@@ -1904,6 +1928,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
+            recording::RecordingEvent
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
