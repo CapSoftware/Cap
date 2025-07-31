@@ -1,12 +1,13 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
-import { faCloudUpload, faSpinner } from "@fortawesome/free-solid-svg-icons";
+import { faCloudUpload, faSpinner, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Image from "next/image";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Tooltip } from "./Tooltip";
 
 export interface FileInputProps {
   onChange?: (file: File | null) => void;
@@ -18,6 +19,8 @@ export interface FileInputProps {
   initialPreviewUrl?: string | null;
   onRemove?: () => void;
   isLoading?: boolean;
+  height?: string | number;
+  previewIconSize?: string | number;
 }
 
 export const FileInput: React.FC<FileInputProps> = ({
@@ -30,6 +33,8 @@ export const FileInput: React.FC<FileInputProps> = ({
   initialPreviewUrl = null,
   onRemove,
   isLoading = false,
+  height = "44px",
+  previewIconSize = 20,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -176,11 +181,13 @@ export const FileInput: React.FC<FileInputProps> = ({
 
   return (
     <div className={`relative ${className}`}>
-      <div className="h-[44px]">
+      <div style={{
+        height: height,
+      }}>
         {" "}
         {/* Fixed height container to prevent resizing */}
         {selectedFile || previewUrl ? (
-          <div className="flex gap-2 items-center p-1.5 rounded-xl border bg-gray-1 border-gray-4 h-full">
+          <div className="flex gap-2 items-center p-1.5 rounded-xl border border-dashed bg-gray-1 border-gray-4 h-full">
             <div className="flex flex-1 gap-1.5 items-center">
               <div className="flex flex-1 gap-1 items-center">
                 {selectedFile ? (
@@ -193,17 +200,21 @@ export const FileInput: React.FC<FileInputProps> = ({
                     </p>
                   </>
                 ) : (
-                  <div className="flex gap-2 items-center">
+                  <div className="flex gap-2 items-center px-2">
                     <p className="text-xs font-medium text-gray-12">
                       Current icon:{" "}
                     </p>
-                    <div className="overflow-hidden relative flex-shrink-0 rounded-md size-5">
+                    <div style={{
+                      width: previewIconSize,
+                      height: previewIconSize,
+                    }} className="overflow-hidden relative flex-shrink-0 rounded-md">
                       {previewUrl && (
                         <Image
                           src={previewUrl}
+                          width={36}
+                          height={36}
                           alt="File preview"
-                          fill
-                          className="object-contain rounded-full"
+                          className="object-cover rounded-full"
                         />
                       )}
                     </div>
@@ -211,19 +222,19 @@ export const FileInput: React.FC<FileInputProps> = ({
                 )}
               </div>
             </div>
-            <Button
-              variant="destructive"
-              size="xs"
-              disabled={isLoading || disabled}
-              onClick={handleRemove}
-              style={
-                {
-                  "--gradient-border-radius": "8px",
-                } as React.CSSProperties
-              }
+            <Tooltip
+              content="Remove icon"
             >
-              Remove
-            </Button>
+              <Button
+                variant="outline"
+                size="xs"
+                className="!p-0 size-8 group mr-2"
+                disabled={isLoading || disabled}
+                onClick={handleRemove}
+              >
+                <FontAwesomeIcon className="size-2.5 text-gray-12 group-hover:text-gray-1" icon={faTrash} />
+              </Button>
+            </Tooltip>
           </div>
         ) : (
           <div

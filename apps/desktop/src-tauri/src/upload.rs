@@ -1,39 +1,28 @@
 // credit @filleduchaos
 
+use crate::web_api::ManagerExt;
+use crate::{UploadProgress, VideoUploadInfo};
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use cap_utils::spawn_actor;
 use flume::Receiver;
-use futures::{stream, StreamExt};
-use image::codecs::jpeg::JpegEncoder;
+use futures::{StreamExt, stream};
 use image::ImageReader;
+use image::codecs::jpeg::JpegEncoder;
+use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
-use reqwest::{multipart::Form, StatusCode};
+use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
-use std::io::SeekFrom;
+use specta::Type;
 use std::path::PathBuf;
-use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::sync::mpsc;
-use tokio::sync::RwLock;
 use tokio::task;
 use tokio::time::sleep;
-use tracing::{error, info, trace, warn};
-
-use crate::web_api::{self, ManagerExt};
-
-use crate::{
-    get_video_metadata, notifications, App, MutableState, RecordingStopped, UploadProgress,
-    VideoUploadInfo,
-};
-use serde::de::{self, Deserializer};
-use serde::{Deserialize, Serialize};
-use specta::Type;
+use tracing::{error, info, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
@@ -880,7 +869,7 @@ impl InstantMultipartUpload {
                 return Err(format!(
                     "Failed to request presigned URL for part {}: {}",
                     *part_number, e
-                ))
+                ));
             }
         };
 
@@ -981,7 +970,7 @@ impl InstantMultipartUpload {
                 return Err(format!(
                     "Failed to upload part {} after {} attempts",
                     *part_number, max_retries
-                ))
+                ));
             }
         };
 

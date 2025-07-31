@@ -5,10 +5,10 @@ use cidre::av;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
-        -> bool;
+    -> bool;
 }
 
 #[derive(Serialize, Deserialize, specta::Type)]

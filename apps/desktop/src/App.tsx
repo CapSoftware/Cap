@@ -83,7 +83,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              currentWindow.show();
+              if (location.pathname !== "/camera") currentWindow.show();
             });
 
             return (
