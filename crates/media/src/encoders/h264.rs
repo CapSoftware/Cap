@@ -202,7 +202,7 @@ fn get_codec_and_options(
             // looks terrible rn :(
             // "h264_videotoolbox"
         } else {
-            "h264_mf"
+            "libx264"
         }
     };
 
@@ -230,8 +230,7 @@ fn get_codec_and_options(
             options.set("vsync", "1");
             options.set("g", &keyframe_interval_str);
             options.set("keyint_min", &keyframe_interval_str);
-        }
-        else if encoder_name == "h264_mf" {
+        } else if encoder_name == "h264_mf" {
             options.set("hw_encoding", "true");
             options.set("scenario", "4");
             options.set("quality", "1");

@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample};
+use ffmpeg::format::Sample;
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
@@ -10,7 +10,7 @@ use scap::{
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow, sync::{Arc}, time::SystemTime};
+use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -470,6 +470,48 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         let mut video_i = 0;
         let mut audio_i = 0;
 
+        let mut frames_dropped = 0;
+
+        // Frame drop rate tracking state
+        use std::collections::VecDeque;
+        use std::time::{Duration, Instant};
+
+        let mut frame_events: VecDeque<(Instant, bool)> = VecDeque::new();
+        let window_duration = Duration::from_secs(3);
+        let max_drop_rate_threshold = 0.2;
+        let mut last_cleanup = Instant::now();
+        let mut last_log = Instant::now();
+        let log_interval = Duration::from_secs(5);
+
+        // Helper function to clean up old frame events
+        let cleanup_old_events = |frame_events: &mut VecDeque<(Instant, bool)>, now: Instant| {
+            let cutoff = now - window_duration;
+            while let Some(&(timestamp, _)) = frame_events.front() {
+                if timestamp < cutoff {
+                    frame_events.pop_front();
+                } else {
+                    break;
+                }
+            }
+        };
+
+        // Helper function to calculate current drop rate
+        let calculate_drop_rate =
+            |frame_events: &mut VecDeque<(Instant, bool)>| -> (f64, usize, usize) {
+                let now = Instant::now();
+                cleanup_old_events(frame_events, now);
+
+                if frame_events.is_empty() {
+                    return (0.0, 0, 0);
+                }
+
+                let total_frames = frame_events.len();
+                let dropped_frames = frame_events.iter().filter(|(_, dropped)| *dropped).count();
+                let drop_rate = dropped_frames as f64 / total_frames as f64;
+
+                (drop_rate, dropped_frames, total_frames)
+            };
+
         inner(
             self,
             ready_signal,
@@ -530,16 +572,53 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                     ));
 
-                    match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
+                    // Record frame attempt and check if it was dropped
+                    let now = Instant::now();
+                    let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
                         Err(flume::TrySendError::Disconnected(_)) => {
                             error!("Pipeline is unreachable. Shutting down recording.");
                             return ControlFlow::Break(());
                         }
                         Err(flume::TrySendError::Full(_)) => {
                             warn!("Screen capture sender is full, dropping frame");
-
+                            frames_dropped += 1;
+                            true
                         }
-                        _ => {}
+                        _ => false,
+                    };
+
+                    frame_events.push_back((now, frame_dropped));
+
+                    if now.duration_since(last_cleanup) > Duration::from_millis(100) {
+                        cleanup_old_events(&mut frame_events, now);
+                        last_cleanup = now;
+                    }
+
+                    // Check drop rate and potentially exit
+                    let (drop_rate, dropped_count, total_count) =
+                        calculate_drop_rate(&mut frame_events);
+
+                    if drop_rate > max_drop_rate_threshold && total_count >= 10 {
+                        error!(
+                            "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            window_duration.as_secs()
+                        );
+                        return ControlFlow::Break(());
+                    }
+
+                    // Periodic logging of drop rate
+                    if now.duration_since(last_log) > log_interval && total_count > 0 {
+                        info!(
+                            "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            frames_dropped
+                        );
+                        last_log = now;
                     }
 
                     ControlFlow::Continue(())
@@ -723,6 +802,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             }
                         }
                         sc::stream::OutputType::Audio => {
+                            use ffmpeg::ChannelLayout;
+
                             let res = || {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
