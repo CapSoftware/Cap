@@ -167,7 +167,7 @@ pub enum ShowCapWindow {
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -263,17 +263,6 @@ impl ShowCapWindow {
                     .shadow(true)
                     .center();
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::ModeSelect => {
@@ -293,23 +282,10 @@ impl ShowCapWindow {
                     .focused(true)
                     .shadow(true);
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
-
-                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
 
                 let mut window_builder = self
                     .window_builder(app, "/camera")
@@ -326,12 +302,6 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .initialization_script(&format!(
-                        "
-			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {port};
-		                ",
-                    ))
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -432,9 +402,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let mut width = 180.0 + 32.0;
 
                 let height = 40.0;
@@ -455,6 +423,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]
