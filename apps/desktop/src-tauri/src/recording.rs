@@ -331,7 +331,6 @@ pub async fn start_recording(
     }
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
-    dbg!(countdown);
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;

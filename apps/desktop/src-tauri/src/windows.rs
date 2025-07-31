@@ -462,7 +462,7 @@ impl ShowCapWindow {
                     .skip_taskbar(true)
                     .initialization_script(format!(
                         "window.COUNTDOWN = {};",
-                        dbg!(countdown.unwrap_or_default())
+                        countdown.unwrap_or_default()
                     ))
                     .build()?;
 
