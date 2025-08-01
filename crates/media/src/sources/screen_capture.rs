@@ -105,7 +105,6 @@ impl ScreenCaptureTarget {
 
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
-    output_resolution: Option<ScapResolution>,
     output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
@@ -126,7 +125,7 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
         f.debug_struct("ScreenCaptureSource")
             .field("target", &self.target)
             .field("bounds", &self.bounds)
-            .field("output_resolution", &self.output_resolution)
+            // .field("output_resolution", &self.output_resolution)
             .field("output_type", &self.output_type)
             .field("fps", &self.fps)
             .field("video_info", &self.video_info)
@@ -167,7 +166,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     fn clone(&self) -> Self {
         Self {
             target: self.target.clone(),
-            output_resolution: self.output_resolution,
             output_type: self.output_type,
             fps: self.fps,
             video_info: self.video_info.clone(),
@@ -227,7 +225,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let mut this = Self {
             target: target.clone(),
-            output_resolution: None,
             output_type,
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
@@ -432,7 +429,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             target: Some(target.clone()),
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
-            output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
+            output_resolution: ScapResolution::Captured,
             excluded_targets: (!excluded_targets.is_empty()).then(|| excluded_targets),
             captures_audio,
             exclude_current_process_audio: true,
@@ -478,7 +475,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         let mut frame_events: VecDeque<(Instant, bool)> = VecDeque::new();
         let window_duration = Duration::from_secs(3);
-        let max_drop_rate_threshold = 0.2;
+        let max_drop_rate_threshold = 0.25;
         let mut last_cleanup = Instant::now();
         let mut last_log = Instant::now();
         let log_interval = Duration::from_secs(5);
@@ -606,6 +603,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                             total_count,
                             window_duration.as_secs()
                         );
+                        panic!("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.");
                         return ControlFlow::Break(());
                     }
 

@@ -7,7 +7,7 @@ use std::{
 
 use cap_media::{
     data::AudioInfo,
-    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, OpusEncoder},
+    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File},
     feeds::AudioInputFeed,
     pipeline::{builder::PipelineBuilder, task::PipelineSinkTask, RealTimeClock},
     sources::{
