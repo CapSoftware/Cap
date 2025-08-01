@@ -311,7 +311,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
     let mut ideal_formats = formats
         .clone()
         .into_iter()
-        .filter(|f| f.frame_rate() >= 30.0 && f.width() < 1300 && f.height() < 1300)
+        .filter(|f| f.frame_rate() >= 30.0 && f.width() < 2000 && f.height() < 2000)
         .collect::<Vec<_>>();
 
     if ideal_formats.is_empty() {
