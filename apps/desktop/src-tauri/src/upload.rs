@@ -401,19 +401,12 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         .streams()
         .best(ffmpeg::media::Type::Video)
         .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
-    let audio_stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
 
     let duration_millis = input.duration() as f64 / 1000.;
 
     let video_codec = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
-    let audio_codec = ffmpeg::codec::context::Context::from_parameters(audio_stream.parameters())
-        .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
     let video_codec_name = video_codec.id();
-    let audio_codec_name = audio_codec.id();
     let video = video_codec.decoder().video().unwrap();
     let width = video.width();
     let height = video.height();
@@ -423,6 +416,16 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         .unwrap_or("-".into());
     let bit_rate = video.bit_rate();
 
+    let audio_codec_name = input
+        .streams()
+        .best(ffmpeg::media::Type::Audio)
+        .map(|audio_stream| {
+            ffmpeg::codec::context::Context::from_parameters(audio_stream.parameters())
+                .map(|c| c.id())
+                .map_err(|e| format!("Unable to read audio codec information: {e}"))
+        })
+        .transpose()?;
+
     Ok(S3VideoMeta {
         duration: duration_millis.to_string(),
         resolution: format!("{}x{}", width, height),
@@ -431,9 +434,9 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         video_codec: format!("{video_codec_name:?}")
             .replace("Id::", "")
             .to_lowercase(),
-        audio_codec: format!("{audio_codec_name:?}")
-            .replace("Id::", "")
-            .to_lowercase(),
+        audio_codec: audio_codec_name
+            .map(|name| format!("{name:?}").replace("Id::", "").to_lowercase())
+            .unwrap_or_default(),
     })
 }
 

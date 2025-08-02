@@ -4,8 +4,6 @@ use flume::Receiver;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::feeds::RawCameraFrame;
-
 pub struct WSFrame {
     pub data: Vec<u8>,
     pub width: u32,

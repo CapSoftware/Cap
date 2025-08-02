@@ -287,6 +287,7 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
+                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
                 let mut window_builder = self
                     .window_builder(app, "/camera")
                     .maximized(false)
@@ -302,7 +303,14 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .transparent(true);
+                    .initialization_script(&format!(
+                        "
+			                window.__CAP__ = window.__CAP__ ?? {{}};
+			                window.__CAP__.cameraWsPort = {port};
+		                ",
+                    ))
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
 

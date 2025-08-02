@@ -40,9 +40,6 @@ pub enum MediaError {
     #[error("FFmpeg error: {0}")]
     FFmpeg(#[from] ffmpeg::Error),
 
-    #[error("Camera error: {0}")]
-    Nokhwa(#[from] nokhwa::NokhwaError),
-
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
 

@@ -4,18 +4,24 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ffmpeg = { workspace = true }
 thiserror.workspace = true
+inquire = "0.7.5"
 
+[target.'cfg(windows)'.dependencies]
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 
-[target.'cfg(target_os= "windows")'.dependencies]
-windows = { version = "0.60", features = ["Win32_Media_MediaFoundation"] }
-windows-core = { version = "0.60" }
+windows = { workspace = true }
+windows-core = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 inquire = "0.7.5"
+
+cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
+cap-camera-directshow = { path = "../camera-directshow" }
+
+windows = { workspace = true }
+windows-core = { workspace = true }

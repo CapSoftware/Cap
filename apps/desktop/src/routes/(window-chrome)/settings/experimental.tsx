@@ -23,6 +23,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      enableNativeCameraPreview: false,
     }
   );
 
@@ -57,6 +58,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 description="Studio Mode recordings will capture cursor state separately for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
                 value={!!settings.customCursorCapture}
                 onChange={(value) => handleChange("customCursorCapture", value)}
+              />
+              <ToggleSetting
+                label="Native camera preview"
+                description="Show the camera preview using a native GPU surface instead of rendering it within the webview. This is not functional on certain Windows systems so your mileage may vary."
+                value={!!settings.enableNativeCameraPreview}
+                onChange={(value) =>
+                  handleChange("enableNativeCameraPreview", value)
+                }
               />
             </div>
           </div>
