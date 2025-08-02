@@ -1,8 +1,8 @@
 use cap_project::{CursorEvents, CursorMoveEvent, XY};
 
 use crate::{
-    spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
     Coord, RawDisplayUVSpace,
+    spring_mass_damper::{SpringMassDamperSimulation, SpringMassDamperSimulationConfig},
 };
 
 #[derive(Debug, Clone)]

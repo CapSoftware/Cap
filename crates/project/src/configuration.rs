@@ -59,7 +59,7 @@ pub struct XY<T> {
 }
 
 impl<T> XY<T> {
-    pub fn new(x: T, y: T) -> Self {
+    pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
@@ -144,6 +144,24 @@ impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
         Self {
             x: self.x / other.x,
             y: self.y / other.y,
+        }
+    }
+}
+
+impl Into<XY<f64>> for XY<f32> {
+    fn into(self) -> XY<f64> {
+        XY {
+            x: self.x as f64,
+            y: self.y as f64,
+        }
+    }
+}
+
+impl<T> Into<XY<T>> for (T, T) {
+    fn into(self) -> XY<T> {
+        XY {
+            x: self.0,
+            y: self.1,
         }
     }
 }
@@ -354,6 +372,12 @@ pub struct CursorConfiguration {
     pub raw: bool,
     #[serde(default)]
     pub motion_blur: f32,
+    #[serde(default = "yes")]
+    pub use_svg: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for CursorConfiguration {
@@ -369,6 +393,7 @@ impl Default for CursorConfiguration {
             friction: 20.0,
             raw: false,
             motion_blur: 0.5,
+            use_svg: true,
         }
     }
 }
@@ -539,7 +564,7 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let config_str =
             std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
-        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+        let config: Self = serde_json::from_str(&config_str).unwrap_or_default();
 
         Ok(config)
     }

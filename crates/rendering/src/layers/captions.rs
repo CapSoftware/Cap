@@ -5,9 +5,9 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use log::{debug, info, warn};
-use wgpu::{util::DeviceExt, Device, Queue};
+use wgpu::{Device, Queue, util::DeviceExt};
 
-use crate::{parse_color_component, DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
+use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 /// Represents a caption segment with timing and text
 #[derive(Debug, Clone)]

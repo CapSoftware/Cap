@@ -1,0 +1,23 @@
+[package]
+name = "cap-cursor-info"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dev-dependencies]
+hex = "0.4.3"
+image = "0.25.6"
+sha2 = "0.10.9"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-app-kit = "0.3.1"
+objc2 = "0.6.1"
+
+[target.'cfg(target_os= "windows")'.dev-dependencies]
+windows = { workspace = true, features = [
+	"Win32_Graphics_Gdi",
+	"Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

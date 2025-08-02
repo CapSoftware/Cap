@@ -1,8 +1,8 @@
 use cap_project::XY;
 
 use crate::{
-    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     DecodedSegmentFrames,
+    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
 };
 
 pub struct DisplayLayer {

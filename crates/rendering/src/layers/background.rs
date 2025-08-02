@@ -6,8 +6,8 @@ use specta::Type;
 use wgpu::{include_wgsl, util::DeviceExt};
 
 use crate::{
-    create_shader_render_pipeline, srgb_to_linear, ProjectUniforms, RenderVideoConstants,
-    RenderingError,
+    ProjectUniforms, RenderVideoConstants, RenderingError, create_shader_render_pipeline,
+    srgb_to_linear,
 };
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
