@@ -1,5 +1,5 @@
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, ChannelLayout};
+use ffmpeg::format::Sample;
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
@@ -107,7 +107,6 @@ impl ScreenCaptureTarget {
 
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
-    output_resolution: Option<ScapResolution>,
     output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
@@ -128,7 +127,7 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
         f.debug_struct("ScreenCaptureSource")
             .field("target", &self.target)
             .field("bounds", &self.bounds)
-            .field("output_resolution", &self.output_resolution)
+            // .field("output_resolution", &self.output_resolution)
             .field("output_type", &self.output_type)
             .field("fps", &self.fps)
             .field("video_info", &self.video_info)
@@ -169,7 +168,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     fn clone(&self) -> Self {
         Self {
             target: self.target.clone(),
-            output_resolution: self.output_resolution,
             output_type: self.output_type,
             fps: self.fps,
             video_info: self.video_info.clone(),
@@ -229,7 +227,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let mut this = Self {
             target: target.clone(),
-            output_resolution: None,
             output_type,
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
@@ -434,7 +431,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             target: Some(target.clone()),
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
-            output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
+            output_resolution: ScapResolution::Captured,
             excluded_targets: (!excluded_targets.is_empty()).then(|| excluded_targets),
             captures_audio,
             exclude_current_process_audio: true,
@@ -471,6 +468,48 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         let mut video_i = 0;
         let mut audio_i = 0;
+
+        let mut frames_dropped = 0;
+
+        // Frame drop rate tracking state
+        use std::collections::VecDeque;
+        use std::time::{Duration, Instant};
+
+        let mut frame_events: VecDeque<(Instant, bool)> = VecDeque::new();
+        let window_duration = Duration::from_secs(3);
+        let max_drop_rate_threshold = 0.25;
+        let mut last_cleanup = Instant::now();
+        let mut last_log = Instant::now();
+        let log_interval = Duration::from_secs(5);
+
+        // Helper function to clean up old frame events
+        let cleanup_old_events = |frame_events: &mut VecDeque<(Instant, bool)>, now: Instant| {
+            let cutoff = now - window_duration;
+            while let Some(&(timestamp, _)) = frame_events.front() {
+                if timestamp < cutoff {
+                    frame_events.pop_front();
+                } else {
+                    break;
+                }
+            }
+        };
+
+        // Helper function to calculate current drop rate
+        let calculate_drop_rate =
+            |frame_events: &mut VecDeque<(Instant, bool)>| -> (f64, usize, usize) {
+                let now = Instant::now();
+                cleanup_old_events(frame_events, now);
+
+                if frame_events.is_empty() {
+                    return (0.0, 0, 0);
+                }
+
+                let total_frames = frame_events.len();
+                let dropped_frames = frame_events.iter().filter(|(_, dropped)| *dropped).count();
+                let drop_rate = dropped_frames as f64 / total_frames as f64;
+
+                (drop_rate, dropped_frames, total_frames)
+            };
 
         inner(
             self,
@@ -532,9 +571,54 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                     ));
 
-                    if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
-                        error!("Pipeline is unreachable. Shutting down recording.");
+                    // Record frame attempt and check if it was dropped
+                    let now = Instant::now();
+                    let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
+                        Err(flume::TrySendError::Disconnected(_)) => {
+                            error!("Pipeline is unreachable. Shutting down recording.");
+                            return ControlFlow::Break(());
+                        }
+                        Err(flume::TrySendError::Full(_)) => {
+                            warn!("Screen capture sender is full, dropping frame");
+                            frames_dropped += 1;
+                            true
+                        }
+                        _ => false,
+                    };
+
+                    frame_events.push_back((now, frame_dropped));
+
+                    if now.duration_since(last_cleanup) > Duration::from_millis(100) {
+                        cleanup_old_events(&mut frame_events, now);
+                        last_cleanup = now;
+                    }
+
+                    // Check drop rate and potentially exit
+                    let (drop_rate, dropped_count, total_count) =
+                        calculate_drop_rate(&mut frame_events);
+
+                    if drop_rate > max_drop_rate_threshold && total_count >= 10 {
+                        error!(
+                            "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            window_duration.as_secs()
+                        );
+                        panic!("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.");
                         return ControlFlow::Break(());
+                    }
+
+                    // Periodic logging of drop rate
+                    if now.duration_since(last_log) > log_interval && total_count > 0 {
+                        info!(
+                            "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            frames_dropped
+                        );
+                        last_log = now;
                     }
 
                     ControlFlow::Continue(())
@@ -718,6 +802,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             }
                         }
                         sc::stream::OutputType::Audio => {
+                            use ffmpeg::ChannelLayout;
+
                             let res = || {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
