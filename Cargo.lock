@@ -1234,6 +1234,7 @@ dependencies = [
  "image 0.25.5",
  "objc",
  "relative-path",
+ "scap",
  "screencapturekit",
  "serde",
  "serde_json",
