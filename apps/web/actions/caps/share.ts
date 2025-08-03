@@ -10,9 +10,10 @@ import { nanoId } from "@cap/database/helpers"
 interface ShareCapParams {
   capId: string
   spaceIds: string[]
+  public?: boolean
 }
 
-export async function shareCap({ capId, spaceIds }: ShareCapParams) {
+export async function shareCap({ capId, spaceIds, public: isPublic }: ShareCapParams) {
   try {
     
     const user = await getCurrentUser()
@@ -122,6 +123,15 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
         })
       }
     }
+
+    // Update public status if provided
+    if (typeof isPublic === 'boolean') {
+      await db()
+        .update(videos)
+        .set({ public: isPublic })
+        .where(eq(videos.id, capId))
+    }
+
     revalidatePath('/dashboard/caps')
     revalidatePath(`/dashboard/caps/${capId}`)
     return { success: true }

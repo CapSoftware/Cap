@@ -173,6 +173,7 @@ export const ShareHeader = ({
         capName={data.name}
         sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
+        isPublic={data.public}
       />
       <div>
         <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">

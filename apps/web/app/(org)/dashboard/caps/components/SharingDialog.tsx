@@ -8,12 +8,13 @@ import {
   DialogTitle,
   Input,
   Avatar,
+  Switch,
 } from "@cap/ui";
 import { faShareNodes, faCopy } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { Check, Search } from "lucide-react";
+import { Check, Search, Globe2 } from "lucide-react";
 import Image from "next/image";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -32,6 +33,7 @@ interface SharingDialogProps {
     organizationId: string;
   }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
+  isPublic?: boolean;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -41,6 +43,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   capName,
   sharedSpaces,
   onSharingUpdated,
+  isPublic = false,
 }) => {
   const { spacesData } = useDashboardContext();
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
@@ -49,9 +52,11 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     Set<string>
   >(new Set());
   const [loading, setLoading] = useState(false);
-  const tabs = ["Share to space", "Embed"] as const;
+  const [publicToggle, setPublicToggle] = useState(isPublic);
+  const [initialPublicState, setInitialPublicState] = useState(isPublic);
+  const tabs = ["Share", "Embed"] as const;
   const [activeTab, setActiveTab] =
-    useState<(typeof tabs)[number]>("Share to space");
+    useState<(typeof tabs)[number]>("Share");
 
   const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
 
@@ -60,10 +65,12 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       const spaceIds = new Set(sharedSpaces.map((space) => space.id));
       setSelectedSpaces(spaceIds);
       setInitialSelectedSpaces(spaceIds);
+      setPublicToggle(isPublic);
+      setInitialPublicState(isPublic);
       setSearchTerm("");
       setActiveTab(tabs[0]);
     }
-  }, [isOpen, sharedSpaces]);
+  }, [isOpen, sharedSpaces, isPublic]);
 
   const isSpaceSharedViaOrganization = useCallback(
     (spaceId: string) => {
@@ -92,6 +99,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
       const result = await shareCap({
         capId,
         spaceIds: Array.from(selectedSpaces),
+        public: publicToggle,
       });
 
       if (!result.success) {
@@ -108,22 +116,26 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         (id) => !newSelectedSpaces.includes(id)
       );
 
+      const publicChanged = publicToggle !== initialPublicState;
+
       const getSpaceName = (id: string) => {
         const space = spacesData?.find((space) => space.id === id);
         return space?.name || `Space ${id}`;
       };
 
-      if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0) {
+      if (publicChanged && addedSpaceIds.length === 0 && removedSpaceIds.length === 0) {
+        toast.success(publicToggle ? "Video is now public" : "Video is now private");
+      } else if (addedSpaceIds.length === 1 && removedSpaceIds.length === 0 && !publicChanged) {
         toast.success(`Shared to ${getSpaceName(addedSpaceIds[0] as string)}`);
-      } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0) {
+      } else if (removedSpaceIds.length === 1 && addedSpaceIds.length === 0 && !publicChanged) {
         toast.success(
           `Unshared from ${getSpaceName(removedSpaceIds[0] as string)}`
         );
-      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0) {
+      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length === 0 && !publicChanged) {
         toast.success(`Shared to ${addedSpaceIds.length} spaces`);
-      } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0) {
+      } else if (removedSpaceIds.length > 0 && addedSpaceIds.length === 0 && !publicChanged) {
         toast.success(`Unshared from ${removedSpaceIds.length} spaces`);
-      } else if (addedSpaceIds.length > 0 && removedSpaceIds.length > 0) {
+      } else if (addedSpaceIds.length > 0 || removedSpaceIds.length > 0 || publicChanged) {
         toast.success(`Sharing settings updated`);
       } else {
         toast.info("No changes to sharing settings");
@@ -163,13 +175,13 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         <DialogHeader
           icon={<FontAwesomeIcon icon={faShareNodes} className="size-3.5" />}
           description={
-            activeTab === "Share to space"
-              ? "Select the spaces you would like to share with"
+            activeTab === "Share"
+              ? "Select how you would like to share the cap"
               : "Copy the embed code to share your cap"
           }
         >
           <DialogTitle className="truncate w-full max-w-[320px]">
-            {activeTab === "Share to space"
+            {activeTab === "Share"
               ? `Share ${capName}`
               : `Embed ${capName}`}
           </DialogTitle>
@@ -202,12 +214,29 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         </div>
 
         <div className="p-5">
-          {activeTab === "Share to space" ? (
+          {activeTab === "Share" ? (
             <>
+              {/* Public sharing toggle */}
+              <div className="flex items-center justify-between p-3 mb-4 rounded-lg border bg-gray-1 border-gray-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center justify-center w-8 h-8 rounded-full bg-gray-3">
+                    <Globe2 className="w-4 h-4 text-gray-11" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-12">Anyone with the link</p>
+                    <p className="text-xs text-gray-10">Anyone with this link can view the video</p>
+                  </div>
+                </div>
+                <Switch
+                  checked={publicToggle}
+                  onCheckedChange={setPublicToggle}
+                />
+              </div>
+
               <div className="relative mb-3">
                 <Input
                   type="text"
-                  placeholder="Search..."
+                  placeholder="Search and share to spaces..."
                   value={searchTerm}
                   className="pr-8"
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -264,7 +293,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
         </div>
 
         <DialogFooter className="p-5 border-t border-gray-4">
-          {activeTab === "Share to space" ? (
+          {activeTab === "Share" ? (
             <>
               <Button size="sm" variant="gray" onClick={onClose}>
                 Cancel
