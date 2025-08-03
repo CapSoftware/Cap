@@ -54,7 +54,7 @@ pub struct StudioRecordingActor {
     recording_dir: PathBuf,
     fps: u32,
     segments: Vec<StudioRecordingSegment>,
-    start_time: SystemTime,
+    start_instant: Instant,
 }
 
 pub struct StudioRecordingSegment {
@@ -142,15 +142,15 @@ pub async fn spawn_studio_recording_actor<'a>(
     let segments_dir = ensure_dir(&content_dir.join("segments"))?;
     let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
+    // TODO: move everything to start_instant
     let start_time = SystemTime::now();
-
-    // let bounds = screen_source.get_bounds().clone();
+    let start_instant = Instant::now();
 
     // debug!("screen capture: {screen_source:#?}");
 
     if let Some(camera_feed) = &camera_feed {
         let camera_feed = camera_feed.lock().await;
-        debug!("camera device info: {:#?}", camera_feed.camera_info());
+        // debug!("camera device info: {:#?}", camera_feed.camera_info());
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
 
@@ -168,6 +168,7 @@ pub async fn spawn_studio_recording_actor<'a>(
         camera_feed,
         custom_cursor_capture,
         start_time,
+        start_instant,
     );
 
     let index = 0;
@@ -194,7 +195,7 @@ pub async fn spawn_studio_recording_actor<'a>(
             recording_dir,
             fps,
             segments: Vec::new(),
-            start_time,
+            start_instant,
         };
 
         let mut state = StudioRecordingActorState::Recording {
@@ -556,6 +557,7 @@ struct SegmentPipelineFactory {
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     custom_cursor_capture: bool,
     start_time: SystemTime,
+    start_instant: Instant,
     index: u32,
 }
 
@@ -569,6 +571,7 @@ impl SegmentPipelineFactory {
         camera_feed: Option<Arc<Mutex<CameraFeed>>>,
         custom_cursor_capture: bool,
         start_time: SystemTime,
+        start_instant: Instant,
     ) -> Self {
         Self {
             segments_dir,
@@ -579,6 +582,7 @@ impl SegmentPipelineFactory {
             camera_feed,
             custom_cursor_capture,
             start_time,
+            start_instant,
             index: 0,
         }
     }
@@ -605,7 +609,8 @@ impl SegmentPipelineFactory {
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
-            self.start_time.clone(),
+            self.start_time,
+            self.start_instant,
         )
         .await?;
 
@@ -628,6 +633,7 @@ async fn create_segment_pipeline(
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     start_time: SystemTime,
+    start_instant: Instant,
 ) -> Result<
     (
         StudioRecordingPipeline,
@@ -781,7 +787,7 @@ async fn create_segment_pipeline(
     let camera = if let Some(camera_feed) = camera_feed {
         let (tx, rx) = flume::bounded(8);
 
-        let camera_source = CameraSource::init(camera_feed, tx, start_time);
+        let camera_source = CameraSource::init(camera_feed, tx, start_instant);
         let camera_config = camera_source.info();
         let output_path = dir.join("camera.mp4");
 

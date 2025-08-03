@@ -6,26 +6,28 @@ use std::path::PathBuf;
 use super::{Bounds, CursorShape, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
-use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
-};
-use windows::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
-    MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
-    MONITOR_DEFAULTTONULL,
-};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
-    IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::Win32::{
+    Foundation::{CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
+    Graphics::{
+        Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
+        Gdi::{
+            EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
+            MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO,
+            MONITORINFOEXW, MONITOR_DEFAULTTONULL,
+        },
+    },
+    System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    },
+    UI::HiDpi::GetDpiForWindow,
+    UI::WindowsAndMessaging::{
+        EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
+        IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
+        IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+    },
 };
 
 #[inline]
@@ -115,7 +117,7 @@ impl Default for DefaultCursors {
 }
 
 unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
-    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)?;
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)?;
     if handle.is_invalid() {
         tracing::error!("Invalid PID {}", pid);
     }
