@@ -5,5 +5,5 @@ pub struct Flags {
 }
 
 pub const FLAGS: Flags = Flags {
-    captions: false, // cfg!(debug_assertions),
+    captions: true, // cfg!(debug_assertions),
 };

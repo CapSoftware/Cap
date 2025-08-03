@@ -22,6 +22,22 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 // Re-export caption types from cap_project
 pub use cap_project::{CaptionSegment, CaptionSettings};
 
+// Helper function to clean special tokens from text
+fn clean_special_tokens(text: &str) -> String {
+    let mut result = text.trim().to_string();
+    
+    // Remove all patterns that look like [_XXX] where XXX can be any characters
+    while let Some(start) = result.find("[_") {
+        if let Some(end) = result[start..].find(']') {
+            result.replace_range(start..start + end + 1, "");
+        } else {
+            break;
+        }
+    }
+    
+    result.trim().to_string()
+}
+
 // Convert the project type's float precision from f32 to f64 for compatibility
 #[derive(Debug, Serialize, Deserialize, Type, Clone)]
 pub struct CaptionData {
@@ -38,10 +54,7 @@ impl Default for CaptionData {
     }
 }
 
-// Model context is shared and cached
-lazy_static::lazy_static! {
-    static ref WHISPER_CONTEXT: Arc<Mutex<Option<WhisperContext>>> = Arc::new(Mutex::new(None));
-}
+// Removed global WHISPER_CONTEXT to prevent memory issues - now creating fresh contexts for each transcription
 
 // Constants
 const WHISPER_SAMPLE_RATE: u32 = 16000;
@@ -87,9 +100,12 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     audio_sources.push(base_path.join(system_audio));
                 }
 
-                // Add microphone audio if available
+                // Add microphone audio if available (check both "audio" and "mic" fields)
                 if let Some(audio) = segment["audio"]["path"].as_str() {
                     audio_sources.push(base_path.join(audio));
+                }
+                if let Some(mic) = segment["mic"]["path"].as_str() {
+                    audio_sources.push(base_path.join(mic));
                 }
             }
         }
@@ -518,19 +534,13 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
 /// Load or initialize the WhisperContext
 async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, String> {
-    let mut context_guard = WHISPER_CONTEXT.lock().await;
-
-    // Always create a new context to avoid issues with multiple uses
+    // Always create a new context for each transcription to avoid issues with multiple uses
     log::info!("Initializing Whisper context with model: {}", model_path);
     let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
         .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
 
-    *context_guard = Some(ctx);
-
-    // Get a reference to the context and wrap it in an Arc
-    let context_ref = context_guard.as_ref().unwrap();
-    let context_arc = unsafe { Arc::new(std::ptr::read(context_ref)) };
-    Ok(context_arc)
+    // Return the context wrapped in an Arc
+    Ok(Arc::new(ctx))
 }
 
 /// Process audio file with Whisper for transcription
@@ -616,6 +626,11 @@ fn process_with_whisper(
         let text = state
             .full_get_segment_text(i)
             .map_err(|e| format!("Failed to get segment text: {}", e))?;
+        
+        // Get the number of tokens in this segment
+        let n_tokens = state
+            .full_n_tokens(i)
+            .map_err(|e| format!("Failed to get token count for segment {}: {}", i, e))?;
 
         // Properly unwrap the Result first, then convert i64 to f64
         let start_i64 = state
@@ -629,13 +644,113 @@ fn process_with_whisper(
         let start_time = (start_i64 as f32) / 100.0;
         let end_time = (end_i64 as f32) / 100.0;
 
+        // Extract word-level timestamps using token data
+        let mut words = Vec::new();
+        let text_trimmed = text.trim();
+        
+        if !text_trimmed.is_empty() && n_tokens > 0 {
+            // Collect all tokens with their timestamps
+            let mut current_word = String::new();
+            let mut word_start_time: Option<f32> = None;
+            
+            for j in 0..n_tokens {
+                if let Ok(token_text) = state.full_get_token_text(i, j) {
+                    if let Ok(token_info) = state.full_get_token_data(i, j) {
+                        // Convert token timestamps from centiseconds to seconds
+                        let token_start = (token_info.t0 as f32) / 100.0;
+                        let token_end = (token_info.t1 as f32) / 100.0;
+                        
+                        // Skip special tokens (they start with [_ and end with ])
+                        let is_special_token = token_text.starts_with("[_") && token_text.ends_with("]");
+                        
+                        if !is_special_token {
+                            // Check if this token starts a new word (contains space at beginning or is first token)
+                            let is_word_boundary = token_text.starts_with(' ') || token_text.starts_with('\n') || (j == 0 && !current_word.is_empty());
+                            
+                            if is_word_boundary && !current_word.is_empty() {
+                                // Save the previous word
+                                if let Some(start) = word_start_time {
+                                    let cleaned_word = clean_special_tokens(&current_word);
+                                    if !cleaned_word.is_empty() {
+                                        words.push(cap_project::CaptionWord {
+                                            text: cleaned_word,
+                                            start,
+                                            end: token_start,
+                                        });
+                                    }
+                                }
+                                current_word.clear();
+                                word_start_time = None;
+                            }
+                            
+                            // Add token text to current word
+                            current_word.push_str(&token_text);
+                            
+                            // Set word start time if not set
+                            if word_start_time.is_none() {
+                                word_start_time = Some(token_start);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Don't forget the last word
+            if !current_word.is_empty() {
+                if let Some(start) = word_start_time {
+                    // Clean up any special tokens that might be attached to the word
+                    let cleaned_word = clean_special_tokens(&current_word);
+                    if !cleaned_word.is_empty() {
+                        words.push(cap_project::CaptionWord {
+                            text: cleaned_word,
+                            start,
+                            end: end_time,
+                        });
+                    }
+                }
+            }
+            
+            // Fallback to character-weighted distribution if no token data
+            if words.is_empty() {
+                let word_texts: Vec<&str> = text_trimmed.split_whitespace().collect();
+                let segment_duration = end_time - start_time;
+                
+                if !word_texts.is_empty() {
+                    let total_chars: usize = word_texts.iter().map(|w| w.len()).sum();
+                    let mut current_time = start_time;
+                    
+                    for word_text in word_texts.iter() {
+                        let word_weight = word_text.len() as f32 / total_chars as f32;
+                        let word_duration = segment_duration * word_weight;
+                        let word_end = current_time + word_duration;
+                        
+                        words.push(cap_project::CaptionWord {
+                            text: word_text.to_string(),
+                            start: current_time,
+                            end: word_end,
+                        });
+                        
+                        current_time = word_end;
+                    }
+                }
+            }
+        }
+
         // Add debug logging for timestamps
+        if !words.is_empty() {
+            log::debug!("Word-level timestamps for segment {}:", i);
+            for word in &words {
+                log::debug!("  '{}': {:.2}s - {:.2}s", word.text, word.start, word.end);
+            }
+        }
+        
         log::info!(
-            "Segment {}: start={}, end={}, text='{}'",
+            "Segment {}: start={}, end={}, text='{}', words={}",
             i,
             start_time,
             end_time,
-            text.trim()
+            text.trim(),
+            words.len()
         );
 
         if !text.trim().is_empty() {
@@ -644,6 +759,7 @@ fn process_with_whisper(
                 start: start_time,
                 end: end_time,
                 text: text.trim().to_string(),
+                words,
             });
         }
     }
@@ -873,6 +989,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                             start: start as f32,
                             end: end as f32,
                             text: text.to_string(),
+                            words: Vec::new(), // Legacy data doesn't have word-level timing
                         });
                     }
                 }

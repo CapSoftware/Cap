@@ -56,6 +56,7 @@ export function Player() {
               start: segment.start,
               end: segment.end,
               text: segment.text,
+              words: segment.words || [], // Include word-level timing data
             })),
             settings: {
               enabled: captionsStore.state.settings.enabled,

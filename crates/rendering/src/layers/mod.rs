@@ -1,6 +1,7 @@
 mod background;
 mod blur;
 mod camera;
+mod caption_background;
 mod captions;
 mod cursor;
 mod display;

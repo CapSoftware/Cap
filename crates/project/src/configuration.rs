@@ -457,11 +457,21 @@ pub const WALLPAPERS_PATH: &str = "assets/backgrounds/macOS";
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct CaptionWord {
+    pub text: String,
+    pub start: f32,
+    pub end: f32,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptionSegment {
     pub id: String,
     pub start: f32,
     pub end: f32,
     pub text: String,
+    #[serde(default)]
+    pub words: Vec<CaptionWord>,
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
