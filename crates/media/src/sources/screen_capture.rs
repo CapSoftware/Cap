@@ -1,5 +1,6 @@
+use cap_media_info::{AudioInfo, PlanarData, RawVideoFormat, VideoInfo};
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::format::Sample;
+use ffmpeg::{format::Sample, frame};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
@@ -16,7 +17,6 @@ use tracing::{debug, error, info, trace, warn};
 use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
-    data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
     platform::{self, logical_monitor_bounds, Bounds, Window},
     MediaError,
@@ -146,7 +146,7 @@ pub trait ScreenCaptureFormat {
 }
 
 impl ScreenCaptureFormat for AVFrameCapture {
-    type VideoFormat = FFVideo;
+    type VideoFormat = ffmpeg::frame::Video;
 
     fn audio_info() -> AudioInfo {
         let host = cpal::default_host();
@@ -528,8 +528,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         return ControlFlow::Continue(());
                     };
 
-                    let mut buffer =
-                        FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
+                    let mut buffer = frame::Video::new(
+                        video_info.pixel_format,
+                        video_info.width,
+                        video_info.height,
+                    );
 
                     let bytes_per_pixel = 4;
                     let width_in_bytes = frame.width as usize * bytes_per_pixel;
@@ -827,6 +830,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             frame.set_rate(48_000);
                             let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                             for i in 0..frame.planes() {
+                                use cap_media_info::PlanarData;
+
                                 frame.plane_data_mut(i).copy_from_slice(
                                     &slice[i * data_bytes_size as usize
                                         ..(i + 1) * data_bytes_size as usize],

@@ -1,4 +1,6 @@
 use cap_fail::{fail, fail_err};
+use cap_media_info::VideoInfo;
+use ffmpeg::frame;
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
 use futures::channel::oneshot;
 use std::{
@@ -8,8 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
-
-use crate::data::{FFVideo, VideoInfo};
 
 use cap_camera_ffmpeg::*;
 
@@ -40,7 +40,7 @@ enum CameraControl {
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
-    pub frame: FFVideo,
+    pub frame: frame::Video,
     pub timestamp: Duration,
     pub refrence_time: Instant,
 }

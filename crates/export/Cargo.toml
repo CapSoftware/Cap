@@ -10,6 +10,8 @@ cap-rendering = { path = "../rendering" }
 cap-editor = { path = "../editor" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
 
 tokio.workspace = true
 tempfile = "3.12.0"

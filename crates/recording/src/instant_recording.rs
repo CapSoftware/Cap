@@ -5,13 +5,13 @@ use std::{
 };
 
 use cap_media::{
-    data::VideoInfo,
     feeds::AudioInputFeed,
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
     MediaError,
 };
+use cap_media_info::VideoInfo;
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
