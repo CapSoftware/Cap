@@ -163,11 +163,18 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
     }
   };
 
+  // Filter out organization-level "All [OrgName]" entries as they're not real spaces
+  const realSpaces = spacesData?.filter((space) =>
+    !(space.id === space.organizationId && space.primary === true)
+  );
+
   const filteredSpaces = searchTerm
-    ? spacesData?.filter((space) =>
+    ? realSpaces?.filter((space) =>
       space.name.toLowerCase().includes(searchTerm.toLowerCase())
     )
-    : spacesData;
+    : realSpaces;
+
+
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -236,7 +243,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               <div className="relative mb-3">
                 <Input
                   type="text"
-                  placeholder="Search and share to spaces..."
+                  placeholder="Search and add to spaces..."
                   value={searchTerm}
                   className="pr-8"
                   onChange={(e) => setSearchTerm(e.target.value)}
@@ -262,7 +269,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                 ) : (
                   <div className="flex col-span-5 gap-2 justify-center items-center text-sm">
                     <p className="text-gray-12">
-                      {spacesData && spacesData.length > 0
+                      {realSpaces && realSpaces.length > 0
                         ? "No spaces match your search"
                         : "No spaces available"}
                     </p>
