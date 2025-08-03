@@ -139,7 +139,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 
   const handleCopyEmbedCode = async () => {
     const embedCode = `<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${process.env.NODE_ENV === "development"
-      ? "http://localhost:3000"
+      ? process.env.NEXT_PUBLIC_WEB_URL
       : "https://cap.so"
       }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`;
 
@@ -246,7 +246,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
               <div className="p-3 rounded-lg border bg-gray-3 border-gray-4">
                 <code className="font-mono text-xs break-all text-gray-11">
                   {`<div style="position: relative; padding-bottom: 56.25%; height: 0;"><iframe src="${process.env.NODE_ENV === "development"
-                    ? "http://localhost:3000"
+                    ? process.env.NEXT_PUBLIC_WEB_URL
                     : "https://cap.so"
                     }/embed/${capId}" frameborder="0" webkitallowfullscreen mozallowfullscreen allowfullscreen style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></iframe></div>`}
                 </code>
