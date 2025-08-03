@@ -26,6 +26,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   sharedSpaces = [],
+  spacesData = null,
   NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
@@ -46,6 +47,7 @@ export const ShareHeader = ({
     iconUrl?: string;
     organizationId: string;
   }[];
+  spacesData?: any[] | null;
   NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
@@ -174,6 +176,7 @@ export const ShareHeader = ({
         sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
         isPublic={data.public}
+        spacesData={spacesData}
       />
       <div>
         <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">

@@ -25,6 +25,7 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -275,6 +276,18 @@ async function AuthorizedContent({
   const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
+
+  // Fetch spaces data for the sharing dialog
+  let spacesData = null;
+  if (user) {
+    try {
+      const dashboardData = await getDashboardData(user);
+      spacesData = dashboardData.spacesData;
+    } catch (error) {
+      console.error("Failed to fetch spaces data for sharing dialog:", error);
+      spacesData = [];
+    }
+  }
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -548,6 +561,7 @@ async function AuthorizedContent({
             videoWithOrganizationInfo.sharedOrganizations || []
           }
           userOrganizations={userOrganizations}
+          spacesData={spacesData}
           NODE_ENV={process.env.NODE_ENV}
         />
 

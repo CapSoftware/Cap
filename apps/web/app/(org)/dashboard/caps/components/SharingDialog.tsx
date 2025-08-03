@@ -34,6 +34,7 @@ interface SharingDialogProps {
   }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
   isPublic?: boolean;
+  spacesData?: any[] | null;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
@@ -44,8 +45,10 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
   sharedSpaces,
   onSharingUpdated,
   isPublic = false,
+  spacesData: propSpacesData = null,
 }) => {
-  const { spacesData } = useDashboardContext();
+  const { spacesData: contextSpacesData } = useDashboardContext();
+  const spacesData = propSpacesData || contextSpacesData;
   const [selectedSpaces, setSelectedSpaces] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState("");
   const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
