@@ -10,7 +10,7 @@ export const metadata = {
 export default async function VerifyOTPPage({
   searchParams,
 }: {
-  searchParams: { email?: string; next?: string };
+  searchParams: { email?: string; next?: string; lastSent?: string };
 }) {
   const session = await getSession();
 
@@ -24,8 +24,8 @@ export default async function VerifyOTPPage({
 
   return (
     <div className="flex h-screen w-full items-center justify-center">
-      <Suspense fallback={<div>Loading...</div>}>
-        <VerifyOTPForm email={searchParams.email} next={searchParams.next} />
+      <Suspense fallback={null}>
+        <VerifyOTPForm email={searchParams.email} next={searchParams.next} lastSent={searchParams.lastSent} />
       </Suspense>
     </div>
   );

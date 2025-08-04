@@ -10,10 +10,13 @@ import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { verifyOTPAction } from "./actions";
 
-export function VerifyOTPForm({ email, next }: { email: string; next?: string }) {
+export function VerifyOTPForm({ email, next, lastSent }: { email: string; next?: string; lastSent?: string }) {
   const [code, setCode] = useState(["", "", "", "", "", ""]);
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [lastResendTime, setLastResendTime] = useState<number | null>(
+    lastSent ? parseInt(lastSent) : null
+  );
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
   useEffect(() => {
@@ -85,15 +88,33 @@ export function VerifyOTPForm({ email, next }: { email: string; next?: string })
   };
 
   const handleResend = async () => {
+    // Check client-side rate limiting
+    if (lastResendTime) {
+      const timeSinceLastRequest = Date.now() - lastResendTime;
+      const waitTime = 30000; // 30 seconds
+      if (timeSinceLastRequest < waitTime) {
+        const remainingSeconds = Math.ceil((waitTime - timeSinceLastRequest) / 1000);
+        toast.error(`Please wait ${remainingSeconds} seconds before requesting a new code`);
+        return;
+      }
+    }
+
     setResending(true);
     try {
-      await signIn("email", {
+      const result = await signIn("email", {
         email,
         redirect: false,
       });
-      toast.success("A new code has been sent to your email!");
-      setCode(["", "", "", "", "", ""]);
-      inputRefs.current[0]?.focus();
+      
+      if (result?.ok && !result?.error) {
+        toast.success("A new code has been sent to your email!");
+        setCode(["", "", "", "", "", ""]);
+        inputRefs.current[0]?.focus();
+        setLastResendTime(Date.now());
+      } else {
+        // NextAuth returns generic "EmailSignin" error for all email errors
+        toast.error("Please wait 30 seconds before requesting a new code");
+      }
     } catch (error) {
       toast.error("Failed to resend code. Please try again.");
     } finally {

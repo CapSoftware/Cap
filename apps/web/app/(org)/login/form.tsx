@@ -16,7 +16,7 @@ import { LucideArrowUpRight } from "lucide-react";
 import { signIn } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -27,6 +27,7 @@ const MotionButton = motion(Button);
 
 export function LoginForm() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const next = searchParams?.get("next");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
@@ -35,6 +36,7 @@ export function LoginForm() {
   const [showOrgInput, setShowOrgInput] = useState(false);
   const [organizationId, setOrganizationId] = useState("");
   const [organizationName, setOrganizationName] = useState<string | null>(null);
+  const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(null);
   const theme = Cookies.get("theme") || "light";
 
   useEffect(() => {
@@ -218,6 +220,17 @@ export function LoginForm() {
                       e.preventDefault();
                       if (!email) return;
 
+                      // Check if we're rate limited on the client side
+                      if (lastEmailSentTime) {
+                        const timeSinceLastRequest = Date.now() - lastEmailSentTime;
+                        const waitTime = 30000; // 30 seconds
+                        if (timeSinceLastRequest < waitTime) {
+                          const remainingSeconds = Math.ceil((waitTime - timeSinceLastRequest) / 1000);
+                          toast.error(`Please wait ${remainingSeconds} seconds before requesting a new code`);
+                          return;
+                        }
+                      }
+
                       setLoading(true);
                       trackEvent("auth_started", {
                         method: "email",
@@ -230,23 +243,30 @@ export function LoginForm() {
                       })
                         .then((res) => {
                           setLoading(false);
+                          
                           if (res?.ok && !res?.error) {
                             setEmailSent(true);
+                            setLastEmailSentTime(Date.now());
                             trackEvent("auth_email_sent", {
                               email_domain: email.split("@")[1],
                             });
                             const params = new URLSearchParams({
                               email,
                               ...(next && { next }),
+                              lastSent: Date.now().toString(),
                             });
-                            window.location.href = `/verify-otp?${params.toString()}`;
+                            router.push(`/verify-otp?${params.toString()}`);
                           } else {
-                            toast.error("Error sending email - try again?");
+                            // NextAuth always returns "EmailSignin" for all email provider errors
+                            // Since we already check rate limiting on the client side before sending,
+                            // if we get an error here, it's likely rate limiting from the server
+                            toast.error("Please wait 30 seconds before requesting a new code");
                           }
                         })
-                        .catch(() => {
+                        .catch((error) => {
                           setEmailSent(false);
                           setLoading(false);
+                          // Catch block is rarely triggered with NextAuth
                           toast.error("Error sending email - try again?");
                         });
                     }}
