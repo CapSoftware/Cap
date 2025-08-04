@@ -1,1 +1,0 @@
-ALTER TABLE `spaces` ADD `role` varchar(255) NOT NULL;

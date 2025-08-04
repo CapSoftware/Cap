@@ -1,37 +1,63 @@
 import { Button, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
-import {
-  faCheck,
-  faMinus,
-  faPlus,
-} from "@fortawesome/free-solid-svg-icons";
+import { faCheck, faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { homepageCopy } from "../../../../data/homepage-copy";
 import { ProArt, ProArtRef } from "./ProArt";
 
 export const ProCard = () => {
   const [users, setUsers] = useState(1);
   const [isAnnually, setIsAnnually] = useState(true);
   const [proLoading, setProLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
   const proArtRef = useRef<ProArtRef>(null);
   const { push } = useRouter();
 
-  const CAP_PRO_ANNUAL_PRICE_PER_USER = 6;
-  const CAP_PRO_MONTHLY_PRICE_PER_USER = 9;
+  const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
+  const CAP_PRO_MONTHLY_PRICE_PER_USER =
+    homepageCopy.pricing.pro.pricing.monthly;
 
   const currentTotalPricePro =
     users *
     (isAnnually
       ? CAP_PRO_ANNUAL_PRICE_PER_USER
       : CAP_PRO_MONTHLY_PRICE_PER_USER);
-  const billingCycleTextPro = isAnnually ? "per user, billed annually" : "per user, billed monthly";
+  const billingCycleTextPro = isAnnually
+    ? "per user, billed annually"
+    : "per user, billed monthly";
 
   const incrementUsers = () => setUsers((prev) => prev + 1);
   const decrementUsers = () => setUsers((prev) => (prev > 1 ? prev - 1 : 1));
+
+  const guestCheckout = async (planId: string) => {
+    setGuestLoading(true);
+
+    try {
+      const response = await fetch(`/api/settings/billing/guest-checkout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ priceId: planId, quantity: users }),
+      });
+      const data = await response.json();
+
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        toast.error("Failed to create checkout session");
+      }
+    } catch (error) {
+      toast.error("An error occurred. Please try again.");
+    } finally {
+      setGuestLoading(false);
+    }
+  };
 
   const planCheckout = async (planId?: string) => {
     setProLoading(true);
@@ -50,9 +76,9 @@ export const ProCard = () => {
     const data = await response.json();
 
     if (data.auth === false) {
-      localStorage.setItem("pendingPriceId", planId);
-      localStorage.setItem("pendingQuantity", users.toString());
-      push(`/login?next=/pricing`);
+      // User not authenticated, do guest checkout
+      setProLoading(false);
+      await guestCheckout(planId);
       return;
     }
 
@@ -80,20 +106,17 @@ export const ProCard = () => {
       <div>
         <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
           <span className="rounded-full font-mono bg-blue-500 px-4 py-1.5 text-xs uppercase text-gray-1">
-            Most Popular
+            {homepageCopy.pricing.pro.badge}
           </span>
         </div>
         <div className="md:h-[300px]">
-        <ProArt ref={proArtRef} />
-        <h3 className="mb-2 text-2xl text-center">
-          App + Commercial License +{" "}
-          <span className="text-blue-9">Cap Pro</span>
-        </h3>
-        <p className="mb-6 text-base text-center text-gray-8">
-          For professional use + cloud features like shareable links,
-          transcriptions, comments, & more. Perfect for teams or sharing with
-          clients.
-        </p>
+          <ProArt ref={proArtRef} />
+          <h3 className="mb-2 text-2xl text-center">
+            {homepageCopy.pricing.pro.title}
+          </h3>
+          <p className="mb-6 text-base text-center text-gray-8">
+            {homepageCopy.pricing.pro.description}
+          </p>
         </div>
 
         <div className="mb-6 text-center">
@@ -156,70 +179,67 @@ export const ProCard = () => {
         </div>
 
         <div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-zinc-700/50 border-zinc-700">
-
-        <div className="flex gap-3 justify-center items-center">
-          <p className="text-base text-gray-1">Users:</p>
-          <div className="flex items-center">
-            <Button
-               onClick={decrementUsers}
-               className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
-               aria-label="Decrease user count"
-             >
-               <FontAwesomeIcon icon={faMinus} className="text-gray-12 size-3" />
-             </Button>
-            <span className="w-8 font-medium tabular-nums text-center text-white">
-              <NumberFlow value={users} />
-            </span>
-            <Button
-               onClick={incrementUsers}
-               className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
-               aria-label="Increase user count"
-             >
-               <FontAwesomeIcon icon={faPlus} className="text-gray-12 size-3" />
-             </Button>
+          <div className="flex gap-3 justify-center items-center">
+            <p className="text-base text-gray-1">
+              {homepageCopy.pricing.pro.labels.users}
+            </p>
+            <div className="flex items-center">
+              <Button
+                onClick={decrementUsers}
+                className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+                aria-label="Decrease user count"
+              >
+                <FontAwesomeIcon
+                  icon={faMinus}
+                  className="text-gray-12 size-3"
+                />
+              </Button>
+              <span className="w-8 font-medium tabular-nums text-center text-white">
+                <NumberFlow value={users} />
+              </span>
+              <Button
+                onClick={incrementUsers}
+                className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+                aria-label="Increase user count"
+              >
+                <FontAwesomeIcon
+                  icon={faPlus}
+                  className="text-gray-12 size-3"
+                />
+              </Button>
+            </div>
           </div>
-        </div>
 
-        <div className="flex justify-center items-center">
-          <div className="flex gap-2 items-center">
-            <span
-              className={clsx(
-                "text-md",
-                !isAnnually ? "text-white" : "text-gray-8"
-              )}
-            >
-              Monthly
-            </span>
-            <Switch
-              checked={isAnnually}
-              onCheckedChange={setIsAnnually}
-              aria-label="Billing Cycle For Pro"
-              id="billing-cycle-cap-pro"
-            />
-            <span
-              className={clsx(
-                "text-md",
-                isAnnually ? "text-white" : "text-gray-8"
-              )}
-            >
-              Annually
-            </span>
+          <div className="flex justify-center items-center">
+            <div className="flex gap-2 items-center">
+              <span
+                className={clsx(
+                  "text-md",
+                  !isAnnually ? "text-white" : "text-gray-8"
+                )}
+              >
+                {homepageCopy.pricing.pro.labels.monthly}
+              </span>
+              <Switch
+                checked={isAnnually}
+                onCheckedChange={setIsAnnually}
+                aria-label="Billing Cycle For Pro"
+                id="billing-cycle-cap-pro"
+              />
+              <span
+                className={clsx(
+                  "text-md",
+                  isAnnually ? "text-white" : "text-gray-8"
+                )}
+              >
+                {homepageCopy.pricing.pro.labels.annually}
+              </span>
+            </div>
           </div>
-        </div>
-
         </div>
 
         <ul className="mb-8 space-y-3 text-base">
-          {[
-            "Commercial License included",
-            "Unlimited cloud storage & Shareable links",
-            "Connect custom S3 storage bucket",
-            "Advanced teams features",
-            "Unlimited views",
-            "Password protected videos",
-            "Advanced analytics",
-            "Priority support",
-          ].map((feature) => (
+          {homepageCopy.pricing.pro.features.map((feature) => (
             <li key={feature} className="flex items-center text-gray-1">
               <FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-1" />
               {feature}
@@ -229,15 +249,15 @@ export const ProCard = () => {
       </div>
 
       <Button
-         variant="white"
-         size="lg"
-         onClick={() => planCheckout()}
-         disabled={proLoading}
-         className="w-full font-medium"
-         aria-label="Purchase Cap Pro License"
-       >
-         {proLoading ? "Loading..." : "Purchase License"}
-       </Button>
+        variant="blue"
+        size="lg"
+        onClick={() => planCheckout()}
+        disabled={proLoading || guestLoading}
+        className="w-full font-medium"
+        aria-label="Purchase Cap Pro License"
+      >
+        {proLoading || guestLoading ? "Loading..." : homepageCopy.pricing.pro.cta}
+      </Button>
     </div>
   );
 };

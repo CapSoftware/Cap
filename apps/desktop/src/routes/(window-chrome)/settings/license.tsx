@@ -1,9 +1,7 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import { licenseContract } from "@cap/web-api-contract";
-import { useNavigate } from "@solidjs/router";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
-import * as tauriShell from "@tauri-apps/plugin-shell";
 import { ClientInferResponseBody } from "@ts-rest/core";
 import {
   createResource,
@@ -22,40 +20,22 @@ import { Input } from "../../editor/ui";
 
 export default function Page() {
   const license = createLicenseQuery();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   return (
-    <div class="flex overflow-y-auto gap-3 relative flex-col items-center p-4 mx-auto w-full h-full custom-scroll">
-      <div class="text-left w-full py-2">
-        <h2 class="text-gray-12 text-lg font-medium">Commercial License</h2>
-        <p class="text-gray-11 text-sm">
-          Permits using Cap for commercial purposes, but without paying for
-          cloud features.
-          <Show when={license.data?.type !== "pro"}>
-            <br />
-            Need cloud features?{" "}
-            <button
-              class="underline cursor-pointer"
-              onClick={() => commands.showWindow("Upgrade")}
-            >
-              Upgrade to Cap Pro.
-            </button>
-          </Show>
-        </p>
-      </div>
+    <div class="flex overflow-y-auto relative flex-col gap-3 items-center p-4 mx-auto w-full h-full custom-scroll">
       <Switch fallback={<CommercialLicensePurchase />}>
         <Match when={license.data?.type === "pro" && license.data}>
-          <div class="p-6 mx-auto mt-6 w-full max-w-md text-white bg-gray-2 rounded-3xl border border-gray-4">
-            <div class="space-y-4 text-center">
-              <div class="flex flex-col gap-2 items-center mb-4">
+          <div class="flex justify-center items-center w-full h-screen">
+            <div class="flex flex-col items-center p-6 mx-auto space-y-3 w-full max-w-md text-white rounded-3xl border bg-gray-2 border-gray-3">
+              <div class="flex flex-col gap-2 items-center">
                 <h3 class="text-2xl font-medium text-gray-12">
                   Cap Pro License
                 </h3>
               </div>
-              <p class="text-gray-11">
+              <p class="text-center text-gray-11">
                 Your account is upgraded to{" "}
-                <span class="font-semibold text-blue-400">Cap Pro</span> and
+                <span class="font-semibold text-blue-500">Cap Pro</span> and
                 already includes a commercial license.
               </p>
             </div>
@@ -67,7 +47,7 @@ export default function Page() {
               <div class="space-y-6">
                 <div class="flex flex-col gap-2 items-center mb-4 text-center">
                   <span class="text-2xl text-green-400 fa fa-briefcase" />
-                  <h3 class="text-2xl text-gray-12 font-medium">
+                  <h3 class="text-2xl font-medium text-gray-12">
                     Commercial License
                   </h3>
                 </div>
@@ -155,7 +135,7 @@ function LicenseKeyActivate(props: {
           }));
 
           return (
-            <div class="p-6 mx-auto w-full text-gray-12 rounded-xl border bg-gray-2 border-gray-3">
+            <div class="p-6 mx-auto w-full rounded-xl border text-gray-12 bg-gray-2 border-gray-3">
               <div class="space-y-3">
                 <h3 class="mb-2 text-xl text-center">Have a license key?</h3>
                 <Input

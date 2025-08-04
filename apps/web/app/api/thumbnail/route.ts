@@ -1,11 +1,9 @@
 import type { NextRequest } from "next/server";
-import { ListObjectsV2Command, GetObjectCommand } from "@aws-sdk/client-s3";
 import { getHeaders } from "@/utils/helpers";
 import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createBucketProvider } from "@/utils/s3";
 import { S3_BUCKET_URL } from "@cap/utils";
 import { serverEnv } from "@cap/env";
 
@@ -73,16 +71,12 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const Bucket = await getS3Bucket(result.bucket);
-  const [s3ClientInstance] = await createS3Client(result.bucket);
+  const bucketProvider = await createBucketProvider(result.bucket);
 
   try {
-    const listCommand = new ListObjectsV2Command({
-      Bucket,
-      Prefix: prefix,
+    const listResponse = await bucketProvider.listObjects({
+      prefix: prefix,
     });
-
-    const listResponse = await s3ClientInstance.send(listCommand);
     const contents = listResponse.Contents || [];
 
     const thumbnailKey = contents.find((item: any) =>
@@ -102,14 +96,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    thumbnailUrl = await getSignedUrl(
-      s3ClientInstance,
-      new GetObjectCommand({
-        Bucket,
-        Key: thumbnailKey,
-      }),
-      { expiresIn: 3600 }
-    );
+    thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
   } catch (error) {
     return new Response(
       JSON.stringify({

@@ -2,7 +2,7 @@
 
 import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
-import { MessageSquare, Edit3, Check, X } from "lucide-react";
+import { MessageSquare, Edit3, Check, X, Copy, Download } from "lucide-react";
 import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
 import { useTranscript, useInvalidateTranscript } from "hooks/use-transcript";
 import { Button } from "@cap/ui";
@@ -19,6 +19,7 @@ interface TranscriptEntry {
   text: string;
   startTime: number;
 }
+
 
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
   const lines = vttContent.split("\n");
@@ -118,8 +119,8 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
 
 export const Transcript: React.FC<TranscriptProps> = ({
   data,
-  onSeek,
   user,
+  onSeek,
 }) => {
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -130,6 +131,10 @@ export const Transcript: React.FC<TranscriptProps> = ({
   const [editingEntry, setEditingEntry] = useState<number | null>(null);
   const [editText, setEditText] = useState<string>("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
+  const [downloadPressed, setDownloadPressed] = useState(false);
+
 
   const {
     data: transcriptContent,
@@ -221,9 +226,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
     setSelectedEntry(entry.id);
 
-    if (onSeek) {
-      onSeek(entry.startTime);
-    }
+    onSeek?.(entry.startTime);
   };
 
   const startEditing = (entry: TranscriptEntry) => {
@@ -278,6 +281,81 @@ export const Transcript: React.FC<TranscriptProps> = ({
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const formatTranscriptForClipboard = (entries: TranscriptEntry[]): string => {
+    return entries
+      .map((entry) => `[${entry.timestamp}] ${entry.text}`)
+      .join("\n\n");
+  };
+
+  const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
+    const vttHeader = "WEBVTT\n\n";
+
+    const vttEntries = entries.map((entry, index) => {
+      const startSeconds = entry.startTime;
+      const nextEntry = entries[index + 1];
+      const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
+
+      const formatTime = (seconds: number): string => {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        const milliseconds = Math.floor((seconds % 1) * 1000);
+
+        return `${hours.toString().padStart(2, "0")}:${minutes
+          .toString()
+          .padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
+            .toString()
+            .padStart(3, "0")}`;
+      };
+
+      return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
+        endSeconds
+      )}\n${entry.text}\n`;
+    });
+
+    return vttHeader + vttEntries.join("\n");
+  };
+
+  const copyTranscriptToClipboard = async () => {
+    if (transcriptData.length === 0) return;
+
+    setIsCopying(true);
+    try {
+      const formattedTranscript = formatTranscriptForClipboard(transcriptData);
+      await navigator.clipboard.writeText(formattedTranscript);
+      setCopyPressed(true);
+      setTimeout(() => {
+        setCopyPressed(false);
+      }, 2000);
+    } catch (error) {
+      console.error("Failed to copy transcript:", error);
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const downloadTranscriptFile = () => {
+    if (transcriptData.length === 0) return;
+
+    const vttContent = formatTranscriptAsVTT(transcriptData);
+    const blob = new Blob([vttContent], { type: "text/vtt" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `transcript-${data.id}.vtt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    setDownloadPressed(true);
+    setTimeout(() => {
+      setDownloadPressed(false);
+    }, 2000);
   };
 
   const canEdit = user?.id === data.ownerId;
@@ -360,22 +438,79 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
   return (
     <div className="flex flex-col h-full">
+      <div className="p-4 border-b border-gray-3">
+        <div className="flex gap-2 justify-end">
+          <Button
+            onClick={copyTranscriptToClipboard}
+            disabled={isCopying || transcriptData.length === 0}
+            variant="white"
+            size="xs"
+            spinner={isCopying}
+          >
+            {!copyPressed ? (
+              <Copy className="mr-1 w-3 h-3" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1 w-3 h-3 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {copyPressed ? "Copied" : "Copy Transcript"}
+          </Button>
+          <Button
+            onClick={downloadTranscriptFile}
+            disabled={transcriptData.length === 0}
+            variant="white"
+            size="xs"
+          >
+            {!downloadPressed ? (
+              <Download className="mr-1 w-3 h-3" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1 w-3 h-3 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {downloadPressed ? "Downloaded" : "Download"}
+          </Button>
+        </div>
+      </div>
+
       <div className="overflow-y-auto flex-1">
         <div className="p-4 space-y-3">
           {transcriptData.map((entry) => (
             <div
               key={entry.id}
-              className={`group rounded-lg transition-colors ${
-                editingEntry === entry.id
-                  ? "bg-gray-1 border border-gray-4 p-3"
-                  : selectedEntry === entry.id
+              className={`group rounded-lg transition-colors ${editingEntry === entry.id
+                ? "bg-gray-1 border border-gray-4 p-3"
+                : selectedEntry === entry.id
                   ? "bg-gray-2 p-3"
                   : "hover:bg-gray-2 p-3"
-              } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
+                } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
               onClick={() => handleTranscriptClick(entry)}
             >
               <div className="flex justify-between items-start mb-2">
-                <div className="text-xs text-gray-8 font-medium">
+                <div className="text-xs font-medium text-gray-8">
                   {entry.timestamp}
                 </div>
                 {canEdit && editingEntry !== entry.id && (
@@ -394,11 +529,11 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
               {editingEntry === entry.id ? (
                 <div className="space-y-3">
-                  <div className="rounded-lg bg-gray-1 border border-gray-4 p-3">
+                  <div className="p-3 rounded-lg border bg-gray-1 border-gray-4">
                     <textarea
                       value={editText}
                       onChange={(e) => setEditText(e.target.value)}
-                      className="w-full text-sm leading-relaxed text-gray-12 bg-transparent placeholder:text-gray-8 resize-none focus:outline-none"
+                      className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
                       rows={Math.max(2, Math.ceil(editText.length / 60))}
                       autoFocus
                       onClick={(e) => e.stopPropagation()}
@@ -416,7 +551,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       size="xs"
                       className="min-w-[70px]"
                     >
-                      <X className="w-3 h-3 mr-1" />
+                      <X className="mr-1 w-3 h-3" />
                       Cancel
                     </Button>
                     <Button
@@ -430,7 +565,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
                       className="min-w-[70px]"
                       spinner={isSaving}
                     >
-                      <Check className="w-3 h-3 mr-1" />
+                      <Check className="mr-1 w-3 h-3" />
                       Save
                     </Button>
                   </div>

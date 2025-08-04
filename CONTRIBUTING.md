@@ -29,7 +29,7 @@ There are many ways to contribute to Cap. You can:
 Before anything else, make sure you have the following installed:
 
 - Node Version 20+
-- Rust 1.84.0+
+- Rust 1.88.0+
 - pnpm 8.10.5+
 - Docker ([OrbStack](https://orbstack.dev/) recommended)
 
@@ -39,10 +39,11 @@ Configure the necessary environment variables by copying the `.env.example` file
 `.env.example` by default assumes you want to run both `@cap/desktop` and `@cap/web` locally.
 Follow the instructions in the file for how to configure the environment variables for which apps you want to run.
 
-Run `pnpm cap-setup` to install native dependencies such as FFmpeg,
-then run `pnpm install`.
+Run `pnpm install`,
+then run `pnpm cap-setup` to install native dependencies such as FFmpeg.
 
 On Windows, llvm, clang, and VCPKG must be installed.
+On MacOS, cmake must be installed.
 `pnpm cap-setup` does not yet install these dependencies for you.
 
 To run both `@cap/desktop` and `@cap/web` together, use `pnpm dev`.

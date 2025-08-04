@@ -86,7 +86,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              currentWindow.show();
+              if (location.pathname !== "/camera") currentWindow.show();
             });
 
             return (
@@ -132,7 +132,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
+        window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }

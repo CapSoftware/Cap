@@ -42,6 +42,7 @@ function createServerEnv() {
       STRIPE_WEBHOOK_SECRET: z.string().optional(),
       DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
       OPENAI_API_KEY: z.string().optional(),
+      GROQ_API_KEY: z.string().optional(),
       INTERCOM_SECRET: z.string().optional(),
       VERCEL_ENV: z
         .union([
@@ -60,6 +61,8 @@ function createServerEnv() {
       POSTHOG_PERSONAL_API_KEY: z.string().optional(),
       CLOUDFRONT_KEYPAIR_ID: z.string().optional(),
       CLOUDFRONT_KEYPAIR_PRIVATE_KEY: z.string().optional(),
+      S3_PUBLIC_ENDPOINT: z.string().optional(),
+      S3_INTERNAL_ENDPOINT: z.string().optional(),
     },
     experimental__runtimeEnv: {
       ...process.env,

@@ -1,4 +1,4 @@
-use cidre::cv;
+use cidre::{cg, cv};
 use cocoa::{base::id, foundation::NSDictionary};
 use core_foundation::{
     array::CFArrayGetCount,
@@ -16,7 +16,6 @@ use core_graphics::{
         kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
     },
 };
-pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
 use std::{collections::HashMap, ffi::c_void};
 
 use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
@@ -347,7 +346,7 @@ pub fn get_display_refresh_rate(
 
     if rate == 0 {
         // adapted from https://github.com/mpv-player/mpv/commit/eacf22e42a6bbce8a32e64f5563ac431122c1186
-        let link = cv::DisplayLink::with_cg_display(display.id)
+        let link = cv::DisplayLink::with_cg_display(cg::DirectDisplayId(display.id))
             .map_err(|e| format!("with_cg_display / {e}"))?;
 
         let t = link.nominal_output_video_refresh_period();

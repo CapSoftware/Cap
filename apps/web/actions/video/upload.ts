@@ -1,8 +1,7 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
-import { createS3Client, getS3Bucket, getS3Config } from "@/utils/s3";
-import { createPresignedPost } from "@aws-sdk/s3-presigned-post";
+import { createBucketProvider } from "@/utils/s3";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
@@ -12,8 +11,10 @@ import {
   CloudFrontClient,
   CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
+import { revalidatePath } from "next/cache";
+import { userIsPro } from "@cap/utils";
 
-export async function getVideoUploadPresignedUrl({
+async function getVideoUploadPresignedUrl({
   fileKey,
   duration,
   resolution,
@@ -33,28 +34,27 @@ export async function getVideoUploadPresignedUrl({
   }
 
   try {
-    const [bucket] = await db()
+    const [customBucket] = await db()
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
 
-    const s3Config = bucket
+    const s3Config = customBucket
       ? {
-          endpoint: bucket.endpoint || undefined,
-          region: bucket.region,
-          accessKeyId: bucket.accessKeyId,
-          secretAccessKey: bucket.secretAccessKey,
+          endpoint: customBucket.endpoint || undefined,
+          region: customBucket.region,
+          accessKeyId: customBucket.accessKeyId,
+          secretAccessKey: customBucket.secretAccessKey,
         }
       : null;
 
     if (
-      !bucket ||
+      !customBucket ||
       !s3Config ||
-      bucket.bucketName !== serverEnv().CAP_AWS_BUCKET
+      customBucket.bucketName !== serverEnv().CAP_AWS_BUCKET
     ) {
       const distributionId = serverEnv().CAP_CLOUDFRONT_DISTRIBUTION_ID;
       if (distributionId) {
-
         const cloudfront = new CloudFrontClient({
           region: serverEnv().CAP_AWS_REGION || "us-east-1",
           credentials: {
@@ -66,7 +66,7 @@ export async function getVideoUploadPresignedUrl({
         const pathToInvalidate = "/" + fileKey;
 
         try {
-          const invalidation = await cloudfront.send(
+          await cloudfront.send(
             new CreateInvalidationCommand({
               DistributionId: distributionId,
               InvalidationBatch: {
@@ -84,7 +84,7 @@ export async function getVideoUploadPresignedUrl({
       }
     }
 
-    const [s3Client] = await createS3Client(s3Config);
+    const bucket = await createBucketProvider(customBucket);
 
     const contentType = fileKey.endsWith(".aac")
       ? "audio/aac"
@@ -107,11 +107,7 @@ export async function getVideoUploadPresignedUrl({
       "x-amz-meta-audiocodec": audioCodec ?? "",
     };
 
-    const bucketName = await getS3Bucket(bucket);
-
-    const presignedPostData = await createPresignedPost(s3Client, {
-      Bucket: bucketName,
-      Key: fileKey,
+    const presignedPostData = await bucket.getPresignedPostUrl(fileKey, {
       Fields,
       Expires: 1800,
     });
@@ -119,7 +115,7 @@ export async function getVideoUploadPresignedUrl({
     const customEndpoint = serverEnv().CAP_AWS_ENDPOINT;
     if (customEndpoint && !customEndpoint.includes("amazonaws.com")) {
       if (serverEnv().S3_PATH_STYLE) {
-        presignedPostData.url = `${customEndpoint}/${bucketName}`;
+        presignedPostData.url = `${customEndpoint}/${bucket.name}`;
       } else {
         presignedPostData.url = customEndpoint;
       }
@@ -157,6 +153,7 @@ export async function createVideoAndGetUploadUrl({
   audioCodec,
   isScreenshot = false,
   isUpload = false,
+  folderId,
 }: {
   videoId?: string;
   duration?: number;
@@ -165,6 +162,7 @@ export async function createVideoAndGetUploadUrl({
   audioCodec?: string;
   isScreenshot?: boolean;
   isUpload?: boolean;
+  folderId?: string;
 }) {
   const user = await getCurrentUser();
 
@@ -173,19 +171,14 @@ export async function createVideoAndGetUploadUrl({
   }
 
   try {
-    const isUpgraded = user.stripeSubscriptionStatus === "active";
-
-    if (!isUpgraded && duration && duration > 300) {
+    if (!userIsPro(user) && duration && duration > 300) {
       throw new Error("upgrade_required");
     }
 
-    const [bucket] = await db()
+    const [customBucket] = await db()
       .select()
       .from(s3Buckets)
       .where(eq(s3Buckets.ownerId, user.id));
-
-    const s3Config = await getS3Config(bucket);
-    const bucketName = await getS3Bucket(bucket);
 
     const date = new Date();
     const formattedDate = `${date.getDate()} ${date.toLocaleString("default", {
@@ -199,7 +192,9 @@ export async function createVideoAndGetUploadUrl({
         .where(eq(videos.id, videoId));
 
       if (existingVideo) {
-        const fileKey = `${user.id}/${videoId}/${isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"}`;
+        const fileKey = `${user.id}/${videoId}/${
+          isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
+        }`;
         const { presignedPostData } = await getVideoUploadPresignedUrl({
           fileKey,
           duration: duration?.toString(),
@@ -210,9 +205,6 @@ export async function createVideoAndGetUploadUrl({
 
         return {
           id: existingVideo.id,
-          user_id: user.id,
-          aws_region: existingVideo.awsRegion,
-          aws_bucket: existingVideo.awsBucket,
           presignedPostData,
         };
       }
@@ -220,20 +212,26 @@ export async function createVideoAndGetUploadUrl({
 
     const idToUse = videoId || nanoId();
 
+    const bucket = await createBucketProvider(customBucket);
+
     const videoData = {
       id: idToUse,
-      name: `Cap ${isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"} - ${formattedDate}`,
+      name: `Cap ${
+        isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
+      } - ${formattedDate}`,
       ownerId: user.id,
-      awsRegion: s3Config.region,
-      awsBucket: bucketName,
+      awsBucket: bucket.name,
       source: { type: "desktopMP4" as const },
       isScreenshot,
-      bucket: bucket?.id,
+      bucket: customBucket?.id,
+      ...(folderId ? { folderId } : {}),
     };
 
     await db().insert(videos).values(videoData);
 
-    const fileKey = `${user.id}/${idToUse}/${isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"}`;
+    const fileKey = `${user.id}/${idToUse}/${
+      isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
+    }`;
     const { presignedPostData } = await getVideoUploadPresignedUrl({
       fileKey,
       duration: duration?.toString(),
@@ -242,11 +240,10 @@ export async function createVideoAndGetUploadUrl({
       audioCodec,
     });
 
+    revalidatePath("/dashboard/folder");
+
     return {
       id: idToUse,
-      user_id: user.id,
-      aws_region: s3Config.region,
-      aws_bucket: bucketName,
       presignedPostData,
     };
   } catch (error) {

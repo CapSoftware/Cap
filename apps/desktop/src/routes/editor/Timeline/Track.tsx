@@ -88,11 +88,13 @@ export function SegmentRoot(
 }
 
 export function SegmentContent(props: ComponentProps<"div">) {
+  const ctx = useSegmentContext();
   return (
     <div
       {...props}
       class={cx(
-        "relative w-full h-full flex flex-row items-center px-[0.5rem] py-[0.25rem]",
+        "relative w-full h-full flex flex-row items-center py-[0.25rem]",
+        ctx.width() < 100 ? "px-0" : "px-[0.5rem]",
         props.class
       )}
     />
@@ -109,7 +111,7 @@ export function SegmentHandle(
     <div
       {...props}
       class={cx(
-        "w-3 cursor-col-resize shrink-0 transition-opacity h-full flex flex-row items-center",
+        "w-3 cursor-col-resize transition-opacity h-full flex flex-row items-center",
         props.position === "start"
           ? "left-0 justify-end"
           : "right-0 justify-start",

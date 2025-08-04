@@ -20,13 +20,13 @@ futures = "0.3.30"
 futures-intrusive = "0.5.0"
 image = "0.25.2"
 log = "0.4"
-serde = "1.0.209"
+serde = { workspace = true }
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
 reactive_graph = "0.1.5"
-glyphon = "0.6.0"
+glyphon = "0.9.0"
 tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]

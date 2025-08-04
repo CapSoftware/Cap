@@ -2,11 +2,15 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { spaces, spaceMembers, spaceVideos } from "@cap/database/schema";
+import {
+  spaces,
+  spaceMembers,
+  spaceVideos,
+  folders,
+} from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { createS3Client, getS3Bucket } from "@/utils/s3";
-import { DeleteObjectsCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { createBucketProvider } from "@/utils/s3";
 
 interface DeleteSpaceResponse {
   success: boolean;
@@ -51,38 +55,33 @@ export async function deleteSpace(
     }
 
     // Delete in order to maintain referential integrity:
+
     // 1. First delete all space videos
     await db().delete(spaceVideos).where(eq(spaceVideos.spaceId, spaceId));
 
     // 2. Delete all space members
     await db().delete(spaceMembers).where(eq(spaceMembers.spaceId, spaceId));
 
-    // 3. Delete space icons from S3
+    // 3. Delete all space folders
+    await db().delete(folders).where(eq(folders.spaceId, spaceId));
+
+    // 4. Delete space icons from S3
     try {
-      const [s3Client] = await createS3Client();
-      const bucketName = await getS3Bucket();
+      const bucketProvider = await createBucketProvider();
 
       // List all objects with the space prefix
-      const prefix = `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`;
 
-      const listObjectsCommand = new ListObjectsV2Command({
-        Bucket: bucketName,
-        Prefix: prefix,
+      const listedObjects = await bucketProvider.listObjects({
+        prefix: `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`,
       });
 
-      const listedObjects = await s3Client.send(listObjectsCommand);
-
       if (listedObjects.Contents?.length) {
-        const deleteObjectsCommand = new DeleteObjectsCommand({
-          Bucket: bucketName,
-          Delete: {
-            Objects: listedObjects.Contents.map((content) => ({
-              Key: content.Key,
-            })),
-          },
-        });
+        await bucketProvider.deleteObjects(
+          listedObjects.Contents.map((content) => ({
+            Key: content.Key,
+          }))
+        );
 
-        await s3Client.send(deleteObjectsCommand);
         console.log(
           `Deleted ${listedObjects.Contents.length} objects for space ${spaceId}`
         );
@@ -92,10 +91,8 @@ export async function deleteSpace(
       // Continue with space deletion even if S3 deletion fails
     }
 
-    // 4. Finally delete the space itself
     await db().delete(spaces).where(eq(spaces.id, spaceId));
 
-    // Revalidate the dashboard path to reflect the changes
     revalidatePath("/dashboard");
 
     return {

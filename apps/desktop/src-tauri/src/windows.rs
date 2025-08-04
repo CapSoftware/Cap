@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
+use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
 use cap_displays::DisplayId;
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
@@ -12,7 +12,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicU32, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -144,14 +144,6 @@ impl CapWindowId {
         app.get_webview_window(&label)
     }
 
-    #[cfg(target_os = "windows")]
-    pub fn should_have_decorations(&self) -> bool {
-        matches!(
-            self,
-            Self::Setup | Self::Settings | Self::Editor { .. } | Self::ModeSelect
-        )
-    }
-
     #[cfg(target_os = "macos")]
     pub fn traffic_lights_position(&self) -> Option<Option<LogicalPosition<f64>>> {
         match self {
@@ -192,7 +184,7 @@ pub enum ShowCapWindow {
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -345,17 +337,6 @@ impl ShowCapWindow {
                     .shadow(true)
                     .center();
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::ModeSelect => {
@@ -375,24 +356,12 @@ impl ShowCapWindow {
                     .focused(true)
                     .shadow(true);
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
                 let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-
                 let mut window_builder = self
                     .window_builder(app, "/camera")
                     .maximized(false)
@@ -414,7 +383,8 @@ impl ShowCapWindow {
 			                window.__CAP__.cameraWsPort = {port};
 		                ",
                     ))
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
 
@@ -514,9 +484,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let mut width = 180.0 + 32.0;
 
                 let height = 40.0;
@@ -537,6 +505,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]
@@ -643,9 +615,7 @@ impl ShowCapWindow {
 
         #[cfg(target_os = "windows")]
         {
-            if !id.should_have_decorations() {
-                builder = builder.decorations(false);
-            }
+            builder = builder.decorations(false);
         }
 
         builder
@@ -743,7 +713,7 @@ fn position_traffic_lights_impl(
     window: &tauri::Window,
     controls_inset: Option<LogicalPosition<f64>>,
 ) {
-    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {

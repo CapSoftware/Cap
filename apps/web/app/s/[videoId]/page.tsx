@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
-import { eq, desc, sql, count, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel } from "drizzle-orm";
 import { Logo } from "@cap/ui";
+
 import {
   videos,
   comments,
@@ -10,20 +11,18 @@ import {
   organizations,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
-import { getCurrentUser, userSelectProps } from "@cap/database/auth/session";
-import type { Metadata, ResolvingMetadata } from "next";
+import { getCurrentUser } from "@cap/database/auth/session";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
-import { getScreenshot } from "@/actions/screenshots/get-screenshot";
-import { cookies, headers } from "next/headers";
+import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { isAiGenerationEnabled, isAiUiEnabled } from "@/utils/flags";
+import { isAiGenerationEnabled } from "@/utils/flags";
 
 import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
-import { ImageViewer } from "./_components/ImageViewer";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
 
@@ -69,11 +68,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return notFound();
   }
 
-  // Get the headers from the middleware
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
 
-  // Check if referrer is from allowed platforms
   const allowedReferrers = [
     "x.com",
     "twitter.com",
@@ -88,7 +85,6 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     referrer.includes(domain)
   );
 
-  // Set robots metadata based on referrer and video publicity
   const robotsDirective = isAllowedReferrer
     ? "index, follow"
     : "noindex, nofollow";
@@ -213,11 +209,9 @@ export default async function ShareVideoPage(props: Props) {
   const videoId = params.videoId as string;
   console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const user = await getCurrentUser();
-  const userId = user?.id as string | undefined;
-  console.log("[ShareVideoPage] Current user:", userId);
+  const userPromise = getCurrentUser();
 
-  const videoWithOrganization = await db()
+  const [video] = await db()
     .select({
       id: videos.id,
       name: videos.name,
@@ -245,17 +239,14 @@ export default async function ShareVideoPage(props: Props) {
     })
     .from(videos)
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-    .where(eq(videos.id, videoId))
-    .execute();
-
-  const video = videoWithOrganization[0];
+    .where(eq(videos.id, videoId));
 
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
 
-  const userAccess = await userHasAccessToVideo(user, video);
+  const userAccess = await userHasAccessToVideo(userPromise, video);
 
   if (userAccess === "private") return <p>This video is private</p>;
 
@@ -266,7 +257,7 @@ export default async function ShareVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <AuthorizedContent video={video} user={user} />
+        <AuthorizedContent video={video} user={userPromise} />
       )}
     </div>
   );
@@ -274,13 +265,14 @@ export default async function ShareVideoPage(props: Props) {
 
 async function AuthorizedContent({
   video,
-  user,
+  user: _user,
 }: {
   video: InferSelectModel<typeof videos> & {
     sharedOrganization: { organizationId: string } | null;
   };
-  user: InferSelectModel<typeof users> | null;
+  user: MaybePromise<InferSelectModel<typeof users> | null>;
 }) {
+  const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
 
@@ -420,7 +412,84 @@ async function AuthorizedContent({
     }
   }
 
-  const commentsQuery: CommentWithAuthor[] = await db()
+  const customDomainPromise = (async () => {
+    if (!user) {
+      return { customDomain: null, domainVerified: false };
+    }
+    const activeOrganizationId = user.activeOrganizationId;
+    if (!activeOrganizationId) {
+      return { customDomain: null, domainVerified: false };
+    }
+
+    // Fetch the active org
+    const orgArr = await db()
+      .select({
+        customDomain: organizations.customDomain,
+        domainVerified: organizations.domainVerified,
+      })
+      .from(organizations)
+      .where(eq(organizations.id, activeOrganizationId))
+      .limit(1);
+
+    const org = orgArr[0];
+    if (
+      org &&
+      org.customDomain &&
+      org.domainVerified !== null &&
+      user.id === video.ownerId
+    ) {
+      return { customDomain: org.customDomain, domainVerified: true };
+    }
+    return { customDomain: null, domainVerified: false };
+  })();
+
+  const sharedOrganizationsPromise = db()
+    .select({ id: sharedVideos.organizationId, name: organizations.name })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  const userOrganizationsPromise = (async () => {
+    if (!userId) return [];
+
+    const [ownedOrganizations, memberOrganizations] = await Promise.all([
+      db()
+        .select({ id: organizations.id, name: organizations.name })
+        .from(organizations)
+        .where(eq(organizations.ownerId, userId)),
+      db()
+        .select({ id: organizations.id, name: organizations.name })
+        .from(organizations)
+        .innerJoin(
+          organizationMembers,
+          eq(organizations.id, organizationMembers.organizationId)
+        )
+        .where(eq(organizationMembers.userId, userId)),
+    ]);
+
+    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
+    const uniqueOrganizationIds = new Set();
+
+    return allOrganizations.filter((organization) => {
+      if (uniqueOrganizationIds.has(organization.id)) return false;
+      uniqueOrganizationIds.add(organization.id);
+      return true;
+    });
+  })();
+
+  const membersListPromise = video.sharedOrganization?.organizationId
+    ? db()
+      .select({ userId: organizationMembers.userId })
+      .from(organizationMembers)
+      .where(
+        eq(
+          organizationMembers.organizationId,
+          video.sharedOrganization.organizationId
+        )
+      )
+    : Promise.resolve([]);
+
+  const commentsPromise = db()
     .select({
       id: comments.id,
       content: comments.content,
@@ -435,156 +504,32 @@ async function AuthorizedContent({
     })
     .from(comments)
     .leftJoin(users, eq(comments.authorId, users.id))
-    .where(eq(comments.videoId, videoId));
+    .where(eq(comments.videoId, videoId))
+    .execute();
 
-  let screenshotUrl;
-  if (video.isScreenshot === true) {
-    try {
-      const data = await getScreenshot(video.ownerId, videoId);
-      screenshotUrl = data.url;
+  const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
-      return (
-        <ImageViewer
-          imageSrc={screenshotUrl}
-          data={video}
-          user={user}
-          comments={commentsQuery}
-        />
-      );
-    } catch (error) {
-      console.error("[ShareVideoPage] Error fetching screenshot:", error);
-      return <p>Failed to load screenshot</p>;
-    }
-  }
-
-  const analyticsData = await getVideoAnalytics(videoId);
-
-  const initialAnalytics = {
-    views: analyticsData.count || 0,
-    comments: commentsQuery.filter((c) => c.type === "text").length,
-    reactions: commentsQuery.filter((c) => c.type === "emoji").length,
-  };
-
-  let customDomain: string | null = null;
-  let domainVerified = false;
-
-  if (video.sharedOrganization?.organizationId) {
-    const organizationData = await db()
-      .select({
-        customDomain: organizations.customDomain,
-        domainVerified: organizations.domainVerified,
-      })
-      .from(organizations)
-      .where(eq(organizations.id, video.sharedOrganization.organizationId))
-      .limit(1);
-
-    if (
-      organizationData.length > 0 &&
-      organizationData[0] &&
-      organizationData[0].customDomain
-    ) {
-      customDomain = organizationData[0].customDomain;
-      if (organizationData[0].domainVerified !== null) {
-        domainVerified = true;
-      }
-    }
-  }
-
-  if (!customDomain && video.ownerId) {
-    const ownerOrganizations = await db()
-      .select({
-        customDomain: organizations.customDomain,
-        domainVerified: organizations.domainVerified,
-      })
-      .from(organizations)
-      .where(eq(organizations.ownerId, video.ownerId))
-      .limit(1);
-
-    if (
-      ownerOrganizations.length > 0 &&
-      ownerOrganizations[0] &&
-      ownerOrganizations[0].customDomain
-    ) {
-      customDomain = ownerOrganizations[0].customDomain;
-      if (ownerOrganizations[0].domainVerified !== null) {
-        domainVerified = true;
-      }
-    }
-  }
-
-  const sharedOrganizationsData = await db()
-    .select({
-      id: sharedVideos.organizationId,
-      name: organizations.name,
-    })
-    .from(sharedVideos)
-    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .where(eq(sharedVideos.videoId, videoId));
-
-  let userOrganizations: { id: string; name: string }[] = [];
-  if (userId) {
-    const ownedOrganizations = await db()
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-      })
-      .from(organizations)
-      .where(eq(organizations.ownerId, userId));
-
-    const memberOrganizations = await db()
-      .select({
-        id: organizations.id,
-        name: organizations.name,
-      })
-      .from(organizations)
-      .innerJoin(
-        organizationMembers,
-        eq(organizations.id, organizationMembers.organizationId)
-      )
-      .where(eq(organizationMembers.userId, userId));
-
-    const allOrganizations = [...ownedOrganizations, ...memberOrganizations];
-    const uniqueOrganizationIds = new Set();
-    userOrganizations = allOrganizations.filter((organization) => {
-      if (uniqueOrganizationIds.has(organization.id)) return false;
-      uniqueOrganizationIds.add(organization.id);
-      return true;
-    });
-  }
-
-  const membersList = video.sharedOrganization?.organizationId
-    ? await db()
-        .select({
-          userId: organizationMembers.userId,
-        })
-        .from(organizationMembers)
-        .where(
-          eq(
-            organizationMembers.organizationId,
-            video.sharedOrganization.organizationId
-          )
-        )
-    : [];
+  const [
+    membersList,
+    userOrganizations,
+    sharedOrganizations,
+    { customDomain, domainVerified },
+  ] = await Promise.all([
+    membersListPromise,
+    userOrganizationsPromise,
+    sharedOrganizationsPromise,
+    customDomainPromise,
+  ]);
 
   const videoWithOrganizationInfo: VideoWithOrganization = {
     ...video,
     organizationMembers: membersList.map((member) => member.userId),
     organizationId: video.sharedOrganization?.organizationId ?? undefined,
-    sharedOrganizations: sharedOrganizationsData,
+    sharedOrganizations: sharedOrganizations,
     password: null,
     hasPassword: video.password !== null,
   };
 
-  let aiUiEnabled = false;
-  if (user?.email) {
-    aiUiEnabled = await isAiUiEnabled({
-      email: user.email,
-      stripeSubscriptionStatus: user.stripeSubscriptionStatus,
-    });
-    console.log(
-      `[ShareVideoPage] AI UI feature flag check for viewer ${user.id}: ${aiUiEnabled} (email: ${user.email})`
-    );
-  }
 
   return (
     <>
@@ -603,19 +548,19 @@ async function AuthorizedContent({
             videoWithOrganizationInfo.sharedOrganizations || []
           }
           userOrganizations={userOrganizations}
+          NODE_ENV={process.env.NODE_ENV}
         />
 
         <Share
           data={videoWithOrganizationInfo}
           user={user}
-          comments={commentsQuery}
-          initialAnalytics={initialAnalytics}
+          comments={commentsPromise}
+          views={viewsPromise}
           customDomain={customDomain}
           domainVerified={domainVerified}
           userOrganizations={userOrganizations}
           initialAiData={initialAiData}
           aiGenerationEnabled={aiGenerationEnabled}
-          aiUiEnabled={aiUiEnabled}
         />
       </div>
       <div className="py-4 mt-auto">
