@@ -1055,6 +1055,7 @@ dependencies = [
  "axum",
  "cap-audio",
  "cap-media",
+ "cap-media-info",
  "cap-project",
  "cap-rendering",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
@@ -1076,6 +1077,8 @@ dependencies = [
  "cap-editor",
  "cap-flags",
  "cap-media",
+ "cap-media-encoders",
+ "cap-media-info",
  "cap-project",
  "cap-rendering",
  "cap-utils",
@@ -1127,6 +1130,8 @@ dependencies = [
  "cap-camera-windows",
  "cap-fail",
  "cap-flags",
+ "cap-media-encoders",
+ "cap-media-info",
  "cap-project",
  "cidre",
  "cocoa 0.26.1",
@@ -1161,6 +1166,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-media-encoders"
+version = "0.1.0"
+dependencies = [
+ "cap-audio",
+ "cap-fail",
+ "cap-flags",
+ "cap-media-info",
+ "cap-project",
+ "cidre",
+ "ffmpeg-next",
+ "gif",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-media-info"
+version = "0.1.0"
+dependencies = [
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
+ "ffmpeg-next",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
@@ -1181,6 +1211,8 @@ dependencies = [
  "cap-displays",
  "cap-flags",
  "cap-media",
+ "cap-media-encoders",
+ "cap-media-info",
  "cap-project",
  "cap-utils",
  "chrono",

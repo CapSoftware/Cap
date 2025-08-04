@@ -1,9 +1,10 @@
+use cap_media_info::VideoInfo;
+use ffmpeg::frame;
 use flume::{Receiver, Sender};
 use std::time::{Duration, Instant};
 use tracing::{error, info};
 
 use crate::{
-    data::{FFVideo, VideoInfo},
     feeds::{CameraConnection, CameraFeed, RawCameraFrame},
     pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
     MediaError,
@@ -12,14 +13,18 @@ use crate::{
 pub struct CameraSource {
     feed_connection: CameraConnection,
     video_info: VideoInfo,
-    output: Sender<(FFVideo, f64)>,
+    output: Sender<(frame::Video, f64)>,
     first_frame_instant: Option<Instant>,
     first_frame_timestamp: Option<Duration>,
     start_instant: Instant,
 }
 
 impl CameraSource {
-    pub fn init(feed: &CameraFeed, output: Sender<(FFVideo, f64)>, start_instant: Instant) -> Self {
+    pub fn init(
+        feed: &CameraFeed,
+        output: Sender<(frame::Video, f64)>,
+        start_instant: Instant,
+    ) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             video_info: feed.video_info(),

@@ -13,6 +13,8 @@ cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 cap-displays = { path = "../displays" }
 cap-cursor-capture = { path = "../cursor-capture" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
 
 specta.workspace = true
 tokio.workspace = true

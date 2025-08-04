@@ -6,11 +6,10 @@
 
 use std::borrow::Cow;
 
-use data::AudioInfoError;
+use cap_media_info::AudioInfoError;
 use thiserror::Error;
 
 pub mod data;
-pub mod encoders;
 pub mod feeds;
 pub mod frame_ws;
 pub mod pipeline;

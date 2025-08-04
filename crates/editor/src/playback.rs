@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
-use cap_media::data::{AudioInfo, FromSampleBytes};
-use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment, AudioSegmentTrack};
+use cap_media::data::FromSampleBytes;
+use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment};
 use cap_media::MediaError;
-use cap_project::{AudioConfiguration, ProjectConfiguration, XY};
+use cap_media_info::AudioInfo;
+use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},

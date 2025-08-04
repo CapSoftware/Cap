@@ -18,6 +18,9 @@ cap-flags = { path = "../flags" }
 cap-audio = { path = "../audio" }
 cap-camera = { path = "../camera", features = ["specta", "serde"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+cap-fail = { path = "../fail" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
@@ -34,7 +37,6 @@ tracing = { workspace = true }
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
-cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
 tokio-util = "0.7.15"
