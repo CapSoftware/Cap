@@ -115,6 +115,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      enableNativeCameraPreview: false,
     }
   );
 

@@ -13,18 +13,21 @@ cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 cap-displays = { path = "../displays" }
 cap-cursor-capture = { path = "../cursor-capture" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
 
 specta.workspace = true
 tokio.workspace = true
 flume.workspace = true
 thiserror.workspace = true
 ffmpeg = { workspace = true }
+scap.workspace = true
 
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 serde_json = "1"
 chrono = "0.4.38"
 tracing.workspace = true
-device_query = "2.1.0"
+device_query = "4.0.1"
 image = "0.25.2"
 either = "1.13.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }

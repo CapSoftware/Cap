@@ -28,7 +28,7 @@ pub async fn main() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     let _ = handle.stop().await;
 

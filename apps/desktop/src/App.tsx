@@ -129,7 +129,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
+        window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }
