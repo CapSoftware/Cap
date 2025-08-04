@@ -2,7 +2,7 @@ use std::ops::{Add, Deref, Mul, Sub};
 
 use cap_project::{ProjectConfiguration, XY};
 
-use crate::{zoom::InterpolatedZoom, ProjectUniforms, RenderOptions};
+use crate::{ProjectUniforms, RenderOptions, zoom::InterpolatedZoom};
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct RawDisplaySpace;
