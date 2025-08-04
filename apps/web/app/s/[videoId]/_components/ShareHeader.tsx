@@ -137,10 +137,10 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (
-        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
-        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
-      ) {
+      const hasSpaceSharing = (sharedOrganizations?.length > 0) || (effectiveSharedSpaces?.length > 0);
+      const isPublic = data.public;
+
+      if (!hasSpaceSharing && !isPublic) {
         return (
           <p
             className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
