@@ -116,7 +116,7 @@ export function createCurrentRecordingQuery() {
 
 export function createLicenseQuery() {
   const query = createQuery(() => ({
-    queryKey: ["bruh"],
+    queryKey: ["licenseQuery"],
     queryFn: async () => {
       const settings = await generalSettingsStore.get();
       const auth = await authStore.get();
