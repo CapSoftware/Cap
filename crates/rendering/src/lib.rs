@@ -627,7 +627,8 @@ impl ProjectUniforms {
 
         let velocity = [0.0, 0.0];
 
-        let motion_blur_amount = 0.0;
+        // Base motion blur amount set by project settings
+        let motion_blur_amount = project.background.motion_blur;
 
         let crop = Self::get_crop(options, project);
 
@@ -663,6 +664,38 @@ impl ProjectUniforms {
             .map(|i| i.position)
             .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
+
+        // Previous frame zoom state for motion blur calculation
+        let prev_zoom = InterpolatedZoom::new(
+            SegmentsCursor::new(
+                (frame_time - 1.0 / fps as f32) as f64,
+                project
+                    .timeline
+                    .as_ref()
+                    .map(|t| t.zoom_segments.as_slice())
+                    .unwrap_or(&[]),
+            ),
+            interpolate_cursor(
+                cursor_events,
+                (segment_frames.recording_time - 0.2 - 1.0 / fps as f32).max(0.0),
+                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                    tension: project.cursor.tension,
+                    mass: project.cursor.mass,
+                    friction: project.cursor.friction,
+                }),
+            )
+            .as_ref()
+            .map(|i| i.position)
+            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+        );
+
+        let zoom_progress = zoom.t as f32; // 0 to 1 across zoom
+        let blur_factor = (5.0 * zoom_progress * (1.0 - zoom_progress)).clamp(0.0, 1.0);
+
+        let screen_blur_scale = 0.3;
+
+        let motion_blur_amount_for_display = motion_blur_amount * blur_factor * screen_blur_scale;
+        let camera_motion_blur = motion_blur_amount * blur_factor * screen_blur_scale;
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -707,8 +740,8 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount,
-                camera_motion_blur_amount: 0.0,
+                motion_blur_amount: motion_blur_amount_for_display,
+                camera_motion_blur_amount: camera_motion_blur,
                 shadow: project.background.shadow,
                 shadow_size: project
                     .background
@@ -790,8 +823,7 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                // Calculate camera motion blur based on zoom transition
-                let camera_motion_blur = 0.0;
+                // Camera motion blur based on zoom transition
 
                 CompositeVideoFrameUniforms {
                     output_size,
@@ -813,7 +845,7 @@ impl ProjectUniforms {
                     rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
-                    motion_blur_amount,
+                    motion_blur_amount: motion_blur_amount_for_display,
                     camera_motion_blur_amount: camera_motion_blur,
                     shadow: project.camera.shadow,
                     shadow_size: project
