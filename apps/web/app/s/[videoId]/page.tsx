@@ -9,6 +9,8 @@ import {
   sharedVideos,
   organizationMembers,
   organizations,
+  spaces,
+  spaceVideos,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
@@ -30,6 +32,63 @@ import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 export const dynamic = "auto";
 export const dynamicParams = true;
 export const revalidate = 30;
+
+// Helper function to fetch shared spaces data for a video
+async function getSharedSpacesForVideo(videoId: string) {
+  // Fetch space-level sharing
+  const spaceSharing = await db()
+    .select({
+      id: spaces.id,
+      name: spaces.name,
+      organizationId: spaces.organizationId,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(spaceVideos)
+    .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+    .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+    .where(eq(spaceVideos.videoId, videoId));
+
+  // Fetch organization-level sharing
+  const orgSharing = await db()
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      organizationId: organizations.id,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  const sharedSpaces: Array<{
+    id: string;
+    name: string;
+    organizationId: string;
+    iconUrl?: string;
+  }> = [];
+
+  // Add space-level sharing
+  spaceSharing.forEach(space => {
+    sharedSpaces.push({
+      id: space.id,
+      name: space.name,
+      organizationId: space.organizationId,
+      iconUrl: space.iconUrl || undefined,
+    });
+  });
+
+  // Add organization-level sharing
+  orgSharing.forEach(org => {
+    sharedSpaces.push({
+      id: org.id,
+      name: org.name,
+      organizationId: org.organizationId,
+      iconUrl: org.iconUrl || undefined,
+    });
+  });
+
+  return sharedSpaces;
+}
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
@@ -288,6 +347,9 @@ async function AuthorizedContent({
       spacesData = [];
     }
   }
+
+  // Fetch shared spaces data for this video
+  const sharedSpaces = await getSharedSpacesForVideo(videoId);
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -560,6 +622,7 @@ async function AuthorizedContent({
           sharedOrganizations={
             videoWithOrganizationInfo.sharedOrganizations || []
           }
+          sharedSpaces={sharedSpaces}
           userOrganizations={userOrganizations}
           spacesData={spacesData}
           NODE_ENV={process.env.NODE_ENV}

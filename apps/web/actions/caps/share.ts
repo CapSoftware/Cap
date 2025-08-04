@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { db } from "@cap/database"
 import { getCurrentUser } from "@cap/database/auth/session"
 import { sharedVideos, videos, spaces, organizationMembers, organizations, spaceVideos } from "@cap/database/schema"
-import { eq, and, inArray, or } from "drizzle-orm"
+import { eq, and, inArray } from "drizzle-orm"
 import { nanoId } from "@cap/database/helpers"
 
 interface ShareCapParams {
@@ -15,7 +15,6 @@ interface ShareCapParams {
 
 export async function shareCap({ capId, spaceIds, public: isPublic }: ShareCapParams) {
   try {
-    
     const user = await getCurrentUser()
     if (!user) {
       return { success: false, error: "Unauthorized" }
