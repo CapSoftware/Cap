@@ -1,7 +1,7 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
+use cap_media::frame_ws::WSFrame;
+use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
 use cap_rendering::{
     decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta,
     ProjectUniforms, RenderVideoConstants, RendererLayers,

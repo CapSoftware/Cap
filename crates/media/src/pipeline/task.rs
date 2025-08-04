@@ -1,4 +1,4 @@
-use flume::{Receiver, Sender};
+use flume::Sender;
 
 use crate::pipeline::{MediaError, PipelineControlSignal};
 
@@ -19,10 +19,4 @@ pub trait PipelineSourceTask: Send {
     fn queue_size(&self) -> usize {
         DEFAULT_QUEUE_SIZE
     }
-}
-
-pub trait PipelineSinkTask<Input>: Send {
-    fn run(&mut self, ready_signal: PipelineReadySignal, input: &Receiver<Input>);
-
-    fn finish(&mut self);
 }

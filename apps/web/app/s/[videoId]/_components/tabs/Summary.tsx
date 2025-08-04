@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { userSelectProps } from "@cap/database/auth/session";
-import { isUserOnProPlan } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { Button } from "@cap/ui";
 
 interface Chapter {
@@ -60,7 +60,6 @@ const SkeletonLoader = () => (
 );
 
 export const Summary: React.FC<SummaryProps> = ({
-  videoId,
   onSeek,
   initialAiData,
   aiGenerationEnabled = false,
@@ -91,11 +90,7 @@ export const Summary: React.FC<SummaryProps> = ({
     }
   };
 
-  const hasProAccess = user
-    ? isUserOnProPlan({
-        subscriptionStatus: user.stripeSubscriptionStatus || null,
-      })
-    : false;
+  const hasProAccess = userIsPro(user);
 
   const hasExistingAiData =
     aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);

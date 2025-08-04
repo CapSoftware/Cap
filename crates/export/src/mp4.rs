@@ -2,11 +2,9 @@ use std::{path::PathBuf, time::Duration};
 
 use crate::ExporterBase;
 use cap_editor::get_audio_segments;
-use cap_media::{
-    data::{RawVideoFormat, VideoInfo},
-    encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4Input},
-    feeds::AudioRenderer,
-};
+use cap_media::feeds::AudioRenderer;
+use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
+use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
@@ -79,7 +77,7 @@ impl Mp4ExportSettings {
         let encoder_thread = tokio::task::spawn_blocking(move || {
             trace!("Creating MP4File encoder");
 
-            let mut encoder = cap_media::encoders::MP4File::init(
+            let mut encoder = MP4File::init(
                 "output",
                 base.output_path.clone(),
                 |o| {
@@ -91,6 +89,7 @@ impl Mp4ExportSettings {
                     has_audio.then(|| {
                         AACEncoder::init("output_audio", AudioRenderer::info(), o)
                             .map(|v| v.boxed())
+                            .map_err(Into::into)
                     })
                 },
             )

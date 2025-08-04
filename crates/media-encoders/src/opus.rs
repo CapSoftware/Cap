@@ -1,17 +1,11 @@
-use std::{collections::VecDeque, path::PathBuf};
-
-use cap_fail::fail;
+use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
     codec::{context, encoder},
-    format::{self, sample::Type, Sample},
+    format::{self, Sample, sample::Type},
+    frame,
     threading::Config,
 };
-
-use crate::{
-    data::{cast_bytes_to_f32_slice, AudioInfo, FFAudio, FFRational},
-    pipeline::task::PipelineSinkTask,
-    MediaError,
-};
+use std::{collections::VecDeque, path::PathBuf};
 
 use super::AudioEncoder;
 
@@ -23,8 +17,8 @@ pub struct OggFile {
 impl OggFile {
     pub fn init(
         mut output: PathBuf,
-        encoder: impl FnOnce(&mut format::context::Output) -> Result<OpusEncoder, MediaError>,
-    ) -> Result<Self, MediaError> {
+        encoder: impl FnOnce(&mut format::context::Output) -> Result<OpusEncoder, OpusEncoderError>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         output.set_extension("ogg");
         let mut output = format::output(&output)?;
 
@@ -36,7 +30,7 @@ impl OggFile {
         Ok(Self { encoder, output })
     }
 
-    pub fn queue_frame(&mut self, frame: FFAudio) {
+    pub fn queue_frame(&mut self, frame: frame::Audio) {
         self.encoder.queue_frame(frame, &mut self.output);
     }
 
@@ -51,9 +45,19 @@ pub struct OpusEncoder {
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
     resampler: Option<ffmpeg::software::resampling::Context>,
-    resampled_frame: FFAudio,
+    resampled_frame: frame::Audio,
     buffer: VecDeque<u8>,
     stream_index: usize,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum OpusEncoderError {
+    #[error("FFmpeg/{0}")]
+    FFmpeg(#[from] ffmpeg::Error),
+    #[error("Opus codec not found")]
+    CodecNotFound,
+    #[error("Sample rate not supported: {0}")]
+    RateNotSupported(i32),
 }
 
 impl OpusEncoder {
@@ -63,7 +67,7 @@ impl OpusEncoder {
     pub fn factory(
         tag: &'static str,
         input_config: AudioInfo,
-    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
+    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, OpusEncoderError> {
         move |o| Self::init(tag, input_config, o)
     }
 
@@ -71,9 +75,8 @@ impl OpusEncoder {
         tag: &'static str,
         input_config: AudioInfo,
         output: &mut format::context::Output,
-    ) -> Result<Self, MediaError> {
-        let codec = encoder::find_by_name("libopus")
-            .ok_or(MediaError::TaskLaunch("Could not find Opus codec".into()))?;
+    ) -> Result<Self, OpusEncoderError> {
+        let codec = encoder::find_by_name("libopus").ok_or(OpusEncoderError::CodecNotFound)?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
@@ -93,10 +96,7 @@ impl OpusEncoder {
                 .find(|r| **r >= input_config.rate())
                 .or(rates.first())
             else {
-                return Err(MediaError::TaskLaunch(format!(
-                    "Opus Codec does not support sample rate {}",
-                    input_config.rate()
-                )));
+                return Err(OpusEncoderError::RateNotSupported(input_config.rate()));
             };
             rate
         };
@@ -152,12 +152,12 @@ impl OpusEncoder {
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
-            resampled_frame: FFAudio::empty(),
+            resampled_frame: frame::Audio::empty(),
             resampler,
         })
     }
 
-    pub fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+    pub fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         if let Some(resampler) = &mut self.resampler {
             resampler.run(&frame, &mut self.resampled_frame).unwrap();
 
@@ -173,7 +173,7 @@ impl OpusEncoder {
                 }
 
                 let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
-                let mut frame = FFAudio::new(
+                let mut frame = frame::Audio::new(
                     self.encoder.format(),
                     self.encoder.frame_size() as usize,
                     self.encoder.channel_layout(),
@@ -198,7 +198,7 @@ impl OpusEncoder {
                 }
 
                 let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
-                let mut frame = FFAudio::new(
+                let mut frame = frame::Audio::new(
                     self.encoder.format(),
                     self.encoder.frame_size() as usize,
                     self.encoder.channel_layout(),
@@ -245,7 +245,7 @@ impl OpusEncoder {
                 while self.buffer.len() >= frame_size_bytes {
                     let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
 
-                    let mut frame = FFAudio::new(
+                    let mut frame = frame::Audio::new(
                         self.encoder.format(),
                         self.encoder.frame_size() as usize,
                         self.encoder.channel_layout(),
@@ -267,7 +267,7 @@ impl OpusEncoder {
 
                 let bytes = self.buffer.drain(0..frame_size_bytes).collect::<Vec<_>>();
 
-                let mut frame = FFAudio::new(
+                let mut frame = frame::Audio::new(
                     self.encoder.format(),
                     frame_size,
                     self.encoder.channel_layout(),
@@ -288,7 +288,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoder for OpusEncoder {
-    fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         self.queue_frame(frame, output);
     }
 
@@ -297,26 +297,6 @@ impl AudioEncoder for OpusEncoder {
     }
 }
 
-impl PipelineSinkTask<FFAudio> for OggFile {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<FFAudio>,
-    ) {
-        ready_signal.send(Ok(())).unwrap();
-
-        while let Ok(frame) = input.recv() {
-            fail!("media::encoder::opus::run");
-
-            self.queue_frame(frame);
-        }
-    }
-
-    fn finish(&mut self) {
-        self.finish();
-    }
-}
-
-fn frame_size_bytes(frame: &FFAudio) -> usize {
+fn frame_size_bytes(frame: &frame::Audio) -> usize {
     frame.samples() * frame.format().bytes() * frame.channels() as usize
 }
