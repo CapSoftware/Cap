@@ -11,6 +11,7 @@ import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { buildEnv } from "@cap/env";
 import { transcribeVideo } from "@/actions/videos/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -159,8 +160,11 @@ export default async function EmbedVideoPage(props: Props) {
 
   if (userAccess === "private") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-black text-white">
-        <p>This video is private</p>
+      <div className="flex flex-col justify-center items-center min-h-screen text-center bg-black text-white">
+        <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+        <p className="text-gray-400">
+          If you own this video, please <Link href="/login">sign in</Link> to manage sharing.
+        </p>
       </div>
     );
   }

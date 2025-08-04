@@ -16,6 +16,7 @@ import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
@@ -308,7 +309,16 @@ export default async function ShareVideoPage(props: Props) {
 
   const userAccess = await userHasAccessToVideo(userPromise, video);
 
-  if (userAccess === "private") return <p>This video is private</p>;
+  if (userAccess === "private") {
+    return (
+      <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+        <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+        <p className="text-gray-400">
+          If you own this video, please <Link href="/login">sign in</Link> to manage sharing.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
