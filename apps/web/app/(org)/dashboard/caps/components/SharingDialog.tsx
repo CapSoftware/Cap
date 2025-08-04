@@ -240,7 +240,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
                   </div>
                   <div>
                     <p className="text-sm font-medium text-gray-12">Anyone with the link</p>
-                    <p className="text-xs text-gray-10">Anyone with this link can view the video</p>
+                    <p className="text-xs text-gray-10">{publicToggle ? 'Anyone on the internet with the link can view': 'Only people with access can view'}</p>
                   </div>
                 </div>
                 <Switch
