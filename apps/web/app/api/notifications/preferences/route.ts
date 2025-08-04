@@ -8,6 +8,7 @@ import { z } from "zod";
 const PreferencesSchema = z.object({
   notifications: z.object({
     pauseComments: z.boolean(),
+    pauseReplies: z.boolean(),
     pauseViews: z.boolean(),
     pauseReactions: z.boolean(),
   }),

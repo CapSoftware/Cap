@@ -114,9 +114,20 @@ export default function DashboardInner({
             onClick={() => {
               setToggleNotifications(!toggleNotifications);
             }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setToggleNotifications(!toggleNotifications);
+              }
+            }}
+            tabIndex={0}
+            role="button"
+            aria-label={`Notifications${anyNewNotifications ? ' (new notifications available)' : ''}`}
+            aria-expanded={toggleNotifications}
             className="hidden relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
             rounded-full transition-colors cursor-pointer lg:flex
             hover:bg-gray-5 data-[state=open]:bg-gray-5
+            focus:outline-none
             size-9"
           >
             {anyNewNotifications && (

@@ -215,10 +215,6 @@ export default async function ShareVideoPage(props: Props) {
 
   const userPromise = await getCurrentUser();
 
-  createNotification({
-    videoId,
-  }, "view");
-
   const [video] = await db()
     .select({
       id: videos.id,
@@ -248,6 +244,15 @@ export default async function ShareVideoPage(props: Props) {
     .from(videos)
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .where(eq(videos.id, videoId));
+
+
+  if (userPromise && video && userPromise.id !== video.ownerId) {
+    try {
+      await createNotification({ videoId }, "view");
+    } catch (error) {
+      console.error("Failed to create view notification:", error);
+    }
+  }
 
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);

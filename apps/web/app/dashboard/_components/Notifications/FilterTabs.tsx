@@ -22,6 +22,8 @@ export const FilterTabs = ({ activeFilter, setActiveFilter, loading, count }: Fi
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
+      // Only hijack vertical scroll if not already scrolling horizontally
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
       if (!e.ctrlKey) {
         e.preventDefault();
       }

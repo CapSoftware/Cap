@@ -54,10 +54,7 @@ export const NotificationItem = ({ notification, className }: NotificationItemPr
             <span className="text-gray-10 text-[13px]">{descriptionMap[notification.type]}</span>
           </div>
 
-          {notification.type === NotificationType.COMMENT && (
-            <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">{notification.content}</p>
-          )}
-          {notification.type === NotificationType.REPLY && (
+          {notification.type === NotificationType.COMMENT || notification.type === NotificationType.REPLY && (
             <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">{notification.content}</p>
           )}
           <p className="text-xs text-gray-10">{moment(notification.createdAt).fromNow()}</p>

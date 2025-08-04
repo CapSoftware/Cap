@@ -331,7 +331,15 @@ export const notifications = mysqlTable("notifications", {
     .notNull(),
   readAt: timestamp("readAt"),
   createdAt: timestamp("createdAt").notNull().defaultNow(),
-});
+}, (table) => ({
+recipientIdIndex: index("recipient_id_idx").on(table.recipientId),
+orgIdIndex: index("org_id_idx").on(table.orgId),
+typeIndex: index("type_idx").on(table.type),
+readAtIndex: index("read_at_idx").on(table.readAt),
+createdAtIndex: index("created_at_idx").on(table.createdAt),
+recipientReadIndex: index("recipient_read_idx").on(table.recipientId, table.readAt),
+recipientCreatedIndex: index("recipient_created_idx").on(table.recipientId, table.createdAt),
+}));
 
 export const s3Buckets = mysqlTable("s3_buckets", {
   id: nanoId("id").notNull().primaryKey().unique(),
@@ -487,7 +495,7 @@ export const sharedVideosRelations = relations(sharedVideos, ({ one }) => ({
   }),
 }));
 
-export const spaces = mysqlTable(
+export const spaces = mysqlTable( 
   "spaces",
   {
     id: nanoId("id").notNull().primaryKey().unique(),
@@ -500,7 +508,7 @@ export const spaces = mysqlTable(
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
     privacy: varchar("privacy", { length: 255, enum: ["Public", "Private"] })
-      .notNull()
+    .notNull()
       .default("Private"),
   },
   (table) => ({

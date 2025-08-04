@@ -48,17 +48,21 @@ export async function newComment(data: {
 
   await db().insert(comments).values(newComment);
 
-  await createNotification(
-    {
-      videoId,
-      comment: {
-        id,
-        parentCommentId,
+  try {
+    await createNotification(
+      {
+        videoId,
+        comment: {
+          id,
+          parentCommentId,
+        },
+        content,
       },
-      content,
-    },
-    conditionalType
-  );
+      conditionalType
+    );
+  } catch (error) {
+    console.error("Failed to create notification:", error);
+  }
 
   // Add author name to the returned data
   const commentWithAuthor = {

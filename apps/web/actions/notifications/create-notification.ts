@@ -111,6 +111,11 @@ export const createNotification = async (
       data.content = notificationData.content;
     }
 
+    if (!videoResult.activeOrganizationId) {
+      console.warn(`User ${videoResult.ownerId} has no active organization, skipping notification`);
+      return;
+    }
+
     await db().insert(notifications).values({
       id: notificationId,
       orgId: videoResult.activeOrganizationId,
