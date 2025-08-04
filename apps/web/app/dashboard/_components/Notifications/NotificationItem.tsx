@@ -19,7 +19,15 @@ const descriptionMap: Record<Notification["type"], string> = {
 };
 
 export const NotificationItem = ({ notification, className }: NotificationItemProps) => {
-  const link = notification.type === NotificationType.REPLY || notification.type === NotificationType.COMMENT || notification.type === NotificationType.MENTION || notification.type === NotificationType.REACTION ? `/s/${notification.videoId}/?comment=${notification.data.comment?.id}` : `/s/${notification.videoId}`;
+  const commentTypes = [
+    NotificationType.REPLY,
+    NotificationType.COMMENT,
+    NotificationType.REACTION
+  ];
+  const commentId = notification.data?.comment?.id;
+  const link = commentTypes.includes(notification.type) && commentId
+    ? `/s/${notification.videoId}/?comment=${commentId}`
+    : `/s/${notification.videoId}`;
 
   return (
     <Link href={link}>
