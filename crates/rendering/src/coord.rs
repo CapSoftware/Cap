@@ -2,7 +2,7 @@ use std::ops::{Add, Deref, Mul, Sub};
 
 use cap_project::{ProjectConfiguration, XY};
 
-use crate::{zoom::InterpolatedZoom, ProjectUniforms, RenderOptions};
+use crate::{ProjectUniforms, RenderOptions, zoom::InterpolatedZoom};
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct RawDisplaySpace;
@@ -83,8 +83,6 @@ impl Coord<RawDisplaySpace> {
         Coord::new(self.coord - crop.position.map(|v| v as f64))
     }
 }
-
-fn frame_size() {}
 
 impl Coord<CroppedDisplaySpace> {
     pub fn to_frame_space(

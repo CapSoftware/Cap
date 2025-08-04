@@ -6,17 +6,17 @@ export const metadata: Metadata = {
 
 export default function App() {
   return (
-    <div className="wrapper wrapper-sm py-20">
-      <div className="text-center space-y-6">
-        <h1 className=" text-3xl md:text-4xl fade-in-down animate-delay-1">
+    <div className="py-32 wrapper wrapper-sm md:py-40">
+      <div className="space-y-6 text-center">
+        <h1 className="text-3xl md:text-4xl fade-in-down animate-delay-1">
           Privacy Policy
         </h1>
-        <p className="text-lg text-gray-8 max-w-lg mx-auto fade-in-down animate-delay-2">
+        <p className="pb-10 mx-auto max-w-lg text-lg text-gray-10 fade-in-down animate-delay-2">
           We've tried to make this privacy policy as simple and digestible as
           possible. If you have any questions, please don't hesitate to reach
           out to us.
         </p>
-        <div className="legal-body text-left fade-in-up animate-delay-2">
+        <div className="text-left legal-body fade-in-up animate-delay-2">
           <>
             <p>
               At Cap Software, Inc. ("Cap," "we," "us," or "our"), we are

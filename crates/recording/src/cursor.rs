@@ -13,13 +13,16 @@ use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
 use futures::future::Either;
+use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 pub struct Cursor {
     pub file_name: String,
     pub id: u32,
     pub hotspot: XY<f64>,
+    pub hash: String,
 }
 
 pub type Cursors = HashMap<u64, Cursor>;
@@ -33,13 +36,13 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    shutdown_tx: oneshot::Sender<()>,
+    stop: CancellationToken,
     rx: oneshot::Receiver<CursorActorResponse>,
 }
 
 impl CursorActor {
     pub async fn stop(self) -> CursorActorResponse {
-        let _ = self.shutdown_tx.send(());
+        self.stop.cancel();
         self.rx.await.unwrap()
     }
 }
@@ -54,9 +57,10 @@ pub fn spawn_cursor_recorder(
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
+    let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
 
+    let stop_token_child = stop_token.child_token();
     spawn_actor(async move {
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
@@ -76,7 +80,8 @@ pub fn spawn_cursor_recorder(
 
         loop {
             let sleep = tokio::time::sleep(Duration::from_millis(10));
-            let Either::Right(_) = futures::future::select(&mut shutdown_rx, pin!(sleep)).await
+            let Either::Right(_) =
+                futures::future::select(pin!(stop_token_child.cancelled()), pin!(sleep)).await
             else {
                 break;
             };
@@ -87,7 +92,7 @@ pub fn spawn_cursor_recorder(
             let elapsed = elapsed.as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
-            let cursor_data = get_cursor_image_data();
+            let cursor_data = get_cursor_data();
             let cursor_id = if let Some(data) = cursor_data {
                 let mut hasher = DefaultHasher::default();
                 data.image.hash(&mut hasher);
@@ -102,6 +107,7 @@ pub fn spawn_cursor_recorder(
                     let file_name = format!("cursor_{}.png", cursor_id);
                     let cursor_path = cursors_dir.join(&file_name);
 
+                    let hash = hex::encode(Sha256::digest(&data.image));
                     if let Ok(image) = image::load_from_memory(&data.image) {
                         // Convert to RGBA
                         let rgba_image = image.into_rgba8();
@@ -116,6 +122,7 @@ pub fn spawn_cursor_recorder(
                                     file_name,
                                     id: response.next_cursor_id,
                                     hotspot: data.hotspot,
+                                    hash,
                                 },
                             );
                             response.next_cursor_id += 1;
@@ -227,7 +234,10 @@ pub fn spawn_cursor_recorder(
         let _ = tx.send(response);
     });
 
-    CursorActor { shutdown_tx, rx }
+    CursorActor {
+        stop: stop_token,
+        rx,
+    }
 }
 
 #[derive(Debug)]
@@ -237,64 +247,32 @@ struct CursorData {
 }
 
 #[cfg(target_os = "macos")]
-fn get_cursor_image_data() -> Option<CursorData> {
-    use cocoa::base::{id, nil};
-    use cocoa::foundation::{NSPoint, NSSize, NSUInteger};
+fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
-    use objc::runtime::Class;
-    use objc::*;
+    use objc2_app_kit::NSCursor;
 
-    autoreleasepool(|| {
-        let nscursor_class = match Class::get("NSCursor") {
-            Some(cls) => cls,
-            None => return None,
+    autoreleasepool(|| unsafe {
+        #[allow(deprecated)]
+        let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
+
+        let image = cursor.image();
+        let size = image.size();
+        let hotspot = cursor.hotSpot();
+        let Some(image_data) = image.TIFFRepresentation() else {
+            return None;
         };
 
-        unsafe {
-            // Get the current system cursor
-            let current_cursor: id = msg_send![nscursor_class, currentSystemCursor];
-            if current_cursor == nil {
-                return None;
-            }
+        let image = image_data.as_bytes_unchecked().to_vec();
 
-            // Get the image of the cursor
-            let cursor_image: id = msg_send![current_cursor, image];
-            if cursor_image == nil {
-                return None;
-            }
-
-            let cursor_size: NSSize = msg_send![cursor_image, size];
-            let cursor_hotspot: NSPoint = msg_send![current_cursor, hotSpot];
-
-            // Get the TIFF representation of the image
-            let image_data: id = msg_send![cursor_image, TIFFRepresentation];
-            if image_data == nil {
-                return None;
-            }
-
-            // Get the length of the data
-            let length: NSUInteger = msg_send![image_data, length];
-
-            // Get the bytes of the data
-            let bytes: *const u8 = msg_send![image_data, bytes];
-
-            // Copy the data into a Vec<u8>
-            let slice = std::slice::from_raw_parts(bytes, length as usize);
-            let data = slice.to_vec();
-
-            Some(CursorData {
-                image: data,
-                hotspot: XY::new(
-                    cursor_hotspot.x / cursor_size.width,
-                    cursor_hotspot.y / cursor_size.height,
-                ),
-            })
-        }
+        Some(CursorData {
+            image,
+            hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
+        })
     })
 }
 
 #[cfg(windows)]
-fn get_cursor_image_data() -> Option<CursorData> {
+fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC,
@@ -322,7 +300,7 @@ fn get_cursor_image_data() -> Option<CursorData> {
 
         // Get icon info
         let mut icon_info = ICONINFO::default();
-        if GetIconInfo(cursor_info.hCursor, &mut icon_info).is_err() {
+        if GetIconInfo(cursor_info.hCursor.into(), &mut icon_info).is_err() {
             return None;
         }
 
@@ -335,24 +313,24 @@ fn get_cursor_image_data() -> Option<CursorData> {
         };
 
         if GetObjectA(
-            bitmap_handle,
+            bitmap_handle.into(),
             std::mem::size_of::<BITMAP>() as i32,
             Some(&mut bitmap as *mut _ as *mut _),
         ) == 0
         {
             // Clean up handles
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor);
+                DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask);
+                DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
 
         // Create DCs
-        let screen_dc = GetDC(HWND::default());
-        let mem_dc = CreateCompatibleDC(screen_dc);
+        let screen_dc = GetDC(Some(HWND::default()));
+        let mem_dc = CreateCompatibleDC(Some(screen_dc));
 
         // Get cursor dimensions
         let width = bitmap.bmWidth;
@@ -385,17 +363,24 @@ fn get_cursor_image_data() -> Option<CursorData> {
 
         // Create DIB section
         let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        let dib = CreateDIBSection(mem_dc, &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
+        let dib = CreateDIBSection(
+            Some(mem_dc),
+            &bitmap_info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            None,
+            0,
+        );
 
         if dib.is_err() {
             // Clean up
             DeleteDC(mem_dc);
-            ReleaseDC(HWND::default(), screen_dc);
+            ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor);
+                DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask);
+                DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -403,14 +388,14 @@ fn get_cursor_image_data() -> Option<CursorData> {
         let dib = dib.unwrap();
 
         // Select DIB into DC
-        let old_bitmap = SelectObject(mem_dc, dib);
+        let old_bitmap = SelectObject(mem_dc, dib.into());
 
         // Draw the cursor onto our bitmap with transparency
         if DrawIconEx(
             mem_dc,
             0,
             0,
-            cursor_info.hCursor,
+            cursor_info.hCursor.into(),
             0, // Use actual size
             0, // Use actual size
             0,
@@ -421,14 +406,14 @@ fn get_cursor_image_data() -> Option<CursorData> {
         {
             // Clean up
             SelectObject(mem_dc, old_bitmap);
-            DeleteObject(dib);
+            DeleteObject(dib.into());
             DeleteDC(mem_dc);
-            ReleaseDC(HWND::default(), screen_dc);
+            ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor);
+                DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask);
+                DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -453,14 +438,14 @@ fn get_cursor_image_data() -> Option<CursorData> {
 
         // Cleanup
         SelectObject(mem_dc, old_bitmap);
-        DeleteObject(dib);
+        DeleteObject(dib.into());
         DeleteDC(mem_dc);
-        ReleaseDC(HWND::default(), screen_dc);
+        ReleaseDC(Some(HWND::default()), screen_dc);
         if !icon_info.hbmColor.is_invalid() {
-            DeleteObject(icon_info.hbmColor);
+            DeleteObject(icon_info.hbmColor.into());
         }
         if !icon_info.hbmMask.is_invalid() {
-            DeleteObject(icon_info.hbmMask);
+            DeleteObject(icon_info.hbmMask.into());
         }
 
         // Process the image data to ensure proper alpha channel

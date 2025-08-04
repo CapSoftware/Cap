@@ -104,11 +104,20 @@ export const authOptions = (): NextAuthOptions => {
     },
     events: {
       async signIn({ user, account, isNewUser }) {
-        if (isNewUser) {
+        // Check if user needs organization setup (new user or guest checkout user)
+        const [dbUser] = await db()
+          .select()
+          .from(users)
+          .where(eq(users.id, user.id))
+          .limit(1);
+        
+        const needsOrganizationSetup = isNewUser || (!dbUser?.activeOrganizationId || dbUser.activeOrganizationId === "");
+        
+        if (needsOrganizationSetup) {
           const dubId = cookies().get("dub_id")?.value;
           const dubPartnerData = cookies().get("dub_partner_data")?.value;
 
-          if (dubId) {
+          if (dubId && isNewUser) {
             try {
               console.log("Attempting to track lead with Dub...");
               const trackResult = await dub().track.lead({
@@ -133,8 +142,8 @@ export const authOptions = (): NextAuthOptions => {
               console.error("Failed to track lead with Dub:", error);
               console.error("Error details:", JSON.stringify(error, null, 2));
             }
-          } else {
-            console.log("No dub_id cookie found - referral tracking skipped");
+          } else if (!isNewUser) {
+            console.log("Guest checkout user signing in for the first time - setting up organization");
           }
 
           const organizationId = nanoId();

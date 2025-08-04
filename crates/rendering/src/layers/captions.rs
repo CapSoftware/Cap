@@ -5,11 +5,9 @@ use glyphon::{
     TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 use log::{debug, info, warn};
-use wgpu::{util::DeviceExt, Device, Queue};
+use wgpu::{Device, Queue, util::DeviceExt};
 
-use crate::{
-    layers, parse_color_component, DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants,
-};
+use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
 
 /// Represents a caption segment with timing and text
 #[derive(Debug, Clone)]
@@ -75,7 +73,7 @@ impl CaptionsLayer {
         });
 
         // Initialize glyphon text rendering components
-        let mut font_system = FontSystem::new();
+        let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -90,7 +88,7 @@ impl CaptionsLayer {
 
         // Create an empty buffer with default metrics
         let metrics = Metrics::new(24.0, 24.0 * 1.2); // Default font size and line height
-        let mut text_buffer = Buffer::new_empty(metrics);
+        let text_buffer = Buffer::new_empty(metrics);
 
         Self {
             settings_buffer,
@@ -122,7 +120,7 @@ impl CaptionsLayer {
                 self.text_buffer.set_text(
                     &mut self.font_system,
                     content,
-                    Attrs::new(),
+                    &Attrs::new(),
                     Shaping::Advanced,
                 );
             }
@@ -260,7 +258,7 @@ impl CaptionsLayer {
                         updated_buffer.set_text(
                             &mut self.font_system,
                             text,
-                            attrs,
+                            &attrs,
                             Shaping::Advanced,
                         );
 

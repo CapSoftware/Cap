@@ -1,10 +1,11 @@
 use reqwest::StatusCode;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
+use tracing::error;
 
 use crate::{
-    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
     ArcLock,
+    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
 };
 
 async fn do_authed_request(
@@ -64,7 +65,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
             .map_err(|e| e.to_string())?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
-            println!("Authentication expired. Please log in again.");
+            error!("Authentication expired. Please log in again.");
 
             AuthenticationInvalid.emit(self).ok();
 

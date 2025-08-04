@@ -14,19 +14,12 @@ pub fn render_audio(
     out_offset: usize,
     out: &mut [f32],
 ) -> usize {
-    if tracks
-        .iter()
-        .any(|t| (t.0.samples().len() / t.0.channels() as usize) < offset)
-    {
-        return 0;
-    }
-
     let samples = samples.min(
         tracks
             .iter()
-            .map(|t| (t.0.samples().len() / t.0.channels() as usize) - offset)
-            .min()
-            .unwrap_or(usize::MAX),
+            .flat_map(|t| (t.0.samples().len() / t.0.channels() as usize).checked_sub(offset))
+            .max()
+            .unwrap_or(0),
     );
 
     for i in 0..samples {
@@ -41,12 +34,18 @@ pub fn render_audio(
             }
 
             if track.0.channels() == 1 {
-                left += track.0.samples()[offset + i] * 0.707 * gain;
-                right += track.0.samples()[offset + i] * 0.707 * gain;
+                if let Some(sample) = track.0.samples().get(offset + i) {
+                    left += sample * 0.707 * gain;
+                    right += sample * 0.707 * gain;
+                }
             } else if track.0.channels() == 2 {
                 let base_idx = offset * 2 + i * 2;
-                let l_sample = track.0.samples()[base_idx];
-                let r_sample = track.0.samples()[base_idx + 1];
+                let Some(l_sample) = track.0.samples().get(base_idx) else {
+                    continue;
+                };
+                let Some(r_sample) = track.0.samples().get(base_idx + 1) else {
+                    continue;
+                };
 
                 match track.2 {
                     StereoMode::Stereo => {

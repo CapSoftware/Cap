@@ -18,7 +18,7 @@ import {
   on,
   Show,
   Switch,
-  ValidComponent
+  ValidComponent,
 } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import toast from "solid-toast";
@@ -170,9 +170,9 @@ export function ExportDialog() {
   }));
 
   const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
-    file: <IconCapFile class="text-solid-white size-4" />,
-    clipboard: <IconCapCopy class="text-solid-white size-4" />,
-    link: <IconCapLink class="text-solid-white size-4" />,
+    file: <IconCapFile class="text-gray-1 size-4" />,
+    clipboard: <IconCapCopy class="text-gray-1 size-4" />,
+    link: <IconCapLink class="text-gray-1 size-4" />,
   };
 
   const copy = createMutation(() => ({
@@ -375,12 +375,12 @@ export function ExportDialog() {
           title="Export"
           confirm={
             <>
-              {settings.exportTo === "link" && !auth.data ?
+              {settings.exportTo === "link" && !auth.data ? (
                 <SignInButton>
                   {exportButtonIcon[settings.exportTo]}
                   <span class="ml-1.5">Sign in to share</span>
                 </SignInButton>
-                :
+              ) : (
                 <Button
                   class="flex gap-1.5 items-center"
                   variant="primary"
@@ -392,7 +392,8 @@ export function ExportDialog() {
                 >
                   Export to
                   {exportButtonIcon[settings.exportTo]}
-                </Button>}
+                </Button>
+              )}
             </>
           }
           leftFooterContent={
@@ -428,6 +429,10 @@ export function ExportDialog() {
                             .toString()
                             .padStart(2, "0")}`;
                         })()}
+                      </span>
+                      <span class="flex items-center text-[--gray-500]">
+                        <IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+                        {settings.resolution.width}×{settings.resolution.height}
                       </span>
                       <span class="flex items-center text-[--gray-500]">
                         <IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
