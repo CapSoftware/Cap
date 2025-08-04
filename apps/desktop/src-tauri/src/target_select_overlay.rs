@@ -1,7 +1,7 @@
 use std::{str::FromStr, time::Duration};
 
 use crate::windows::{CapWindowId, ShowCapWindow};
-use cap_displays::{bounds::LogicalBounds, DisplayId, WindowId};
+use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Manager};
