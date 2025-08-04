@@ -42,7 +42,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return notFound();
   }
 
-  if (video.public === false) {
+  const userPromise = getCurrentUser();
+  const userAccess = await userHasAccessToVideo(userPromise, video);
+
+  if (video.public === false && userAccess !== "has-access") {
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
@@ -50,7 +53,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     };
   }
 
-  if (video.password !== null) {
+  if (video.password !== null && userAccess !== "has-access") {
     return {
       title: "Cap: Password Protected Video",
       description: "This video is password protected.",

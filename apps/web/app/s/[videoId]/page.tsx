@@ -129,6 +129,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return notFound();
   }
 
+  const userPromise = getCurrentUser();
+  const userAccess = await userHasAccessToVideo(userPromise, video);
+
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
 
@@ -150,7 +153,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     ? "index, follow"
     : "noindex, nofollow";
 
-  if (video.public === false) {
+  if (video.public === false && userAccess !== "has-access") {
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
@@ -181,7 +184,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     };
   }
 
-  if (video.password !== null) {
+  if (video.password !== null && userAccess !== "has-access") {
     return {
       title: "Cap: Password Protected Video",
       description: "This video is password protected.",
