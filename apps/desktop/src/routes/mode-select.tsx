@@ -1,6 +1,22 @@
 import ModeSelect from "~/components/ModeSelect";
+import { onMount } from "solid-js";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/window";
 
 const ModeSelectWindow = () => {
+  onMount(async () => {
+    const window = getCurrentWindow();
+    try {
+      const currentSize = await window.innerSize();
+      
+      if (currentSize.width !== 900 || currentSize.height !== 500) {
+        await window.setSize(new LogicalSize(900, 500));
+      }
+    } catch (error) {
+      console.error("Failed to set window size:", error);
+    }
+  });
+
   return (
     <div
       data-tauri-drag-region

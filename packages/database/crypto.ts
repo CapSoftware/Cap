@@ -1,5 +1,5 @@
 import { serverEnv } from "@cap/env";
-import { timingSafeEqual } from "crypto";
+import { timingSafeEqual } from "node:crypto";
 
 const ALGORITHM = { name: "AES-GCM", length: 256 };
 const IV_LENGTH = 12;
@@ -162,7 +162,10 @@ export async function hashPassword(password: string): Promise<string> {
   return result.toString("base64");
 }
 
-export async function verifyPassword(stored: string, password: string): Promise<boolean> {
+export async function verifyPassword(
+  stored: string,
+  password: string
+): Promise<boolean> {
   if (!stored || !password) return false;
 
   const data = Buffer.from(stored, "base64");

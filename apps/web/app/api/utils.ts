@@ -1,11 +1,9 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { createMiddleware } from "hono/factory";
-import { buildEnv, serverEnv } from "@cap/env";
+import { buildEnv } from "@cap/env";
 import { cors } from "hono/cors";
 import { eq } from "drizzle-orm";
-import { getServerSession, Session } from "next-auth";
-import { authOptions } from "@cap/database/auth/auth-options";
 import { Context } from "hono";
 import { db } from "@cap/database";
 import { authApiKeys, users } from "@cap/database/schema";
@@ -23,7 +21,7 @@ async function getAuth(c: Context) {
       .where(eq(authApiKeys.id, authHeader));
     user = res[0]?.users;
   } else {
-    if (authHeader) {
+    if (authHeader)
       cookies().set({
         name: "next-auth.session-token",
         value: authHeader,
@@ -32,11 +30,8 @@ async function getAuth(c: Context) {
         secure: true,
         httpOnly: true,
       });
-    }
 
-    const session = await getServerSession(authOptions());
-    if (!session) return;
-    user = await getCurrentUser(session);
+    user = await getCurrentUser();
   }
 
   if (!user) return;
@@ -60,9 +55,7 @@ export const withAuth = createMiddleware<{
     user: NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>;
   };
 }>(async (c, next) => {
-  console.log("withAuth", c.req);
   const auth = await getAuth(c);
-  console.log("withAuth", { auth });
   if (!auth) return c.text("User not authenticated", 401);
 
   c.set("user", auth.user);
@@ -70,7 +63,7 @@ export const withAuth = createMiddleware<{
   await next();
 });
 
-const allowedOrigins = [
+export const allowedOrigins = [
   buildEnv.NEXT_PUBLIC_WEB_URL,
   "http://localhost:3001",
   "http://localhost:3000",

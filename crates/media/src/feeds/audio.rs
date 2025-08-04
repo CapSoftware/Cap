@@ -1,4 +1,5 @@
 use cap_audio::{AudioData, StereoMode};
+use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
     codec::decoder,
@@ -16,7 +17,7 @@ use ringbuf::{
 use std::sync::Arc;
 
 use crate::{
-    data::{cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, AudioInfo, FFAudio, FromSampleBytes},
+    data::{cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, FFAudio, FromSampleBytes},
     MediaError,
 };
 
@@ -278,7 +279,7 @@ impl AudioRenderer {
         let max_samples = tracks
             .iter()
             .map(|t| t.data().sample_count())
-            .min()
+            .max()
             .unwrap();
 
         if self.cursor.samples >= max_samples {
@@ -300,7 +301,12 @@ impl AudioRenderer {
                     if project.audio.mute {
                         f32::NEG_INFINITY
                     } else {
-                        t.gain(&project.audio)
+                        let g = t.gain(&project.audio);
+                        if g < -30.0 {
+                            f32::NEG_INFINITY
+                        } else {
+                            g
+                        }
                     },
                     t.stereo_mode(&project.audio),
                 )

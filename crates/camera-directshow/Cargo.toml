@@ -1,0 +1,39 @@
+[package]
+name = "cap-camera-directshow"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-core = { version = "0.60" }
+windows = { version = "0.60", features = [
+	"Win32_System_Com",
+	"Win32_Media_MediaFoundation",
+	"Win32_Media_DirectShow",
+	"Win32_System_Com_StructuredStorage",
+	"Win32_System_Ole",
+	"Win32_System_Variant",
+	"Win32_Media_KernelStreaming",
+] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+inquire = "0.7.5"
+tracing.workspace = true
+tracing-subscriber = "0.3.19"
+
+windows-core = { version = "0.60" }
+windows = { version = "0.60", features = [
+	"Win32_System_Com",
+	"Win32_Media_MediaFoundation",
+	"Win32_Media_DirectShow",
+	"Win32_System_Com_StructuredStorage",
+	"Win32_System_Ole",
+	"Win32_System_Variant",
+	"Win32_Media_KernelStreaming",
+] }

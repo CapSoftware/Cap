@@ -12,7 +12,7 @@
 /// (Electron) https://github.com/electron/electron/blob/38512efd25a159ddc64a54c22ef9eb6dd60064ec/shell/browser/native_window_mac.mm#L1454
 ///
 use objc::{msg_send, sel, sel_impl};
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{Rng, distributions::Alphanumeric};
 use tauri::{Emitter, LogicalPosition, Runtime, Window};
 
 pub struct UnsafeWindowHandle(pub *mut std::ffi::c_void);
@@ -70,7 +70,7 @@ pub fn position_window_controls(
 
 pub fn setup<R: Runtime>(window: Window<R>, controls_inset: LogicalPosition<f64>) {
     use cocoa::appkit::NSWindow;
-    use cocoa::base::{id, BOOL};
+    use cocoa::base::{BOOL, id};
     use cocoa::foundation::NSUInteger;
     use objc::runtime::{Object, Sel};
     use std::ffi::c_void;

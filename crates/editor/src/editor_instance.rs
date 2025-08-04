@@ -1,25 +1,25 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
-use cap_media::data::RawVideoFormat;
-use cap_media::data::VideoInfo;
 // use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, ProjectRecordings, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
+    get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
     RenderVideoConstants, SegmentVideoPaths,
 };
 use std::ops::Deref;
 use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{mpsc, watch, Mutex};
+use tokio_util::sync::CancellationToken;
+use tracing::trace;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
     pub ws_port: u16,
-    pub recordings: Arc<ProjectRecordings>,
+    pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
     pub state: Arc<Mutex<EditorState>>,
@@ -29,7 +29,7 @@ pub struct EditorInstance {
         watch::Sender<ProjectConfiguration>,
         watch::Receiver<ProjectConfiguration>,
     ),
-    ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
+    ws_shutdown_token: CancellationToken,
     pub segments: Arc<Vec<Segment>>,
     meta: RecordingMeta,
 }
@@ -53,27 +53,19 @@ impl EditorInstance {
             return Err("Cannot edit non-studio recordings".to_string());
         };
         let project = recording_meta.project_config();
-        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
-
-        let render_options = RenderOptions {
-            screen_size: XY::new(
-                recordings.segments[0].display.width,
-                recordings.segments[0].display.height,
-            ),
-            camera_size: recordings.segments[0]
-                .camera
-                .as_ref()
-                .map(|c| XY::new(c.width, c.height)),
-        };
+        let recordings = Arc::new(ProjectRecordingsMeta::new(
+            &recording_meta.project_path,
+            meta,
+        )?);
 
         let segments = create_segments(&recording_meta, meta).await?;
 
         let (frame_tx, frame_rx) = flume::bounded(4);
 
-        let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
+        let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(render_options, &recording_meta, meta)
+            RenderVideoConstants::new(&recordings.segments, &recording_meta, meta)
                 .await
                 .unwrap(),
         );
@@ -101,7 +93,7 @@ impl EditorInstance {
             on_state_change: Box::new(on_state_change),
             preview_tx,
             project_config: watch::channel(project),
-            ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
+            ws_shutdown_token,
             segments: Arc::new(segments),
             meta: recording_meta,
         });
@@ -117,31 +109,29 @@ impl EditorInstance {
     }
 
     pub async fn dispose(&self) {
-        println!("Disposing EditorInstance");
+        trace!("Disposing EditorInstance");
 
         let mut state = self.state.lock().await;
 
         // Stop playback
         if let Some(handle) = state.playback_task.take() {
-            println!("Stopping playback");
+            trace!("Stopping playback");
             handle.stop();
         }
 
         // Stop preview
         if let Some(task) = state.preview_task.take() {
-            println!("Stopping preview");
+            trace!("Stopping preview");
             task.abort();
             task.await.ok(); // Await the task to ensure it's fully stopped
         }
 
         // Stop WebSocket server
-        if let Some(ws_shutdown) = self.ws_shutdown.lock().unwrap().take() {
-            println!("Shutting down WebSocket server");
-            let _ = ws_shutdown.send(());
-        }
+        trace!("Shutting down WebSocket server");
+        self.ws_shutdown_token.cancel();
 
         // Stop renderer
-        println!("Stopping renderer");
+        trace!("Stopping renderer");
         self.renderer.stop().await;
 
         // // Clear audio data

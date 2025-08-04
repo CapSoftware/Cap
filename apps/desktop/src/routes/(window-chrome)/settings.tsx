@@ -21,7 +21,7 @@ export default function Settings(props: RouteSectionProps) {
   };
 
   return (
-    <div class="flex-1 flex flex-row divide-x divide-gray-5 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
+    <div class="flex-1 flex flex-row divide-x divide-gray-3 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
       <div class="flex flex-col h-full bg-gray-2">
         <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-gray-12">
           <For
@@ -84,7 +84,7 @@ export default function Settings(props: RouteSectionProps) {
         </ul>
         <div class="p-[0.625rem] text-left flex flex-col">
           <Show when={version()}>
-            {(v) => <p class="mb-1 text-xs text-gray-11">v{v()}</p>}
+            {(v) => <p class="mb-2 text-xs text-gray-11">v{v()}</p>}
           </Show>
           {auth.data ? (
             <Button onClick={handleAuth} variant="secondary" class="w-full">

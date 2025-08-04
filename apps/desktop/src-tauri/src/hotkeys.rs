@@ -1,6 +1,4 @@
-use crate::{
-    RequestNewScreenshot, RequestRestartRecording, RequestStartRecording, RequestStopRecording,
-};
+use crate::{RequestStartRecording, recording};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -42,7 +40,7 @@ impl Hotkey {
     }
 }
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum HotkeyAction {
     StartRecording,
@@ -80,19 +78,7 @@ pub fn init(app: &AppHandle) {
 
                 for (action, hotkey) in &store.hotkeys {
                     if &hotkey.to_shortcut() == shortcut {
-                        match action {
-                            HotkeyAction::StartRecording => {
-                                let _ = RequestStartRecording.emit(app);
-                            }
-                            HotkeyAction::StopRecording => {
-                                let _ = RequestStopRecording.emit(app);
-                            }
-                            HotkeyAction::RestartRecording => {
-                                let _ = RequestRestartRecording.emit(app);
-                            } // HotkeyAction::TakeScreenshot => {
-                              //     let _ = RequestNewScreenshot.emit(app);
-                              // }
-                        }
+                        tokio::spawn(handle_hotkey(app.clone(), *action));
                     }
                 }
             })
@@ -109,6 +95,19 @@ pub fn init(app: &AppHandle) {
     }
 
     app.manage(Mutex::new(store));
+}
+
+async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
+    match action {
+        HotkeyAction::StartRecording => {
+            let _ = RequestStartRecording.emit(&app);
+            Ok(())
+        }
+        HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
+        HotkeyAction::RestartRecording => {
+            recording::restart_recording(app.clone(), app.state()).await
+        }
+    }
 }
 
 #[tauri::command(async)]

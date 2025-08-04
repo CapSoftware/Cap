@@ -4,7 +4,6 @@ import {
 } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import {
-  Accessor,
   ComponentProps,
   For,
   Match,
@@ -28,6 +27,117 @@ import {
   useSegmentTranslateX,
   useSegmentWidth,
 } from "./Track";
+import { getSectionMarker } from "./sectionMarker";
+
+function WaveformCanvas(props: {
+  systemWaveform?: number[];
+  micWaveform?: number[];
+  segment: { start: number; end: number };
+  secsPerPixel: number;
+}) {
+  const { project } = useEditorContext();
+
+  let canvas: HTMLCanvasElement | undefined;
+  const { width } = useSegmentContext();
+  const { secsPerPixel } = useTimelineContext();
+
+  const render = (
+    ctx: CanvasRenderingContext2D,
+    h: number,
+    waveform: number[],
+    color: string,
+    gain = 0
+  ) => {
+    const maxAmplitude = h;
+
+    // yellow please
+    ctx.fillStyle = color;
+    ctx.beginPath();
+
+    const step = 0.05 / secsPerPixel();
+
+    ctx.moveTo(0, h);
+
+    const norm = (w: number) => 1.0 - Math.max(w + gain, -60) / -60;
+
+    for (
+      let segmentTime = props.segment.start;
+      segmentTime <= props.segment.end + 0.1;
+      segmentTime += 0.1
+    ) {
+      const index = Math.floor(segmentTime * 10);
+      const xTime = index / 10;
+
+      const amplitude = norm(waveform[index]) * maxAmplitude;
+
+      const x = (xTime - props.segment.start) / secsPerPixel();
+      const y = h - amplitude;
+
+      const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
+      const prevAmplitude = norm(waveform[index - 1]) * maxAmplitude;
+      const prevY = h - prevAmplitude;
+
+      const cpX1 = prevX + step / 2;
+      const cpX2 = x - step / 2;
+
+      ctx.bezierCurveTo(cpX1, prevY, cpX2, y, x, y);
+    }
+
+    ctx.lineTo(
+      (props.segment.end + 0.3 - props.segment.start) / secsPerPixel(),
+      h
+    );
+
+    ctx.closePath();
+    ctx.fill();
+  };
+
+  function renderWaveforms() {
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const w = width();
+    if (w <= 0) return;
+
+    const h = canvas.height;
+    canvas.width = w;
+    ctx.clearRect(0, 0, w, h);
+
+    if (props.micWaveform)
+      render(
+        ctx,
+        h,
+        props.micWaveform,
+        "rgba(255,255,255,0.4)",
+        project.audio.micVolumeDb
+      );
+
+    if (props.systemWaveform)
+      render(
+        ctx,
+        h,
+        props.systemWaveform,
+        "rgba(255,150,0,0.5)",
+        project.audio.systemVolumeDb
+      );
+  }
+
+  createEffect(() => {
+    renderWaveforms();
+  });
+
+  return (
+    <canvas
+      ref={(el) => {
+        canvas = el;
+        renderWaveforms();
+      }}
+      class="absolute inset-0 w-full h-full pointer-events-none"
+      height={52}
+    />
+  );
+}
 
 export function ClipTrack(
   props: Pick<ComponentProps<"div">, "ref"> & {
@@ -37,11 +147,15 @@ export function ClipTrack(
   const {
     project,
     setProject,
+    projectActions,
     editorInstance,
     projectHistory,
     editorState,
     setEditorState,
     totalDuration,
+    micWaveforms,
+    systemAudioWaveforms,
+    metaQuery,
   } = useEditorContext();
 
   const { secsPerPixel, duration } = useTimelineContext();
@@ -105,6 +219,25 @@ export function ClipTrack(
             return segmentIndex === selection.index;
           });
 
+          const micWaveform = () => {
+            if (project.audio.micVolumeDb && project.audio.micVolumeDb < -30)
+              return;
+
+            const idx = segment.recordingSegment ?? i();
+            return micWaveforms()?.[idx] ?? [];
+          };
+
+          const systemAudioWaveform = () => {
+            if (
+              project.audio.systemVolumeDb &&
+              project.audio.systemVolumeDb <= -30
+            )
+              return;
+
+            const idx = segment.recordingSegment ?? i();
+            return systemAudioWaveforms()?.[idx] ?? [];
+          };
+
           return (
             <>
               <Show when={marker()}>
@@ -126,11 +259,7 @@ export function ClipTrack(
                         })()}
                       >
                         {(marker) => (
-                          <div
-                            class={cx(
-                              "h-7 -top-8 overflow-hidden rounded-full -translate-x-1/2"
-                            )}
-                          >
+                          <div class="h-7 -top-8 overflow-hidden rounded-full -translate-x-1/2 z-10">
                             <CutOffsetButton
                               value={(() => {
                                 const m = marker();
@@ -157,53 +286,38 @@ export function ClipTrack(
                       <Match
                         when={(() => {
                           const m = marker();
-                          if (m.type === "dual") return m;
+                          if (
+                            m.type === "dual" &&
+                            m.right &&
+                            m.right.type === "time"
+                          )
+                            return m.right;
                         })()}
                       >
-                        {(marker) => (
-                          <div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
-                            <Show when={marker().left}>
-                              {(marker) => (
-                                <CutOffsetButton
-                                  value={(() => {
-                                    const m = marker();
-                                    return m.type === "reset" ? 0 : m.time;
-                                  })()}
-                                  class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
-                                  onClick={() => {
-                                    setProject(
-                                      "timeline",
-                                      "segments",
-                                      i() - 1,
-                                      "end",
-                                      segmentRecording(i() - 1).display.duration
-                                    );
-                                  }}
-                                />
-                              )}
-                            </Show>
-                            <Show when={marker().right}>
-                              {(marker) => (
-                                <CutOffsetButton
-                                  value={(() => {
-                                    const m = marker();
-                                    return m.type === "reset" ? 0 : m.time;
-                                  })()}
-                                  class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
-                                  onClick={() => {
-                                    setProject(
-                                      "timeline",
-                                      "segments",
-                                      i(),
-                                      "start",
-                                      0
-                                    );
-                                  }}
-                                />
-                              )}
-                            </Show>
-                          </div>
-                        )}
+                        {(marker) => {
+                          const markerValue = marker();
+                          return (
+                            <div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
+                              <CutOffsetButton
+                                value={
+                                  markerValue.type === "time"
+                                    ? markerValue.time
+                                    : 0
+                                }
+                                class="-left-px absolute rounded-r-full !pl-1.5 rounded-tl-full"
+                                onClick={() => {
+                                  setProject(
+                                    "timeline",
+                                    "segments",
+                                    i(),
+                                    "start",
+                                    0
+                                  );
+                                }}
+                              />
+                            </div>
+                          );
+                        }}
                       </Match>
                     </Switch>
                   </div>
@@ -226,22 +340,9 @@ export function ClipTrack(
                     const rect = e.currentTarget.getBoundingClientRect();
                     const fraction = (e.clientX - rect.left) / rect.width;
 
-                    const splitTime =
-                      segment.start + fraction * (segment.end - segment.start);
+                    const splitTime = fraction * (segment.end - segment.start);
 
-                    setProject(
-                      "timeline",
-                      "segments",
-                      produce((segments) => {
-                        segments.splice(i() + 1, 0, {
-                          start: splitTime,
-                          end: segment.end,
-                          timescale: 1,
-                          recordingSegment: segment.recordingSegment,
-                        });
-                        segments[i()].end = splitTime;
-                      })
-                    );
+                    projectActions.splitClipSegment(prevDuration() + splitTime);
                   } else {
                     createRoot((dispose) => {
                       createEventListener(e.currentTarget, "mouseup", (e) => {
@@ -257,6 +358,13 @@ export function ClipTrack(
                   }
                 }}
               >
+                <WaveformCanvas
+                  micWaveform={micWaveform()}
+                  systemWaveform={systemAudioWaveform()}
+                  segment={segment}
+                  secsPerPixel={secsPerPixel()}
+                />
+
                 <Markings segment={segment} prevDuration={prevDuration()} />
 
                 <SegmentHandle
@@ -433,7 +541,10 @@ export function ClipTrack(
                     <div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
                     <div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
                       <CutOffsetButton
-                        value={marker().time}
+                        value={(() => {
+                          const m = marker();
+                          return m.type === "time" ? m.time : 0;
+                        })()}
                         class="-right-px absolute rounded-l-full !pr-1.5 rounded-tr-full"
                         onClick={() => {
                           setProject(
@@ -518,76 +629,14 @@ function CutOffsetButton(props: {
   );
 }
 
-type SectionMarker = { type: "reset" } | { type: "time"; time: number };
-
 function useSectionMarker(
   props: () => {
     segments: TimelineSegment[];
     i: number;
     position: "left" | "right";
   }
-): Accessor<
-  | ({ type: "dual" } & (
-      | { left: SectionMarker; right: null }
-      | { left: null; right: SectionMarker }
-      | { left: SectionMarker; right: SectionMarker }
-    ))
-  | { type: "single"; value: SectionMarker }
-  | null
-> {
+) {
   const { editorInstance } = useEditorContext();
 
-  return () => {
-    const { segments, i, position } = props();
-
-    if (i === 0 && position === "left") {
-      return segments[0].start === 0
-        ? null
-        : {
-            type: "dual",
-            right: { type: "time", time: segments[0].start },
-            left: null,
-          };
-    }
-
-    if (i === segments.length - 1 && position === "right") {
-      const diff =
-        editorInstance.recordings.segments[segments[i].recordingSegment ?? 0]
-          .display.duration - segments[i].end;
-      return diff > 0
-        ? { type: "dual", left: { type: "time", time: diff }, right: null }
-        : null;
-    }
-
-    if (position === "left") {
-      const prevSegment = segments[i - 1];
-      const prevSegmentRecordingDuration =
-        editorInstance.recordings.segments[prevSegment.recordingSegment ?? 0]
-          .display.duration;
-      const nextSegment = segments[i];
-      if (prevSegment.recordingSegment === nextSegment.recordingSegment) {
-        const timeDiff = nextSegment.start - prevSegment.end;
-        return {
-          type: "single",
-          value:
-            timeDiff === 0
-              ? { type: "reset" }
-              : { type: "time", time: timeDiff },
-        };
-      } else {
-        const leftTime = prevSegmentRecordingDuration - prevSegment.end;
-        const rightTime = nextSegment.start;
-
-        const left = leftTime === 0 ? null : { type: "time", time: leftTime };
-        const right =
-          rightTime === 0 ? null : { type: "time", time: rightTime };
-
-        if (left === null && right === null) return null;
-
-        return { type: "dual", left, right } as any;
-      }
-    }
-
-    return null;
-  };
+  return () => getSectionMarker(props(), editorInstance.recordings.segments);
 }

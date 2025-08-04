@@ -1,7 +1,6 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { message } from "@tauri-apps/plugin-dialog";
 import {
   createEffect,
@@ -10,7 +9,6 @@ import {
   onMount,
   Suspense,
 } from "solid-js";
-import { Button } from "@cap/ui-solid";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
@@ -31,7 +29,7 @@ const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {
       onError: (e) => {
-        message(`Error\n${e.message}`);
+        message(`Error\n${e}`);
       },
     },
   },
@@ -85,7 +83,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              currentWindow.show();
+              if (location.pathname !== "/camera") currentWindow.show();
             });
 
             return (
@@ -131,7 +129,7 @@ function createThemeListener(currentWindow: WebviewWindow) {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
+        window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }

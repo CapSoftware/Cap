@@ -2,10 +2,9 @@ use anyhow::Result;
 use cap_audio::AudioData;
 use cap_project;
 use ffmpeg::{
-    codec as avcodec,
+    ChannelLayout, codec as avcodec,
     format::{self as avformat},
     software::resampling,
-    ChannelLayout,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -980,7 +979,6 @@ pub async fn load_captions(
     video_id: String,
     app: AppHandle,
 ) -> Result<Option<CaptionData>, String> {
-    tracing::info!("Loading captions for video_id: {}", video_id);
     let captions_dir = app_captions_dir(&app, &video_id)?;
     let captions_path = captions_dir.join("captions.json");
 
@@ -1203,7 +1201,6 @@ pub async fn export_captions_srt(
     tracing::info!("Starting SRT export for video_id: {}", video_id);
 
     // Load captions
-    tracing::info!("Loading captions from storage");
     let captions = match load_captions(video_id.clone(), app.clone()).await? {
         Some(c) => {
             tracing::info!("Found {} caption segments to export", c.segments.len());

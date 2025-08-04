@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { userSelectProps } from "@cap/database/auth/session";
-import { isUserOnProPlan } from "@cap/utils";
+import { userIsPro } from "@cap/utils";
 import { Button } from "@cap/ui";
 
 interface Chapter {
@@ -20,7 +20,6 @@ interface SummaryProps {
     processing?: boolean;
   };
   aiGenerationEnabled?: boolean;
-  aiUiEnabled?: boolean;
   user: typeof userSelectProps | null;
 }
 
@@ -61,11 +60,9 @@ const SkeletonLoader = () => (
 );
 
 export const Summary: React.FC<SummaryProps> = ({
-  videoId,
   onSeek,
   initialAiData,
   aiGenerationEnabled = false,
-  aiUiEnabled = false,
   user,
 }) => {
   const [aiData, setAiData] = useState<{
@@ -79,7 +76,6 @@ export const Summary: React.FC<SummaryProps> = ({
   );
 
   useEffect(() => {
-    console.log("[Summary] Received initialAiData update:", initialAiData);
     if (initialAiData) {
       setAiData(initialAiData);
       setIsLoading(aiGenerationEnabled && initialAiData.processing === true);
@@ -94,25 +90,12 @@ export const Summary: React.FC<SummaryProps> = ({
     }
   };
 
-  const hasProAccess = user
-    ? isUserOnProPlan({
-        subscriptionStatus: user.stripeSubscriptionStatus || null,
-      })
-    : false;
-
-  console.log("[Summary] Current state:", {
-    isLoading,
-    aiData,
-    initialAiData,
-    aiUiEnabled,
-    aiGenerationEnabled,
-    hasProAccess,
-  });
+  const hasProAccess = userIsPro(user);
 
   const hasExistingAiData =
     aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
 
-  if (aiUiEnabled && !hasProAccess && !hasExistingAiData) {
+  if (!hasProAccess && !hasExistingAiData) {
     return (
       <div className="flex flex-col justify-center items-center p-8 h-full text-center">
         <div className="space-y-4 max-w-sm">

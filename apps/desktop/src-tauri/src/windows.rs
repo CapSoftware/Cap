@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{fake_window, general_settings::AppTheme, permissions, App, ArcLock};
+use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
@@ -11,7 +11,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{atomic::AtomicU32, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32},
 };
 use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
@@ -167,7 +167,7 @@ pub enum ShowCapWindow {
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -219,15 +219,21 @@ impl ShowCapWindow {
                     Box::pin(Self::Setup.show(app)).await?
                 }
             }
-            Self::Settings { page } => self
-                .window_builder(
+            Self::Settings { page } => {
+                // Hide main window when settings window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                self.window_builder(
                     app,
                     format!("/settings/{}", page.clone().unwrap_or_default()),
                 )
                 .resizable(true)
                 .maximized(false)
                 .center()
-                .build()?,
+                .build()?
+            }
             Self::Editor { .. } => {
                 if let Some(main) = CapWindowId::Main.get(app) {
                     let _ = main.close();
@@ -242,30 +248,46 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::Upgrade => self
-                .window_builder(app, "/upgrade")
-                .resizable(false)
-                .focused(true)
-                .always_on_top(true)
-                .maximized(false)
-                .shadow(true)
-                .transparent(true)
-                .center()
-                .build()?,
-            Self::ModeSelect => self
-                .window_builder(app, "/mode-select")
-                .resizable(false)
-                .maximized(false)
-                .maximizable(false)
-                .center()
-                .focused(true)
-                .shadow(true)
-                .build()?,
+            Self::Upgrade => {
+                // Hide main window when upgrade window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                let mut builder = self
+                    .window_builder(app, "/upgrade")
+                    .resizable(false)
+                    .focused(true)
+                    .always_on_top(true)
+                    .maximized(false)
+                    .shadow(true)
+                    .center();
+
+                builder.build()?
+            }
+            Self::ModeSelect => {
+                // Hide main window when mode select window opens
+                if let Some(main) = CapWindowId::Main.get(app) {
+                    let _ = main.hide();
+                }
+
+                let mut builder = self
+                    .window_builder(app, "/mode-select")
+                    .inner_size(900.0, 500.0)
+                    .min_inner_size(900.0, 500.0)
+                    .resizable(true)
+                    .maximized(false)
+                    .maximizable(false)
+                    .center()
+                    .focused(true)
+                    .shadow(true);
+
+                builder.build()?
+            }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
                 let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-
                 let mut window_builder = self
                     .window_builder(app, "/camera")
                     .maximized(false)
@@ -287,7 +309,8 @@ impl ShowCapWindow {
 			                window.__CAP__.cameraWsPort = {port};
 		                ",
                     ))
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
 
@@ -387,9 +410,7 @@ impl ShowCapWindow {
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let mut width = 180.0 + 32.0;
 
                 let height = 40.0;
@@ -410,6 +431,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]
@@ -610,7 +635,7 @@ fn position_traffic_lights_impl(
     window: &tauri::Window,
     controls_inset: Option<LogicalPosition<f64>>,
 ) {
-    use crate::platform::delegates::{position_window_controls, UnsafeWindowHandle};
+    use crate::platform::delegates::{UnsafeWindowHandle, position_window_controls};
     let c_win = window.clone();
     window
         .run_on_main_thread(move || {

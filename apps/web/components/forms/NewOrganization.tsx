@@ -45,23 +45,23 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
         ref={props.formRef}
         onSubmit={form.handleSubmit(async (values) => {
           try {
-            setIsUploading(true);
             props.setCreateLoading?.(true);
-            
+
             // Create FormData to send both the organization name and icon file
             const formData = new FormData();
-            formData.append('name', values.name);
-            
+            formData.append("name", values.name);
+
             // Add the icon file if one was selected
             if (selectedFile) {
-              formData.append('icon', selectedFile);
+              formData.append("icon", selectedFile);
+              setIsUploading(true);
             }
-            
+
             await createOrganization(formData);
             props.onOrganizationCreated();
           } catch (error) {
             console.error("Error creating organization:", error);
-            toast.error("Failed to create organization");
+            error instanceof Error ? toast.error(error.message) : toast.error("Failed to create organization");
           } finally {
             setIsUploading(false);
             props.setCreateLoading?.(false);
@@ -74,9 +74,9 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             name="name"
             render={({ field }) => (
               <FormControl>
-                <Input 
-                  placeholder="Your organization name" 
-                  {...field} 
+                <Input
+                  placeholder="Your organization name"
+                  {...field}
                   onChange={(e) => {
                     field.onChange(e);
                     props.onNameChange?.(e.target.value);
@@ -87,7 +87,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
           />
 
           <div className="space-y-1">
-            <Label htmlFor="icon">Organization Icon (Optional)</Label>
+            <Label htmlFor="icon">Organization Icon</Label>
             <CardDescription className="w-full max-w-[400px]">
               Upload a custom logo or icon for your organization.
             </CardDescription>
@@ -97,6 +97,7 @@ export const NewOrganization: React.FC<NewOrganizationProps> = (props) => {
             <FileInput
               id="icon"
               name="icon"
+              notDraggingClassName="hover:bg-gray-3"
               onChange={setSelectedFile}
               disabled={isUploading}
               isLoading={isUploading}
