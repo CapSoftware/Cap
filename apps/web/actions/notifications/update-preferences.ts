@@ -11,6 +11,7 @@ export const updatePreferences = async ({
 }: {
   notifications: {
     pauseComments: boolean;
+    pauseReplies: boolean;
     pauseViews: boolean;
     pauseReactions: boolean;
   };

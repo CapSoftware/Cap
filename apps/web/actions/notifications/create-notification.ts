@@ -49,6 +49,7 @@ export const createNotification = async (
 
       const shouldSkipNotification =
         (type === "comment" && notificationPrefs.pauseComments) ||
+        (type === "reply" && notificationPrefs.pauseReplies) ||
         (type === "view" && notificationPrefs.pauseViews) ||
         (type === "reaction" && notificationPrefs.pauseReactions);
 

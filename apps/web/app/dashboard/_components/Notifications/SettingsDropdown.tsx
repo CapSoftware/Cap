@@ -3,8 +3,9 @@ import {
   faBellSlash,
   faCheck,
   faCog,
-  faCommentSlash,
-  faEyeSlash,
+  faComment,
+  faEye,
+  faReply,
   faThumbsUp, IconDefinition
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -18,12 +19,13 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 type NotificationOption = {
   icon: IconDefinition;
   label: string;
-  value: "pauseComments" | "pauseViews" | "pauseReactions";
+  value: "pauseComments" | "pauseViews" | "pauseReactions" | "pauseReplies";
 };
 
 const notificationOptions: NotificationOption[] = [
-  { icon: faCommentSlash, label: "Comments", value: "pauseComments" },
-  { icon: faEyeSlash, label: "Views", value: "pauseViews" },
+  { icon: faComment, label: "Comments", value: "pauseComments" },
+  { icon: faReply, label: "Replies", value: "pauseReplies" },
+  { icon: faEye, label: "Views", value: "pauseViews" },
   { icon: faThumbsUp, label: "Reactions", value: "pauseReactions" }
 ]
 
@@ -36,6 +38,7 @@ export const SettingsDropdown = () => {
     try {
       const currentPrefs = userPreferences?.notifications ?? {
         pauseComments: false,
+        pauseReplies: false,
         pauseViews: false,
         pauseReactions: false
       };

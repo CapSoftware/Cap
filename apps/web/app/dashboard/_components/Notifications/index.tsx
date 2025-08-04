@@ -52,6 +52,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
     useEffect(() => {
       if (!scrollRef) return;
       const handleKeyDown = (e: KeyboardEvent) => {
+        e.preventDefault();
         if (e.key === "ArrowUp") {
           scrollRef.current?.scrollBy({
             top: -100,
