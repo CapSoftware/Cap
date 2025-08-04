@@ -50,7 +50,7 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeOrganization, activeSpace } = useDashboardContext();
+  const { activeOrganization, activeSpace, anyNewNotifications } = useDashboardContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
 
   const titles: Record<string, string> = {
@@ -65,6 +65,7 @@ export default function DashboardInner({
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
   const [toggleNotifications, setToggleNotifications] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
   const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
     (e) => {
       if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
@@ -72,7 +73,6 @@ export default function DashboardInner({
       }
     }
   );
-  const bellRef = useRef<HTMLDivElement>(null);
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";
   return (
     <div className="flex flex-col min-h-screen">
@@ -119,7 +119,13 @@ export default function DashboardInner({
             hover:bg-gray-5 data-[state=open]:bg-gray-5
             size-9"
           >
-            <div className="absolute top-0.5 border border-gray-1 right-0 rounded-full z-[10] size-2 bg-red-400" />
+            {anyNewNotifications && (
+              <div className="absolute right-0 top-1 z-10">
+                <div className="relative">
+                  <div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+                  <div className="relative w-2 h-2 bg-red-400 rounded-full" />
+                </div>
+              </div>)}
             <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
             <AnimatePresence>
               {toggleNotifications && <Notifications ref={notificationsRef} />}
@@ -339,8 +345,8 @@ const ReferButton = () => {
       {/* Red notification dot with pulse animation */}
       <div className="absolute right-0 top-1 z-10">
         <div className="relative">
-          <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full opacity-75 animate-ping" />
-          <div className="relative w-2 h-2 bg-red-500 rounded-full" />
+          <div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+          <div className="relative w-2 h-2 bg-red-400 rounded-full" />
         </div>
       </div>
 

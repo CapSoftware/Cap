@@ -1,44 +1,62 @@
 export enum NotificationType {
-  RECORDING = "recording",
   COMMENT = "comment",
   VIEW = "view",
-  REACTION = "reaction"
+  REACTION = "reaction",
+  MENTION = "mention",
+  REPLY = "reply",
 }
 
 export type Notification = {
   id: string;
-  type: NotificationType;
-  user: {
-    name: string;
-    avatar: string;
-    hasUnread?: boolean;
-  };
   content: string;
-  time: string;
-  additionalText?: string;
+  videoId: string;
+  type: NotificationType;
+  readAt: string | null;
+  createdAt: string;
+  data: {
+    comment?: {
+      id: string;
+      parentCommentId: string;
+    };
+    content?: string;
+    videoId: string;
+    authorId?: string;
+  };
+  author: {
+    name: string;
+    avatar: string | null;
+  };
 };
 
 export enum FilterType {
   ALL = "All",
-  RECORDINGS = "Recordings",
   COMMENTS = "Comments",
+  REPLIES = "Replies",
   VIEWS = "Views",
-  REACTIONS = "Reactions"
+  REACTIONS = "Reactions",
 }
+
+export type NotificationData = {
+  notifications: Notification[];
+  count: Record<NotificationType, number>;
+};
 
 export const Filters = [
   FilterType.ALL,
-  FilterType.RECORDINGS,
   FilterType.COMMENTS,
+  FilterType.REPLIES,
   FilterType.VIEWS,
   FilterType.REACTIONS,
 ] as const;
 
 // Map filter types to notification types
-export const filterToNotificationType: Record<FilterType, NotificationType | null> = {
+export const filterToNotificationType: Record<
+  FilterType,
+  NotificationType | null
+> = {
   [FilterType.ALL]: null, // null means all types
-  [FilterType.RECORDINGS]: NotificationType.RECORDING,
   [FilterType.COMMENTS]: NotificationType.COMMENT,
+  [FilterType.REPLIES]: NotificationType.REPLY,
   [FilterType.VIEWS]: NotificationType.VIEW,
-  [FilterType.REACTIONS]: NotificationType.REACTION
+  [FilterType.REACTIONS]: NotificationType.REACTION,
 };

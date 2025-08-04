@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel, sql, desc } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 
 import {
@@ -25,6 +25,7 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { createNotification } from "@/actions/notifications/create-notification";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -32,6 +33,7 @@ export const revalidate = 30;
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
+  searchParams: { [key: string]: string | string[] | undefined };
 };
 
 type CommentWithAuthor = typeof comments.$inferSelect & {
@@ -51,6 +53,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
+
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
@@ -206,10 +209,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ShareVideoPage(props: Props) {
   const params = props.params;
+  const searchParams = props.searchParams;
   const videoId = params.videoId as string;
-  console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const userPromise = getCurrentUser();
+
+  const userPromise = await getCurrentUser();
+
+  createNotification({
+    videoId,
+  }, "view");
 
   const [video] = await db()
     .select({
@@ -257,7 +265,7 @@ export default async function ShareVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <AuthorizedContent video={video} user={userPromise} />
+        <AuthorizedContent video={video} user={userPromise} searchParams={searchParams} />
       )}
     </div>
   );
@@ -266,15 +274,18 @@ export default async function ShareVideoPage(props: Props) {
 async function AuthorizedContent({
   video,
   user: _user,
+  searchParams,
 }: {
-  video: InferSelectModel<typeof videos> & {
+  video: Omit<InferSelectModel<typeof videos>, "folderId"> & {
     sharedOrganization: { organizationId: string } | null;
   };
   user: MaybePromise<InferSelectModel<typeof users> | null>;
+  searchParams: { [key: string]: string | string[] | undefined };
 }) {
   const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
+  const commentId = searchParams.comment as string | undefined;
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -489,23 +500,31 @@ async function AuthorizedContent({
       )
     : Promise.resolve([]);
 
-  const commentsPromise = db()
-    .select({
-      id: comments.id,
-      content: comments.content,
-      timestamp: comments.timestamp,
-      type: comments.type,
-      authorId: comments.authorId,
-      videoId: comments.videoId,
-      createdAt: comments.createdAt,
-      updatedAt: comments.updatedAt,
-      parentCommentId: comments.parentCommentId,
-      authorName: users.name,
-    })
-    .from(comments)
-    .leftJoin(users, eq(comments.authorId, users.id))
-    .where(eq(comments.videoId, videoId))
-    .execute();
+  const commentsPromise = (async () => {
+    const allComments = await db()
+      .select({
+        id: comments.id,
+        content: comments.content,
+        timestamp: comments.timestamp,
+        type: comments.type,
+        authorId: comments.authorId,
+        videoId: comments.videoId,
+        createdAt: comments.createdAt,
+        updatedAt: comments.updatedAt,
+        parentCommentId: comments.parentCommentId,
+        authorName: users.name,
+      })
+      .from(comments)
+      .leftJoin(users, eq(comments.authorId, users.id))
+      .where(eq(comments.videoId, videoId))
+      .orderBy(
+        commentId
+          ? sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt} DESC`
+          : desc(comments.createdAt)
+      );
+
+    return allComments;
+  })();
 
   const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -528,6 +547,7 @@ async function AuthorizedContent({
     sharedOrganizations: sharedOrganizations,
     password: null,
     hasPassword: video.password !== null,
+    folderId: null,
   };
 
 

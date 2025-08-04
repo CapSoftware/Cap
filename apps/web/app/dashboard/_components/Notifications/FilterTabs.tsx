@@ -1,42 +1,42 @@
 import clsx from "clsx";
 import { motion } from "framer-motion";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import { Filters, FilterType } from "./types";
+import { NotificationType } from "./types";
 
 type FilterTabsProps = {
   activeFilter: FilterType;
   setActiveFilter: (filter: FilterType) => void;
+  loading: boolean;
+  count?: Record<NotificationType, number>;
 };
 
-export const FilterTabs = ({ activeFilter, setActiveFilter }: FilterTabsProps) => {
+export const FilterTabs = ({ activeFilter, setActiveFilter, loading, count }: FilterTabsProps) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const totalCount = useMemo(() => {
+    return Object.values(count ?? {}).reduce((acc, val) => acc + val, 0);
+  }, [count]);
 
-  // Add wheel event handling for horizontal scrolling
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
-      // Prevent the default vertical scroll
       if (!e.ctrlKey) {
         e.preventDefault();
       }
-      
-      // Scroll horizontally instead of vertically
       container.scrollLeft += e.deltaY;
     };
 
-    // Add the wheel event listener
     container.addEventListener('wheel', handleWheel, { passive: false });
 
-    // Clean up
     return () => {
       container.removeEventListener('wheel', handleWheel);
     };
   }, []);
 
   return (
-    <div 
+    <div
       ref={scrollContainerRef}
       className="flex isolate overflow-x-auto relative gap-4 items-center px-6 border-r border-b border-l hide-scroll border-gray-3"
     >
@@ -47,25 +47,25 @@ export const FilterTabs = ({ activeFilter, setActiveFilter }: FilterTabsProps) =
             className="flex relative gap-2 items-center py-4 cursor-pointer group"
           >
             <p className={clsx(
-              "text-[13px] transition-colors", 
-              activeFilter === filter 
-                ? "text-gray-12" 
+              "text-[13px] transition-colors",
+              activeFilter === filter
+                ? "text-gray-12"
                 : "text-gray-10 group-hover:text-gray-11"
             )}>
               {filter}
             </p>
             <div className="flex justify-center items-center rounded-md size-4 bg-gray-4">
-              <p className={clsx(
-                "text-[10px] transition-colors", 
-                activeFilter === filter 
-                  ? "text-gray-12" 
+              {loading ? <span className="size-1.5 rounded-full bg-gray-10" /> : <p className={clsx(
+                "text-[10px] transition-colors",
+                activeFilter === filter
+                  ? "text-gray-12"
                   : "text-gray-10 group-hover:text-gray-11"
               )}>
-                5
-              </p>
+                {filter === FilterType.ALL ? totalCount : count?.[filter.toLowerCase() as keyof typeof count]}
+              </p>}
             </div>
           </div>
-          
+
           {/* Indicator */}
           {activeFilter === filter && (
             <motion.div
