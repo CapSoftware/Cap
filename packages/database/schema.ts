@@ -126,6 +126,24 @@ export const verificationTokens = mysqlTable("verification_tokens", {
   updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 });
 
+export const otpCodes = mysqlTable(
+  "otp_codes",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    identifier: varchar("identifier", { length: 255 }).notNull(),
+    code: varchar("code", { length: 6 }).notNull(),
+    expires: datetime("expires").notNull(),
+    attempts: int("attempts").notNull().default(0),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => ({
+    identifierIndex: index("identifier_idx").on(table.identifier),
+    codeIndex: index("code_idx").on(table.code),
+    expiresIndex: index("expires_idx").on(table.expires),
+  })
+);
+
 export const organizations = mysqlTable(
   "organizations",
   {

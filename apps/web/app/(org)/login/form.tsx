@@ -235,7 +235,11 @@ export function LoginForm() {
                             trackEvent("auth_email_sent", {
                               email_domain: email.split("@")[1],
                             });
-                            toast.success("Email sent - check your inbox!");
+                            const params = new URLSearchParams({
+                              email,
+                              ...(next && { next }),
+                            });
+                            window.location.href = `/verify-otp?${params.toString()}`;
                           } else {
                             toast.error("Error sending email - try again?");
                           }
