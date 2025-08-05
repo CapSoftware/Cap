@@ -116,6 +116,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       autoCreateShareableLink: false,
       enableNotifications: true,
       enableNativeCameraPreview: false,
+      autoZoomOnClicks: false,
     }
   );
 

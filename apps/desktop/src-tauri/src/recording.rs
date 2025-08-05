@@ -23,9 +23,9 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    cursor::CursorEvents, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment,
+    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode, ZoomSegment,
+    cursor::CursorEvents,
 };
 use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
@@ -676,6 +676,7 @@ async fn handle_recording_finish(
             let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
+                &app,
                 &recording,
                 &recordings,
                 PresetsStore::get_default_preset(&app)?.map(|p| p.config),
@@ -830,6 +831,9 @@ async fn handle_recording_finish(
     Ok(())
 }
 
+/// Generates zoom segments based on mouse click events during recording.
+/// This is an experimental feature that automatically creates zoom effects
+/// around user interactions to highlight important moments.
 fn generate_zoom_segments_from_clicks(
     recording: &CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
@@ -905,10 +909,15 @@ fn generate_zoom_segments_from_clicks(
 }
 
 fn project_config_from_recording(
+    app: &AppHandle,
     completed_recording: &CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
+    let settings = GeneralSettingsStore::get(app)
+        .unwrap_or(None)
+        .unwrap_or_default();
+
     ProjectConfiguration {
         timeline: Some(TimelineConfiguration {
             segments: recordings
@@ -922,7 +931,11 @@ fn project_config_from_recording(
                     timescale: 1.0,
                 })
                 .collect(),
-            zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
+            zoom_segments: if settings.auto_zoom_on_clicks {
+                generate_zoom_segments_from_clicks(&completed_recording, &recordings)
+            } else {
+                Vec::new()
+            },
         }),
         ..default_config.unwrap_or_default()
     }

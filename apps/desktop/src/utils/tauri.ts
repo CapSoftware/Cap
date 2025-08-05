@@ -354,7 +354,7 @@ openEditorAfterRecording?: boolean;
 /**
  * @deprecated can be removed when native camera preview is ready
  */
-enableNativeCameraPreview: boolean }
+enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
