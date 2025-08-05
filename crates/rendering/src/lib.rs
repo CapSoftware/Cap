@@ -636,20 +636,7 @@ impl ProjectUniforms {
                     .advanced_shadow
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
-                debug_cursor_pos: if let Some(cursor) = &interpolated_cursor {
-                    let cursor_frame_pos =
-                        cursor
-                            .position
-                            .to_frame_space(&options, &project, resolution_base);
-                    [
-                        cursor_frame_pos.coord.x as f32,
-                        cursor_frame_pos.coord.y as f32,
-                    ]
-                } else {
-                    [0.0, 0.0]
-                },
-                debug_hotspot_offset: 10.0,
-                _padding: 0.0,
+                _padding: [0.0; 3],
             }
         };
 
@@ -755,20 +742,7 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    debug_cursor_pos: if let Some(cursor) = &interpolated_cursor {
-                        let cursor_frame_pos =
-                            cursor
-                                .position
-                                .to_frame_space(&options, &project, resolution_base);
-                        [
-                            cursor_frame_pos.coord.x as f32,
-                            cursor_frame_pos.coord.y as f32,
-                        ]
-                    } else {
-                        [0.0, 0.0]
-                    },
-                    debug_hotspot_offset: 10.0,
-                    _padding: 0.0,
+                    _padding: [0.0; 3],
                 }
             });
 

@@ -324,12 +324,8 @@ impl CursorLayer {
         let cursor_size_px: XY<f64> = (cursor_base_size_px * click_scale_factor).into();
 
         // Apply zoom scaling to cursor size to match position transformation
-        let zoom_size_ratio = zoom.bounds.bottom_right - zoom.bounds.top_left;
-        let zoom_scale_factor = XY::new(
-            1.0 / zoom_size_ratio.x.max(0.001), // Avoid division by zero
-            1.0 / zoom_size_ratio.y.max(0.001),
-        );
-        let cursor_size_px = cursor_size_px * zoom_scale_factor;
+        let zoom_scale = 1.0 / zoom.display_amount().max(0.001); // Avoid division by zero
+        let cursor_size_px = cursor_size_px * zoom_scale;
 
         let hotspot_px = cursor_texture.hotspot * cursor_size_px;
 
