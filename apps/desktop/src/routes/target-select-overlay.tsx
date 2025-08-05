@@ -1,11 +1,11 @@
 import { Button } from "@cap/ui-solid";
 import {
   ComponentProps,
+  createEffect,
   createRoot,
   createSignal,
   JSX,
   Match,
-  PropsWithChildren,
   Show,
   Switch,
 } from "solid-js";
@@ -24,6 +24,7 @@ import {
   ScreenCaptureTarget,
   TargetUnderCursor,
 } from "~/utils/tauri";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export default function () {
   const [params] = useSearchParams<{ displayId: string }>();
@@ -39,8 +40,12 @@ export default function () {
   createEventListener(document, "keydown", (e) => {
     if (e.key === "Escape") {
       e.preventDefault();
-      setOptions("targetMode", undefined);
+      setOptions("targetMode", null);
     }
+  });
+
+  createEffect(() => {
+    if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
   });
 
   return (

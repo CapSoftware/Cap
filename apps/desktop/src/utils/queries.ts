@@ -80,7 +80,7 @@ export function createOptionsQuery() {
     micName: string | null;
     mode: RecordingMode;
     captureSystemAudio?: boolean;
-    targetMode?: "screen" | "window" | "area";
+    targetMode?: "screen" | "window" | "area" | null;
     cameraID?: DeviceOrModelID | null;
     /** @deprecated */
     cameraLabel: string | null;
