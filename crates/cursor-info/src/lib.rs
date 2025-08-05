@@ -47,7 +47,7 @@ impl ResolvedCursor {
             // https://developer.apple.com/documentation/appkit/nscursor/dragcopy
             "af060876004c8647d82411eeac1bbd613d2991d46794aba16b56c91d3081e128" => ResolvedCursor {
                 raw: include_str!("../assets/mac/drag_copy.svg"),
-                hotspot: (0.222, 0.0),
+                hotspot: (0.255, 0.1),
             },
             // https://developer.apple.com/documentation/appkit/nscursor/draglink
             "59ac2483461f4ad577a0a6b68be89fe663c36263b583c5f038eee2ae6a5ad98f" => ResolvedCursor {
@@ -67,7 +67,7 @@ impl ResolvedCursor {
             // https://developer.apple.com/documentation/appkit/nscursor/operationnotallowed
             "37287ef1d097704d3e9d0be9c1049ce1fb6dfabd6d210af0429b1b6ec7084c59" => ResolvedCursor {
                 raw: include_str!("../assets/mac/operation_not_allowed.svg"),
-                hotspot: (0.22, 0.0),
+                hotspot: (0.24, 0.1),
             },
             // https://developer.apple.com/documentation/appkit/nscursor/pointinghand
             "b0443e9f72e724cb6d94b879bf29c6cb18376d0357c6233e5a7561cf8a9943c6" => ResolvedCursor {
@@ -118,7 +118,7 @@ impl ResolvedCursor {
             // IDC_ARROW
             "19502718917bb8a86b83ffb168021cf90517b5c5e510c33423060d230c9e2d20" => ResolvedCursor {
                 raw: include_str!("../assets/windows/arrow.svg"),
-                hotspot: (0.0, 0.0),
+                hotspot: (0.055, 0.085),
             },
             // IDC_IBEAM
             "77cc4cedcf68f3e1d41bfe16c567961b2306c6236b35b966cd3d5c9516565e33" => ResolvedCursor {
@@ -138,7 +138,7 @@ impl ResolvedCursor {
             // IDC_UPARROW
             "823d642acdc51ffbc29c2710303606270ed24936daf45215ead531333df102ba" => ResolvedCursor {
                 raw: include_str!("../assets/windows/uparrow.svg"),
-                hotspot: (0.5, 0.0),
+                hotspot: (0.5, 0.05),
             },
             // IDC_SIZENWSE
             "2daf2a40e4c7ecadec3270fbdb243a12ac22a14bb0b3a08a56b38a38322f9296" => ResolvedCursor {
@@ -178,27 +178,27 @@ impl ResolvedCursor {
             // IDC_APPSTARTING
             "1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf" => ResolvedCursor {
                 raw: include_str!("../assets/windows/appstarting.svg"),
-                hotspot: (0.0, 0.289),
+                hotspot: (0.055, 0.368),
             },
             // IDC_HELP
             "5d0b4df6188bc8d540abfbd4235199cc0f67fb41d5e0dcbfd40a3011f8808fea" => ResolvedCursor {
                 raw: include_str!("../assets/windows/idchelp.svg"),
-                hotspot: (0.0, 0.0),
+                hotspot: (0.056, 0.127),
             },
             // IDC_PIN
             "cb74a2d34774dbc43004882e43f9c058b2d2ee60184185567d0328ca013f5bc3" => ResolvedCursor {
                 raw: include_str!("../assets/windows/idcpin.svg"),
-                hotspot: (0.25, 0.01),
+                hotspot: (0.245, 0.05),
             },
             // IDC_PERSON
             "1f5209791a75916697c26cf2d018d267ae1102c71dbd196de6c83132f5627f09" => ResolvedCursor {
                 raw: include_str!("../assets/windows/idcperson.svg"),
-                hotspot: (0.23, 0.01),
+                hotspot: (0.235, 0.05),
             },
             // MAKEINTRESOURCE(32631) - Pen
             "7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2" => ResolvedCursor {
                 raw: include_str!("../assets/windows/pen.svg"),
-                hotspot: (0.0, 1.0),
+                hotspot: (0.055, 0.945),
             },
             // // MAKEINTRESOURCE(32652) - ScrolNS
             // "4c89e1d64c35cc88d09aaddcc78ab685ceab8d974006d3d94af23a9e888a74d7" => todo!(),
