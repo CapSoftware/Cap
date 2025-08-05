@@ -25,7 +25,7 @@ impl ResolvedCursor {
             //  https://developer.apple.com/documentation/appkit/nscursor/arrow
             "de2d1f4a81e520b65fd1317b845b00a1c51a4d1f71cca3cd4ccdab52b98d1ac9" => ResolvedCursor {
                 raw: include_str!("../assets/mac/arrow.svg"),
-                hotspot: (0.324, 0.253),
+                hotspot: (0.347, 0.33),
             },
             // https://developer.apple.com/documentation/appkit/nscursor/contextualmenu
             "ab26ca862492d41355b711c58544687a799dd7ae14cf161959ca524bbc97c322" => ResolvedCursor {
