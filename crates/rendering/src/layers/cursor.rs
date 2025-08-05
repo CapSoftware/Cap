@@ -544,8 +544,6 @@ impl CursorTexture {
             .flat_map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
             .collect();
 
-        // Keep hotspot in normalized coordinates (0.0-1.0) for consistency
-
         Ok(Self::prepare(
             constants,
             &rgba,
