@@ -243,7 +243,6 @@ impl CursorLayer {
             // Attempt to find and load a higher-quality SVG cursor included in Cap.
             // These are used instead of the OS provided cursor images when possible as the quality is better.
             if let Some(cursor_hash) = cursor_hash
-                && !uniforms.project.cursor.raw
                 && uniforms.project.cursor.use_svg
             {
                 if let Some(info) = ResolvedCursor::from_hash(cursor_hash) {
