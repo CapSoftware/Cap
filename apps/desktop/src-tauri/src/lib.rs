@@ -2202,6 +2202,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }
                     }
                 }
+                #[cfg(target_os = "windows")]
+                WindowEvent::Focused(focused) if *focused => {
+                    if let Ok(window_id) = CapWindowId::from_str(label) {
+                        // When NewMain window gets focus, ensure it stays on top of overlays
+                        if matches!(window_id, CapWindowId::NewMain) {
+                            platform::handle_main_window_activation(window.clone());
+                        }
+                    }
+                }
                 WindowEvent::DragDrop(event) => {
                     if let tauri::DragDropEvent::Drop { paths, .. } = event {
                         for path in paths {

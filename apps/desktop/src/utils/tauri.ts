@@ -259,7 +259,8 @@ async closeTargetSelectOverlays() : Promise<null> {
 },
 /**
  * Tauri command to manually force the main window to the top
- * This can be called from the frontend when needed
+ * This can be called from the frontend when the user clicks on the main window
+ * or when focus management is needed
  */
 async forceMainWindowToTop() : Promise<null> {
     return await TAURI_INVOKE("force_main_window_to_top");
