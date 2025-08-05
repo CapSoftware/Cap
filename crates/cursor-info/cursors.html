@@ -63,6 +63,7 @@
         display: block;
         max-width: 200px;
         max-height: 200px;
+        pointer-events: none;
       }
 
       .cursor-svg.macos {
@@ -156,13 +157,13 @@
             name: "arrow",
             hash: "de2d1f4a81e520b65fd1317b845b00a1c51a4d1f71cca3cd4ccdab52b98d1ac9",
             svg: "assets/mac/arrow.svg",
-            hotspot: [0.235, 0.174],
+            hotspot: [0.324, 0.253],
           },
           {
             name: "contextual_menu",
             hash: "ab26ca862492d41355b711c58544687a799dd7ae14cf161959ca524bbc97c322",
             svg: "assets/mac/contextual_menu.svg",
-            hotspot: [0.179, 0.125],
+            hotspot: [0.278, 0.295],
           },
           {
             name: "closed_hand",
@@ -174,25 +175,25 @@
             name: "crosshair",
             hash: "c583f776531f4e7b76ea7ba2ab159765e2da11fd63cb897cc10362183859d1d8",
             svg: "assets/mac/crosshair.svg",
-            hotspot: [0.458, 0.458],
+            hotspot: [0.52, 0.51],
           },
           {
             name: "drag_copy",
             hash: "af060876004c8647d82411eeac1bbd613d2991d46794aba16b56c91d3081e128",
             svg: "assets/mac/drag_copy.svg",
-            hotspot: [0.179, 0.125],
+            hotspot: [0.222, 0.0],
           },
           {
             name: "drag_link",
             hash: "59ac2483461f4ad577a0a6b68be89fe663c36263b583c5f038eee2ae6a5ad98f",
             svg: "assets/mac/drag_link.svg",
-            hotspot: [0.688, 0.143],
+            hotspot: [0.621, 0.309],
           },
           {
             name: "ibeam",
             hash: "492dca0bb6751a30607ac728803af992ba69365052b7df2dff1c0dfe463e653c",
             svg: "assets/mac/ibeam.svg",
-            hotspot: [0.444, 0.5],
+            hotspot: [0.525, 0.52],
           },
           {
             name: "open_hand",
@@ -204,7 +205,7 @@
             name: "operation_not_allowed",
             hash: "37287ef1d097704d3e9d0be9c1049ce1fb6dfabd6d210af0429b1b6ec7084c59",
             svg: "assets/mac/operation_not_allowed.svg",
-            hotspot: [0.179, 0.125],
+            hotspot: [0.22, 0.0],
           },
           {
             name: "pointing_hand",
@@ -252,7 +253,7 @@
             name: "ibeam_vertical",
             hash: "024e1d486a7f16368669d419e69c9a326e464ec1b8ed39645e5c89cb183e03c5",
             svg: "assets/mac/ibeam_vertical.svg",
-            hotspot: [0.389, 0.25],
+            hotspot: [0.51, 0.49],
           },
         ],
         windows: [
@@ -260,7 +261,7 @@
             name: "arrow",
             hash: "19502718917bb8a86b83ffb168021cf90517b5c5e510c33423060d230c9e2d20",
             svg: "assets/windows/arrow.svg",
-            hotspot: [0.027, 0.041],
+            hotspot: [0.0, 0.0],
           },
           {
             name: "ibeam",
@@ -272,7 +273,7 @@
             name: "wait",
             hash: "5991d86a0d4e915dd0cb0fdd9bef3bf37ed6a3b321256fcb5b240db7ac1a6324",
             svg: "assets/windows/wait.svg",
-            hotspot: [0.5, 0.5],
+            hotspot: [0.5, 0.52],
           },
           {
             name: "cross",
@@ -302,13 +303,7 @@
             name: "hand",
             hash: "44a554b439a681410d337d239bf08afe7c66486538563ebb93dc1c309f0a9209",
             svg: "assets/windows/hand.svg",
-            hotspot: [0.421, 0.009],
-          },
-          {
-            name: "pen",
-            hash: "7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2",
-            svg: "assets/windows/pen.svg",
-            hotspot: [0.03, 0.97],
+            hotspot: [0.42, 0],
           },
           {
             name: "uparrow",
@@ -338,25 +333,31 @@
             name: "appstarting",
             hash: "1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf",
             svg: "assets/windows/appstarting.svg",
-            hotspot: [0.027, 0.041],
+            hotspot: [0.0, 0.289],
           },
           {
             name: "idchelp",
             hash: "5d0b4df6188bc8d540abfbd4235199cc0f67fb41d5e0dcbfd40a3011f8808fea",
             svg: "assets/windows/idchelp.svg",
-            hotspot: [0.027, 0.041],
+            hotspot: [0.0, 0.0],
           },
           {
             name: "idcpin",
             hash: "cb74a2d34774dbc43004882e43f9c058b2d2ee60184185567d0328ca013f5bc3",
             svg: "assets/windows/idcpin.svg",
-            hotspot: [0.1, 0.1],
+            hotspot: [0.25, 0.01],
           },
           {
             name: "idcperson",
             hash: "1f5209791a75916697c26cf2d018d267ae1102c71dbd196de6c83132f5627f09",
             svg: "assets/windows/idcperson.svg",
-            hotspot: [0.5, 0.5],
+            hotspot: [0.23, 0.01],
+          },
+          {
+            name: "pen",
+            hash: "7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2",
+            svg: "assets/windows/pen.svg",
+            hotspot: [0, 1.0],
           },
         ],
       };
@@ -411,7 +412,7 @@
 
         let currentMousePos = null;
 
-        item.addEventListener("mousemove", (e) => {
+        container.addEventListener("mousemove", (e) => {
           const rect = container.getBoundingClientRect();
           const x = (e.clientX - rect.left) / rect.width;
           const y = (e.clientY - rect.top) / rect.height;
@@ -421,15 +422,34 @@
           )})`;
         });
 
-        item.addEventListener("mouseleave", () => {
+        container.addEventListener("mouseleave", () => {
           mousePosition.textContent = "";
+          currentMousePos = null;
         });
 
-        item.addEventListener("click", () => {
+        item.addEventListener("click", (e) => {
+          // If mouse is over the container, use current mouse position
           if (currentMousePos) {
-            const hotspotText = `hotspot: (${currentMousePos[0].toFixed(
+            const hotspotText = `(${currentMousePos[0].toFixed(
               3
             )}, ${currentMousePos[1].toFixed(3)})`;
+            navigator.clipboard.writeText(hotspotText).then(() => {
+              mousePosition.textContent = "Copied!";
+              setTimeout(() => {
+                if (currentMousePos) {
+                  mousePosition.textContent = `Mouse: (${currentMousePos[0].toFixed(
+                    3
+                  )}, ${currentMousePos[1].toFixed(3)})`;
+                } else {
+                  mousePosition.textContent = "";
+                }
+              }, 1000);
+            });
+          } else if (cursor.hotspot) {
+            // Fallback to defined hotspot if no current mouse position
+            const hotspotText = `(${cursor.hotspot[0].toFixed(
+              3
+            )}, ${cursor.hotspot[1].toFixed(3)})`;
             navigator.clipboard.writeText(hotspotText).then(() => {
               mousePosition.textContent = "Copied!";
               setTimeout(() => {
