@@ -99,7 +99,9 @@ pub fn ensure_window_on_top(window: tauri::Window) {
         let hwnd = HWND(raw_handle.0 as *mut c_void);
 
         // Simplified approach - just set level 50 again
-        set_window_level_internal(hwnd, 50);
+        unsafe {
+            set_window_level_internal(hwnd, 50);
+        }
     });
 }
 
@@ -128,20 +130,10 @@ unsafe fn set_window_level_internal(hwnd: HWND, level: i32) {
     }
 }
 
-/// Simplified positioning function
-pub fn position_window_above_target(main_window: tauri::Window, _target_window: tauri::Window) {
-    // Just call ensure_window_on_top for simplicity
-    ensure_window_on_top(main_window);
-}
-
-/// Check if a window handle is valid - utility function
-pub fn is_window_valid(window: &tauri::Window) -> bool {
-    window.hwnd().is_ok()
-}
-
 /// Tauri command to manually force the main window to the top
 /// This can be called from the frontend when needed
 #[tauri::command]
+#[specta::specta]
 pub fn force_main_window_to_top(app: tauri::AppHandle) -> Result<(), String> {
     use crate::windows::CapWindowId;
 
