@@ -256,18 +256,26 @@ impl ShowCapWindow {
                     #[cfg(target_os = "windows")]
                     {
                         crate::platform::set_window_level(window.as_ref().window(), 50);
+// <<<<<<< HEAD
 
-                        // Set up window close handler to clean up state
-                        let main_label = window.label().to_string();
-                        window.on_window_event(move |event| {
-                            if matches!(
-                                event,
-                                tauri::WindowEvent::CloseRequested { .. }
-                                    | tauri::WindowEvent::Destroyed
-                            ) {
-                                crate::platform::mark_main_window_closed(&main_label);
-                            }
-                        });
+//                         // Set up window close handler to clean up state
+//                         let main_label = window.label().to_string();
+//                         window.on_window_event(move |event| {
+//                             if matches!(
+//                                 event,
+//                                 tauri::WindowEvent::CloseRequested { .. }
+//                                     | tauri::WindowEvent::Destroyed
+//                             ) {
+// =======
+
+//                         // Set up window close handler to clean up state
+//                         let main_label = window.label().to_string();
+//                         window.on_window_event(move |event| {
+//                             if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+// >>>>>>> fe62e6429f47d9ca116ebd711bb28ae22eaa8160
+//                                 crate::platform::mark_main_window_closed(&main_label);
+//                             }
+//                         });
                     }
 
                     window
@@ -306,7 +314,7 @@ impl ShowCapWindow {
                     if let Some(window) = CapWindowId::NewMain.get(&app).await {
                         window.close().await.ok();
                     }
-                    
+
                     let window2 = self
                         .window_builder(app, "/new-main")
                         .resizable(false)
@@ -330,15 +338,23 @@ impl ShowCapWindow {
                 {
                     // Set the overlay window level with improved layering
                     crate::platform::set_window_level(window.as_ref().window(), 45);
+// <<<<<<< HEAD
 
-                    // Set up window close handler to clean up state
-                    let overlay_label = window.label().to_string();
-                    window.on_window_event(move |event| {
-                        if matches!(
-                            event,
-                            tauri::WindowEvent::CloseRequested { .. }
-                                | tauri::WindowEvent::Destroyed
-                        ) {
+//                     // Set up window close handler to clean up state
+//                     let overlay_label = window.label().to_string();
+//                     window.on_window_event(move |event| {
+//                         if matches!(
+//                             event,
+//                             tauri::WindowEvent::CloseRequested { .. }
+//                                 | tauri::WindowEvent::Destroyed
+//                         ) {
+// =======
+
+//                     // Set up window close handler to clean up state
+//                     let overlay_label = window.label().to_string();
+//                     window.on_window_event(move |event| {
+//                         if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+// >>>>>>> fe62e6429f47d9ca116ebd711bb28ae22eaa8160
                             crate::platform::mark_overlay_closed(&overlay_label);
                         }
                     });
