@@ -321,13 +321,16 @@ impl CursorLayer {
             * (1.0 - CLICK_SHRINK_SIZE)
             + CLICK_SHRINK_SIZE;
 
-        let cursor_size_px: XY<f64> = (cursor_base_size_px * click_scale_factor).into();
-
         // Apply zoom scaling to cursor size to match position transformation
         let zoom_scale = 1.0 / zoom.display_amount().max(0.001); // Avoid division by zero
-        let cursor_size_px = cursor_size_px * zoom_scale;
 
-        let hotspot_px = cursor_texture.hotspot * cursor_size_px;
+        // Calculate hotspot based on base size (before click scaling) to maintain consistent positioning
+        let cursor_base_size_px: XY<f64> = cursor_base_size_px.into();
+        let cursor_base_size_zoomed = cursor_base_size_px * zoom_scale;
+        let hotspot_px = cursor_texture.hotspot * cursor_base_size_zoomed;
+
+        // Apply click scaling for rendering size only
+        let cursor_size_px = cursor_base_size_zoomed * click_scale_factor as f64;
 
         let position = {
             let mut frame_position = interpolated_cursor.position.to_frame_space(
