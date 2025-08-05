@@ -51,12 +51,24 @@ const getCurrentRecording = queryOptions({
   queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
 });
 
-const listVideoDevices = queryOptions({
+export const listVideoDevices = queryOptions({
   queryKey: ["videoDevices"] as const,
   queryFn: () => commands.listCameras(),
   refetchInterval: 1000,
   initialData: [],
 });
+
+export function createVideoDevicesQuery() {
+  const query = createQuery(() => listVideoDevices);
+
+  const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
+
+  createMemo(() => {
+    setVideoDevices(reconcile(query.data ?? []));
+  });
+
+  return videoDevicesStore;
+}
 
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,

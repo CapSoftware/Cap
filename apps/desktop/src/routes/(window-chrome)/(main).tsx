@@ -422,7 +422,6 @@ function Page() {
         options={cameras}
         value={options.cameraID() ?? null}
         onChange={(v) => {
-          console.log({ v });
           if (!v) setCamera.mutate(null);
           else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
           else setCamera.mutate({ DeviceID: v.device_id });
