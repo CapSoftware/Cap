@@ -135,24 +135,36 @@ impl ResolvedCursor {
                 raw: include_str!("../assets/windows/cross.svg"),
                 hotspot: (0.5, 0.5), // Center of crosshair
             },
-            // // IDC_UPARROW
-            // "823d642acdc51ffbc29c2710303606270ed24936daf45215ead531333df102ba" => todo!(),
-            // // IDC_SIZENWSE
-            // "2daf2a40e4c7ecadec3270fbdb243a12ac22a14bb0b3a08a56b38a38322f9296" => todo!(),
+            // IDC_UPARROW
+            "823d642acdc51ffbc29c2710303606270ed24936daf45215ead531333df102ba" => ResolvedCursor {
+                raw: include_str!("../assets/windows/uparrow.svg"),
+                hotspot: (0.5, 0.0), // Tip of up arrow
+            },
+            // IDC_SIZENWSE
+            "2daf2a40e4c7ecadec3270fbdb243a12ac22a14bb0b3a08a56b38a38322f9296" => ResolvedCursor {
+                raw: include_str!("../assets/windows/idcsizenwse.svg"),
+                hotspot: (0.5, 0.5), // Center of diagonal resize cursor
+            },
             // IDC_SIZENESW
             "47b4d609cb404feae70c7e20b525ac901d1e7a5f1a2e8a240418b3710ee43473" => ResolvedCursor {
                 raw: include_str!("../assets/windows/size-nesw.svg"),
                 hotspot: (0.5, 0.5), // Center of resize cursor
             },
-            // // IDC_SIZEWE
-            // "8a024cf4bec4d58a4c149af2320206088981357312b3d82fbfcc07bee38c71ac" => todo!(),
+            // IDC_SIZEWE
+            "8a024cf4bec4d58a4c149af2320206088981357312b3d82fbfcc07bee38c71ac" => ResolvedCursor {
+                raw: include_str!("../assets/windows/idcsizewe.svg"),
+                hotspot: (0.5, 0.5), // Center of horizontal resize cursor
+            },
             // IDC_SIZENS
             "253b9e5360de1e12561be6a8f84484d4b108fd54d31e7d2c8f3b66d1c71b9880" => ResolvedCursor {
                 raw: include_str!("../assets/windows/size-ns.svg"),
                 hotspot: (0.5, 0.5), // Center of vertical resize cursor
             },
             // IDC_SIZEALL
-            "8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903" => todo!(),
+            "8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903" => ResolvedCursor {
+                raw: include_str!("../assets/windows/sizeall.svg"),
+                hotspot: (0.5, 0.5), // Center of move/resize all cursor
+            },
             // IDC_NO
             "7df883a459aced72acf32b969ff1119676d334d9acfcbe668ef92fe01094a7d6" => ResolvedCursor {
                 raw: include_str!("../assets/windows/no.svg"),
@@ -163,14 +175,26 @@ impl ResolvedCursor {
                 raw: include_str!("../assets/windows/hand.svg"),
                 hotspot: (0.421, 0.009), // Tip of pointing finger
             },
-            // // IDC_APPSTARTING
-            // "1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf" => todo!(),
-            // // IDC_HELP
-            // "5d0b4df6188bc8d540abfbd4235199cc0f67fb41d5e0dcbfd40a3011f8808fea" => todo!(),
-            // // IDC_PIN
-            // "cb74a2d34774dbc43004882e43f9c058b2d2ee60184185567d0328ca013f5bc3" => todo!(),
-            // // IDC_PERSON
-            // "1f5209791a75916697c26cf2d018d267ae1102c71dbd196de6c83132f5627f09" => todo!(),
+            // IDC_APPSTARTING
+            "1486a2339478da61a52a6eecf8ee3446be62f12d375dba8befd42bb553eea7bf" => ResolvedCursor {
+                raw: include_str!("../assets/windows/appstarting.svg"),
+                hotspot: (0.027, 0.041), // Arrow tip like IDC_ARROW
+            },
+            // IDC_HELP
+            "5d0b4df6188bc8d540abfbd4235199cc0f67fb41d5e0dcbfd40a3011f8808fea" => ResolvedCursor {
+                raw: include_str!("../assets/windows/idchelp.svg"),
+                hotspot: (0.027, 0.041), // Arrow tip like IDC_ARROW
+            },
+            // IDC_PIN
+            "cb74a2d34774dbc43004882e43f9c058b2d2ee60184185567d0328ca013f5bc3" => ResolvedCursor {
+                raw: include_str!("../assets/windows/idcpin.svg"),
+                hotspot: (0.1, 0.1), // Tip of pin
+            },
+            // IDC_PERSON
+            "1f5209791a75916697c26cf2d018d267ae1102c71dbd196de6c83132f5627f09" => ResolvedCursor {
+                raw: include_str!("../assets/windows/idcperson.svg"),
+                hotspot: (0.5, 0.5), // Center of person icon
+            },
             // MAKEINTRESOURCE(32631) - Pen
             "7340ea75802db8fef3a103e9385e65b2c8c358e077ef949faaf572fb502dd9e2" => ResolvedCursor {
                 raw: include_str!("../assets/windows/pen.svg"),
