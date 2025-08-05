@@ -8,8 +8,8 @@ use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, STANDARD_CURSOR_HEIGHT,
-    zoom::InterpolatedZoom,
+    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
+    STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -288,7 +288,7 @@ impl CursorLayer {
             return;
         };
 
-        let cursor_base_size_px = {
+        let size = {
             let cursor_texture_size = cursor_texture.texture.size();
             let cursor_texture_size_aspect =
                 cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
@@ -303,52 +303,52 @@ impl CursorLayer {
 
             let cursor_size_constant = factor * cursor_size_percentage;
 
-            if cursor_texture_size_aspect > 1.0 {
+            Coord::<FrameSpace>::new(if cursor_texture_size_aspect > 1.0 {
                 // Wide cursor: base sizing on width to prevent excessive width
                 let width = cursor_size_constant;
                 let height = cursor_size_constant / cursor_texture_size_aspect;
-                XY::new(width, height)
+                XY::new(width, height).into()
             } else {
                 // Tall or square cursor: base sizing on height (current behavior)
                 XY::new(
                     cursor_size_constant * cursor_texture_size_aspect,
                     cursor_size_constant,
                 )
-            }
+                .into()
+            })
         };
 
+        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
+
+        let position = interpolated_cursor.position.to_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+        ) - hotspot;
+
+        let zoomed_position = position.to_zoomed_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+            zoom,
+        );
+
+        let zoomed_size = (position + size).to_zoomed_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+            zoom,
+        ) - zoomed_position;
+
         let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
+        	// lerp shrink size
             * (1.0 - CLICK_SHRINK_SIZE)
             + CLICK_SHRINK_SIZE;
 
-        // Apply zoom scaling to cursor size to match position transformation
-        let zoom_scale = 1.0 / zoom.display_amount().max(0.001); // Avoid division by zero
-
-        // Calculate hotspot based on base size (before zoom and click scaling) in frame space
-        let cursor_base_size_px: XY<f64> = cursor_base_size_px.into();
-        let hotspot_frame_px = cursor_texture.hotspot * cursor_base_size_px;
-
-        // Apply zoom and click scaling for rendering size
-        let cursor_base_size_zoomed = cursor_base_size_px * zoom_scale;
-        let cursor_size_px = cursor_base_size_zoomed * click_scale_factor as f64;
-
-        let position = {
-            let mut frame_position = interpolated_cursor.position.to_frame_space(
-                &constants.options,
-                &uniforms.project,
-                resolution_base,
-            );
-
-            // Subtract hotspot in frame space before zoom transformation
-            frame_position.coord = frame_position.coord - hotspot_frame_px.map(|v| v as f64);
-
-            frame_position
-                .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom)
-                .coord
-        };
+        let cursor_size_px = zoomed_size.coord * click_scale_factor as f64;
 
         let uniforms = CursorUniforms {
-            position: [position.x as f32, position.y as f32],
+            position: [zoomed_position.x as f32, zoomed_position.y as f32],
             size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
@@ -545,7 +545,7 @@ impl CursorTexture {
             .collect();
 
         // Keep hotspot in normalized coordinates (0.0-1.0) for consistency
-        
+
         Ok(Self::prepare(
             constants,
             &rgba,
