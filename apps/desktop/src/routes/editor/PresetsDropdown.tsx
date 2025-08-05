@@ -14,7 +14,7 @@ import {
 } from "./ui";
 
 export function PresetsDropdown() {
-  const { setDialog, presets, setProject } = useEditorContext();
+  const { setDialog, presets, setProject, project } = useEditorContext();
   return (
     <KDropdownMenu gutter={8} placement="bottom">
       <EditorButton<typeof KDropdownMenu.Trigger>
@@ -45,6 +45,16 @@ export function PresetsDropdown() {
                 {(preset, i) => {
                   const [showSettings, setShowSettings] = createSignal(false);
 
+                  function applyPreset() {
+                    setShowSettings(false);
+                    setProject(
+                      reconcile({
+                        ...preset.config,
+                        timeline: project.timeline,
+                      })
+                    );
+                  }
+
                   return (
                     <KDropdownMenu.Sub gutter={16}>
                       <MenuItem<typeof KDropdownMenu.SubTrigger>
@@ -52,8 +62,7 @@ export function PresetsDropdown() {
                         class="h-[2.5rem]"
                         onFocusIn={() => setShowSettings(false)}
                         onClick={() => {
-                          setShowSettings(false);
-                          setProject(reconcile(preset.config));
+                          applyPreset();
                         }}
                       >
                         <span class="mr-auto">{preset.name}</span>
@@ -88,8 +97,7 @@ export function PresetsDropdown() {
                           >
                             <DropdownItem
                               onSelect={() => {
-                                setShowSettings(false);
-                                setProject(reconcile(preset.config));
+                                applyPreset();
                               }}
                             >
                               Apply

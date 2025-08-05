@@ -3,17 +3,17 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
 use cidre::{
     arc::R,
     cv::{self, pixel_buffer::LockFlags},
 };
-use ffmpeg::{format, frame, Rational};
+use ffmpeg::{Rational, format, frame};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
 
-use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -338,11 +338,7 @@ impl AVAssetReaderDecoder {
                                         let min = *cache.keys().min().unwrap();
                                         let max = *cache.keys().max().unwrap();
 
-                                        if current_frame > max {
-                                            min
-                                        } else {
-                                            max
-                                        }
+                                        if current_frame > max { min } else { max }
                                     };
 
                                     cache.remove(&frame);
@@ -398,7 +394,5 @@ impl AVAssetReaderDecoder {
                 }
             }
         }
-
-        println!("Decoder thread ended");
     }
 }

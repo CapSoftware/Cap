@@ -1,0 +1,105 @@
+name: "Docker Build Web"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag for the Docker image"
+        required: false
+        default: "latest"
+        type: string
+
+jobs:
+  build:
+    name: Build Docker Image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - platform: amd64
+            runner: ubuntu-24.04
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+      fail-fast: false
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env file
+        run: |
+          echo "WEB_URL=http://localhost:3000" > .env
+          echo "NEXT_PUBLIC_DOCKER_BUILD=true" >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_BUCKET=capso" >> .env
+          echo "NEXT_PUBLIC_CAP_AWS_REGION=us-east-1" >> .env
+          cat .env
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Platform Image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          platforms: linux/${{ matrix.platform }}
+          push: true
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/cap-web,push-by-digest=true
+          cache-from: type=gha,scope=buildx-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=buildx-${{ matrix.platform }}
+
+      - name: Export Digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload Digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.platform }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Create Multi-Architecture Manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download Digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Image Manifest
+        run: |
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/cap-web:${{ inputs.tag || 'latest' }} \
+            $(find /tmp/digests -type f -not -path "*/\.*" -exec basename {} \; | xargs -I {} echo "ghcr.io/${{ github.repository_owner }}/cap-web@sha256:{}")

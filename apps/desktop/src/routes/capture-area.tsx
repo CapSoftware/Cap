@@ -6,14 +6,14 @@ import {
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import Cropper from "~/components/Cropper";
 import { createOptionsQuery } from "~/utils/queries";
 import { type Crop } from "~/utils/tauri";
 
 export default function CaptureArea() {
-  const { options, setOptions } = createOptionsQuery();
+  const { rawOptions, setOptions } = createOptionsQuery();
   const webview = getCurrentWebviewWindow();
 
   const [state, setState] = makePersisted(
@@ -55,13 +55,13 @@ export default function CaptureArea() {
   });
 
   async function handleConfirm() {
-    const target = options.data?.captureTarget;
-    if (!options.data || !target || target.variant !== "screen") return;
+    const target = rawOptions.captureTarget;
+    if (target.variant !== "screen") return;
     setPendingState(false);
 
-    setOptions.mutate({
-      ...options.data,
-      captureTarget: {
+    setOptions(
+      "captureTarget",
+      reconcile({
         variant: "area",
         screen: target.id,
         bounds: {
@@ -70,8 +70,8 @@ export default function CaptureArea() {
           width: crop.size.x,
           height: crop.size.y,
         },
-      },
-    });
+      })
+    );
 
     close();
   }

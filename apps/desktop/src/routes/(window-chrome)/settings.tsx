@@ -3,6 +3,7 @@ import { A, type RouteSectionProps } from "@solidjs/router";
 import { getVersion } from "@tauri-apps/api/app";
 import "@total-typescript/ts-reset/filter-boolean";
 import { createResource, For, Show, Suspense } from "solid-js";
+import { CapErrorBoundary } from "~/components/CapErrorBoundary";
 import { SignInButton } from "~/components/SignInButton";
 
 import { authStore } from "~/store";
@@ -19,9 +20,8 @@ export default function Settings(props: RouteSectionProps) {
     }
   };
 
-
   return (
-    <div class="flex-1 flex flex-row divide-x divide-gray-5 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
+    <div class="flex-1 flex flex-row divide-x divide-gray-3 text-[0.875rem] leading-[1.25rem] overflow-y-hidden">
       <div class="flex flex-col h-full bg-gray-2">
         <ul class="min-w-[12rem] h-full p-[0.625rem] space-y-1 text-gray-12">
           <For
@@ -45,6 +45,11 @@ export default function Settings(props: RouteSectionProps) {
                 href: "integrations",
                 name: "Integrations",
                 icon: IconLucideUnplug,
+              },
+              {
+                href: "license",
+                name: "License",
+                icon: IconLucideGift,
               },
               {
                 href: "experimental",
@@ -79,7 +84,7 @@ export default function Settings(props: RouteSectionProps) {
         </ul>
         <div class="p-[0.625rem] text-left flex flex-col">
           <Show when={version()}>
-            {(v) => <p class="mb-1 text-xs text-gray-11">v{v()}</p>}
+            {(v) => <p class="mb-2 text-xs text-gray-11">v{v()}</p>}
           </Show>
           {auth.data ? (
             <Button onClick={handleAuth} variant="secondary" class="w-full">
@@ -91,7 +96,9 @@ export default function Settings(props: RouteSectionProps) {
         </div>
       </div>
       <div class="overflow-y-hidden flex-1 animate-in">
-        <Suspense>{props.children}</Suspense>
+        <CapErrorBoundary>
+          <Suspense>{props.children}</Suspense>
+        </CapErrorBoundary>
       </div>
     </div>
   );

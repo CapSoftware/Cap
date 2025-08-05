@@ -5,7 +5,7 @@ import { cx } from "cva";
 import { For, Show, batch, createRoot, createSignal, onMount } from "solid-js";
 import { produce } from "solid-js/store";
 
-import "../../../styles/timeline.css";
+import "./styles.css";
 
 import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
@@ -24,6 +24,7 @@ export function Timeline() {
     setEditorState,
     totalDuration,
     editorState,
+    projectActions,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -86,43 +87,20 @@ export function Timeline() {
   }
 
   createEventListener(window, "keydown", (e) => {
-    if (e.code === "Backspace" || e.code === "Delete") {
+    const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+
+    if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
       const selection = editorState.timeline.selection;
       if (!selection) return;
 
-      if (selection.type === "zoom") {
-        batch(() => {
-          setProject(
-            produce((project) => {
-              project.timeline?.zoomSegments.splice(selection.index, 1);
-            })
-          );
-        });
-      } else if (selection.type === "clip") {
-        const selectedSegment = project.timeline?.segments.find(
-          (_, i) => i === selection.index
-        );
-        if (!selectedSegment || selectedSegment.recordingSegment === undefined)
-          return;
+      if (selection.type === "zoom")
+        projectActions.deleteZoomSegment(selection.index);
+      else if (selection.type === "clip")
+        projectActions.deleteClipSegment(selection.index);
+    } else if (e.code === "KeyC" && hasNoModifiers) {
+      if (!editorState.previewTime) return;
 
-        const timeline = project.timeline;
-        if (!timeline) return;
-
-        if (
-          timeline.segments.filter(
-            (s) => s.recordingSegment === selectedSegment.recordingSegment
-          ).length < 2
-        )
-          return;
-
-        batch(() => {
-          setProject(
-            produce((project) => {
-              project.timeline?.segments.splice(selection.index, 1);
-            })
-          );
-        });
-      }
+      projectActions.splitClipSegment(editorState.previewTime);
     }
   });
 
@@ -225,21 +203,22 @@ export function Timeline() {
             </div>
           )}
         </Show>
-        <Show when={!split()}>
-          <div
-            class="absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]"
-            style={{
-              left: `${TIMELINE_PADDING}px`,
-              transform: `translateX(${Math.min(
-                (editorState.playbackTime - transform().position) /
-                  secsPerPixel(),
-                timelineBounds.width ?? 0
-              )}px)`,
-            }}
-          >
-            <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
-          </div>
-        </Show>
+        <div
+          class={cx(
+            "absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+            split() && "opacity-50"
+          )}
+          style={{
+            left: `${TIMELINE_PADDING}px`,
+            transform: `translateX(${Math.min(
+              (editorState.playbackTime - transform().position) /
+                secsPerPixel(),
+              timelineBounds.width ?? 0
+            )}px)`,
+          }}
+        >
+          <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+        </div>
         <ClipTrack
           ref={setTimelineRef}
           handleUpdatePlayhead={handleUpdatePlayhead}

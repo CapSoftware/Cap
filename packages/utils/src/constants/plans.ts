@@ -1,4 +1,4 @@
-import { NODE_ENV } from "@cap/env";
+import { buildEnv, NODE_ENV } from "@cap/env";
 
 const planIds = {
   development: {
@@ -18,19 +18,20 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
   return planIds[environment]?.[billingCycle] || "";
 };
 
-export const isUserOnProPlan = ({
-  subscriptionStatus,
-}: {
-  subscriptionStatus: string | null;
-}) => {
-  if (
-    subscriptionStatus === "active" ||
-    subscriptionStatus === "trialing" ||
-    subscriptionStatus === "complete" ||
-    subscriptionStatus === "paid"
-  ) {
-    return true;
-  }
+export const userIsPro = (
+  user?: {
+    stripeSubscriptionStatus?: string | null;
+  } | null
+) => {
+  if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
 
-  return false;
+  if (!user) return false;
+
+  const { stripeSubscriptionStatus } = user;
+  return (
+    stripeSubscriptionStatus === "active" ||
+    stripeSubscriptionStatus === "trialing" ||
+    stripeSubscriptionStatus === "complete" ||
+    stripeSubscriptionStatus === "paid"
+  );
 };

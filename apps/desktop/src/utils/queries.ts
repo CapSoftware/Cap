@@ -1,15 +1,27 @@
+import { makePersisted } from "@solid-primitives/storage";
 import {
   createMutation,
   createQuery,
   queryOptions,
+  useQuery,
 } from "@tanstack/solid-query";
+import { createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { createMemo, createSignal } from "solid-js";
-import { makePersisted } from "@solid-primitives/storage";
 
+import { createEventListener } from "@solid-primitives/event-listener";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { authStore, generalSettingsStore } from "~/store";
-import { commands, events, RecordingOptions } from "./tauri";
 import { createQueryInvalidate } from "./events";
+import {
+  CameraInfo,
+  commands,
+  DeviceOrModelID,
+  ModelIDType,
+  RecordingMode,
+  ScreenCaptureTarget,
+} from "./tauri";
+import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
   queryKey: ["capture", "windows"] as const,
@@ -34,11 +46,6 @@ export const listScreens = queryOptions({
   refetchInterval: 1000,
 });
 
-const getOptions = queryOptions({
-  queryKey: ["recordingOptions"] as const,
-  queryFn: () => commands.getRecordingOptions(),
-});
-
 const getCurrentRecording = queryOptions({
   queryKey: ["currentRecording"] as const,
   queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
@@ -48,12 +55,13 @@ const listVideoDevices = queryOptions({
   queryKey: ["videoDevices"] as const,
   queryFn: () => commands.listCameras(),
   refetchInterval: 1000,
+  initialData: [],
 });
 
 export function createVideoDevicesQuery() {
   const query = createQuery(() => listVideoDevices);
 
-  const [videoDevicesStore, setVideoDevices] = createStore<string[]>([]);
+  const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
 
   createMemo(() => {
     setVideoDevices(reconcile(query.data ?? []));
@@ -64,10 +72,7 @@ export function createVideoDevicesQuery() {
 
 export const listAudioDevices = queryOptions({
   queryKey: ["audioDevices"] as const,
-  queryFn: async () => {
-    const devices = await commands.listAudioDevices();
-    return devices.map((name) => ({ name, deviceId: name }));
-  },
+  queryFn: () => commands.listAudioDevices(),
   reconcile: "name",
   refetchInterval: 1000,
   gcTime: 0,
@@ -81,40 +86,30 @@ export const getPermissions = queryOptions({
 });
 
 export function createOptionsQuery() {
+  const PERSIST_KEY = "recording-options-query";
   const [state, setState] = makePersisted(
-    createSignal<RecordingOptions | null>(),
-    { name: "recording-options-query" }
+    createStore<{
+      captureTarget: ScreenCaptureTarget;
+      micName: string | null;
+      mode: RecordingMode;
+      captureSystemAudio?: boolean;
+      cameraID?: DeviceOrModelID | null;
+      /** @deprecated */
+      cameraLabel: string | null;
+    }>({
+      captureTarget: { variant: "screen", id: 0 },
+      micName: null,
+      cameraLabel: null,
+      mode: "studio",
+    }),
+    { name: PERSIST_KEY }
   );
 
-  const setOptions = createMutation(() => ({
-    mutationFn: async (newOptions: RecordingOptions) => {
-      await commands.setRecordingOptions(newOptions);
-    },
-  }));
-
-  const initialData = state() ?? undefined;
-  const options = createQuery<RecordingOptions>(() => ({
-    ...getOptions,
-    ...(initialData === undefined
-      ? { initialData, staleTime: 1000 }
-      : ({} as any)),
-    select: (data) => {
-      setState(data);
-
-      return data;
-    },
-  }));
-
-  createQueryInvalidate(options, "recordingOptionsChanged");
-
-  events.recordingOptionsChanged.listen(() => {
-    commands.getRecordingOptions().then((options) => {
-      console.log("setting state", options);
-      setState(options);
-    });
+  createEventListener(window, "storage", (e) => {
+    if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
   });
 
-  return { options, setOptions };
+  return { rawOptions: state, setOptions: setState };
 }
 
 export function createCurrentRecordingQuery() {
@@ -147,4 +142,50 @@ export function createLicenseQuery() {
   authStore.listen(() => query.refetch());
 
   return query;
+}
+
+export function createCameraMutation() {
+  const { setOptions, rawOptions } = useRecordingOptions();
+
+  const setCameraInput = createMutation(() => ({
+    mutationFn: async (model: DeviceOrModelID | null) => {
+      const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
+      setOptions("cameraID", reconcile(model));
+      if (model) {
+        await commands.showWindow("Camera");
+        getCurrentWindow().setFocus();
+      }
+
+      await commands.setCameraInput(model).catch(async (e) => {
+        if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+          setOptions("cameraID", null);
+        } else setOptions("cameraID", reconcile(before));
+
+        throw e;
+      });
+    },
+  }));
+
+  return setCameraInput;
+}
+
+export function createCustomDomainQuery() {
+  return useQuery(() => ({
+    queryKey: ["customDomain"] as const,
+    queryFn: async () => {
+      try {
+        const auth = await authStore.get();
+        if (!auth) return { custom_domain: null, domain_verified: null };
+        const response = await orgCustomDomainClient.getOrgCustomDomain({
+          headers: await protectedHeaders(),
+        });
+        if (response.status === 200) return response.body;
+      } catch (error) {
+        console.error("Error fetching custom domain:", error);
+        return { custom_domain: null, domain_verified: null };
+      }
+    },
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  }));
 }

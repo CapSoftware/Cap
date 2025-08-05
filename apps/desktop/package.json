@@ -24,6 +24,7 @@
     "@solid-primitives/context": "^0.2.3",
     "@solid-primitives/date": "^2.0.23",
     "@solid-primitives/deep": "^0.2.9",
+    "@solid-primitives/event-bus": "^1.1.1",
     "@solid-primitives/event-listener": "^2.3.3",
     "@solid-primitives/history": "^0.1.5",
     "@solid-primitives/memo": "^1.4.2",
@@ -41,7 +42,7 @@
     "@tauri-apps/plugin-deep-link": "^2.2.0",
     "@tauri-apps/plugin-dialog": "2.0.1",
     "@tauri-apps/plugin-fs": "2.2.0",
-    "@tauri-apps/plugin-http": "^2.0.1",
+    "@tauri-apps/plugin-http": "^2.4.4",
     "@tauri-apps/plugin-notification": "2.0.0",
     "@tauri-apps/plugin-opener": "^2.2.6",
     "@tauri-apps/plugin-os": "2.0.0",
@@ -64,7 +65,8 @@
     "unplugin-icons": "^0.19.2",
     "uuid": "^9.0.1",
     "vinxi": "^0.5.6",
-    "webcodecs": "^0.1.0"
+    "webcodecs": "^0.1.0",
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@fontsource/geist-sans": "^5.0.3",
@@ -74,8 +76,9 @@
     "@types/dom-webcodecs": "^0.1.11",
     "@types/uuid": "^9.0.8",
     "cross-env": "^7.0.3",
-    "typescript": "^5.7.2",
+    "typescript": "^5.8.3",
     "vite": "^6.3.5",
-    "vite-tsconfig-paths": "^5.0.1"
+    "vite-tsconfig-paths": "^5.0.1",
+    "vitest": "~2.1.9"
   }
 }

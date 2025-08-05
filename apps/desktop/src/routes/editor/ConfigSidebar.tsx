@@ -33,7 +33,7 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
-
+import IconLucideSparkles from "~icons/lucide/sparkles";
 import colorBg from "~/assets/illustrations/color.webp";
 import gradientBg from "~/assets/illustrations/gradient.webp";
 import imageBg from "~/assets/illustrations/image.webp";
@@ -42,6 +42,7 @@ import { Toggle } from "~/components/Toggle";
 import { generalSettingsStore } from "~/store";
 import {
   type BackgroundSource,
+  CameraShape,
   StereoMode,
   TimelineSegment,
   ZoomSegment,
@@ -66,6 +67,7 @@ import {
   Subfield,
   topSlideAnimateClasses,
 } from "./ui";
+import { CaptionsTab } from "./CaptionsTab";
 
 const BACKGROUND_SOURCES = {
   wallpaper: "Wallpaper",
@@ -181,6 +183,17 @@ const STEREO_MODES = [
   { name: "Mono R", value: "monoR" },
 ] satisfies Array<{ name: string; value: StereoMode }>;
 
+const CAMERA_SHAPES = [
+  {
+    name: "Square",
+    value: "square",
+  },
+  {
+    name: "Source",
+    value: "source",
+  },
+] satisfies Array<{ name: string; value: CameraShape }>;
+
 const BACKGROUND_THEMES = {
   macOS: "macOS",
   dark: "Dark",
@@ -209,7 +222,8 @@ export function ConfigSidebar() {
       | "transcript"
       | "audio"
       | "cursor"
-      | "hotkeys",
+      | "hotkeys"
+      | "captions",
   });
 
   let scrollRef!: HTMLDivElement;
@@ -227,13 +241,9 @@ export function ConfigSidebar() {
               id: TAB_IDS.camera,
               icon: IconCapCamera,
               disabled: editorInstance.recordings.segments.every(
-                (s) => s.camera === null
+                (s) => s.camera === null,
               ),
             },
-            // {
-            //   id: "transcript" as const,
-            //   icon: IconCapMessageBubble,
-            // },
             { id: TAB_IDS.audio, icon: IconCapAudioOn },
             {
               id: TAB_IDS.cursor,
@@ -242,8 +252,12 @@ export function ConfigSidebar() {
                 meta().type === "multiple" && (meta() as any).segments[0].cursor
               ),
             },
+            window.FLAGS.captions && {
+              id: "captions" as const,
+              icon: IconCapMessageBubble,
+            },
             // { id: "hotkeys" as const, icon: IconCapHotkeys },
-          ]}
+          ].filter(Boolean)}
         >
           {(item) => (
             <KTabs.Trigger
@@ -261,7 +275,7 @@ export function ConfigSidebar() {
                 class={cx(
                   "flex justify-center relative border-transparent border z-10 items-center rounded-md size-9 transition will-change-transform",
                   state.selectedTab !== item.id &&
-                    "group-hover:border-gray-300 group-disabled:border-none"
+                    "group-hover:border-gray-300 group-disabled:border-none",
                 )}
               >
                 <Dynamic component={item.icon} />
@@ -281,21 +295,6 @@ export function ConfigSidebar() {
       >
         <BackgroundConfig scrollRef={scrollRef} />
         <CameraConfig scrollRef={scrollRef} />
-        <KTabs.Content value="transcript" class="flex flex-col gap-6">
-          <Field name="Transcript" icon={<IconCapMessageBubble />}>
-            <div class="p-1 rounded-md border bg-gray-1 text-gray-11 text-wrap">
-              Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed ac
-              purus sit amet nunc ultrices ultricies. Nullam nec scelerisque
-              nunc. Nullam nec scelerisque nunc.
-            </div>
-            <button
-              type="button"
-              class="w-full bg-gray-10/20 hover:bg-gray-10/30 transition-colors duration-100 rounded-full py-1.5"
-            >
-              Edit
-            </button>
-          </Field>
-        </KTabs.Content>
         <KTabs.Content value="audio" class="flex flex-col gap-6">
           <Field
             name="Audio Controls"
@@ -314,7 +313,7 @@ export function ConfigSidebar() {
                   optionValue="value"
                   optionTextValue="name"
                   value={STEREO_MODES.find(
-                    (v) => v.value === project.audio.micStereoMode
+                    (v) => v.value === project.audio.micStereoMode,
                   )}
                   onChange={(v) => {
                     if (v) setProject("audio", "micStereoMode", v.value);
@@ -481,6 +480,18 @@ export function ConfigSidebar() {
                 </div>
               </KCollapsible.Content>
             </KCollapsible>
+            <Field
+              name="High Quality SVG Cursors"
+              icon={<IconLucideSparkles />}
+              value={
+                <Toggle
+                  checked={(project.cursor as any).useSvg ?? true}
+                  onChange={(value) => {
+                    setProject("cursor", "useSvg" as any, value);
+                  }}
+                />
+              }
+            />
           </Show>
 
           {/* <Field name="Motion Blur">
@@ -546,6 +557,9 @@ export function ConfigSidebar() {
               </Subfield>
             </ComingSoonTooltip>
           </Field>
+        </KTabs.Content>
+        <KTabs.Content value="captions" class="flex flex-col gap-6">
+          <CaptionsTab />
         </KTabs.Content>
       </div>
       <Show when={editorState.timeline.selection}>
@@ -658,7 +672,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
                 // Get the raw path without any URL prefixes
                 const rawPath = decodeURIComponent(
-                  photoUrl.replace("file://", "")
+                  photoUrl.replace("file://", ""),
                 );
 
                 debouncedSetProject(rawPath);
@@ -718,7 +732,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
         }
       },
     },
-    { passive: false }
+    { passive: false },
   );
 
   let fileInput!: HTMLInputElement;
@@ -884,7 +898,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                             project.background.source.path
                           ) {
                             const convertedPath = convertFileSrc(
-                              project.background.source.path
+                              project.background.source.path,
                             );
                             // Only use converted path if it's valid
                             if (convertedPath) {
@@ -902,7 +916,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                 project.background.source as {
                                   path?: string;
                                 }
-                              ).path?.includes(w.id)
+                              ).path?.includes(w.id),
                             );
                             // Only use wallpaper URL if it exists
                             if (selectedWallpaper?.url) {
@@ -969,7 +983,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                       <KTabs.Trigger
                         onClick={() =>
                           setBackgroundTab(
-                            key as keyof typeof BACKGROUND_THEMES
+                            key as keyof typeof BACKGROUND_THEMES,
                           )
                         }
                         value={key}
@@ -986,17 +1000,17 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
             <KRadioGroup
               value={
                 project.background.source.type === "wallpaper"
-                  ? wallpapers()?.find((w) =>
+                  ? (wallpapers()?.find((w) =>
                       (
                         project.background.source as { path?: string }
-                      ).path?.includes(w.id)
-                    )?.url ?? undefined
+                      ).path?.includes(w.id),
+                    )?.url ?? undefined)
                   : undefined
               }
               onChange={(photoUrl) => {
                 try {
                   const wallpaper = wallpapers()?.find(
-                    (w) => w.url === photoUrl
+                    (w) => w.url === photoUrl,
                   );
                   if (!wallpaper) return;
 
@@ -1197,7 +1211,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                               setProject(
                                 "background",
                                 "source",
-                                backgrounds.color
+                                backgrounds.color,
                               );
                             }
                           }}
@@ -1281,7 +1295,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                   const rawNewAngle =
                                     Math.round(
                                       start +
-                                        (downEvent.clientY - moveEvent.clientY)
+                                        (downEvent.clientY - moveEvent.clientY),
                                     ) % max;
                                   const newAngle = moveEvent.shiftKey
                                     ? rawNewAngle
@@ -1296,7 +1310,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                   ) {
                                     commands.performHapticFeedback(
                                       "Alignment",
-                                      "Now"
+                                      "Now",
                                     );
                                   }
 
@@ -1306,7 +1320,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                       newAngle < 0 ? newAngle + max : newAngle,
                                   });
                                 },
-                              })
+                              }),
                             );
                           }}
                         >
@@ -1331,7 +1345,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                     setProject(
                                       "background",
                                       "source",
-                                      backgrounds.gradient
+                                      backgrounds.gradient,
                                     );
                                   }
                                 }}
@@ -1340,7 +1354,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
                                 class="rounded-lg transition-all duration-200 cursor-pointer size-8 peer-checked:hover:opacity-100 peer-hover:opacity-70 peer-checked:ring-2 peer-checked:ring-gray-500 peer-checked:ring-offset-2 peer-checked:ring-offset-gray-200"
                                 style={{
                                   background: `linear-gradient(${angle()}deg, rgb(${gradient.from.join(
-                                    ","
+                                    ",",
                                   )}), rgb(${gradient.to.join(",")}))`,
                                 }}
                               />
@@ -1504,9 +1518,9 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
                         item.x === "left"
                           ? "left-2"
                           : item.x === "right"
-                          ? "right-2"
-                          : "left-1/2 transform -translate-x-1/2",
-                        item.y === "top" ? "top-2" : "bottom-2"
+                            ? "right-2"
+                            : "left-1/2 transform -translate-x-1/2",
+                        item.y === "top" ? "top-2" : "bottom-2",
                       )}
                       onClick={() => setProject("camera", "position", item)}
                     >
@@ -1529,6 +1543,65 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
               onChange={(mirror) => setProject("camera", "mirror", mirror)}
             />
           </Subfield>
+          <Subfield name="Shape">
+            <KSelect<{ name: string; value: CameraShape }>
+              options={CAMERA_SHAPES}
+              optionValue="value"
+              optionTextValue="name"
+              value={CAMERA_SHAPES.find(
+                (v) => v.value === project.camera.shape,
+              )}
+              onChange={(v) => {
+                if (v) setProject("camera", "shape", v.value);
+              }}
+              disallowEmptySelection
+              itemComponent={(props) => (
+                <MenuItem<typeof KSelect.Item>
+                  as={KSelect.Item}
+                  item={props.item}
+                >
+                  <KSelect.ItemLabel class="flex-1">
+                    {props.item.rawValue.name}
+                  </KSelect.ItemLabel>
+                </MenuItem>
+              )}
+            >
+              <KSelect.Trigger class="flex flex-row gap-2 items-center px-2 w-full h-8 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11">
+                <KSelect.Value<{
+                  name: string;
+                  value: StereoMode;
+                }> class="flex-1 text-sm text-left truncate text-[--gray-500] font-normal">
+                  {(state) => <span>{state.selectedOption().name}</span>}
+                </KSelect.Value>
+                <KSelect.Icon<ValidComponent>
+                  as={(props) => (
+                    <IconCapChevronDown
+                      {...props}
+                      class="size-4 shrink-0 transform transition-transform ui-expanded:rotate-180 text-[--gray-500]"
+                    />
+                  )}
+                />
+              </KSelect.Trigger>
+              <KSelect.Portal>
+                <PopperContent<typeof KSelect.Content>
+                  as={KSelect.Content}
+                  class={cx(topSlideAnimateClasses, "z-50")}
+                >
+                  <MenuItemList<typeof KSelect.Listbox>
+                    class="overflow-y-auto max-h-32"
+                    as={KSelect.Listbox}
+                  />
+                </PopperContent>
+              </KSelect.Portal>
+            </KSelect>
+          </Subfield>
+
+          {/* <Subfield name="Use Camera Aspect Ratio">
+            <Toggle
+              checked={project.camera.use_camera_aspect}
+              onChange={(v) => setProject("camera", "use_camera_aspect", v)}
+            />
+          </Subfield> */}
         </div>
       </Field>
       {/** Dashed divider */}
@@ -1643,6 +1716,7 @@ function ZoomSegmentConfig(props: {
     editorInstance,
     setEditorState,
     projectHistory,
+    projectActions,
   } = useEditorContext();
 
   const states = {
@@ -1666,17 +1740,7 @@ function ZoomSegmentConfig(props: {
         <EditorButton
           variant="danger"
           onClick={() => {
-            batch(() => {
-              setProject(
-                "timeline",
-                "zoomSegments",
-                produce((s) => {
-                  if (!s) return;
-                  return s.splice(props.segmentIndex, 1);
-                })
-              );
-              setEditorState("timeline", "selection", null);
-            });
+            projectActions.deleteZoomSegment(props.segmentIndex);
           }}
           leftIcon={<IconCapTrash />}
         >
@@ -1692,7 +1756,7 @@ function ZoomSegmentConfig(props: {
               "zoomSegments",
               props.segmentIndex,
               "amount",
-              v[0]
+              v[0],
             )
           }
           minValue={1}
@@ -1711,7 +1775,7 @@ function ZoomSegmentConfig(props: {
               "zoomSegments",
               props.segmentIndex,
               "mode",
-              v === "auto" ? "auto" : { manual: states.manual }
+              v === "auto" ? "auto" : { manual: states.manual },
             );
           }}
         >
@@ -1752,7 +1816,7 @@ function ZoomSegmentConfig(props: {
 
                   const st = start();
                   let i = project.timeline?.segments.findIndex(
-                    (s) => s.start <= st && s.end > st
+                    (s) => s.start <= st && s.end > st,
                   );
                   if (i === undefined || i === -1) return 0;
                   return i;
@@ -1764,7 +1828,7 @@ function ZoomSegmentConfig(props: {
                     // TODO: this shouldn't be so hardcoded
                     `${
                       editorInstance.path
-                    }/content/segments/segment-${segmentIndex()}/display.mp4`
+                    }/content/segments/segment-${segmentIndex()}/display.mp4`,
                   );
                 });
 
@@ -1782,8 +1846,8 @@ function ZoomSegmentConfig(props: {
                     },
                     () => {
                       render();
-                    }
-                  )
+                    },
+                  ),
                 );
 
                 const render = () => {
@@ -1798,7 +1862,7 @@ function ZoomSegmentConfig(props: {
                     0,
                     0,
                     canvasRef.width!,
-                    canvasRef.height!
+                    canvasRef.height!,
                   );
                 };
 
@@ -1861,19 +1925,19 @@ function ZoomSegmentConfig(props: {
                                   Math.min(
                                     (moveEvent.clientX - bounds.left) /
                                       bounds.width,
-                                    1
+                                    1,
                                   ),
-                                  0
+                                  0,
                                 ),
                                 y: Math.max(
                                   Math.min(
                                     (moveEvent.clientY - bounds.top) /
                                       bounds.height,
-                                    1
+                                    1,
                                   ),
-                                  0
+                                  0,
                                 ),
-                              }
+                              },
                             );
                           },
                         });
@@ -1915,7 +1979,8 @@ function ClipSegmentConfig(props: {
   segmentIndex: number;
   segment: TimelineSegment;
 }) {
-  const { setProject, setEditorState, project } = useEditorContext();
+  const { setProject, setEditorState, project, projectActions } =
+    useEditorContext();
 
   return (
     <>
@@ -1931,22 +1996,12 @@ function ClipSegmentConfig(props: {
         <EditorButton
           variant="danger"
           onClick={() => {
-            batch(() => {
-              setProject(
-                "timeline",
-                "segments",
-                produce((s) => {
-                  if (!s) return;
-                  return s.splice(props.segmentIndex, 1);
-                })
-              );
-              setEditorState("timeline", "selection", null);
-            });
+            projectActions.deleteClipSegment(props.segmentIndex);
           }}
           disabled={
             (
               project.timeline?.segments.filter(
-                (s) => s.recordingSegment === props.segment.recordingSegment
+                (s) => s.recordingSegment === props.segment.recordingSegment,
               ) ?? []
             ).length < 2
           }

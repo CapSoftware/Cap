@@ -1,10 +1,11 @@
 use reqwest::StatusCode;
 use tauri::{Emitter, Manager, Runtime};
 use tauri_specta::Event;
+use tracing::error;
 
 use crate::{
-    auth::{AuthStore, AuthenticationInvalid},
-    ArcLock, MutableState,
+    ArcLock,
+    auth::{AuthSecret, AuthStore, AuthenticationInvalid},
 };
 
 async fn do_authed_request(
@@ -14,7 +15,18 @@ async fn do_authed_request(
 ) -> Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
 
-    let mut req = build(client, url).header("Authorization", format!("Bearer {}", auth.token));
+    let mut req = build(client, url)
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                match &auth.secret {
+                    AuthSecret::ApiKey { api_key } => api_key,
+                    AuthSecret::Session { token, .. } => token,
+                }
+            ),
+        )
+        .header("X-Desktop-Version", env!("CARGO_PKG_VERSION"));
 
     if let Some(s) = std::option_env!("VITE_VERCEL_AUTOMATION_BYPASS_SECRET") {
         req = req.header("x-vercel-protection-bypass", s);
@@ -53,7 +65,7 @@ impl<T: Manager<R> + Emitter<R>, R: Runtime> ManagerExt<R> for T {
             .map_err(|e| e.to_string())?;
 
         if response.status() == StatusCode::UNAUTHORIZED {
-            println!("Authentication expired. Please log in again.");
+            error!("Authentication expired. Please log in again.");
 
             AuthenticationInvalid.emit(self).ok();
 

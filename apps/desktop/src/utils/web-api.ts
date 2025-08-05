@@ -1,9 +1,13 @@
-import { ApiFetcher, initClient } from "@ts-rest/core";
-import { contract, licenseContract } from "@cap/web-api-contract";
+import {
+  contract,
+  licenseContract,
+  orgCustomDomainContract,
+} from "@cap/web-api-contract";
 import { fetch } from "@tauri-apps/plugin-http";
+import { ApiFetcher, initClient } from "@ts-rest/core";
 
-import { clientEnv } from "./env";
 import { authStore } from "~/store";
+import { clientEnv } from "./env";
 
 const api: ApiFetcher = async (args) => {
   const bypassSecret = import.meta.env.VITE_VERCEL_AUTOMATION_BYPASS_SECRET;
@@ -19,8 +23,6 @@ const api: ApiFetcher = async (args) => {
   } else {
     body = await resp.text();
   }
-
-  console.log({ body });
 
   return {
     body,
@@ -38,14 +40,26 @@ export const licenseApiClient = initClient(licenseContract, {
   api,
 });
 
+export const orgCustomDomainClient = initClient(orgCustomDomainContract, {
+  baseUrl: `${clientEnv.VITE_SERVER_URL}/api/desktop`,
+  api,
+});
+
 export async function maybeProtectedHeaders() {
-  const token = (await authStore.get())?.token;
+  const store = await authStore.get();
+
+  let token: string | undefined;
+  if (store?.secret && "api_key" in store.secret) {
+    token = store.secret.api_key;
+  } else if (store?.secret && "token" in store.secret) {
+    token = store.secret.token;
+  }
+
   return { authorization: token ? `Bearer ${token}` : undefined };
 }
 
 export async function protectedHeaders() {
   const { authorization } = await maybeProtectedHeaders();
   if (!authorization) throw new Error("Not authorized");
-  console.log({ authorization });
   return { authorization };
 }

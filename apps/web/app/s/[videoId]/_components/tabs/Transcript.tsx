@@ -2,12 +2,15 @@
 
 import { videos } from "@cap/database/schema";
 import { useState, useEffect } from "react";
-import { MessageSquare } from "lucide-react";
-import { usePublicEnv } from "@/utils/public-env";
+import { MessageSquare, Edit3, Check, X, Copy, Download } from "lucide-react";
+import { editTranscriptEntry } from "@/actions/videos/edit-transcript";
+import { useTranscript, useInvalidateTranscript } from "hooks/use-transcript";
+import { Button } from "@cap/ui";
 
 interface TranscriptProps {
   data: typeof videos.$inferSelect;
   onSeek?: (time: number) => void;
+  user?: { id: string } | null;
 }
 
 interface TranscriptEntry {
@@ -16,6 +19,7 @@ interface TranscriptEntry {
   text: string;
   startTime: number;
 }
+
 
 const parseVTT = (vttContent: string): TranscriptEntry[] => {
   const lines = vttContent.split("\n");
@@ -91,7 +95,12 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
     }
 
     if (currentEntry.timestamp && !currentEntry.text) {
-      currentEntry.text = trimmedLine;
+      const textContent =
+        trimmedLine.startsWith('"') && trimmedLine.endsWith('"')
+          ? trimmedLine.slice(1, -1)
+          : trimmedLine;
+
+      currentEntry.text = textContent;
       if (
         currentEntry.id !== undefined &&
         currentEntry.timestamp &&
@@ -104,53 +113,79 @@ const parseVTT = (vttContent: string): TranscriptEntry[] => {
     }
   }
 
-  return entries.sort((a, b) => a.startTime - b.startTime);
+  const sortedEntries = entries.sort((a, b) => a.startTime - b.startTime);
+  return sortedEntries;
 };
 
-export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
+export const Transcript: React.FC<TranscriptProps> = ({
+  data,
+  user,
+  onSeek,
+}) => {
   const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedEntry, setSelectedEntry] = useState<number | null>(null);
   const [isTranscriptionProcessing, setIsTranscriptionProcessing] =
     useState(false);
   const [hasTimedOut, setHasTimedOut] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<number | null>(null);
+  const [editText, setEditText] = useState<string>("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isCopying, setIsCopying] = useState(false);
+  const [copyPressed, setCopyPressed] = useState(false);
+  const [downloadPressed, setDownloadPressed] = useState(false);
 
-  const publicEnv = usePublicEnv();
+
+  const {
+    data: transcriptContent,
+    isLoading: isTranscriptLoading,
+    error: transcriptError,
+  } = useTranscript(data.id, data.transcriptionStatus);
+
+  const invalidateTranscript = useInvalidateTranscript();
 
   useEffect(() => {
-    const fetchTranscript = async () => {
-      let transcriptionUrl;
-
-      if (data.bucket && data.awsBucket !== publicEnv.awsBucket) {
-        // For custom S3 buckets, fetch through the API
-        transcriptionUrl = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`;
+    if (transcriptContent) {
+      const parsed = parseVTT(transcriptContent);
+      setTranscriptData(parsed);
+      setIsTranscriptionProcessing(false);
+      setIsLoading(false);
+    } else if (transcriptError) {
+      console.error(
+        "[Transcript] Transcript error from React Query:",
+        transcriptError.message
+      );
+      if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
+        setIsTranscriptionProcessing(true);
       } else {
-        // For default Cap storage
-        transcriptionUrl = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
-      }
-
-      try {
-        const response = await fetch(transcriptionUrl);
-        const vttContent = await response.text();
-        const parsed = parseVTT(vttContent);
-        setTranscriptData(parsed);
-      } catch (error) {
-        console.error("Error loading transcript:", error);
+        setIsTranscriptionProcessing(false);
       }
       setIsLoading(false);
-    };
+    }
+  }, [transcriptContent, transcriptError]);
 
+  useEffect(() => {
+    if (isTranscriptLoading) {
+      setIsLoading(true);
+    }
+  }, [isTranscriptLoading]);
+
+  useEffect(() => {
     const videoCreationTime = new Date(data.createdAt).getTime();
     const fiveMinutesInMs = 5 * 60 * 1000;
     const isVideoOlderThanFiveMinutes =
       Date.now() - videoCreationTime > fiveMinutesInMs;
 
-    if (data.transcriptionStatus === "COMPLETE") {
-      fetchTranscript();
+    if (data.transcriptionStatus === "PROCESSING") {
+      setIsTranscriptionProcessing(true);
+      setIsLoading(true);
+    } else if (data.transcriptionStatus === "ERROR") {
+      setIsTranscriptionProcessing(false);
+      setIsLoading(false);
     } else if (isVideoOlderThanFiveMinutes && !data.transcriptionStatus) {
       setIsLoading(false);
       setHasTimedOut(true);
-    } else {
+    } else if (!data.transcriptionStatus) {
       const startTime = Date.now();
       const maxDuration = 2 * 60 * 1000;
 
@@ -167,7 +202,6 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
             if (transcriptionStatus === "PROCESSING") {
               setIsTranscriptionProcessing(true);
             } else if (transcriptionStatus === "COMPLETE") {
-              fetchTranscript();
               clearInterval(intervalId);
             } else if (transcriptionStatus === "ERROR") {
               clearInterval(intervalId);
@@ -178,44 +212,153 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
       return () => clearInterval(intervalId);
     }
-  }, [
-    data.id,
-    data.ownerId,
-    data.bucket,
-    data.awsBucket,
-    data.transcriptionStatus,
-    data.createdAt,
-  ]);
+  }, [data.id, data.transcriptionStatus, data.createdAt]);
 
   const handleReset = () => {
     setIsLoading(true);
-    const fetchTranscript = async () => {
-      const transcriptionUrl =
-        data.bucket && data.awsBucket !== publicEnv.awsBucket
-          ? `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&fileType=transcription`
-          : `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/transcription.vtt`;
-
-      try {
-        const response = await fetch(transcriptionUrl);
-        const vttContent = await response.text();
-        const parsed = parseVTT(vttContent);
-        setTranscriptData(parsed);
-      } catch (error) {
-        console.error("Error resetting transcript:", error);
-      }
-      setIsLoading(false);
-    };
-
-    fetchTranscript();
+    invalidateTranscript(data.id);
   };
 
   const handleTranscriptClick = (entry: TranscriptEntry) => {
+    if (editingEntry === entry.id) {
+      return;
+    }
+
     setSelectedEntry(entry.id);
 
-    if (onSeek) {
-      onSeek(entry.startTime);
+    onSeek?.(entry.startTime);
+  };
+
+  const startEditing = (entry: TranscriptEntry) => {
+    setEditingEntry(entry.id);
+    setEditText(entry.text);
+  };
+
+  const cancelEditing = () => {
+    setEditingEntry(null);
+    setEditText("");
+  };
+
+  const saveEdit = async () => {
+    if (!editingEntry || !editText.trim()) {
+      return;
+    }
+
+    const originalEntry = transcriptData.find(
+      (entry) => entry.id === editingEntry
+    );
+
+    setIsSaving(true);
+    try {
+      const result = await editTranscriptEntry(data.id, editingEntry, editText);
+
+      if (result.success) {
+        setTranscriptData((prev) =>
+          prev.map((entry) =>
+            entry.id === editingEntry
+              ? { ...entry, text: editText.trim() }
+              : entry
+          )
+        );
+        setEditingEntry(null);
+        setEditText("");
+        invalidateTranscript(data.id);
+      } else {
+        console.error("[Transcript] Failed to save transcript edit:", {
+          entryId: editingEntry,
+          videoId: data.id,
+          errorMessage: result.message,
+          result,
+        });
+      }
+    } catch (error) {
+      console.error("[Transcript] Error saving transcript edit:", {
+        entryId: editingEntry,
+        videoId: data.id,
+        error: error instanceof Error ? error.message : error,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+    } finally {
+      setIsSaving(false);
     }
   };
+
+  const formatTranscriptForClipboard = (entries: TranscriptEntry[]): string => {
+    return entries
+      .map((entry) => `[${entry.timestamp}] ${entry.text}`)
+      .join("\n\n");
+  };
+
+  const formatTranscriptAsVTT = (entries: TranscriptEntry[]): string => {
+    const vttHeader = "WEBVTT\n\n";
+
+    const vttEntries = entries.map((entry, index) => {
+      const startSeconds = entry.startTime;
+      const nextEntry = entries[index + 1];
+      const endSeconds = nextEntry ? nextEntry.startTime : startSeconds + 3;
+
+      const formatTime = (seconds: number): string => {
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        const milliseconds = Math.floor((seconds % 1) * 1000);
+
+        return `${hours.toString().padStart(2, "0")}:${minutes
+          .toString()
+          .padStart(2, "0")}:${secs.toString().padStart(2, "0")}.${milliseconds
+            .toString()
+            .padStart(3, "0")}`;
+      };
+
+      return `${entry.id}\n${formatTime(startSeconds)} --> ${formatTime(
+        endSeconds
+      )}\n${entry.text}\n`;
+    });
+
+    return vttHeader + vttEntries.join("\n");
+  };
+
+  const copyTranscriptToClipboard = async () => {
+    if (transcriptData.length === 0) return;
+
+    setIsCopying(true);
+    try {
+      const formattedTranscript = formatTranscriptForClipboard(transcriptData);
+      await navigator.clipboard.writeText(formattedTranscript);
+      setCopyPressed(true);
+      setTimeout(() => {
+        setCopyPressed(false);
+      }, 2000);
+    } catch (error) {
+      console.error("Failed to copy transcript:", error);
+    } finally {
+      setIsCopying(false);
+    }
+  };
+
+  const downloadTranscriptFile = () => {
+    if (transcriptData.length === 0) return;
+
+    const vttContent = formatTranscriptAsVTT(transcriptData);
+    const blob = new Blob([vttContent], { type: "text/vtt" });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `transcript-${data.id}.vtt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url);
+
+    setDownloadPressed(true);
+    setTimeout(() => {
+      setDownloadPressed(false);
+    }, 2000);
+  };
+
+  const canEdit = user?.id === data.ownerId;
 
   if (isLoading) {
     return (
@@ -295,20 +438,143 @@ export const Transcript: React.FC<TranscriptProps> = ({ data, onSeek }) => {
 
   return (
     <div className="flex flex-col h-full">
+      <div className="p-4 border-b border-gray-3">
+        <div className="flex gap-2 justify-end">
+          <Button
+            onClick={copyTranscriptToClipboard}
+            disabled={isCopying || transcriptData.length === 0}
+            variant="white"
+            size="xs"
+            spinner={isCopying}
+          >
+            {!copyPressed ? (
+              <Copy className="mr-1 w-3 h-3" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1 w-3 h-3 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {copyPressed ? "Copied" : "Copy Transcript"}
+          </Button>
+          <Button
+            onClick={downloadTranscriptFile}
+            disabled={transcriptData.length === 0}
+            variant="white"
+            size="xs"
+          >
+            {!downloadPressed ? (
+              <Download className="mr-1 w-3 h-3" />
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="mr-1 w-3 h-3 svgpathanimation"
+              >
+                <path d="M20 6 9 17l-5-5" />
+              </svg>
+            )}
+            {downloadPressed ? "Downloaded" : "Download"}
+          </Button>
+        </div>
+      </div>
+
       <div className="overflow-y-auto flex-1">
         <div className="p-4 space-y-3">
           {transcriptData.map((entry) => (
             <div
               key={entry.id}
-              className={`group rounded-lg p-2 transition-colors cursor-pointer ${
-                selectedEntry === entry.id ? "bg-gray-2" : "hover:bg-gray-2"
-              }`}
+              className={`group rounded-lg transition-colors ${editingEntry === entry.id
+                ? "bg-gray-1 border border-gray-4 p-3"
+                : selectedEntry === entry.id
+                  ? "bg-gray-2 p-3"
+                  : "hover:bg-gray-2 p-3"
+                } ${editingEntry === entry.id ? "" : "cursor-pointer"}`}
               onClick={() => handleTranscriptClick(entry)}
             >
-              <div className="mb-1 text-sm text-gray-8 font-semibold">
-                {entry.timestamp}
+              <div className="flex justify-between items-start mb-2">
+                <div className="text-xs font-medium text-gray-8">
+                  {entry.timestamp}
+                </div>
+                {canEdit && editingEntry !== entry.id && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEditing(entry);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-gray-3 rounded-md transition-all duration-200"
+                    title="Edit transcript"
+                  >
+                    <Edit3 className="w-3.5 h-3.5 text-gray-9" />
+                  </button>
+                )}
               </div>
-              <div className="text-sm text-gray-12">{entry.text}</div>
+
+              {editingEntry === entry.id ? (
+                <div className="space-y-3">
+                  <div className="p-3 rounded-lg border bg-gray-1 border-gray-4">
+                    <textarea
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      className="w-full text-sm leading-relaxed bg-transparent resize-none text-gray-12 placeholder:text-gray-8 focus:outline-none"
+                      rows={Math.max(2, Math.ceil(editText.length / 60))}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      placeholder="Edit transcript text..."
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end">
+                    <Button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        cancelEditing();
+                      }}
+                      disabled={isSaving}
+                      variant="white"
+                      size="xs"
+                      className="min-w-[70px]"
+                    >
+                      <X className="mr-1 w-3 h-3" />
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        saveEdit();
+                      }}
+                      disabled={isSaving || !editText.trim()}
+                      variant="primary"
+                      size="xs"
+                      className="min-w-[70px]"
+                      spinner={isSaving}
+                    >
+                      <Check className="mr-1 w-3 h-3" />
+                      Save
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm leading-relaxed text-gray-12">
+                  {entry.text}
+                </div>
+              )}
             </div>
           ))}
         </div>

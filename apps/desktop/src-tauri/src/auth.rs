@@ -10,11 +10,17 @@ use crate::web_api;
 
 #[derive(Serialize, Deserialize, Type, Debug)]
 pub struct AuthStore {
-    pub token: String,
+    pub secret: AuthSecret,
     pub user_id: Option<String>,
-    pub expires: i32,
     pub plan: Option<Plan>,
     pub intercom_hash: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Type, Debug)]
+#[serde(untagged)]
+pub enum AuthSecret {
+    ApiKey { api_key: String },
+    Session { token: String, expires: i32 },
 }
 
 #[derive(Serialize, Deserialize, Type, Debug)]
@@ -107,12 +113,6 @@ impl AuthStore {
         let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
         };
-
-        let value = value.map(|mut auth| {
-            // Set expiration to 100 years in the future
-            auth.expires = (chrono::Utc::now() + chrono::Duration::days(36500)).timestamp() as i32;
-            auth
-        });
 
         store.set("auth", json!(value));
         store.save().map_err(|e| e.to_string())

@@ -4,6 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 
 #[derive(Serialize, Deserialize, Type, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +27,10 @@ impl PresetsStore {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Err("Failed to deserialize presets store".to_string()),
+                    Err(_) => {
+                        error!("Failed to deserialize presets store");
+                        Ok(None)
+                    }
                 }
             }
             _ => Ok(None),

@@ -1,23 +1,22 @@
 use crate::windows::ShowCapWindow;
 use crate::{
-    RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
-    RequestStartRecording, RequestStopRecording,
+    RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings, recording,
 };
-use cap_fail::fail;
-use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Manager;
 use tauri::menu::{MenuId, PredefinedMenuItem};
 use tauri::{
+    AppHandle,
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle,
 };
 use tauri_specta::Event;
 
 pub enum TrayItem {
     OpenCap,
-    StartNewRecording,
     TakeScreenshot,
     PreviousRecordings,
     PreviousScreenshots,
@@ -29,7 +28,6 @@ impl From<TrayItem> for MenuId {
     fn from(value: TrayItem) -> Self {
         match value {
             TrayItem::OpenCap => "open_cap",
-            TrayItem::StartNewRecording => "new_recording",
             TrayItem::TakeScreenshot => "take_screenshot",
             TrayItem::PreviousRecordings => "previous_recordings",
             TrayItem::PreviousScreenshots => "previous_screenshots",
@@ -46,7 +44,6 @@ impl TryFrom<MenuId> for TrayItem {
     fn try_from(value: MenuId) -> Result<Self, Self::Error> {
         match value.0.as_str() {
             "open_cap" => Ok(TrayItem::OpenCap),
-            "new_recording" => Ok(TrayItem::StartNewRecording),
             "take_screenshot" => Ok(TrayItem::TakeScreenshot),
             "previous_recordings" => Ok(TrayItem::PreviousRecordings),
             "previous_screenshots" => Ok(TrayItem::PreviousScreenshots),
@@ -61,22 +58,8 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &MenuItem::with_id(
-                app,
-                "version",
-                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
-                false,
-                None::<&str>,
-            )?,
-            &MenuItem::with_id(app, TrayItem::OpenCap, "Open Cap", true, None::<&str>)?,
+            &MenuItem::with_id(app, TrayItem::OpenCap, "New Recording", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(
-                app,
-                TrayItem::StartNewRecording,
-                "Start New Recording",
-                true,
-                None::<&str>,
-            )?,
             // &MenuItem::with_id(
             //     app,
             //     TrayItem::TakeScreenshot,
@@ -91,15 +74,15 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 true,
                 None::<&str>,
             )?,
-            // &MenuItem::with_id(
-            //     app,
-            //     TrayItem::PreviousScreenshots,
-            //     "Previous Screenshots",
-            //     true,
-            //     None::<&str>,
-            // )?,
-            &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, TrayItem::OpenSettings, "Settings", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                "version",
+                format!("Cap v{}", env!("CARGO_PKG_VERSION")),
+                false,
+                None::<&str>,
+            )?,
             &MenuItem::with_id(app, TrayItem::Quit, "Quit Cap", true, None::<&str>)?,
         ],
     )?;
@@ -117,9 +100,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
                     tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
-                }
-                Ok(TrayItem::StartNewRecording) => {
-                    let _ = RequestStartRecording.emit(&app_handle);
                 }
                 Ok(TrayItem::TakeScreenshot) => {
                     let _ = RequestNewScreenshot.emit(&app_handle);
@@ -154,7 +134,10 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |tray, event| {
                 if let tauri::tray::TrayIconEvent::Click { .. } = event {
                     if is_recording.load(Ordering::Relaxed) {
-                        let _ = RequestStopRecording.emit(&app_handle);
+                        let app = app_handle.clone();
+                        tokio::spawn(async move {
+                            let _ = recording::stop_recording(app.clone(), app.state()).await;
+                        });
                     } else {
                         let _ = tray.set_visible(true);
                     }
