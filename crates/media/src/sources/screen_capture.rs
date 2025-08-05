@@ -578,8 +578,9 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     let now = Instant::now();
                     let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
                         Err(flume::TrySendError::Disconnected(_)) => {
-                            error!("Pipeline is unreachable. Shutting down recording.");
-                            return ControlFlow::Break(());
+                            return ControlFlow::Break(Err(
+                                "Pipeline is unreachable. Shutting down recording".to_string(),
+                            ));
                         }
                         Err(flume::TrySendError::Full(_)) => {
                             warn!("Screen capture sender is full, dropping frame");
@@ -608,8 +609,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                             total_count,
                             window_duration.as_secs()
                         );
-                        panic!("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.");
-                        return ControlFlow::Break(());
+                        return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
                     }
 
                     // Periodic logging of drop rate
@@ -642,10 +642,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     ControlFlow::Continue(())
                 }
                 Ok(_) => panic!("Unsupported video format"),
-                Err(error) => {
-                    error!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }
@@ -655,7 +652,7 @@ fn inner<T: ScreenCaptureFormat>(
     source: &mut ScreenCaptureSource<T>,
     ready_signal: crate::pipeline::task::PipelineReadySignal,
     mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<()>,
+    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<Result<(), String>>,
 ) {
     trace!("Preparing screen capture source thread...");
 
@@ -702,8 +699,13 @@ fn inner<T: ScreenCaptureFormat>(
                 }
 
                 match get_frame(&mut capturer) {
-                    ControlFlow::Break(_) => {
+                    ControlFlow::Break(res) => {
                         warn!("breaking from loop");
+
+                        if let Err(e) = res {
+                            error!("Capture loop broke with error: {}", e)
+                        }
+
                         break;
                     }
                     ControlFlow::Continue(_) => {
@@ -847,10 +849,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     ControlFlow::Continue(())
                 }
-                Err(error) => {
-                    eprintln!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }
