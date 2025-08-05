@@ -324,12 +324,12 @@ impl CursorLayer {
         // Apply zoom scaling to cursor size to match position transformation
         let zoom_scale = 1.0 / zoom.display_amount().max(0.001); // Avoid division by zero
 
-        // Calculate hotspot based on base size (before click scaling) to maintain consistent positioning
+        // Calculate hotspot based on base size (before zoom and click scaling) in frame space
         let cursor_base_size_px: XY<f64> = cursor_base_size_px.into();
-        let cursor_base_size_zoomed = cursor_base_size_px * zoom_scale;
-        let hotspot_px = cursor_texture.hotspot * cursor_base_size_zoomed;
+        let hotspot_frame_px = cursor_texture.hotspot * cursor_base_size_px;
 
-        // Apply click scaling for rendering size only
+        // Apply zoom and click scaling for rendering size
+        let cursor_base_size_zoomed = cursor_base_size_px * zoom_scale;
         let cursor_size_px = cursor_base_size_zoomed * click_scale_factor as f64;
 
         let position = {
@@ -339,7 +339,8 @@ impl CursorLayer {
                 resolution_base,
             );
 
-            frame_position.coord = frame_position.coord - hotspot_px.map(|v| v as f64);
+            // Subtract hotspot in frame space before zoom transformation
+            frame_position.coord = frame_position.coord - hotspot_frame_px.map(|v| v as f64);
 
             frame_position
                 .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom)
@@ -532,24 +533,19 @@ impl CursorTexture {
         // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
         let scale_x = width as f32 / rtree.size().width();
         let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / rtree.size().height();
-        let scale = scale_x.min(scale_y) * 1.5;
-        let transform = tiny_skia::Transform::from_row(
-            scale,
-            0.0,
-            0.0,
-            scale,
-            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
-            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
-        );
+        let scale = scale_x.min(scale_y);
+        let transform = tiny_skia::Transform::from_scale(scale, scale);
 
         resvg::render(&rtree, transform, &mut pixmap.as_mut());
 
         let rgba: Vec<u8> = pixmap
             .pixels()
             .iter()
-            .flat_map(|p| [p.red(), p.green(), p.red(), p.alpha()])
+            .flat_map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
             .collect();
 
+        // Keep hotspot in normalized coordinates (0.0-1.0) for consistency
+        
         Ok(Self::prepare(
             constants,
             &rgba,
