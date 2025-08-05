@@ -2,7 +2,7 @@ use cap_project::XY;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    composite_frame::CompositeVideoFramePipeline, CompositeVideoFrameUniforms, DecodedFrame,
+    CompositeVideoFrameUniforms, DecodedFrame, composite_frame::CompositeVideoFramePipeline,
 };
 
 pub struct CameraLayer {

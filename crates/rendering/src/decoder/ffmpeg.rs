@@ -3,15 +3,15 @@ use std::{
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
-use ffmpeg::{codec, format, frame, software, Codec};
-use ffmpeg_sys_next::{avcodec_find_decoder, AVHWDeviceType};
+use ffmpeg::{Codec, codec, format, frame, software};
+use ffmpeg_sys_next::{AVHWDeviceType, avcodec_find_decoder};
 use log::debug;
 use tokio::sync::oneshot;
 
-use super::{pts_to_frame, VideoDecoderMessage, FRAME_CACHE_SIZE};
+use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
@@ -201,11 +201,7 @@ impl FfmpegDecoder {
                                             let min = *cache.keys().min().unwrap();
                                             let max = *cache.keys().max().unwrap();
 
-                                            if current_frame > max {
-                                                min
-                                            } else {
-                                                max
-                                            }
+                                            if current_frame > max { min } else { max }
                                         };
 
                                         cache.remove(&frame);
