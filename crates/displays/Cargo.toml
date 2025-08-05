@@ -20,6 +20,7 @@ cidre = { workspace = true }
 windows = { workspace = true, features = [
 	"Win32_Foundation",
 	"Win32_System",
+	"Win32_System_Threading",
 	"Win32_UI_WindowsAndMessaging",
 	"Win32_Graphics_Gdi",
 ] }

@@ -1,27 +1,21 @@
-use std::{ffi::c_void, mem, ptr, str::FromStr};
+use std::{mem, str::FromStr};
 
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, FALSE, HWND, LPARAM, POINT, RECT, TRUE},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE},
         Graphics::Gdi::{
             EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
             MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
         },
-        System::{
-            ProcessStatus::GetModuleBaseNameW,
-            Threading::{
-                GetCurrentProcess, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-            },
+        System::Threading::{
+            OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+            QueryFullProcessImageNameW,
         },
-        UI::{
-            Input::KeyboardAndMouse::GetCursorPos,
-            WindowsAndMessaging::{
-                EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-                IsWindowVisible,
-            },
+        UI::WindowsAndMessaging::{
+            EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
         },
     },
-    core::{PCWSTR, PWSTR},
+    core::{BOOL, PWSTR},
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
@@ -34,7 +28,23 @@ pub struct DisplayImpl(HMONITOR);
 
 impl DisplayImpl {
     pub fn primary() -> Self {
-        // Get the primary monitor (at 0,0)
+        // Find the primary monitor by checking the MONITORINFOF_PRIMARY flag
+        const MONITORINFOF_PRIMARY: u32 = 1u32;
+
+        for display in Self::list() {
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+            unsafe {
+                if GetMonitorInfoW(display.0, &mut info as *mut _ as *mut _).as_bool() {
+                    if (info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0 {
+                        return display;
+                    }
+                }
+            }
+        }
+
+        // Fallback to the old method if no primary monitor is found
         let point = POINT { x: 0, y: 0 };
         let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
         Self(monitor)
@@ -46,8 +56,8 @@ impl DisplayImpl {
             _hdc: HDC,
             _lprc_clip: *mut RECT,
             lparam: LPARAM,
-        ) -> windows::Win32::Foundation::BOOL {
-            let list = &mut *(lparam.0 as *mut Vec<DisplayImpl>);
+        ) -> BOOL {
+            let list = unsafe { &mut *(lparam.0 as *mut Vec<DisplayImpl>) };
             list.push(DisplayImpl(hmonitor));
             TRUE
         }
@@ -58,7 +68,7 @@ impl DisplayImpl {
                 None,
                 None,
                 Some(monitor_enum_proc),
-                LPARAM(&mut list as *mut _ as isize),
+                LPARAM(std::ptr::addr_of_mut!(list) as isize),
             );
         }
 
@@ -127,7 +137,7 @@ impl DisplayImpl {
         };
 
         let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONULL) };
-        if monitor.0 != 0 {
+        if monitor.0 as usize != 0 {
             Some(Self(monitor))
         } else {
             None
@@ -138,7 +148,7 @@ impl DisplayImpl {
 fn get_cursor_position() -> Option<LogicalPosition> {
     let mut point = POINT { x: 0, y: 0 };
     unsafe {
-        if GetCursorPos(&mut point).as_bool() {
+        if GetCursorPos(&mut point).is_ok() {
             Some(LogicalPosition {
                 x: point.x as f64,
                 y: point.y as f64,
@@ -154,14 +164,11 @@ pub struct WindowImpl(HWND);
 
 impl WindowImpl {
     pub fn list() -> Vec<Self> {
-        unsafe extern "system" fn enum_windows_proc(
-            hwnd: HWND,
-            lparam: LPARAM,
-        ) -> windows::Win32::Foundation::BOOL {
-            let list = &mut *(lparam.0 as *mut Vec<WindowImpl>);
+        unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let list = unsafe { &mut *(lparam.0 as *mut Vec<WindowImpl>) };
 
             // Only include visible windows
-            if IsWindowVisible(hwnd).as_bool() {
+            if unsafe { IsWindowVisible(hwnd) }.as_bool() {
                 list.push(WindowImpl(hwnd));
             }
 
@@ -172,7 +179,7 @@ impl WindowImpl {
         unsafe {
             let _ = EnumWindows(
                 Some(enum_windows_proc),
-                LPARAM(&mut list as *mut _ as isize),
+                LPARAM(std::ptr::addr_of_mut!(list) as isize),
             );
         }
 
@@ -218,21 +225,26 @@ impl WindowImpl {
                 return None;
             }
 
-            let process_handle = OpenProcess(
-                PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
-                FALSE,
-                process_id,
-            )
-            .ok()?;
+            let process_handle =
+                OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
 
-            let mut buffer = [0u16; 260]; // MAX_PATH
-            let result = GetModuleBaseNameW(process_handle, None, &mut buffer);
+            let mut buffer = [0u16; 1024];
+            let mut buffer_size = buffer.len() as u32;
+
+            let result = QueryFullProcessImageNameW(
+                process_handle,
+                PROCESS_NAME_FORMAT::default(),
+                PWSTR(buffer.as_mut_ptr()),
+                &mut buffer_size,
+            );
 
             let _ = CloseHandle(process_handle);
 
-            if result > 0 {
-                let len = buffer.iter().position(|&x| x == 0).unwrap_or(buffer.len());
-                Some(String::from_utf16_lossy(&buffer[..len]))
+            if result.is_ok() && buffer_size > 0 {
+                let path_str = String::from_utf16_lossy(&buffer[..buffer_size as usize]);
+                std::path::Path::new(&path_str)
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
             } else {
                 None
             }
@@ -242,7 +254,7 @@ impl WindowImpl {
     pub fn bounds(&self) -> Option<LogicalBounds> {
         let mut rect = RECT::default();
         unsafe {
-            if GetWindowRect(self.0, &mut rect).as_bool() {
+            if GetWindowRect(self.0, &mut rect).is_ok() {
                 Some(LogicalBounds {
                     position: LogicalPosition {
                         x: rect.left as f64,

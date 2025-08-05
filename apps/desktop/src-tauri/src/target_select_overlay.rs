@@ -24,12 +24,14 @@ pub struct WindowUnderCursor {
 #[tauri::command]
 pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
     println!("OPEN SELECT OVERLAYS");
-    for display in cap_displays::Display::list() {
-        let _ = ShowCapWindow::TargetSelectOverlay {
-            display_id: display.id(),
-        }
-        .show(&app)
-        .await;
+    let displays = cap_displays::Display::list()
+        .into_iter()
+        .map(|d| d.id())
+        .collect::<Vec<_>>();
+    for display_id in displays {
+        let _ = ShowCapWindow::TargetSelectOverlay { display_id }
+            .show(&app)
+            .await;
     }
 
     #[cfg(target_os = "macos")]
