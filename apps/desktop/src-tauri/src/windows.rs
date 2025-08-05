@@ -253,6 +253,11 @@ impl ShowCapWindow {
                         crate::platform::set_window_level(window.as_ref().window(), 50);
                     }
 
+                    #[cfg(target_os = "windows")]
+                    {
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                    }
+
                     window
                 } else {
                     Box::pin(Self::Setup.show(app)).await?
@@ -289,6 +294,18 @@ impl ShowCapWindow {
                 #[cfg(target_os = "macos")]
                 {
                     crate::platform::set_window_level(window.as_ref().window(), 45);
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 45);
+
+                    // Ensure any existing NewMain window stays on top
+                    if let Some(main_window) = CapWindowId::NewMain.get(app) {
+                        crate::platform::ensure_window_on_top(
+                            main_window.as_ref().window().clone(),
+                        );
+                    }
                 }
 
                 window
