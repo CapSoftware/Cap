@@ -1,7 +1,6 @@
 use std::ffi::c_void;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::collections::HashMap;
-use lazy_static::lazy_static;
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM, HHOOK},
     UI::WindowsAndMessaging::{
@@ -15,8 +14,10 @@ use windows::Win32::{
 use tauri::AppHandle;
 
 // Global state for window relationship management
-lazy_static! {
-    static ref WINDOW_STATE: Arc<Mutex<WindowState>> = Arc::new(Mutex::new(WindowState::new()));
+static WINDOW_STATE: OnceLock<Arc<Mutex<WindowState>>> = OnceLock::new();
+
+fn get_window_state() -> &'static Arc<Mutex<WindowState>> {
+    WINDOW_STATE.get_or_init(|| Arc::new(Mutex::new(WindowState::new())))
 }
 
 struct WindowState {
@@ -61,7 +62,7 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
 
         // Update window state tracking
         {
-            let mut state = WINDOW_STATE.lock().unwrap();
+            let mut state = get_window_state().lock().unwrap();
             match level {
                 50 => {
                     state.main_windows.insert(window_label.clone(), hwnd);
@@ -130,7 +131,7 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
 /// Sets up the main window with smart layering based on overlay state
 unsafe fn set_main_window_level(hwnd: HWND, window_label: &str) {
     let overlay_active = {
-        let state = WINDOW_STATE.lock().unwrap();
+        let state = get_window_state().lock().unwrap();
         state.overlay_active && !state.overlay_windows.is_empty()
     };
 
@@ -183,7 +184,7 @@ unsafe fn set_main_window_level(hwnd: HWND, window_label: &str) {
 unsafe fn set_overlay_window_level(hwnd: HWND, window_label: &str) {
     // Find the main window to establish owner relationship
     let main_hwnd = {
-        let state = WINDOW_STATE.lock().unwrap();
+        let state = get_window_state().lock().unwrap();
         state.main_windows.values().next().copied()
     };
 
@@ -212,7 +213,7 @@ unsafe fn set_overlay_window_level(hwnd: HWND, window_label: &str) {
 /// Refreshes the position of all main windows to ensure they stay above overlays
 unsafe fn refresh_main_window_positions() {
     let main_windows = {
-        let state = WINDOW_STATE.lock().unwrap();
+        let state = get_window_state().lock().unwrap();
         state.main_windows.values().copied().collect::<Vec<_>>()
     };
 
@@ -256,7 +257,7 @@ unsafe extern "system" fn window_hook_proc(
 
 /// Handles window activation events to maintain proper Z-order
 unsafe fn handle_window_activation(activated_hwnd: HWND) {
-    let state = WINDOW_STATE.lock().unwrap();
+    let state = get_window_state().lock().unwrap();
     
     // Check if an overlay window was activated
     let overlay_activated = state.overlay_windows.values().any(|&hwnd| hwnd == activated_hwnd);
@@ -283,7 +284,7 @@ fn install_window_hook() {
         );
         
         if let Ok(hook_handle) = hook {
-            let mut state = WINDOW_STATE.lock().unwrap();
+            let mut state = get_window_state().lock().unwrap();
             state.hook_handle = Some(hook_handle);
         }
     }
@@ -291,7 +292,7 @@ fn install_window_hook() {
 
 /// Removes the window hook when no longer needed
 fn remove_window_hook() {
-    let mut state = WINDOW_STATE.lock().unwrap();
+    let mut state = get_window_state().lock().unwrap();
     if let Some(hook_handle) = state.hook_handle.take() {
         unsafe {
             let _ = UnhookWindowsHookEx(hook_handle);
@@ -329,7 +330,7 @@ pub fn refresh_window_layering(app: tauri::AppHandle) -> Result<(), String> {
 /// Marks an overlay as closed and updates the global state
 #[cfg(target_os = "windows")]
 pub fn mark_overlay_closed(window_label: &str) {
-    let mut state = WINDOW_STATE.lock().unwrap();
+    let mut state = get_window_state().lock().unwrap();
     state.overlay_windows.remove(window_label);
     
     // If no overlays remain, mark overlay as inactive
@@ -351,7 +352,7 @@ pub fn mark_overlay_closed(window_label: &str) {
 /// Marks a main window as closed and cleans up state
 #[cfg(target_os = "windows")]
 pub fn mark_main_window_closed(window_label: &str) {
-    let mut state = WINDOW_STATE.lock().unwrap();
+    let mut state = get_window_state().lock().unwrap();
     state.main_windows.remove(window_label);
     
     // If no main windows remain, remove the hook

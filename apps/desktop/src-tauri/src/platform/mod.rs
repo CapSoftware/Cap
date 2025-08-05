@@ -68,6 +68,13 @@ pub fn mark_main_window_closed(_window_label: &str) {
 #[tauri::command]
 #[specta::specta]
 #[cfg(not(target_os = "windows"))]
+pub fn force_main_window_to_top(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("Force main window to top is only supported on Windows.".into())
+}
+
+#[tauri::command]
+#[specta::specta]
+#[cfg(not(target_os = "windows"))]
 pub fn refresh_window_layering(_app: tauri::AppHandle) -> Result<(), String> {
     Err("Window layering refresh is only supported on Windows.".into())
 }
