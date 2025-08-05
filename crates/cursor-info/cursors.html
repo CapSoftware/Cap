@@ -74,7 +74,7 @@
         position: absolute;
         width: 6px;
         height: 6px;
-        background: red;
+        background: rgba(255, 0, 0, 0.6);
         border-radius: 1px;
         transform: translate(-50%, -50%);
         pointer-events: none;
@@ -105,18 +105,7 @@
       }
 
       .copy-button {
-        margin-top: 5px;
-        padding: 2px 8px;
-        font-size: 10px;
-        background: #007bff;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-      }
-
-      .copy-button:hover {
-        background: #0056b3;
+        display: none;
       }
 
       .platform-section {
@@ -405,7 +394,6 @@
         const copyButton = document.createElement("button");
         copyButton.className = "copy-button";
         copyButton.textContent = "Copy Hotspot";
-        copyButton.style.display = "none";
 
         if (cursor.hotspot) {
           hotspotInfo.textContent = `Hotspot: (${cursor.hotspot[0].toFixed(
@@ -423,7 +411,7 @@
 
         let currentMousePos = null;
 
-        container.addEventListener("mousemove", (e) => {
+        item.addEventListener("mousemove", (e) => {
           const rect = container.getBoundingClientRect();
           const x = (e.clientX - rect.left) / rect.width;
           const y = (e.clientY - rect.top) / rect.height;
@@ -431,23 +419,21 @@
           mousePosition.textContent = `Mouse: (${x.toFixed(3)}, ${y.toFixed(
             3
           )})`;
-          copyButton.style.display = "inline-block";
         });
 
-        container.addEventListener("mouseleave", () => {
+        item.addEventListener("mouseleave", () => {
           mousePosition.textContent = "";
-          copyButton.style.display = "none";
         });
 
-        container.addEventListener("click", () => {
+        item.addEventListener("click", () => {
           if (currentMousePos) {
             const hotspotText = `hotspot: (${currentMousePos[0].toFixed(
               3
             )}, ${currentMousePos[1].toFixed(3)})`;
             navigator.clipboard.writeText(hotspotText).then(() => {
-              copyButton.textContent = "Copied!";
+              mousePosition.textContent = "Copied!";
               setTimeout(() => {
-                copyButton.textContent = "Copy Hotspot";
+                mousePosition.textContent = "";
               }, 1000);
             });
           }
