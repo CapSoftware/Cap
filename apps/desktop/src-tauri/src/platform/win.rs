@@ -2,8 +2,8 @@ use std::ffi::c_void;
 use windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{
-        BringWindowToTop, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SetWindowPos,
+        BringWindowToTop, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SetForegroundWindow, SetWindowPos,
     },
 };
 
@@ -47,7 +47,7 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
             }
             // NewMain window - must be above TargetSelectOverlay
             50 => {
-                // First make it topmost
+                // Simple but reliable approach: set as topmost and bring to front
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOPMOST),
@@ -55,24 +55,16 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
                     0,
                     0,
                     0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    SWP_NOMOVE | SWP_NOSIZE,
                 );
-                // Then bring it to the very top of topmost windows
+
+                // Bring to the front of topmost windows
                 let _ = BringWindowToTop(hwnd);
-                // Additional call to ensure it's at the front
-                let _ = SetWindowPos(
-                    hwnd,
-                    Some(HWND_TOP),
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-                );
+                let _ = SetForegroundWindow(hwnd);
             }
             // TargetSelectOverlay - should be below NewMain
             45 => {
-                // Make it topmost but don't bring to front
+                // Set as topmost but don't bring to front - let it stay behind level 50 windows
                 let _ = SetWindowPos(
                     hwnd,
                     Some(HWND_TOPMOST),
@@ -82,7 +74,6 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
-                // Don't call BringWindowToTop for this level - let NewMain stay on top
             }
             // Default case - not topmost
             _ => {
@@ -100,24 +91,64 @@ pub fn set_window_level(window: tauri::Window, level: i32) {
     });
 }
 
-/// Additional function to ensure NewMain window stays on top
-/// This can be called from the Tauri application when needed
+/// Simplified function to ensure NewMain window stays on top
 pub fn ensure_window_on_top(window: tauri::Window) {
     let c_window = window.clone();
-    let _ = window.run_on_main_thread(move || unsafe {
+    let _ = window.run_on_main_thread(move || {
         let raw_handle = c_window.hwnd().expect("Failed to get native window handle");
         let hwnd = HWND(raw_handle.0 as *mut c_void);
 
-        // Bring to top of topmost windows
-        let _ = BringWindowToTop(hwnd);
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        // Simplified approach - just set level 50 again
+        set_window_level_internal(hwnd, 50);
     });
+}
+
+/// Internal helper that directly operates on HWND
+unsafe fn set_window_level_internal(hwnd: HWND, level: i32) {
+    match level {
+        50 => {
+            // NewMain window - simplified approach
+            unsafe {
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE,
+                );
+                let _ = BringWindowToTop(hwnd);
+                let _ = SetForegroundWindow(hwnd);
+            }
+        }
+        _ => {
+            // For other levels, use the original logic
+        }
+    }
+}
+
+/// Simplified positioning function
+pub fn position_window_above_target(main_window: tauri::Window, _target_window: tauri::Window) {
+    // Just call ensure_window_on_top for simplicity
+    ensure_window_on_top(main_window);
+}
+
+/// Check if a window handle is valid - utility function
+pub fn is_window_valid(window: &tauri::Window) -> bool {
+    window.hwnd().is_ok()
+}
+
+/// Tauri command to manually force the main window to the top
+/// This can be called from the frontend when needed
+#[tauri::command]
+pub fn force_main_window_to_top(app: tauri::AppHandle) -> Result<(), String> {
+    use crate::windows::CapWindowId;
+
+    if let Some(main_window) = CapWindowId::NewMain.get(&app) {
+        set_window_level(main_window.as_ref().window().clone(), 50);
+        Ok(())
+    } else {
+        Err("NewMain window not found".to_string())
+    }
 }

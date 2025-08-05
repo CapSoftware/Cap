@@ -298,6 +298,7 @@ impl ShowCapWindow {
 
                 #[cfg(target_os = "windows")]
                 {
+                    // Set the overlay window level
                     crate::platform::set_window_level(window.as_ref().window(), 45);
 
                     // Ensure any existing NewMain window stays on top
