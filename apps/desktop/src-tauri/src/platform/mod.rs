@@ -53,3 +53,21 @@ pub fn perform_haptic_feedback(
     #[cfg(not(target_os = "macos"))]
     Err("Haptics are only supported on macOS.".into())
 }
+
+// Stub functions for non-Windows platforms
+#[cfg(not(target_os = "windows"))]
+pub fn mark_overlay_closed(_window_label: &str) {
+    // No-op on non-Windows platforms
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn mark_main_window_closed(_window_label: &str) {
+    // No-op on non-Windows platforms
+}
+
+#[tauri::command]
+#[specta::specta]
+#[cfg(not(target_os = "windows"))]
+pub fn refresh_window_layering(_app: tauri::AppHandle) -> Result<(), String> {
+    Err("Window layering refresh is only supported on Windows.".into())
+}
