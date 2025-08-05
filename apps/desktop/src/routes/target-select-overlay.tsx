@@ -1,17 +1,20 @@
 import { Button } from "@cap/ui-solid";
 import {
   ComponentProps,
+  createEffect,
   createRoot,
   createSignal,
   JSX,
   Match,
-  PropsWithChildren,
   Show,
   Switch,
 } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { createStore, reconcile } from "solid-js/store";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
@@ -21,16 +24,28 @@ import {
   ScreenCaptureTarget,
   TargetUnderCursor,
 } from "~/utils/tauri";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 export default function () {
   const [params] = useSearchParams<{ displayId: string }>();
-  const { rawOptions } = createOptionsQuery();
+  const { rawOptions, setOptions } = createOptionsQuery();
 
   const [targetUnderCursor, setTargetUnderCursor] =
     createStore<TargetUnderCursor>({ display_id: null, window: null });
 
   events.targetUnderCursor.listen((event) => {
     setTargetUnderCursor(reconcile(event.payload));
+  });
+
+  createEventListener(document, "keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOptions("targetMode", null);
+    }
+  });
+
+  createEffect(() => {
+    if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
   });
 
   return (

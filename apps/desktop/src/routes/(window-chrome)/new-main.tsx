@@ -259,9 +259,7 @@ function Page() {
           selected={rawOptions.targetMode === "screen"}
           Component={IconMdiMonitor}
           onClick={() =>
-            setOptions("targetMode", (v) =>
-              v === "screen" ? undefined : "screen"
-            )
+            setOptions("targetMode", (v) => (v === "screen" ? null : "screen"))
           }
           name="Screen"
         />
@@ -269,9 +267,7 @@ function Page() {
           selected={rawOptions.targetMode === "window"}
           Component={IconLucideAppWindowMac}
           onClick={() =>
-            setOptions("targetMode", (v) =>
-              v === "window" ? undefined : "window"
-            )
+            setOptions("targetMode", (v) => (v === "window" ? null : "window"))
           }
           name="Window"
         />
@@ -279,7 +275,7 @@ function Page() {
           selected={rawOptions.targetMode === "area"}
           Component={IconMaterialSymbolsScreenshotFrame2Rounded}
           onClick={() =>
-            setOptions("targetMode", (v) => (v === "area" ? undefined : "area"))
+            setOptions("targetMode", (v) => (v === "area" ? null : "area"))
           }
           name="Area"
         />
