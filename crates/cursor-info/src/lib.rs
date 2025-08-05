@@ -151,8 +151,8 @@ impl ResolvedCursor {
                 raw: include_str!("../assets/windows/size-ns.svg"),
                 hotspot: (0.5, 0.5), // Center of vertical resize cursor
             },
-            // // IDC_SIZEALL
-            // "8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903" => todo!(),
+            // IDC_SIZEALL
+            "8066a12792e4e8ef21636e5ade61adaaf0fecc2ffc69536ffa0c2dd5bedc6903" => todo!(),
             // IDC_NO
             "7df883a459aced72acf32b969ff1119676d334d9acfcbe668ef92fe01094a7d6" => ResolvedCursor {
                 raw: include_str!("../assets/windows/no.svg"),
