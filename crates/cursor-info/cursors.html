@@ -65,16 +65,30 @@
         max-height: 200px;
       }
 
+      .cursor-svg.macos {
+        max-width: 250px;
+        max-height: 250px;
+      }
+
       .hotspot {
         position: absolute;
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
         background: red;
-        border: 2px solid white;
-        border-radius: 50%;
+        border-radius: 1px;
         transform: translate(-50%, -50%);
         pointer-events: none;
-        box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+      }
+
+      .hotspot::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 1px;
+        height: 1px;
+        background: black;
+        transform: translate(-50%, -50%);
       }
 
       .hotspot-info {
@@ -374,7 +388,8 @@
         container.className = "cursor-container";
 
         const svg = document.createElement("object");
-        svg.className = "cursor-svg";
+        svg.className =
+          platform === "macos" ? "cursor-svg macos" : "cursor-svg";
         svg.data = cursor.svg;
         svg.type = "image/svg+xml";
 
