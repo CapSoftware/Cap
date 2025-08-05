@@ -32,11 +32,14 @@ import {
   getPermissions,
   listAudioDevices,
   listScreens,
+  listVideoDevices,
   listWindows,
 } from "~/utils/queries";
 import {
+  CameraInfo,
   type CaptureScreen,
   commands,
+  DeviceOrModelID,
   events,
   ScreenCaptureTarget,
 } from "~/utils/tauri";
@@ -47,6 +50,15 @@ function getWindowSize() {
     height: 255,
   };
 }
+
+const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
+  return cameras.find((c) => {
+    if (!id) return false;
+    return "DeviceID" in id
+      ? id.DeviceID === c.device_id
+      : id.ModelID === c.model_id;
+  });
+};
 
 export default function () {
   return (
@@ -101,15 +113,14 @@ function Page() {
 
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
-  const cameras = createQuery(() => listAudioDevices);
+  const cameras = createQuery(() => listVideoDevices);
+  const mics = createQuery(() => listAudioDevices);
 
   cameras.promise.then((cameras) => {
-    if (rawOptions.cameraLabel && !cameras.includes(rawOptions.cameraLabel)) {
+    if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
       setOptions("cameraLabel", null);
     }
   });
-
-  const mics = createQuery(() => listAudioDevices);
 
   mics.promise.then((mics) => {
     if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
@@ -145,7 +156,11 @@ function Page() {
 
       return win;
     },
-    cameraLabel: () => cameras.data?.find((c) => c === rawOptions.cameraLabel),
+    camera: () => {
+      if (!rawOptions.cameraID) return undefined;
+      return findCamera(cameras.data || [], rawOptions.cameraID);
+    },
+
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
       switch (rawOptions.captureTarget.variant) {
@@ -286,13 +301,16 @@ function Page() {
       </div>
       <CameraSelect
         disabled={cameras.isPending}
-        options={cameras.isPending ? [] : cameras.data ?? []}
+        options={cameras.data ?? []}
         value={
-          mics.isPending
-            ? rawOptions.cameraLabel
-            : options.cameraLabel() ?? null
+          // cameras.isPending ? rawOptions.cameraID :
+          options.camera() ?? null
         }
-        onChange={(v) => setCamera.mutate(v)}
+        onChange={(c) => {
+          if (!c) setCamera.mutate(null);
+          else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+          else setCamera.mutate({ DeviceID: c.device_id });
+        }}
       />
       <MicrophoneSelect
         disabled={mics.isPending}
@@ -517,9 +535,9 @@ const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   disabled?: boolean;
-  options: string[];
-  value: string | null;
-  onChange: (cameraLabel: string | null) => void;
+  options: CameraInfo[];
+  value: CameraInfo | null;
+  onChange: (camera: CameraInfo | null) => void;
 }) {
   const currentRecording = createCurrentRecordingQuery();
   const permissions = createQuery(() => getPermissions);
@@ -529,7 +547,7 @@ function CameraSelect(props: {
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  const onChange = (cameraLabel: string | null) => {
+  const onChange = (cameraLabel: CameraInfo | null) => {
     if (!cameraLabel && permissions?.data?.camera !== "granted")
       return requestPermission("camera");
 
@@ -556,7 +574,7 @@ function CameraSelect(props: {
             PredefinedMenuItem.new({ item: "Separator" }),
             ...props.options.map((o) =>
               CheckMenuItem.new({
-                text: o,
+                text: o.display_name,
                 checked: o === props.value,
                 action: () => onChange(o),
               })
@@ -570,7 +588,7 @@ function CameraSelect(props: {
       >
         <IconCapCamera class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
-          {props.value ?? NO_CAMERA}
+          {props.value?.display_name ?? NO_CAMERA}
         </span>
         <TargetSelectInfoPill
           value={props.value}
