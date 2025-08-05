@@ -13,6 +13,8 @@ struct Uniforms {
     shadow_size: f32,
     shadow_opacity: f32,
     shadow_blur: f32,
+    debug_cursor_pos: vec2<f32>,
+    debug_hotspot_offset: f32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -147,7 +149,29 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let final_color = accum / weight_sum;
     let blurred = vec4(final_color.rgb, base_color.a);
-    return mix(shadow_color, blurred, blurred.a);
+    var result = mix(shadow_color, blurred, blurred.a);
+
+    // Debug: Draw hotspot visualization
+    let debug_cursor_pos = uniforms.debug_cursor_pos;
+    let hotspot_offset = uniforms.debug_hotspot_offset;
+
+    // Calculate distance from current pixel to debug cursor position
+    let dist_to_cursor = length(p - debug_cursor_pos);
+    let hotspot_radius = 10.0 + hotspot_offset;
+
+    // Draw a red circle at the cursor position for debugging
+    if (dist_to_cursor < hotspot_radius) {
+        let circle_alpha = 1.0 - smoothstep(hotspot_radius - 2.0, hotspot_radius, dist_to_cursor);
+        result = mix(result, vec4<f32>(1.0, 0.0, 0.0, 1.0), circle_alpha * 0.8);
+    }
+
+    // Draw a smaller yellow dot at the exact hotspot position
+    if (dist_to_cursor < 3.0) {
+        let dot_alpha = 1.0 - smoothstep(1.0, 3.0, dist_to_cursor);
+        result = mix(result, vec4<f32>(1.0, 1.0, 0.0, 1.0), dot_alpha);
+    }
+
+    return result;
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
