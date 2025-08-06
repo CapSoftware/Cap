@@ -2,6 +2,7 @@ import { Button } from "@cap/ui-solid";
 import {
   ComponentProps,
   createEffect,
+  createResource,
   createRoot,
   createSignal,
   JSX,
@@ -27,6 +28,7 @@ import {
   TargetUnderCursor,
 } from "~/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { type as ostype } from "@tauri-apps/plugin-os";
 
 export default function () {
   const [params] = useSearchParams<{ displayId: string }>();
@@ -47,6 +49,10 @@ export default function () {
 
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
+  });
+
+  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), {
+    initialValue: 1,
   });
 
   // This prevents browser keyboard shortcuts from firing.
@@ -82,10 +88,26 @@ export default function () {
               <div
                 class="bg-blue-600/30 absolute flex flex-col items-center justify-center"
                 style={{
-                  width: `${windowUnderCursor.bounds.size.width}px`,
-                  height: `${windowUnderCursor.bounds.size.height}px`,
-                  left: `${windowUnderCursor.bounds.position.x}px`,
-                  top: `${windowUnderCursor.bounds.position.y}px`,
+                  width: `${
+                    ostype() === "macos"
+                      ? windowUnderCursor.bounds.size.width
+                      : windowUnderCursor.bounds.size.width / scale()
+                  }px`,
+                  height: `${
+                    ostype() === "macos"
+                      ? windowUnderCursor.bounds.size.height
+                      : windowUnderCursor.bounds.size.height / scale()
+                  }px`,
+                  left: `${
+                    ostype() === "macos"
+                      ? windowUnderCursor.bounds.position.x
+                      : windowUnderCursor.bounds.position.x / scale()
+                  }px`,
+                  top: `${
+                    ostype() === "macos"
+                      ? windowUnderCursor.bounds.position.y
+                      : windowUnderCursor.bounds.position.y / scale()
+                  }px`,
                 }}
               >
                 <span class="text-3xl font-semibold mb-2">
