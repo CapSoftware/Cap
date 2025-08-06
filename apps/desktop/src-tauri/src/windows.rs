@@ -275,7 +275,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .always_on_top(true)
+                    // .always_on_top(true) // TODO: For windows only
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .inner_size(size.width(), size.height())
@@ -284,18 +284,42 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
 
+                // TODO: Stop this when the window is removed.
                 // TODO: Error handling + use Cap window abstraction
-                if let Some(main_window) = app.get_webview_window("main") {
-                    // main_window
-                    //     .set_always_on_top(true).unwrap();
-                    main_window.set_focus().unwrap();
-                }
+                // TODO: Explain this cursed code
+                let app = app.clone();
+                let window2 = window.clone();
+                tokio::spawn(async move {
+                    use windows::Win32::{
+                        Foundation::HWND,
+                        UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE}
+                    };
 
-                if let Some(main_window) = app.get_webview_window("new-main") {
-                    // main_window
-                    //     .set_always_on_top(true).unwrap();
-                    main_window.set_focus().unwrap();
-                }
+                    loop {
+                        let Some(cap_main_win) = app.get_webview_window("new-main") else {
+                            println!("Failed to find Cap main window");
+                            continue;
+                        };
+
+                        // Check if the main window is currently focused
+                        let main_window_focused = cap_main_win.is_focused().unwrap_or(false);
+
+                        // Only do window focus logic if the main window is not focused
+                        if !main_window_focused {
+                            if let Some(hwnd) = window2.hwnd().ok() {
+                                let hwnd = HWND(hwnd.0 as *mut _);
+
+                                unsafe {
+                                    ShowWindow(hwnd, SW_RESTORE); // Restore if minimized
+                                    BringWindowToTop(hwnd);
+                                    SetForegroundWindow(hwnd);
+                                }
+                                println!("FIXED");
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                });
 
                 #[cfg(target_os = "macos")]
                 {
