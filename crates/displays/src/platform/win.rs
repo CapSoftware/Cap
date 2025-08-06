@@ -195,9 +195,9 @@ impl WindowImpl {
             .into_iter()
             .filter_map(|window| {
                 let bounds = window.bounds()?;
-                let contains_cursor = cursor.x() >= bounds.position().x()
+                let contains_cursor = cursor.x() > bounds.position().x()
                     && cursor.x() < bounds.position().x() + bounds.size().width()
-                    && cursor.y() >= bounds.position().y()
+                    && cursor.y() > bounds.position().y()
                     && cursor.y() < bounds.position().y() + bounds.size().height();
 
                 contains_cursor.then_some(window)
