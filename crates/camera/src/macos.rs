@@ -1,7 +1,7 @@
 use super::*;
 
 use cap_camera_avfoundation::*;
-use cidre::{mach::msg_send, *};
+use cidre::*;
 use objc2_av_foundation::*;
 
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
@@ -31,6 +31,7 @@ impl CameraInfo {
             let height = desc.dimensions().height as u32;
 
             for fr_range in format.video_supported_frame_rate_ranges().iter() {
+                // SAFETY: trust me bro it crashes on intel mac otherwise
                 let fr_range = unsafe {
                     &*(fr_range as *const av::capture::device::FrameRateRange)
                         .cast::<AVFrameRateRange>()
