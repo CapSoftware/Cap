@@ -346,8 +346,13 @@ impl CursorLayer {
 
         let cursor_size_px = zoomed_size.coord * click_scale_factor as f64;
 
+        // Adjust position to keep cursor centered when it shrinks during clicks
+        let size_difference = zoomed_size.coord * (1.0 - click_scale_factor as f64);
+        let position_offset = Coord::new(size_difference / 2.0);
+        let adjusted_position = zoomed_position + position_offset;
+
         let uniforms = CursorUniforms {
-            position: [zoomed_position.x as f32, zoomed_position.y as f32],
+            position: [adjusted_position.x as f32, adjusted_position.y as f32],
             size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
