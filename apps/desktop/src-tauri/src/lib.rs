@@ -347,6 +347,12 @@ pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingDeleted {
+    #[allow(unused)]
+    path: PathBuf,
+}
+
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
     path: PathBuf,
@@ -1979,7 +1985,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
-            recording::RecordingEvent
+            recording::RecordingEvent,
+            RecordingDeleted
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()

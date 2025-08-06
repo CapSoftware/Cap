@@ -523,6 +523,7 @@ import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -797,22 +798,9 @@ function MicrophoneSelect(props: {
     });
   };
 
-  // Create a single event listener using onMount
-  onMount(() => {
-    const listener = (event: Event) => {
-      const dbs = (event as CustomEvent<number>).detail;
-      if (!props.value) setDbs();
-      else setDbs(dbs);
-    };
-
-    events.audioInputLevelChange.listen((dbs) => {
-      if (!props.value) setDbs();
-      else setDbs(dbs.payload);
-    });
-
-    return () => {
-      window.removeEventListener("audioLevelChange", listener);
-    };
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
+    if (!props.value) setDbs();
+    else setDbs(dbs);
   });
 
   // visual audio level from 0 -> 1

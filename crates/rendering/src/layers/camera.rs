@@ -11,6 +11,7 @@ pub struct CameraLayer {
     uniforms_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     pipeline: CompositeVideoFramePipeline,
+    hidden: bool,
 }
 
 impl CameraLayer {
@@ -36,6 +37,7 @@ impl CameraLayer {
             uniforms_buffer,
             bind_group,
             pipeline,
+            hidden: false,
         }
     }
 
@@ -43,10 +45,16 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        uniforms: CompositeVideoFrameUniforms,
+        uniforms: Option<CompositeVideoFrameUniforms>,
         frame_size: XY<u32>,
         camera_frame: &DecodedFrame,
     ) {
+        self.hidden = uniforms.is_none();
+
+        let Some(uniforms) = uniforms else {
+            return;
+        };
+
         if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
         {
             self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
@@ -87,7 +95,9 @@ impl CameraLayer {
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(bind_group) = &self.bind_group {
+        if !self.hidden
+            && let Some(bind_group) = &self.bind_group
+        {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..4, 0..1);
