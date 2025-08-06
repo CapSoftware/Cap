@@ -91,7 +91,7 @@ declare global {
   const IconLucideLoaderCircle: typeof import('~icons/lucide/loader-circle.jsx')['default']
   const IconLucideMessageCircle: typeof import("~icons/lucide/message-circle.jsx")["default"]
   const IconLucideMessageSquare: typeof import("~icons/lucide/message-square.jsx")["default"]
-  const IconLucideMessageSquarePlus: typeof import("~icons/lucide/message-square-plus.jsx")["default"]
+  const IconLucideMessageSquarePlus: typeof import('~icons/lucide/message-square-plus.jsx')['default']
   const IconLucideMicOff: typeof import('~icons/lucide/mic-off.jsx')['default']
   const IconLucideMonitor: typeof import("~icons/lucide/monitor.jsx")["default"]
   const IconLucideRabbit: typeof import("~icons/lucide/rabbit.jsx")["default"]
