@@ -301,13 +301,13 @@ impl ShowCapWindow {
                             continue;
                         };
 
-                        // Check if the main window is currently focused
-                        let main_window_focused = cap_main_win.is_focused().unwrap_or(false);
+                        // If either Cap window is focused we know everything is fine.
+                        let should_refocus = cap_main_win.is_focused().unwrap_or(false) || window2.is_focused().unwrap_or(false);
 
-                        // Only do window focus logic if the main window is not focused
-                        if !main_window_focused {
+                        // If not we refocus the overlay. The Cap main window is `always_on_top` so we don't need to worry about it.
+                        if !should_refocus {
                             window2.set_focus().unwrap();
-                            println!("FIXED");
+                            println!("FIXED FOCUS");
 
                             // if let Some(hwnd) = window2.hwnd().ok() {
                                 // let hwnd = HWND(hwnd.0 as *mut _);
