@@ -113,34 +113,18 @@ impl WindowFocusManager {
             tokio::spawn(async move {
                 let app = window.app_handle();
                 loop {
-                    let cap_main = CapWindowId::Main.get(app);
-                    let cap_new_main = CapWindowId::NewMain.get(app);
-                    if cap_main.is_none() && cap_new_main.is_none() {
+                    let Some(cap_main) = CapWindowId::Main.get(app) else {
                         window.close().ok();
                         continue;
-                    }
+                    };
 
                     // If the main window is minimized or not visible, close the overlay
                     //
                     // This is a workaround for the fact that the Cap main window
                     // is minimized when opening settings, etc instead of it being
                     // closed.
-                    if cap_main
-                        .as_ref()
-                        .and_then(|v| v.is_minimized().ok())
-                        .unwrap_or_default()
-                        || cap_new_main
-                            .as_ref()
-                            .and_then(|v| v.is_minimized().ok())
-                            .unwrap_or_default()
-                        || cap_main
-                            .as_ref()
-                            .and_then(|v| v.is_visible().map(|v| !v).ok())
-                            .unwrap_or_default()
-                        || cap_new_main
-                            .as_ref()
-                            .and_then(|v| v.is_visible().map(|v| !v).ok())
-                            .unwrap_or_default()
+                    if cap_main.is_minimized().ok().unwrap_or_default()
+                        || cap_main.is_visible().map(|v| !v).ok().unwrap_or_default()
                     {
                         window.close().ok();
                         break;
@@ -151,9 +135,6 @@ impl WindowFocusManager {
                         let should_refocus = cap_main
                             .and_then(|w| w.is_focused().ok())
                             .unwrap_or_default()
-                            || cap_new_main
-                                .and_then(|w| w.is_focused().ok())
-                                .unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
                         // If a Cap window is not focused we know something is trying to steal the focus.

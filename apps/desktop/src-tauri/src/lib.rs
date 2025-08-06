@@ -2141,11 +2141,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     } else {
                         println!("Permissions granted, showing main window");
 
-                        if FLAGS.new_recording_flow {
-                            let _ = ShowCapWindow::NewMain.show(&app).await;
-                        } else {
-                            let _ = ShowCapWindow::Main.show(&app).await;
-                        }
+                        let _ = ShowCapWindow::Main.show(&app).await;
                     }
                 }
             });
@@ -2279,11 +2275,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 } else {
                     let handle = handle.clone();
                     let _ = tokio::spawn(async move {
-                        if FLAGS.new_recording_flow {
-                            let _ = ShowCapWindow::NewMain.show(&handle).await;
-                        } else {
-                            let _ = ShowCapWindow::Main.show(&handle).await;
-                        }
+                        let _ = ShowCapWindow::Main.show(&handle).await;
                     });
                 }
             }

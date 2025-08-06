@@ -32,7 +32,6 @@ pub enum CapWindowId {
     // Contains onboarding + permissions
     Setup,
     Main,
-    NewMain,
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
@@ -53,7 +52,6 @@ impl FromStr for CapWindowId {
         Ok(match s {
             "setup" => Self::Setup,
             "main" => Self::Main,
-            "new-main" => Self::NewMain,
             "settings" => Self::Settings,
             "camera" => Self::Camera,
             "capture-area" => Self::CaptureArea,
@@ -90,7 +88,6 @@ impl std::fmt::Display for CapWindowId {
         match self {
             Self::Setup => write!(f, "setup"),
             Self::Main => write!(f, "main"),
-            Self::NewMain => write!(f, "new-main"),
             Self::Settings => write!(f, "settings"),
             Self::Camera => write!(f, "camera"),
             Self::WindowCaptureOccluder { screen_id } => {
@@ -179,7 +176,6 @@ impl CapWindowId {
 pub enum ShowCapWindow {
     Setup,
     Main,
-    NewMain,
     Settings { page: Option<String> },
     Editor { project_path: PathBuf },
     RecordingsOverlay,
@@ -227,22 +223,15 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    self.window_builder(app, "/")
-                        .resizable(false)
-                        .maximized(false)
-                        .maximizable(false)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .center()
-                        .build()?
-                } else {
-                    Box::pin(Self::Setup.show(app)).await?
-                }
-            }
-            Self::NewMain => {
-                if permissions::do_permissions_check(false).necessary_granted() {
                     let window = self
-                        .window_builder(app, "/new-main")
+                        .window_builder(
+                            app,
+                            if FLAGS.new_recording_flow {
+                                "/new-main"
+                            } else {
+                                "/"
+                            },
+                        )
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
@@ -251,8 +240,8 @@ impl ShowCapWindow {
                         .center()
                         .build()?;
 
-                    #[cfg(target_os = "macos")]
-                    {
+                    if FLAGS.new_recording_flow {
+                        #[cfg(target_os = "macos")]
                         crate::platform::set_window_level(window.as_ref().window(), 50);
                     }
 
@@ -629,7 +618,6 @@ impl ShowCapWindow {
         match self {
             ShowCapWindow::Setup => CapWindowId::Setup,
             ShowCapWindow::Main => CapWindowId::Main,
-            ShowCapWindow::NewMain => CapWindowId::NewMain,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
             ShowCapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();
