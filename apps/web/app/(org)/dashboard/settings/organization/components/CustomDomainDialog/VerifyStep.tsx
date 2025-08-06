@@ -30,7 +30,14 @@ export const VerifyStep = ({
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
 
+  // Determine if domain is a subdomain on the frontend
   const isSubdomain = domain.split('.').length > 2;
+
+  // Get the recommended values from Vercel's response
+  const recommendedCname = domainConfig?.recommendedCNAME?.[0]?.value;
+  const recommendedARecord = domainConfig?.requiredAValue;
+  const currentCnames = domainConfig?.cnames || [];
+  const currentAValues = domainConfig?.currentAValues || [];
 
   const handleCopy = async (text: string, field: "name" | "value") => {
     try {
@@ -159,7 +166,7 @@ export const VerifyStep = ({
           )}
 
           {/* A Record Configuration - for full domains */}
-          {!domainConfig.verification?.[0] && domainConfig.requiredAValue && !isSubdomain && (
+          {!domainConfig.verification?.[0] && recommendedARecord && !isSubdomain && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
@@ -171,22 +178,22 @@ export const VerifyStep = ({
               </div>
               <div className="px-4 py-3">
                 <dl className="grid gap-4">
-                  {domainConfig.currentAValues && domainConfig.currentAValues.length > 0 && (
+                  {currentAValues && currentAValues.length > 0 && (
                     <div className="grid grid-cols-[100px,1fr] items-center">
                       <dt className="text-sm font-medium text-gray-12">Current</dt>
                       <dd className="space-y-1.5 text-sm text-gray-10">
-                        {domainConfig.currentAValues.map((value, index) => (
+                        {currentAValues.map((value, index) => (
                           <div
                             key={index}
                             className={clsx(
-                              value === domainConfig.requiredAValue
+                              value === recommendedARecord
                                 ? "flex items-center gap-2 text-green-300"
                                 : "flex items-center gap-2 text-red-200"
                             )}
                           >
                             <code
                               className={clsx(
-                                value === domainConfig.requiredAValue
+                                value === recommendedARecord
                                   ? "px-2 py-1 rounded-lg bg-green-900"
                                   : "px-2 py-1 rounded-lg bg-red-900",
                                 "text-xs"
@@ -194,7 +201,7 @@ export const VerifyStep = ({
                             >
                               {value}
                             </code>
-                            {value === domainConfig.requiredAValue && (
+                            {value === recommendedARecord && (
                               <span className="text-xs text-green-600">(Correct)</span>
                             )}
                           </div>
@@ -215,15 +222,12 @@ export const VerifyStep = ({
                     <dd className="flex gap-2 items-center text-sm text-gray-10">
                       <div className="flex items-center justify-between gap-1.5 bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
                         <code className="text-xs text-gray-10">
-                          {domainConfig.requiredAValue || "Loading..."}
+                          {recommendedARecord || "Loading..."}
                         </code>
-                        {domainConfig.requiredAValue && (
+                        {recommendedARecord && (
                           <button
                             type="button"
-                            onClick={() =>
-                              domainConfig.requiredAValue &&
-                              handleCopy(domainConfig.requiredAValue, "value")
-                            }
+                            onClick={() => handleCopy(recommendedARecord, "value")}
                             className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                             title="Copy to clipboard"
                           >
@@ -243,7 +247,7 @@ export const VerifyStep = ({
           )}
 
           {/* CNAME Record Configuration - for subdomains */}
-          {!domainConfig.verification?.[0] && domainConfig.requiredCnameValue && isSubdomain && (
+          {!domainConfig.verification?.[0] && recommendedCname && isSubdomain && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
@@ -255,31 +259,34 @@ export const VerifyStep = ({
               </div>
               <div className="px-4 py-3">
                 <dl className="grid gap-4">
-                  {domainConfig.currentCnameValue && (
+                  {currentCnames.length > 0 && (
                     <div className="grid grid-cols-[100px,1fr] items-center">
                       <dt className="text-sm font-medium text-gray-12">Current</dt>
                       <dd className="space-y-1.5 text-sm text-gray-10">
-                        <div
-                          className={clsx(
-                            domainConfig.currentCnameValue === domainConfig.requiredCnameValue
-                              ? "flex items-center gap-2 text-green-300"
-                              : "flex items-center gap-2 text-red-200"
-                          )}
-                        >
-                          <code
+                        {currentCnames.map((value, index) => (
+                          <div
+                            key={index}
                             className={clsx(
-                              domainConfig.currentCnameValue === domainConfig.requiredCnameValue
-                                ? "px-2 py-1 rounded-lg bg-green-900"
-                                : "px-2 py-1 rounded-lg bg-red-900",
-                              "text-xs"
+                              value === recommendedCname
+                                ? "flex items-center gap-2 text-green-300"
+                                : "flex items-center gap-2 text-red-200"
                             )}
                           >
-                            {domainConfig.currentCnameValue}
-                          </code>
-                          {domainConfig.currentCnameValue === domainConfig.requiredCnameValue && (
-                            <span className="text-xs text-green-600">(Correct)</span>
-                          )}
-                        </div>
+                            <code
+                              className={clsx(
+                                value === recommendedCname
+                                  ? "px-2 py-1 rounded-lg bg-green-900"
+                                  : "px-2 py-1 rounded-lg bg-red-900",
+                                "text-xs"
+                              )}
+                            >
+                              {value}
+                            </code>
+                            {value === recommendedCname && (
+                              <span className="text-xs text-green-600">(Correct)</span>
+                            )}
+                          </div>
+                        ))}
                       </dd>
                     </div>
                   )}
@@ -300,15 +307,12 @@ export const VerifyStep = ({
                     <dd className="flex gap-2 items-center text-sm text-gray-10">
                       <div className="flex items-center justify-between gap-1.5 bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
                         <code className="text-xs text-gray-10">
-                          {domainConfig.requiredCnameValue || "Loading..."}
+                          {recommendedCname || "Loading..."}
                         </code>
-                        {domainConfig.requiredCnameValue && (
+                        {recommendedCname && (
                           <button
                             type="button"
-                            onClick={() =>
-                              domainConfig.requiredCnameValue &&
-                              handleCopy(domainConfig.requiredCnameValue, "value")
-                            }
+                            onClick={() => handleCopy(recommendedCname, "value")}
                             className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                             title="Copy to clipboard"
                           >

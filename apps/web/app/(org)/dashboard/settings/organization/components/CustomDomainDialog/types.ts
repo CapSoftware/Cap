@@ -1,7 +1,7 @@
 export enum StepStatus {
-  PENDING = 'pending',
-  CURRENT = 'current',
-  COMPLETED = 'completed'
+  PENDING = "pending",
+  CURRENT = "current",
+  COMPLETED = "completed",
 }
 
 export interface StepConfig {
@@ -18,12 +18,12 @@ export interface StepState {
 }
 
 export type StepAction =
-  | { type: 'NEXT_STEP' }
-  | { type: 'PREV_STEP' }
-  | { type: 'GO_TO_STEP'; payload: number }
-  | { type: 'SET_ERROR'; payload: { stepId: string; error: string } }
-  | { type: 'CLEAR_ERROR'; payload: string }
-  | { type: 'RESET' };
+  | { type: "NEXT_STEP" }
+  | { type: "PREV_STEP" }
+  | { type: "GO_TO_STEP"; payload: number }
+  | { type: "SET_ERROR"; payload: { stepId: string; error: string } }
+  | { type: "CLEAR_ERROR"; payload: string }
+  | { type: "RESET" };
 
 export type DomainVerification = {
   type: string;
@@ -45,4 +45,7 @@ export type DomainConfig = {
   currentCnameValue?: string;
   requiredCnameValue?: string;
   isSubdomain?: boolean;
+  recommendedCNAME?: Array<{ rank: number; value: string }>;
+  recommendedIPv4?: Array<{ rank: number; value: string[] | string }>;
+  cnames?: string[];
 };
