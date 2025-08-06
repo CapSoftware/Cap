@@ -1,5 +1,13 @@
-import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "@effect/platform";
+import {
+  HttpApi,
+  HttpApiEndpoint,
+  HttpApiError,
+  HttpApiGroup,
+  HttpApiMiddleware,
+  HttpServerError,
+} from "@effect/platform";
 import * as Schema from "effect/Schema";
+import { Context, Data } from "effect";
 
 const TranscriptionStatus = Schema.Literal("PROCESSING", "COMPLETE", "ERROR");
 const OSType = Schema.Literal("macos", "windows");
@@ -39,6 +47,25 @@ const ChangelogResponse = Schema.Struct({
 const AuthHeaders = Schema.Struct({
   authorization: Schema.String,
 });
+
+export class User extends Data.Class<{
+  id: string;
+  email: string;
+  stripeSubscriptionStatus: string;
+  thirdPartyStripeSubscriptionId: string | null;
+  stripeSubscriptionId: string | null;
+  stripeCustomerId: string | null;
+}> {}
+
+export class Authentication extends Context.Tag("Authentication")<
+  Authentication,
+  { user: User }
+>() {}
+
+export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()(
+  "Authentication",
+  { provides: Authentication }
+) {}
 
 export class ApiContract extends HttpApi.make("cap-web-api")
   .add(
@@ -160,6 +187,7 @@ export class ApiContract extends HttpApi.make("cap-web-api")
           .addError(Schema.Struct({ message: Schema.String }), { status: 500 })
       )
   )
+  .addError(HttpApiError.InternalServerError)
   .prefix("/api") {}
 
 export class LicenseApiContract extends HttpApi.make("cap-license-api").add(

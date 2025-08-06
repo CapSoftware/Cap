@@ -35,5 +35,8 @@
   "name": "cap",
   "engines": {
     "node": "20"
+  },
+  "dependencies": {
+    "@effect/language-service": "^0.34.0"
   }
 }
