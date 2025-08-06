@@ -1,13 +1,12 @@
-use crate::{
-    data::{FFPacket, FFVideo, VideoInfo},
-    MediaError,
-};
+use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
+    Dictionary,
     codec::{codec::Codec, context, encoder},
     format::{self},
+    frame,
     threading::Config,
-    Dictionary,
 };
+use tracing::{debug, error};
 
 pub struct H264EncoderBuilder {
     name: &'static str,
@@ -21,6 +20,16 @@ pub enum H264Preset {
     Slow,
     Medium,
     Ultrafast,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum H264EncoderError {
+    #[error("FFmpeg/{0}")]
+    FFmpeg(#[from] ffmpeg::Error),
+    #[error("Codec not found")]
+    CodecNotFound,
+    #[error("Pixel format {0:?} not supported")]
+    PixFmtNotSupported(Pixel),
 }
 
 impl H264EncoderBuilder {
@@ -45,9 +54,13 @@ impl H264EncoderBuilder {
         self
     }
 
-    pub fn build(self, output: &mut format::context::Output) -> Result<H264Encoder, MediaError> {
+    pub fn build(
+        self,
+        output: &mut format::context::Output,
+    ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = &self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)?;
+        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
+            .ok_or(H264EncoderError::CodecNotFound)?;
 
         let (format, converter) = if !codec
             .video()
@@ -57,10 +70,9 @@ impl H264EncoderBuilder {
             .any(|f| f == input_config.pixel_format)
         {
             let format = ffmpeg::format::Pixel::NV12;
-            tracing::debug!(
+            debug!(
                 "Converting from {:?} to {:?} for H264 encoding",
-                input_config.pixel_format,
-                format
+                input_config.pixel_format, format
             );
             (
                 format,
@@ -71,12 +83,11 @@ impl H264EncoderBuilder {
                         format,
                     )
                     .map_err(|e| {
-                        tracing::error!(
+                        error!(
                             "Failed to create converter from {:?} to NV12: {:?}",
-                            input_config.pixel_format,
-                            e
+                            input_config.pixel_format, e
                         );
-                        MediaError::Any("Failed to create frame converter".into())
+                        H264EncoderError::PixFmtNotSupported(input_config.pixel_format)
                     })?,
                 ),
             )
@@ -120,7 +131,7 @@ impl H264EncoderBuilder {
             stream_index,
             config: self.input_config,
             converter,
-            packet: FFPacket::empty(),
+            packet: ffmpeg::Packet::empty(),
         })
     }
 }
@@ -139,9 +150,9 @@ impl H264Encoder {
         H264EncoderBuilder::new(name, input_config)
     }
 
-    pub fn queue_frame(&mut self, frame: FFVideo, output: &mut format::context::Output) {
+    pub fn queue_frame(&mut self, frame: frame::Video, output: &mut format::context::Output) {
         let frame = if let Some(converter) = &mut self.converter {
-            let mut new_frame = FFVideo::empty();
+            let mut new_frame = frame::Video::empty();
             match converter.run(&frame, &mut new_frame) {
                 Ok(_) => {
                     new_frame.set_pts(frame.pts());
@@ -192,10 +203,7 @@ impl H264Encoder {
     }
 }
 
-fn get_codec_and_options(
-    config: &VideoInfo,
-    preset: H264Preset,
-) -> Result<(Codec, Dictionary), MediaError> {
+fn get_codec_and_options(config: &VideoInfo, preset: H264Preset) -> Option<(Codec, Dictionary)> {
     let encoder_name = {
         if cfg!(target_os = "macos") {
             "libx264"
@@ -236,10 +244,10 @@ fn get_codec_and_options(
             options.set("quality", "1");
         }
 
-        return Ok((codec, options));
+        return Some((codec, options));
     }
 
-    Err(MediaError::MissingCodec("H264 video"))
+    None
 }
 
 fn get_bitrate(width: u32, height: u32, frame_rate: f32, bpp: f32) -> usize {

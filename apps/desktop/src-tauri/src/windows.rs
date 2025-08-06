@@ -539,7 +539,7 @@ impl ShowCapWindow {
             }
         }
 
-        #[cfg(target_os = "windows")]
+        #[cfg(windows)]
         {
             builder = builder.decorations(false);
         }

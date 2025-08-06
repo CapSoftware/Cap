@@ -6,14 +6,14 @@ use std::{
 };
 
 use cap_media::{
-    data::VideoInfo,
-    encoders::{H264Encoder, MP4File, OggFile, OpusEncoder},
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
     MediaError,
 };
+use cap_media_encoders::{H264Encoder, MP4File, OggFile, OpusEncoder};
+use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
 use flume::Receiver;
@@ -525,6 +525,7 @@ async fn stop_recording(
                                 image_path: RelativePathBuf::from("content/cursors")
                                     .join(&cursor.file_name),
                                 hotspot: cursor.hotspot,
+                                shape: cursor.shape,
                             },
                         )
                     })
@@ -715,7 +716,8 @@ async fn create_segment_pipeline(
         let mut mic_encoder = OggFile::init(
             output_path.clone(),
             OpusEncoder::factory("microphone", mic_config),
-        )?;
+        )
+        .map_err(|e| MediaError::Any(e.to_string().into()))?;
 
         pipeline_builder.spawn_source("microphone_capture", mic_source);
 
@@ -757,7 +759,8 @@ async fn create_segment_pipeline(
         let mut system_audio_encoder = OggFile::init(
             output_path.clone(),
             OpusEncoder::factory("system_audio", config),
-        )?;
+        )
+        .map_err(|e| MediaError::Any(e.to_string().into()))?;
 
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
@@ -797,7 +800,7 @@ async fn create_segment_pipeline(
             |o| H264Encoder::builder("camera", camera_config).build(o),
             |_| None,
         )
-        .map_err(|e| RecordingError::Media(e.into()))?;
+        .map_err(|e| MediaError::Any(e.to_string().into()))?;
 
         pipeline_builder.spawn_source("camera_capture", camera_source);
 

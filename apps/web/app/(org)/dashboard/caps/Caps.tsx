@@ -19,7 +19,7 @@ import Folder from "./components/Folder";
 import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
 import { useUploadingContext } from "./UploadingContext";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 
 export type VideoData = {
   id: string;
@@ -79,7 +79,7 @@ export const Caps = ({
 
   const anyCapSelected = selectedCaps.length > 0;
 
-  const { data: analyticsData } = useSuspenseQuery({
+  const { data: analyticsData } = useQuery({
     queryKey: ['analytics', data.map(video => video.id)],
     queryFn: async () => {
       if (!dubApiKeyEnabled || data.length === 0) {

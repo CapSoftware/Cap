@@ -1,5 +1,6 @@
+use cap_media_info::{AudioInfo, PlanarData, RawVideoFormat, VideoInfo};
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::format::Sample;
+use ffmpeg::{format::Sample, frame};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
@@ -16,7 +17,6 @@ use tracing::{debug, error, info, trace, warn};
 use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
-    data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
     platform::{self, logical_monitor_bounds, Bounds, Window},
     MediaError,
@@ -146,7 +146,7 @@ pub trait ScreenCaptureFormat {
 }
 
 impl ScreenCaptureFormat for AVFrameCapture {
-    type VideoFormat = FFVideo;
+    type VideoFormat = ffmpeg::frame::Video;
 
     fn audio_info() -> AudioInfo {
         let host = cpal::default_host();
@@ -459,7 +459,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         mut clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -528,8 +528,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         return ControlFlow::Continue(());
                     };
 
-                    let mut buffer =
-                        FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
+                    let mut buffer = frame::Video::new(
+                        video_info.pixel_format,
+                        video_info.width,
+                        video_info.height,
+                    );
 
                     let bytes_per_pixel = 4;
                     let width_in_bytes = frame.width as usize * bytes_per_pixel;
@@ -575,8 +578,9 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     let now = Instant::now();
                     let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
                         Err(flume::TrySendError::Disconnected(_)) => {
-                            error!("Pipeline is unreachable. Shutting down recording.");
-                            return ControlFlow::Break(());
+                            return ControlFlow::Break(Err(
+                                "Pipeline is unreachable. Shutting down recording".to_string(),
+                            ));
                         }
                         Err(flume::TrySendError::Full(_)) => {
                             warn!("Screen capture sender is full, dropping frame");
@@ -605,8 +609,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                             total_count,
                             window_duration.as_secs()
                         );
-                        panic!("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.");
-                        return ControlFlow::Break(());
+                        return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
                     }
 
                     // Periodic logging of drop rate
@@ -639,10 +642,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     ControlFlow::Continue(())
                 }
                 Ok(_) => panic!("Unsupported video format"),
-                Err(error) => {
-                    error!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }
@@ -652,8 +652,8 @@ fn inner<T: ScreenCaptureFormat>(
     source: &mut ScreenCaptureSource<T>,
     ready_signal: crate::pipeline::task::PipelineReadySignal,
     mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<()>,
-) {
+    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<Result<(), String>>,
+) -> Result<(), String> {
     trace!("Preparing screen capture source thread...");
 
     let maybe_capture_window_id = match &source.target {
@@ -666,7 +666,7 @@ fn inner<T: ScreenCaptureFormat>(
         Err(e) => {
             error!("Failed to build capturer: {e}");
             let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer".into())));
-            return;
+            return Err(e.to_string());
         }
     };
 
@@ -699,9 +699,14 @@ fn inner<T: ScreenCaptureFormat>(
                 }
 
                 match get_frame(&mut capturer) {
-                    ControlFlow::Break(_) => {
+                    ControlFlow::Break(res) => {
                         warn!("breaking from loop");
-                        break;
+
+                        if let Err(e) = &res {
+                            error!("Capture loop broke with error: {}", e)
+                        }
+
+                        return res;
                     }
                     ControlFlow::Continue(_) => {
                         continue;
@@ -712,6 +717,7 @@ fn inner<T: ScreenCaptureFormat>(
     }
 
     info!("Shut down screen capture source thread.");
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -740,7 +746,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
@@ -827,6 +833,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             frame.set_rate(48_000);
                             let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                             for i in 0..frame.planes() {
+                                use cap_media_info::PlanarData;
+
                                 frame.plane_data_mut(i).copy_from_slice(
                                     &slice[i * data_bytes_size as usize
                                         ..(i + 1) * data_bytes_size as usize],
@@ -842,10 +850,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     ControlFlow::Continue(())
                 }
-                Err(error) => {
-                    eprintln!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }

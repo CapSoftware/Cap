@@ -13,6 +13,9 @@ cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
 cap-displays = { path = "../displays" }
 cap-cursor-capture = { path = "../cursor-capture" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
+cap-cursor-info = { path = "../cursor-info" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -32,12 +35,15 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 relative-path = "1.9.3"
 futures = "0.3.31"
 tokio-util = "0.7.15"
+sha2 = "0.10.9"
+hex = "0.4.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
 cidre = { workspace = true }
+objc2-app-kit = "0.3.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [

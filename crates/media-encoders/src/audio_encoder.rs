@@ -1,6 +1,4 @@
-use ffmpeg::format;
-
-use crate::data::FFAudio;
+use ffmpeg::{format, frame};
 
 pub trait AudioEncoder {
     fn boxed(self) -> Box<dyn AudioEncoder + Send + 'static>
@@ -10,6 +8,6 @@ pub trait AudioEncoder {
         Box::new(self)
     }
 
-    fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output);
+    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output);
     fn finish(&mut self, output: &mut format::context::Output);
 }

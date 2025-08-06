@@ -11,6 +11,7 @@ cap-media = { path = "../media" }
 cap-project = { path = "../project" }
 cap-rendering = { path = "../rendering" }
 cap-audio = { path = "../audio" }
+cap-media-info = { path = "../media-info" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true

@@ -32,7 +32,9 @@ use cap_media::platform::Bounds;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
+};
 use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -42,7 +44,7 @@ use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use recording::InProgressRecording;
+use recording::{InProgressRecording, StartRecordingInputs};
 use relative_path::RelativePathBuf;
 
 use scap::capturer::Capturer;
@@ -85,6 +87,12 @@ use windows::EditorWindowIds;
 use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
+pub enum RecordingState {
+    None,
+    Pending,
+    Active(InProgressRecording),
+}
+
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
@@ -104,7 +112,7 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<InProgressRecording>,
+    recording_state: RecordingState,
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
     server_url: String,
@@ -140,16 +148,27 @@ pub struct VideoUploadInfo {
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        self.current_recording = Some(actor);
+    pub fn set_pending_recording(&mut self) {
+        self.recording_state = RecordingState::Pending;
+        CurrentRecordingChanged.emit(&self.handle).ok();
+    }
 
+    pub fn set_current_recording(&mut self, actor: InProgressRecording) {
+        self.recording_state = RecordingState::Active(actor);
         CurrentRecordingChanged.emit(&self.handle).ok();
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
-        self.close_occluder_windows();
-
-        self.current_recording.take()
+        match std::mem::replace(&mut self.recording_state, RecordingState::None) {
+            RecordingState::Active(recording) => {
+                self.close_occluder_windows();
+                Some(recording)
+            }
+            _ => {
+                self.close_occluder_windows();
+                None
+            }
+        }
     }
 
     fn close_occluder_windows(&self) {
@@ -174,6 +193,24 @@ impl App {
             .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
 
         Ok(())
+    }
+
+    pub fn current_recording(&self) -> Option<&InProgressRecording> {
+        match &self.recording_state {
+            RecordingState::Active(recording) => Some(recording),
+            _ => None,
+        }
+    }
+
+    pub fn current_recording_mut(&mut self) -> Option<&mut InProgressRecording> {
+        match &mut self.recording_state {
+            RecordingState::Active(recording) => Some(recording),
+            _ => None,
+        }
+    }
+
+    pub fn is_recording_active_or_pending(&self) -> bool {
+        !matches!(self.recording_state, RecordingState::None)
     }
 }
 
@@ -310,6 +347,12 @@ pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingDeleted {
+    #[allow(unused)]
+    path: PathBuf,
+}
+
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewScreenshotAdded {
     path: PathBuf,
@@ -389,7 +432,7 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
+    Ok(JsonValue::new(&state.current_recording().map(|r| {
         let bounds = r.bounds();
 
         let target = match r.capture_target() {
@@ -1021,6 +1064,19 @@ async fn set_project_config(
     editor_instance.project_config.0.send(config).ok();
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn generate_zoom_segments_from_clicks(
+    editor_instance: WindowEditorInstance,
+) -> Result<Vec<ZoomSegment>, String> {
+    let meta = editor_instance.meta();
+    let recordings = &editor_instance.recordings;
+
+    let zoom_segments = recording::generate_zoom_segments_for_project(meta, recordings);
+
+    Ok(zoom_segments)
 }
 
 #[tauri::command]
@@ -1870,6 +1926,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -1928,7 +1985,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
-            recording::RecordingEvent
+            recording::RecordingEvent,
+            RecordingDeleted
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2041,7 +2099,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_feed_initialization: None,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
-                    current_recording: None,
+                    recording_state: RecordingState::None,
                     recording_logging_handle,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
@@ -2130,7 +2188,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let state = app.state::<Arc<RwLock<App>>>();
                                     let app_state = &mut *state.write().await;
 
-                                    if app_state.current_recording.is_none() {
+                                    if !app_state.is_recording_active_or_pending() {
                                         app_state.mic_feed.take();
                                         app_state.camera_feed.take();
 

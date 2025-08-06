@@ -5,12 +5,11 @@ use cap_project::{
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
-use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
-use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
+use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
+use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
-use futures::future::OptionFuture;
 use futures::FutureExt;
-use image::GenericImageView;
+use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
 };
@@ -19,6 +18,7 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
+use tracing::error;
 
 mod composite_frame;
 mod coord;
@@ -293,26 +293,22 @@ pub fn get_duration(
     }
 }
 
-pub struct CursorTexture {
-    inner: wgpu::Texture,
-    hotspot: XY<f32>,
-}
-
 pub struct RenderVideoConstants {
     pub _instance: wgpu::Instance,
     pub _adapter: wgpu::Adapter,
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub cursor_textures: HashMap<String, CursorTexture>,
-    background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    pub meta: StudioRecordingMeta,
+    pub recording_meta: RecordingMeta,
+    pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
 impl RenderVideoConstants {
     pub async fn new(
         segments: &[SegmentRecordings],
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         let options = RenderOptions {
             screen_size: XY::new(segments[0].display.width, segments[0].display.height),
@@ -334,7 +330,6 @@ impl RenderVideoConstants {
             })
             .await?;
 
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, recording_meta, meta);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -343,94 +338,10 @@ impl RenderVideoConstants {
             device,
             queue,
             options,
-            cursor_textures,
             background_textures,
+            meta,
+            recording_meta,
         })
-    }
-
-    fn load_cursor_textures(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
-    ) -> HashMap<String, CursorTexture> {
-        let mut textures = HashMap::new();
-
-        let cursor_images = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.cursor_images(recording_meta).unwrap_or_default()
-            }
-        };
-
-        for (cursor_id, cursor) in &cursor_images.0 {
-            if !cursor.path.exists() {
-                continue;
-            }
-
-            match image::open(&cursor.path) {
-                Ok(img) => {
-                    let dimensions = img.dimensions();
-
-                    let rgba = img.into_rgba8();
-
-                    // Create the texture
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&format!("Cursor Texture {}", cursor_id)),
-                        size: wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &rgba,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(4 * dimensions.0),
-                            rows_per_image: None,
-                        },
-                        wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    textures.insert(
-                        cursor_id.clone(),
-                        CursorTexture {
-                            inner: texture,
-                            hotspot: cursor.hotspot.map(|v| v as f32),
-                        },
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "Failed to load cursor image {}: {}",
-                        cursor.path.display(),
-                        e
-                    );
-                    // Don't return error, just skip this cursor image
-                    continue;
-                }
-            }
-        }
-
-        textures
     }
 }
 
@@ -958,15 +869,13 @@ impl RendererLayers {
             constants,
         );
 
-        if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
-            constants.options.camera_size,
-            &segment_frames.camera_frame,
-            &uniforms.camera,
-        ) {
+        if let (Some(camera_size), Some(camera_frame)) =
+            (constants.options.camera_size, &segment_frames.camera_frame)
+        {
             self.camera.prepare(
                 &constants.device,
                 &constants.queue,
-                *uniforms,
+                uniforms.camera,
                 camera_size,
                 camera_frame,
             );
@@ -996,7 +905,7 @@ impl RendererLayers {
                     label: Some("Render Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: $view,
-                        depth_slice: None,
+                        // depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: $load,
@@ -1266,9 +1175,5 @@ fn srgb_to_linear(c: u16) -> f32 {
 }
 
 fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left {
-        a
-    } else {
-        b
-    }
+    if left { a } else { b }
 }

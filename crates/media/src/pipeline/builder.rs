@@ -1,17 +1,16 @@
 use flume::Receiver;
-use futures::pin_mut;
 use indexmap::IndexMap;
 use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
 use tokio::sync::oneshot;
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 use crate::pipeline::{
     clock::CloneFrom,
     control::ControlBroadcast,
-    task::{PipelineReadySignal, PipelineSinkTask, PipelineSourceTask},
+    task::{PipelineReadySignal, PipelineSourceTask},
     MediaError, Pipeline, PipelineClock,
 };
 
@@ -36,27 +35,6 @@ impl<T> PipelineBuilder<T> {
         }
     }
 
-    pub fn source<O: Send + 'static, C: CloneFrom<T> + Send + 'static>(
-        mut self,
-        name: impl Into<String>,
-        mut task: impl PipelineSourceTask<Clock = C> + 'static,
-    ) -> PipelinePathBuilder<T, O> {
-        let name = name.into();
-        let (output, next_input) = flume::bounded(task.queue_size());
-        let clock = C::clone_from(&self.clock);
-        let control_signal = self.control.add_listener(name.clone());
-
-        self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal);
-            Ok(())
-        });
-
-        PipelinePathBuilder {
-            pipeline: self,
-            next_input,
-        }
-    }
-
     pub fn spawn_source<C: CloneFrom<T> + Send + 'static>(
         &mut self,
         name: impl Into<String>,
@@ -67,8 +45,7 @@ impl<T> PipelineBuilder<T> {
         let control_signal = self.control.add_listener(name.clone());
 
         self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal);
-            Ok(())
+            task.run(clock, ready_signal, control_signal)
         });
     }
 

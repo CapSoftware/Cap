@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cap_media::encoders::GifEncoderWrapper;
+use cap_media_encoders::GifEncoderWrapper;
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;

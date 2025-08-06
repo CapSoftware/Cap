@@ -101,6 +101,9 @@ async setPlayheadPosition(frameNumber: number) : Promise<null> {
 async setProjectConfig(config: ProjectConfiguration) : Promise<null> {
     return await TAURI_INVOKE("set_project_config", { config });
 },
+async generateZoomSegmentsFromClicks() : Promise<ZoomSegment[]> {
+    return await TAURI_INVOKE("generate_zoom_segments_from_clicks");
+},
 async openPermissionSettings(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("open_permission_settings", { permission });
 },
@@ -262,6 +265,7 @@ editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
 newStudioRecordingAdded: NewStudioRecordingAdded,
+recordingDeleted: RecordingDeleted,
 recordingEvent: RecordingEvent,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
@@ -280,6 +284,7 @@ editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
 newStudioRecordingAdded: "new-studio-recording-added",
+recordingDeleted: "recording-deleted",
 recordingEvent: "recording-event",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
@@ -334,8 +339,8 @@ export type CurrentRecording = { target: CurrentRecordingTarget; type: Recording
 export type CurrentRecordingChanged = null
 export type CurrentRecordingTarget = { window: { id: number; bounds: Bounds } } | { screen: { id: number } } | { area: { screen: number; bounds: Bounds } }
 export type CursorAnimationStyle = "regular" | "slow" | "fast"
-export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number }
-export type CursorMeta = { imagePath: string; hotspot: XY<number> }
+export type CursorConfiguration = { hide?: boolean; hideWhenIdle: boolean; size: number; type: CursorType; animationStyle: CursorAnimationStyle; tension: number; mass: number; friction: number; raw?: boolean; motionBlur?: number; useSvg?: boolean }
+export type CursorMeta = { imagePath: string; hotspot: XY<number>; shape?: string | null }
 export type CursorType = "pointer" | "circle"
 export type Cursors = { [key in string]: string } | { [key in string]: CursorMeta }
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType }
@@ -354,7 +359,7 @@ openEditorAfterRecording?: boolean;
 /**
  * @deprecated can be removed when native camera preview is ready
  */
-enableNativeCameraPreview: boolean }
+enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean }
 export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
@@ -382,9 +387,10 @@ export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }
 export type ProjectConfiguration = { aspectRatio: AspectRatio | null; background: BackgroundConfiguration; camera: Camera; audio: AudioConfiguration; cursor: CursorConfiguration; hotkeys: HotkeysConfiguration; timeline?: TimelineConfiguration | null; captions?: CaptionsData | null }
 export type ProjectRecordingsMeta = { segments: SegmentRecordings[] }
+export type RecordingDeleted = { path: string }
 export type RecordingEvent = { variant: "Countdown"; value: number } | { variant: "Started" } | { variant: "Stopped" } | { variant: "Failed"; error: string }
-export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
-export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
+export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null }
+export type RecordingMetaWithType = ((StudioRecordingMeta | InstantRecordingMeta) & { platform?: Platform | null; pretty_name: string; sharing?: SharingMeta | null }) & { type: RecordingType }
 export type RecordingMode = "studio" | "instant"
 export type RecordingOptionsChanged = null
 export type RecordingStarted = null
