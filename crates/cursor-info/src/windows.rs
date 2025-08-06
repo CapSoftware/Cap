@@ -157,25 +157,25 @@ impl CursorShapeWindows {
 mod windows {
     use super::*;
     use std::{collections::HashMap, sync::OnceLock};
-    use windows::{
+    use ::windows::{
         Win32::UI::WindowsAndMessaging::{
             IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
             IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-            IDC_UPARROW, IDC_WAIT, LoadCursorW,
+            IDC_UPARROW, IDC_WAIT, LoadCursorW, HCURSOR,
         },
         core::PCWSTR,
     };
 
-    static CURSOR_CACHE: OnceLock<HashMap<*mut std::ffi::c_void, CursorShapeWindows>> =
+    static CURSOR_CACHE: OnceLock<HashMap<usize, CursorShapeWindows>> =
         OnceLock::new();
 
-    fn get_cursor_cache() -> &'static HashMap<*mut std::ffi::c_void, CursorShapeWindows> {
+    fn get_cursor_cache() -> &'static HashMap<usize, CursorShapeWindows> {
         CURSOR_CACHE.get_or_init(|| {
             #[inline]
-            fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
-                unsafe { LoadCursorW(None, lpcursorname) }
-                    .expect("Failed to load default system cursors")
-                    .0
+            fn load_cursor(lpcursorname: PCWSTR) -> usize {
+                let cursor = unsafe { LoadCursorW(None, lpcursorname) }
+                    .expect("Failed to load default system cursors");
+                cursor.0 as usize
             }
 
             let mut cursors = HashMap::new();
@@ -257,7 +257,7 @@ mod windows {
         type Error = ();
 
         fn try_from(cursor: &HCURSOR) -> Result<Self, Self::Error> {
-            match get_cursor_cache().get(&cursor.0) {
+            match get_cursor_cache().get(&(cursor.0 as usize)) {
                 Some(cursor_shape) => Ok(super::CursorShape::Windows(*cursor_shape)),
                 None => Err(()),
             }
