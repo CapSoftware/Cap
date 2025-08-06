@@ -42,33 +42,7 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
     tokio::spawn(async move {
         loop {
             let display = cap_displays::Display::get_containing_cursor();
-
-            let mut window = None;
-
-            #[cfg(target_os = "macos")]
-            {
-                let mut windows_with_level = cap_displays::Window::list_containing_cursor()
-                    .into_iter()
-                    .filter_map(|window| {
-                        let level = window.raw_handle().level()?;
-                        if level > 5 {
-                            return None;
-                        }
-                        Some((window, level))
-                    })
-                    .collect::<Vec<_>>();
-
-                windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
-
-                if windows_with_level.len() > 0 {
-                    window = Some(windows_with_level.swap_remove(0).0);
-                }
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                window = cap_displays::Window::get_topmost_at_cursor();
-            }
+            let window = cap_displays::Window::get_topmost_at_cursor();
 
             let _ = TargetUnderCursor {
                 display_id: display.map(|d| d.id()),

@@ -12,8 +12,8 @@ use windows::{
             PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
-            WindowFromPoint,
+            EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+            IsWindowVisible, WindowFromPoint,
         },
     },
     core::{BOOL, PWSTR},
@@ -210,14 +210,56 @@ impl WindowImpl {
             y: cursor.y() as i32,
         };
 
-        unsafe {
-            let hwnd = WindowFromPoint(point);
-            if !hwnd.is_invalid() {
-                Some(Self(hwnd))
-            } else {
-                None
-            }
+        struct HitTestData {
+            pt: POINT,
+            found: Option<HWND>,
+            current_process_id: u32,
         }
+
+        unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let data = unsafe { &mut *(lparam.0 as *mut HitTestData) };
+
+            // Skip invisible or minimized windows
+            if !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+                return TRUE;
+            }
+
+            // Skip own process windows
+            let mut process_id = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+            if process_id == data.current_process_id {
+                return TRUE;
+            }
+
+            let mut rect = RECT::default();
+            if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
+                if data.pt.x >= rect.left
+                    && data.pt.x < rect.right
+                    && data.pt.y >= rect.top
+                    && data.pt.y < rect.bottom
+                {
+                    data.found = Some(hwnd);
+                    return windows::Win32::Foundation::FALSE; // Found match, stop enumerating
+                }
+            }
+
+            TRUE
+        }
+
+        let mut data = HitTestData {
+            pt: point,
+            found: None,
+            current_process_id: unsafe { GetCurrentProcessId() },
+        };
+
+        unsafe {
+            let _ = EnumWindows(
+                Some(enum_windows_proc),
+                LPARAM(std::ptr::addr_of_mut!(data) as isize),
+            );
+        }
+
+        data.found.map(Self)
     }
 
     pub fn list_containing_cursor() -> Vec<Self> {

@@ -164,6 +164,27 @@ impl WindowImpl {
             .collect()
     }
 
+    pub fn get_topmost_at_cursor() -> Option<Self> {
+        let mut windows_with_level = Self::list_containing_cursor()
+            .into_iter()
+            .filter_map(|window| {
+                let level = window.level()?;
+                if level > 5 {
+                    return None;
+                }
+                Some((window, level))
+            })
+            .collect::<Vec<_>>();
+
+        windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
+
+        if windows_with_level.len() > 0 {
+            Some(windows_with_level.swap_remove(0).0)
+        } else {
+            None
+        }
+    }
+
     pub fn id(&self) -> WindowIdImpl {
         WindowIdImpl(self.0)
     }
