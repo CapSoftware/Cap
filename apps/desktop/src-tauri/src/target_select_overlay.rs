@@ -171,8 +171,6 @@ impl WindowFocusManager {
 
     /// Called when a window is destroyed to cleanup it's task
     pub fn destroy(&self, id: &DisplayId) {
-        println!("DO DESTROY"); // TODO
-
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.remove(&id.to_string()) {
             let _ = task.abort();

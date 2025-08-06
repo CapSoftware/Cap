@@ -109,7 +109,6 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                         } else {
                             let _ = ShowCapWindow::Main.show(&app).await;
                         }
-                        // ShowCapWindow::Main.show(&app).await
                     });
                 }
                 Ok(TrayItem::TakeScreenshot) => {
