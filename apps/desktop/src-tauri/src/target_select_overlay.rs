@@ -46,6 +46,7 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
 
             let mut window = None;
 
+            #[cfg(target_os = "macos")]
             {
                 let mut windows_with_level = windows
                     .into_iter()
@@ -63,6 +64,11 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
                 if windows_with_level.len() > 0 {
                     window = Some(windows_with_level.swap_remove(0).0);
                 }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                window = get_topmost_at_cursor();
             }
 
             let _ = TargetUnderCursor {

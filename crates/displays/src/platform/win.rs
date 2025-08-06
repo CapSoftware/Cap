@@ -13,6 +13,7 @@ use windows::{
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
+            WindowFromPoint,
         },
     },
     core::{BOOL, PWSTR},
@@ -200,6 +201,23 @@ impl WindowImpl {
         }
 
         context.list
+    }
+
+    pub fn get_topmost_at_cursor() -> Option<Self> {
+        let cursor = get_cursor_position()?;
+        let point = POINT {
+            x: cursor.x() as i32,
+            y: cursor.y() as i32,
+        };
+
+        unsafe {
+            let hwnd = WindowFromPoint(point);
+            if !hwnd.is_invalid() {
+                Some(Self(hwnd))
+            } else {
+                None
+            }
+        }
     }
 
     pub fn list_containing_cursor() -> Vec<Self> {
