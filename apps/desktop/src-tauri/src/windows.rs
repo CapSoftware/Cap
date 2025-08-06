@@ -306,18 +306,23 @@ impl ShowCapWindow {
 
                         // Only do window focus logic if the main window is not focused
                         if !main_window_focused {
-                            if let Some(hwnd) = window2.hwnd().ok() {
-                                let hwnd = HWND(hwnd.0 as *mut _);
+                            window2.set_focus().unwrap();
+                            println!("FIXED");
 
-                                unsafe {
-                                    ShowWindow(hwnd, SW_RESTORE); // Restore if minimized
-                                    BringWindowToTop(hwnd);
-                                    SetForegroundWindow(hwnd);
-                                }
-                                println!("FIXED");
-                            }
+                            // if let Some(hwnd) = window2.hwnd().ok() {
+                                // let hwnd = HWND(hwnd.0 as *mut _);
+
+
+                                // unsafe {
+                                //     ShowWindow(hwnd, SW_RESTORE); // Restore if minimized
+                                //     BringWindowToTop(hwnd);
+                                //     SetForegroundWindow(hwnd);
+                                // }
+                                // println!("FIXED");
+                            // }
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     }
                 });
 
