@@ -54,7 +54,7 @@ fn run() {
             cursor_lookup.insert(hash, name);
         }
 
-        // return;
+        return;
 
         loop {
             #[allow(deprecated)]
@@ -179,7 +179,14 @@ fn run() {
 
             // Create DIB section
             let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            let dib = CreateDIBSection(Some(mem_dc), &bitmap_info, DIB_RGB_COLORS, &mut bits, None, 0);
+            let dib = CreateDIBSection(
+                Some(mem_dc),
+                &bitmap_info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                None,
+                0,
+            );
 
             if dib.is_err() {
                 // Clean up
@@ -207,9 +214,15 @@ fn run() {
 
             // Draw the cursor onto our bitmap with transparency
             if DrawIconEx(
-                mem_dc, 0, 0, hCursor.into(), 0, // Use actual size
+                mem_dc,
+                0,
+                0,
+                hCursor.into(),
                 0, // Use actual size
-                0, None, DI_NORMAL,
+                0, // Use actual size
+                0,
+                None,
+                DI_NORMAL,
             )
             .is_err()
             {
