@@ -96,13 +96,11 @@ const stepReducer = (state: StepState, action: StepAction): StepState => {
 interface CustomDomainDialogProps {
   open: boolean;
   onClose: () => void;
-  onVerifyDomain?: () => Promise<void>;
 }
 
 const CustomDomainDialog = ({
   open,
   onClose,
-  onVerifyDomain,
 }: CustomDomainDialogProps) => {
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [domain, setDomain] = useState(
@@ -349,8 +347,8 @@ const CustomDomainDialog = ({
               domain={domain}
               domainConfig={domainConfig}
               isVerified={isVerified}
-              onVerifyDomain={onVerifyDomain}
               verifying={verifying}
+              checkVerification={checkVerification}
               onNext={handleNext}
               onPrev={handlePrev}
             />

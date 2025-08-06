@@ -13,8 +13,8 @@ interface VerifyStepProps {
   domain: string;
   domainConfig?: DomainConfig | null;
   isVerified?: boolean;
-  onVerifyDomain?: () => Promise<void>;
   verifying?: boolean;
+  checkVerification: (showToasts?: boolean) => Promise<void>;
   onNext: () => void;
   onPrev: () => void;
 }
@@ -23,7 +23,7 @@ export const VerifyStep = ({
   domain,
   domainConfig,
   isVerified,
-  onVerifyDomain,
+  checkVerification,
   verifying,
   onNext,
   onPrev
@@ -51,9 +51,8 @@ export const VerifyStep = ({
   };
 
   const handleVerifyClick = async () => {
-    if (onVerifyDomain) {
-      await onVerifyDomain();
-    }
+    await checkVerification(false);
+    onNext();
   };
 
   return (
@@ -337,9 +336,9 @@ export const VerifyStep = ({
             )}
             Check Status
           </Button>
-          {isVerified ? (
-            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-600 rounded-full">
-              <CheckCircle className="text-white opacity-70 size-3" />
+          {!isVerified ? (
+            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-900 rounded-full">
+              <CheckCircle className="text-green-200 size-3" />
               <p className="text-xs font-medium text-white">Domain verified</p>
             </div>
           ) : (
