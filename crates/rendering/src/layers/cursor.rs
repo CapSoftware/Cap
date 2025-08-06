@@ -288,72 +288,64 @@ impl CursorLayer {
         };
 
         let size = {
-            let cursor_texture_size = cursor_texture.texture.size();
-            let cursor_texture_size_aspect =
-                cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
+            let base_size_px = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
+                * uniforms.output_size.1 as f32;
 
-            let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+            let cursor_size_factor = if uniforms.cursor_size <= 0.0 {
                 100.0
             } else {
                 uniforms.cursor_size / 100.0
             };
-            let factor = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
-                * uniforms.output_size.1 as f32;
 
-            let cursor_size_constant = factor * cursor_size_percentage;
+            // 0 -> 1 indicating how much to shrink from click
+            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
+            // lerp shrink size
+            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
 
-            Coord::<FrameSpace>::new(if cursor_texture_size_aspect > 1.0 {
+            let size = base_size_px * cursor_size_factor * click_scale_factor;
+
+            let texture_size_aspect = {
+                let texture_size = cursor_texture.texture.size();
+                texture_size.width as f32 / texture_size.height as f32
+            };
+
+            Coord::<FrameSpace>::new(if texture_size_aspect > 1.0 {
                 // Wide cursor: base sizing on width to prevent excessive width
-                let width = cursor_size_constant;
-                let height = cursor_size_constant / cursor_texture_size_aspect;
+                let width = size;
+                let height = size / texture_size_aspect;
                 XY::new(width, height).into()
             } else {
                 // Tall or square cursor: base sizing on height (current behavior)
-                XY::new(
-                    cursor_size_constant * cursor_texture_size_aspect,
-                    cursor_size_constant,
-                )
-                .into()
+                XY::new(size * texture_size_aspect, size).into()
             })
         };
 
-        // Adjust position to keep cursor centered when it shrinks during clicks
-        // let size_difference = zoomed_size.coord * (1.0 - click_scale_factor as f64);
-        // let position_offset = Coord::new(size_difference / 2.0);
-        // let adjusted_position = zoomed_base_position + position_offset;
-
-        let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
-        	// lerp shrink size
-            * (1.0 - CLICK_SHRINK_SIZE)
-            + CLICK_SHRINK_SIZE;
-
-        let size = size * (1.0 - click_scale_factor as f64);
         let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
 
         // Calculate position without hotspot first
-        let base_position = interpolated_cursor.position.to_frame_space(
+        let position = interpolated_cursor.position.to_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
         ) - hotspot;
 
         // Transform to zoomed space
-        let zoomed_base_position = base_position.to_zoomed_frame_space(
+        let zoomed_position = position.to_zoomed_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
             zoom,
         );
 
-        let zoomed_size = (base_position + size).to_zoomed_frame_space(
+        let zoomed_size = (position + size).to_zoomed_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
             zoom,
-        ) - zoomed_base_position;
+        ) - zoomed_position;
 
         let uniforms = CursorUniforms {
-            position: [zoomed_base_position.x as f32, zoomed_base_position.y as f32],
+            position: [zoomed_position.x as f32, zoomed_position.y as f32],
             size: [zoomed_size.x as f32, zoomed_size.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
