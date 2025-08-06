@@ -2274,7 +2274,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     }
                 } else {
                     let handle = handle.clone();
-                    let _ = tokio::spawn(async move {
+                    tokio::spawn(async move {
                         let _ = ShowCapWindow::Main.show(&handle).await;
                     });
                 }
