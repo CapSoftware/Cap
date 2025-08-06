@@ -8,8 +8,8 @@ use windows::{
             MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
         },
         System::Threading::{
-            OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-            QueryFullProcessImageNameW,
+            GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
+            PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsWindowVisible,
@@ -164,26 +164,42 @@ pub struct WindowImpl(HWND);
 
 impl WindowImpl {
     pub fn list() -> Vec<Self> {
+        struct EnumContext {
+            list: Vec<WindowImpl>,
+            current_process_id: u32,
+        }
+
         unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-            let list = unsafe { &mut *(lparam.0 as *mut Vec<WindowImpl>) };
+            let context = unsafe { &mut *(lparam.0 as *mut EnumContext) };
 
             // Only include visible windows
             if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-                list.push(WindowImpl(hwnd));
+                // Get the process ID of this window
+                let mut process_id = 0u32;
+                unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
+
+                // Only add the window if it doesn't belong to the current process
+                if process_id != context.current_process_id {
+                    context.list.push(WindowImpl(hwnd));
+                }
             }
 
             TRUE
         }
 
-        let mut list = vec![];
+        let mut context = EnumContext {
+            list: vec![],
+            current_process_id: unsafe { GetCurrentProcessId() },
+        };
+
         unsafe {
             let _ = EnumWindows(
                 Some(enum_windows_proc),
-                LPARAM(std::ptr::addr_of_mut!(list) as isize),
+                LPARAM(std::ptr::addr_of_mut!(context) as isize),
             );
         }
 
-        list
+        context.list
     }
 
     pub fn list_containing_cursor() -> Vec<Self> {
@@ -207,13 +223,6 @@ impl WindowImpl {
 
     pub fn id(&self) -> WindowIdImpl {
         WindowIdImpl(self.0.0 as u64)
-    }
-
-    pub fn level(&self) -> Option<i32> {
-        // Windows doesn't have a direct equivalent to macOS window levels
-        // We could use Z-order, but it's complex to determine
-        // For now, return None to indicate this information isn't available
-        None
     }
 
     pub fn owner_name(&self) -> Option<String> {

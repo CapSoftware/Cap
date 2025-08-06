@@ -70,8 +70,8 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
                 window: window.and_then(|w| {
                     Some(WindowUnderCursor {
                         id: w.id(),
-                        bounds: w.raw_handle().bounds()?,
-                        app_name: w.raw_handle().owner_name()?,
+                        bounds: w.bounds()?,
+                        app_name: w.owner_name()?,
                     })
                 }),
             }

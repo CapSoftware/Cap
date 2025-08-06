@@ -3,6 +3,7 @@ pub mod platform;
 
 use std::str::FromStr;
 
+use bounds::LogicalBounds;
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -91,6 +92,14 @@ impl Window {
 
     pub fn id(&self) -> WindowId {
         WindowId(self.0.id())
+    }
+
+    pub fn bounds(&self) -> Option<LogicalBounds> {
+        self.0.bounds()
+    }
+
+    pub fn owner_name(&self) -> Option<String> {
+        self.0.owner_name()
     }
 
     pub fn raw_handle(&self) -> &WindowImpl {

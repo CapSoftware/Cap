@@ -13,7 +13,10 @@ import {
 } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { createStore, reconcile } from "solid-js/store";
-import { createEventListenerMap } from "@solid-primitives/event-listener";
+import {
+  createEventListener,
+  createEventListenerMap,
+} from "@solid-primitives/event-listener";
 import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
@@ -45,6 +48,10 @@ export default function () {
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
   });
+
+  // This prevents browser keyboard shortcuts from firing.
+  // Eg. on Windows Ctrl+P would open the print dialog without this
+  createEventListener(document, "keydown", (e) => e.preventDefault());
 
   return (
     <Switch>
