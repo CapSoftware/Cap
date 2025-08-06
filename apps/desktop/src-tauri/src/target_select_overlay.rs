@@ -132,9 +132,7 @@ impl WindowFocusManager {
 
                     #[cfg(windows)]
                     {
-                        let should_refocus = cap_main
-                            .and_then(|w| w.is_focused().ok())
-                            .unwrap_or_default()
+                        let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
                         // If a Cap window is not focused we know something is trying to steal the focus.
