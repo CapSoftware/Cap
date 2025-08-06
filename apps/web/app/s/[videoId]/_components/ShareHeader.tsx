@@ -18,6 +18,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import clsx from "clsx";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 
 export const ShareHeader = ({
   data,
@@ -47,7 +48,7 @@ export const ShareHeader = ({
     iconUrl?: string;
     organizationId: string;
   }[];
-  spacesData?: any[] | null;
+  spacesData?: Spaces[] | null;
   NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();

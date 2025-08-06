@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 
 interface SharingDialogProps {
   isOpen: boolean;
@@ -34,7 +35,7 @@ interface SharingDialogProps {
   }[];
   onSharingUpdated: (updatedSharedSpaces: string[]) => void;
   isPublic?: boolean;
-  spacesData?: any[] | null;
+  spacesData?: Spaces[] | null;
 }
 
 export const SharingDialog: React.FC<SharingDialogProps> = ({
