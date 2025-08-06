@@ -12,12 +12,6 @@ fn main() {
 
         relevant_windows.sort_by(|a, b| b.1.cmp(&a.1));
 
-        dbg!(relevant_windows.get(0).and_then(|(window, _)| Some((
-            window.owner_name()?,
-            window.bounds()?,
-            window.level()?
-        ))));
-
         std::thread::sleep(Duration::from_millis(50));
     }
 }
