@@ -39,7 +39,6 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
             .await;
     }
 
-    #[cfg(target_os = "macos")]
     tokio::spawn(async move {
         loop {
             let display = cap_displays::Display::get_containing_cursor();
@@ -47,7 +46,6 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
 
             let mut window = None;
 
-            #[cfg(target_os = "macos")]
             {
                 let mut windows_with_level = windows
                     .into_iter()
