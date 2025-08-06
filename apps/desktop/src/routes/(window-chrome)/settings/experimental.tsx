@@ -2,7 +2,7 @@ import { createResource, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { generalSettingsStore } from "~/store";
-import { type GeneralSettingsStore } from "~/utils/tauri";
+import { commands, type GeneralSettingsStore } from "~/utils/tauri";
 import { ToggleSetting } from "./Setting";
 
 export default function ExperimentalSettings() {
@@ -70,11 +70,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               />
               <ToggleSetting
                 label="New recording flow"
-                description="New and improved flow for starting a recording! You may need to close and reopen the main window for this to take effect."
+                description="New and improved flow for starting a recording! You may need to restart the app for this to take effect."
                 value={!!settings.enableNewRecordingFlow}
-                onChange={(value) =>
-                  handleChange("enableNewRecordingFlow", value)
-                }
+                onChange={(value) => {
+                  handleChange("enableNewRecordingFlow", value);
+                  commands.closeWindow("Main");
+                }}
               />
             </div>
           </div>

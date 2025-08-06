@@ -79,6 +79,11 @@ function Page() {
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
 
+    // We resize the window on mount as the user could be switching to the new recording flow
+    // which has a differently sized window.
+    const size = getWindowSize();
+    currentWindow.setSize(new LogicalSize(size.width, size.height));
+
     // Check size when app regains focus
     const unlistenFocus = currentWindow.onFocusChanged(
       ({ payload: focused }) => {
