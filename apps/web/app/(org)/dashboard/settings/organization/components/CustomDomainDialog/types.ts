@@ -41,4 +41,8 @@ export type DomainConfig = {
   aValues?: string[];
   currentAValues?: string[];
   requiredAValue?: string;
+  cnameValue?: string;
+  currentCnameValue?: string;
+  requiredCnameValue?: string;
+  isSubdomain?: boolean;
 };
