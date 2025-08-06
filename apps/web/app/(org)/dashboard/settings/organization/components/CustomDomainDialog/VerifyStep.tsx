@@ -65,21 +65,6 @@ export const VerifyStep = ({
         </p>
       </div>
 
-      {/* Verification Status */}
-      <div className="flex justify-center">
-        {isVerified ? (
-          <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-600 rounded-full">
-            <CheckCircle className="text-white size-4" />
-            <p className="text-sm font-medium text-white">Domain verified</p>
-          </div>
-        ) : (
-          <div className="flex gap-2 items-center px-3 py-2 text-sm bg-red-500 rounded-full">
-            <XCircle className="text-white size-4" />
-            <p className="text-sm font-medium text-white">Domain not verified</p>
-          </div>
-        )}
-      </div>
-
       {/* DNS Configuration */}
       {!isVerified && domainConfig && (
         <div className="space-y-4">
@@ -335,44 +320,46 @@ export const VerifyStep = ({
 
       {/* Action Buttons */}
       <div className="flex gap-4 justify-between items-center">
-        <Button
-          type="button"
-          variant="gray"
-          size="sm"
-          onClick={onPrev}
-          className="min-w-[100px]"
-        >
-          Back
-        </Button>
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center pt-10">
           <Button
             type="button"
             variant="gray"
-            size="sm"
+            size="xs"
             onClick={handleVerifyClick}
             disabled={verifying}
-            className="min-w-[120px]"
+            className="min-w-[100px]"
           >
             {verifying ? (
-              <FontAwesomeIcon className="mr-1 animate-spin size-4" icon={faRefresh} />
+              <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3" icon={faRefresh} />
             ) : (
-              <FontAwesomeIcon className="mr-1 size-4" icon={faRefresh} />
+              <FontAwesomeIcon className="mr-1 opacity-70 size-3" icon={faRefresh} />
             )}
             Check Status
           </Button>
-
-          {isVerified && (
-            <Button
-              onClick={onNext}
-              size="sm"
-              variant="dark"
-              className="min-w-[100px]"
-            >
-              Next
-            </Button>
+          {isVerified ? (
+            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-600 rounded-full">
+              <CheckCircle className="text-white opacity-70 size-3" />
+              <p className="text-xs font-medium text-white">Domain verified</p>
+            </div>
+          ) : (
+            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-red-900 rounded-full">
+              <XCircle className="text-red-200 size-3" />
+              <p className="text-xs font-medium text-white">Domain not verified</p>
+            </div>
           )}
         </div>
+
+        {isVerified && (
+          <Button
+            onClick={onNext}
+            size="sm"
+            variant="dark"
+            className="min-w-[100px]"
+          >
+            Next
+          </Button>
+        )}
       </div>
     </div>
   );
