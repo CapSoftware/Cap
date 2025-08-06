@@ -47,6 +47,11 @@ export const VerifyStep = ({
     }
   };
 
+  console.log({
+    domain,
+    domainConfig,
+  })
+
   return (
     <div className="space-y-6">
       <div className="text-center">

@@ -232,8 +232,6 @@ export function CustomDomain() {
   return (
     <>
       <CustomDomainDialog
-        domain={domain}
-        setDomain={setDomain}
         open={showCustomDomainDialog}
         onClose={() => setShowCustomDomainDialog(false)}
       />
