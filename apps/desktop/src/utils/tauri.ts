@@ -176,6 +176,9 @@ async listFails() : Promise<{ [key in string]: boolean }> {
 async setFail(name: string, value: boolean) : Promise<void> {
     await TAURI_INVOKE("set_fail", { name, value });
 },
+async todo() : Promise<void> {
+    await TAURI_INVOKE("todo");
+},
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
 },

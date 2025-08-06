@@ -1779,6 +1779,25 @@ fn set_fail(name: String, value: bool) {
     cap_fail::set_fail(&name, value)
 }
 
+#[tauri::command]
+#[specta::specta]
+fn todo(app: AppHandle) {
+    // TODO: Error handling + use Cap window abstraction
+    if let Some(main_window) = app.get_webview_window("main") {
+        // main_window
+        //     .set_always_on_top(true).unwrap();
+        main_window.set_focus().unwrap();
+    }
+
+    if let Some(main_window) = app.get_webview_window("new-main") {
+        // main_window
+        //     .set_always_on_top(true).unwrap();
+        main_window.set_focus().unwrap();
+    }
+
+    println!("FOCUS FIXED?");
+}
+
 async fn check_notification_permissions(app: AppHandle) {
     let Ok(Some(settings)) = GeneralSettingsStore::get(&app) else {
         return;
@@ -1942,6 +1961,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             platform::perform_haptic_feedback,
             list_fails,
             set_fail,
+            todo,
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
@@ -2233,15 +2253,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         if window_id.activates_dock() {
                             app.set_activation_policy(tauri::ActivationPolicy::Regular)
                                 .ok();
-                        }
-                    }
-                }
-                #[cfg(target_os = "windows")]
-                WindowEvent::Focused(focused) if *focused => {
-                    if let Ok(window_id) = CapWindowId::from_str(label) {
-                        // When NewMain window gets focus, ensure it stays on top of overlays
-                        if matches!(window_id, CapWindowId::NewMain) {
-                            platform::handle_main_window_activation(window.clone());
                         }
                     }
                 }

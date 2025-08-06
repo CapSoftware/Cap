@@ -284,25 +284,18 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
 
-                // TODO: This is bad
-                // {
-                //     if let Some(window) = CapWindowId::NewMain.get(&app).await {
-                //         window.close().await.ok();
-                //     }
+                // TODO: Error handling + use Cap window abstraction
+                if let Some(main_window) = app.get_webview_window("main") {
+                    // main_window
+                    //     .set_always_on_top(true).unwrap();
+                    main_window.set_focus().unwrap();
+                }
 
-                //     let window2 = self
-                //         .window_builder(app, "/new-main")
-                //         .resizable(false)
-                //         .maximized(false)
-                //         .maximizable(false)
-                //         .always_on_top(true)
-                //         .visible_on_all_workspaces(true)
-                //         .parent(&window).unwrap()
-                //         .center()
-                //         .build()?;
-                // }
-
-                // window.set_ignore_cursor_events(false).unwrap();
+                if let Some(main_window) = app.get_webview_window("new-main") {
+                    // main_window
+                    //     .set_always_on_top(true).unwrap();
+                    main_window.set_focus().unwrap();
+                }
 
                 #[cfg(target_os = "macos")]
                 {

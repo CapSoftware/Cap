@@ -6,6 +6,7 @@ import {
   createSignal,
   JSX,
   Match,
+  onMount,
   Show,
   Switch,
 } from "solid-js";
@@ -46,6 +47,19 @@ export default function () {
 
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
+  });
+
+  onMount(() => {
+    console.log("MOUNTED");
+    getCurrentWindow()
+      .show()
+      .then(() => {
+        commands.todo().then(() => console.log("FOCUS FIXED"));
+      });
+  });
+  createEventListener(document, "mousedown", (e) => {
+    // TODO: Explain this
+    commands.todo().then(() => console.log("COMMAND FIXED"));
   });
 
   return (
