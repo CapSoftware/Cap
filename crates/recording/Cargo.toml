@@ -15,6 +15,7 @@ cap-displays = { path = "../displays" }
 cap-cursor-capture = { path = "../cursor-capture" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }
+cap-cursor-info = { path = "../cursor-info" }
 
 specta.workspace = true
 tokio.workspace = true

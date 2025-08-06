@@ -225,7 +225,7 @@ impl CursorLayer {
         if !self.cursors.contains_key(&interpolated_cursor.cursor_id) {
             let mut cursor = None;
 
-            let cursor_hash = match &constants.recording_meta.inner {
+            let cursor_shape = match &constants.recording_meta.inner {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
                     inner:
                         MultipleSegments {
@@ -234,16 +234,16 @@ impl CursorLayer {
                         },
                 }) => cursors
                     .get(&interpolated_cursor.cursor_id)
-                    .and_then(|v| v.hash.clone()),
+                    .and_then(|v| v.shape.clone()),
                 _ => None,
             };
 
             // Attempt to find and load a higher-quality SVG cursor included in Cap.
             // These are used instead of the OS provided cursor images when possible as the quality is better.
-            if let Some(cursor_hash) = cursor_hash
+            if let Some(cursor_shape) = cursor_shape
                 && uniforms.project.cursor.use_svg
             {
-                if let Some(info) = ResolvedCursor::from_hash(cursor_hash) {
+                if let Some(info) = cursor_shape.resolve() {
                     cursor = CursorTexture::prepare_svg(&constants, info.raw, info.hotspot.into())
                         .map_err(|err| {
                             error!(

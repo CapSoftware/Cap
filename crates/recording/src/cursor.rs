@@ -7,6 +7,7 @@ use std::{
 };
 
 use cap_cursor_capture::RawCursorPosition;
+use cap_cursor_info::CursorShape;
 use cap_displays::Display;
 use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
@@ -22,7 +23,7 @@ pub struct Cursor {
     pub file_name: String,
     pub id: u32,
     pub hotspot: XY<f64>,
-    pub hash: String,
+    pub shape: Option<CursorShape>,
 }
 
 pub type Cursors = HashMap<u64, Cursor>;
@@ -107,7 +108,6 @@ pub fn spawn_cursor_recorder(
                     let file_name = format!("cursor_{}.png", cursor_id);
                     let cursor_path = cursors_dir.join(&file_name);
 
-                    let hash = hex::encode(Sha256::digest(&data.image));
                     if let Ok(image) = image::load_from_memory(&data.image) {
                         // Convert to RGBA
                         let rgba_image = image.into_rgba8();
@@ -122,7 +122,7 @@ pub fn spawn_cursor_recorder(
                                     file_name,
                                     id: response.next_cursor_id,
                                     hotspot: data.hotspot,
-                                    hash,
+                                    shape: data.shape,
                                 },
                             );
                             response.next_cursor_id += 1;
@@ -244,6 +244,7 @@ pub fn spawn_cursor_recorder(
 struct CursorData {
     image: Vec<u8>,
     hotspot: XY<f64>,
+    shape: Option<CursorShape>,
 }
 
 #[cfg(target_os = "macos")]
@@ -264,9 +265,13 @@ fn get_cursor_data() -> Option<CursorData> {
 
         let image = image_data.as_bytes_unchecked().to_vec();
 
+        let shape =
+            cap_cursor_info::CursorShapeMacOS::from_hash(&hex::encode(Sha256::digest(&image)));
+
         Some(CursorData {
             image,
             hotspot: XY::new(hotspot.x / size.width, hotspot.y / size.height),
+            shape: shape.map(Into::into),
         })
     })
 }
