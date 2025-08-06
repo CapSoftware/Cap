@@ -6,7 +6,7 @@ use std::path::PathBuf;
 async fn main() {
     let path: PathBuf = std::env::args().collect::<Vec<_>>().swap_remove(1).into();
 
-    let editor = EditorInstance::new(path,|s| {}).await.unwrap();
+    let editor = EditorInstance::new(path, |s| {}).await.unwrap();
 
     editor.start_playback(30, XY::new(1920, 1080)).await;
 
