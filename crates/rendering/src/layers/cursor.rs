@@ -213,14 +213,12 @@ impl CursorLayer {
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
-        let is_svg_assets_enabled = !uniforms.project.cursor.raw && uniforms.project.cursor.use_svg;
-
         // Remove all cursor assets if the svg configuration changes.
         // it might change the texture.
         //
         // This would be better if it only invalidated the required assets but that would be more complicated.
-        if self.prev_is_svg_assets_enabled != Some(is_svg_assets_enabled) {
-            self.prev_is_svg_assets_enabled = Some(is_svg_assets_enabled);
+        if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
+            self.prev_is_svg_assets_enabled = Some(uniforms.project.cursor.use_svg);
             self.cursors.drain();
         }
 
