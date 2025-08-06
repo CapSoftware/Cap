@@ -32,7 +32,9 @@ use cap_media::platform::Bounds;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
+};
 use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -1060,6 +1062,19 @@ async fn set_project_config(
 
 #[tauri::command]
 #[specta::specta]
+async fn generate_zoom_segments_from_clicks(
+    editor_instance: WindowEditorInstance,
+) -> Result<Vec<ZoomSegment>, String> {
+    let meta = editor_instance.meta();
+    let recordings = &editor_instance.recordings;
+
+    let zoom_segments = recording::generate_zoom_segments_for_project(meta, recordings);
+
+    Ok(zoom_segments)
+}
+
+#[tauri::command]
+#[specta::specta]
 async fn list_audio_devices() -> Result<Vec<String>, ()> {
     if !permissions::do_permissions_check(false)
         .microphone
@@ -1905,6 +1920,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
