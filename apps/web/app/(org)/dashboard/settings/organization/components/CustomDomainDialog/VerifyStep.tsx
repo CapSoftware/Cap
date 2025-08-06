@@ -30,6 +30,8 @@ export const VerifyStep = ({
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
 
+  const isSubdomain = domain.split('.').length > 2;
+
   const handleCopy = async (text: string, field: "name" | "value") => {
     try {
       await navigator.clipboard.writeText(text);
@@ -157,7 +159,7 @@ export const VerifyStep = ({
           )}
 
           {/* A Record Configuration - for full domains */}
-          {!domainConfig.verification?.[0] && domainConfig.requiredAValue && !domainConfig.isSubdomain && (
+          {!domainConfig.verification?.[0] && domainConfig.requiredAValue && !isSubdomain && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
@@ -241,7 +243,7 @@ export const VerifyStep = ({
           )}
 
           {/* CNAME Record Configuration - for subdomains */}
-          {!domainConfig.verification?.[0] && domainConfig.requiredCnameValue && domainConfig.isSubdomain && (
+          {!domainConfig.verification?.[0] && domainConfig.requiredCnameValue && isSubdomain && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
@@ -288,7 +290,7 @@ export const VerifyStep = ({
                   <div className="grid grid-cols-[100px,1fr] items-center">
                     <dt className="text-sm font-medium text-gray-12">Name</dt>
                     <dd className="text-sm text-gray-10">
-                      <code className="text-xs bg-gray-4 px-2 py-1 rounded">
+                      <code className="px-2 py-1 text-xs rounded bg-gray-4">
                         {domain.split('.')[0]}
                       </code>
                     </dd>
