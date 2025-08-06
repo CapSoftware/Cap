@@ -55,7 +55,16 @@ pub async fn create_camera_preview_ws() -> (Sender<RawCameraFrame>, u16, Cancell
 
             _camera_tx
                 .send(WSFrame {
-                    data: frame.data(0).to_vec(),
+data: {
+    let mut buf = frame.data(0).to_vec();
+    // Swap R and B channels for each pixel (RGBA)
+    for px in buf.chunks_exact_mut(4) {
+        let r = px[0];
+        px[0] = px[2];
+        px[2] = r;
+    }
+    buf
+},
                     width: frame.width(),
                     height: frame.height(),
                     stride: frame.stride(0) as u32,
