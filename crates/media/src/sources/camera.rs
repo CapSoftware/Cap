@@ -96,7 +96,7 @@ impl PipelineSourceTask for CameraSource {
         _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
 
         info!("Camera source ready");
@@ -135,5 +135,7 @@ impl PipelineSourceTask for CameraSource {
                 }
             }
         }
+
+        Ok(())
     }
 }
