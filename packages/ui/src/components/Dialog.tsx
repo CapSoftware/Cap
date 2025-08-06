@@ -73,7 +73,7 @@ const DialogHeader = ({
     {...props}
   >
     {icon && (
-      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 size-10">
+      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 min-w-10 min-h-10 size-10">
         {icon}
       </div>
     )}

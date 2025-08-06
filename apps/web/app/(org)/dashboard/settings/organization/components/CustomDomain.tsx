@@ -2,7 +2,7 @@ import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { updateDomain } from "@/actions/organization/update-domain";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { Button, Input, Label } from "@cap/ui";
+import { Button, Label } from "@cap/ui";
 import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
+import CustomDomainDialog from "./CustomDomainDialog";
 
 type DomainVerification = {
   type: string;
@@ -44,6 +45,7 @@ export function CustomDomain() {
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showCustomDomainDialog, setShowCustomDomainDialog] = useState(false);
   const initialCheckDone = useRef(false);
   const pollInterval = useRef<NodeJS.Timeout>();
   const POLL_INTERVAL = 5000;
@@ -228,100 +230,97 @@ export function CustomDomain() {
 
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <Label htmlFor="customDomain">Custom Domain</Label>
-        <p className="text-sm text-gray-10">
-          Set up a custom domain for your organization's shared caps and make
-          it unique.
-        </p>
-      </div>
-      <div className="flex flex-col gap-3 items-start">
-        <div className="flex gap-3 items-center w-full h-fit">
-          <Input
-            type="text"
-            id="customDomain"
-            placeholder="your-domain.com"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            className="flex-1 min-h-[44px]"
-          />
-          <Button
-            type="submit"
-            size="sm"
-            className="min-w-fit"
-            variant="dark"
-            onClick={handleSubmit}
-            spinner={loading}
-            disabled={loading || domain === activeOrganization?.organization.customDomain || domain === ""}
-          >
-            {loading ? "Saving..." : "Save"}
-          </Button>
+    <>
+      <CustomDomainDialog
+        domain={domain}
+        setDomain={setDomain}
+        open={showCustomDomainDialog}
+        onClose={() => setShowCustomDomainDialog(false)}
+      />
+      <div className="flex gap-3 justify-between items-center w-full h-fit">
+        <div className="space-y-1">
+          <Label htmlFor="customDomain">Custom Domain</Label>
+          <p className="text-sm w-full max-w-[375px] text-gray-10">
+            Set up a custom domain for your organization's shared caps and make
+            it unique.
+          </p>
         </div>
+        <Button
+          type="submit"
+          size="sm"
+          className="min-w-fit"
+          variant="dark"
+          onClick={(e) => {
+            e.preventDefault();
+            setShowCustomDomainDialog(true);
+          }}
+        >
+          Setup
+        </Button>
+      </div>
 
-        {activeOrganization?.organization.customDomain &&
-          <div className="flex gap-2 justify-between items-center mt-4">
-            {isVerified ? (
-              <>
-                <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
-                  <CheckCircle className="size-3" />
-                  <span className="text-xs font-medium text-white">
-                    Domain verified
-                  </span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
-                  <XCircle className="size-3" />
-                  <span className="text-xs font-medium text-white">
-                    Domain not verified
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
-        }
+      {activeOrganization?.organization.customDomain &&
+        <div className="flex gap-2 justify-between items-center mt-4">
+          {isVerified ? (
+            <>
+              <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
+                <CheckCircle className="size-3" />
+                <span className="text-xs font-medium text-white">
+                  Domain verified
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
+                <XCircle className="size-3" />
+                <span className="text-xs font-medium text-white">
+                  Domain not verified
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+      }
 
-        {activeOrganization?.organization.customDomain && (
-          <div className="flex gap-3 justify-between items-center w-full">
-            <div className="flex gap-3 items-center">
+      {activeOrganization?.organization.customDomain && (
+        <div className="flex gap-3 justify-between items-center w-full">
+          <div className="flex gap-3 items-center">
+            <Button
+              type="button"
+              variant="gray"
+              size="sm"
+              onClick={() => checkVerification(true)}
+              disabled={verifying}
+              className="w-[105px]"
+            >
+              {verifying ? (
+                <FontAwesomeIcon
+                  className="animate-spin size-4 mr-0.5"
+                  icon={faRefresh}
+                />
+              ) : (
+                <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
+              )}
+              Refresh
+            </Button>
+            {activeOrganization?.organization.customDomain && (
               <Button
                 type="button"
-                variant="gray"
                 size="sm"
-                onClick={() => checkVerification(true)}
-                disabled={verifying}
-                className="w-[105px]"
+                variant="gray"
+                onClick={handleRemoveDomain}
+                disabled={loading}
               >
-                {verifying ? (
-                  <FontAwesomeIcon
-                    className="animate-spin size-4 mr-0.5"
-                    icon={faRefresh}
-                  />
-                ) : (
-                  <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
-                )}
-                Refresh
+                <FontAwesomeIcon className="size-3 mr-0.5" icon={faTrash} />
+                Remove
               </Button>
-              {activeOrganization?.organization.customDomain && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="gray"
-                  onClick={handleRemoveDomain}
-                  disabled={loading}
-                >
-                  <FontAwesomeIcon className="size-3 mr-0.5" icon={faTrash} />
-                  Remove
-                </Button>
-              )}
-            </div>
+            )}
           </div>
-        )}
+        </div>
+      )}
 
 
-      </div>
       {activeOrganization?.organization.customDomain && (
         <div className="mt-4 space-y-4">
           {!isVerified && domainConfig?.verification?.[0] && (
@@ -506,6 +505,6 @@ export function CustomDomain() {
           onOpenChange={setShowUpgradeModal}
         />
       )}
-    </div>
+    </>
   );
 }
