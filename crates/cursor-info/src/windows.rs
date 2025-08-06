@@ -156,18 +156,17 @@ impl CursorShapeWindows {
 #[cfg(target_os = "windows")]
 mod windows {
     use super::*;
-    use std::{collections::HashMap, sync::OnceLock};
     use ::windows::{
         Win32::UI::WindowsAndMessaging::{
-            IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
+            HCURSOR, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
             IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-            IDC_UPARROW, IDC_WAIT, LoadCursorW, HCURSOR,
+            IDC_UPARROW, IDC_WAIT, LoadCursorW,
         },
         core::PCWSTR,
     };
+    use std::{collections::HashMap, sync::OnceLock};
 
-    static CURSOR_CACHE: OnceLock<HashMap<usize, CursorShapeWindows>> =
-        OnceLock::new();
+    static CURSOR_CACHE: OnceLock<HashMap<usize, CursorShapeWindows>> = OnceLock::new();
 
     fn get_cursor_cache() -> &'static HashMap<usize, CursorShapeWindows> {
         CURSOR_CACHE.get_or_init(|| {
