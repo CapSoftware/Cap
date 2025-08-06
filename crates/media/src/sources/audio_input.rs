@@ -110,7 +110,7 @@ impl PipelineSourceTask for AudioInputSource {
         _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         info!("Preparing audio input source thread...");
 
         let mut samples_rx: Option<Receiver<AudioInputSamples>> = None;
@@ -118,7 +118,7 @@ impl PipelineSourceTask for AudioInputSource {
 
         fail!("media::sources::audio_input::run");
 
-        loop {
+        let res = loop {
             match control_signal.last() {
                 Some(Control::Play) => {
                     let samples = samples_rx.get_or_insert_with(|| self.feed_connection.attach());
@@ -127,12 +127,12 @@ impl PipelineSourceTask for AudioInputSource {
                         Ok(samples) => {
                             if let Err(error) = self.process_frame(samples) {
                                 error!("{error}");
-                                break;
+                                break Err(error.to_string());
                             }
                         }
                         Err(_) => {
                             error!("Lost connection with the camera feed");
-                            break;
+                            break Err("Lost connection with the camera feed".to_string());
                         }
                     }
                 }
@@ -140,11 +140,12 @@ impl PipelineSourceTask for AudioInputSource {
                     if let Some(rx) = samples_rx.take() {
                         self.pause_and_drain_frames(rx);
                     }
-                    break;
+                    break Ok(());
                 }
             }
-        }
+        };
 
         info!("Shut down audio input source thread.");
+        res
     }
 }

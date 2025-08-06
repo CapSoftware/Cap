@@ -197,7 +197,7 @@ dependencies = [
  "objc2-foundation 0.3.1",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -960,10 +960,12 @@ name = "cap-cursor-info"
 version = "0.0.0"
 dependencies = [
  "hex",
- "image",
  "objc2 0.6.1",
  "objc2-app-kit",
+ "serde",
  "sha2",
+ "specta",
+ "strum",
  "windows 0.60.0",
 ]
 
@@ -1170,6 +1172,7 @@ dependencies = [
  "image",
  "indexmap 2.10.0",
  "inquire",
+ "kameo",
  "num-traits",
  "objc",
  "objc-foundation",
@@ -1218,6 +1221,7 @@ dependencies = [
 name = "cap-project"
 version = "0.1.0"
 dependencies = [
+ "cap-cursor-info",
  "either",
  "log",
  "relative-path",
@@ -1232,6 +1236,7 @@ name = "cap-recording"
 version = "0.1.0"
 dependencies = [
  "cap-cursor-capture",
+ "cap-cursor-info",
  "cap-displays",
  "cap-flags",
  "cap-media",
@@ -2321,7 +2326,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330c60081dcc4c72131f8eb70510f1ac07223e5d4163db481a04a0befcffa412"
 dependencies = [
- "libloading 0.8.8",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -2388,6 +2393,12 @@ name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+
+[[package]]
+name = "downcast-rs"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea8a8b81cacc08888170eef4d13b775126db426d0b348bee9d18c2c1eaf123cf"
 
 [[package]]
 name = "dpi"
@@ -2541,7 +2552,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "778e2ac28f6c47af28e4907f13ffd1e1ddbd400980a9abd7c8df189bf578a5ad"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3702,7 +3713,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.59.0",
 ]
 
 [[package]]
@@ -4132,6 +4143,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "kameo"
+version = "0.17.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41a73be96f616ca2784f597b5b6635582f5a7b3ba73b1dbe7afa5d9667955d39"
+dependencies = [
+ "downcast-rs 2.0.1",
+ "dyn-clone",
+ "futures",
+ "kameo_macros",
+ "once_cell",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kameo_macros"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3f384b32bf6426ae93a8b37da62c85073b676a31a82a86d608ad86453878de0"
+dependencies = [
+ "heck 0.5.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
+ "uuid",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4301,7 +4341,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.53.3",
+ "windows-targets 0.48.5",
 ]
 
 [[package]]
@@ -4962,7 +5002,7 @@ version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77e878c846a8abae00dd069496dbe8751b16ac1c3d6bd2a7283a938e8228f90d"
 dependencies = [
- "proc-macro-crate 3.3.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.104",
@@ -6002,7 +6042,7 @@ dependencies = [
  "once_cell",
  "socket2 0.5.10",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6552,7 +6592,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6565,7 +6605,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.9.4",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6661,8 +6701,8 @@ dependencies = [
 
 [[package]]
 name = "scap"
-version = "0.0.8"
-source = "git+https://github.com/CapSoftware/scap?rev=6ec1fad428c0#6ec1fad428c0353c9360218450c6354624239dae"
+version = "0.1.0-beta.1"
+source = "git+https://github.com/CapSoftware/scap?rev=3cefe71561ff#3cefe71561ff735efe5c7bee69bcf32cf9ed3da7"
 dependencies = [
  "cidre",
  "cocoa 0.25.0",
@@ -8384,7 +8424,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix 1.0.8",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9391,7 +9431,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "673a33c33048a5ade91a6b139580fa174e19fb0d23f396dca9fa15f2e1e49b35"
 dependencies = [
  "cc",
- "downcast-rs",
+ "downcast-rs 1.2.1",
  "rustix 1.0.8",
  "scoped-tls",
  "smallvec",
@@ -9767,7 +9807,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

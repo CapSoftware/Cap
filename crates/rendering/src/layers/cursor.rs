@@ -213,21 +213,19 @@ impl CursorLayer {
         let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
         let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
 
-        let is_svg_assets_enabled = !uniforms.project.cursor.raw && uniforms.project.cursor.use_svg;
-
         // Remove all cursor assets if the svg configuration changes.
         // it might change the texture.
         //
         // This would be better if it only invalidated the required assets but that would be more complicated.
-        if self.prev_is_svg_assets_enabled != Some(is_svg_assets_enabled) {
-            self.prev_is_svg_assets_enabled = Some(is_svg_assets_enabled);
+        if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
+            self.prev_is_svg_assets_enabled = Some(uniforms.project.cursor.use_svg);
             self.cursors.drain();
         }
 
         if !self.cursors.contains_key(&interpolated_cursor.cursor_id) {
             let mut cursor = None;
 
-            let cursor_hash = match &constants.recording_meta.inner {
+            let cursor_shape = match &constants.recording_meta.inner {
                 RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
                     inner:
                         MultipleSegments {
@@ -236,16 +234,16 @@ impl CursorLayer {
                         },
                 }) => cursors
                     .get(&interpolated_cursor.cursor_id)
-                    .and_then(|v| v.hash.clone()),
+                    .and_then(|v| v.shape.clone()),
                 _ => None,
             };
 
             // Attempt to find and load a higher-quality SVG cursor included in Cap.
             // These are used instead of the OS provided cursor images when possible as the quality is better.
-            if let Some(cursor_hash) = cursor_hash
+            if let Some(cursor_shape) = cursor_shape
                 && uniforms.project.cursor.use_svg
             {
-                if let Some(info) = ResolvedCursor::from_hash(cursor_hash) {
+                if let Some(info) = cursor_shape.resolve() {
                     cursor = CursorTexture::prepare_svg(&constants, info.raw, info.hotspot.into())
                         .map_err(|err| {
                             error!(
@@ -288,43 +286,48 @@ impl CursorLayer {
         };
 
         let size = {
-            let cursor_texture_size = cursor_texture.texture.size();
-            let cursor_texture_size_aspect =
-                cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
+            let base_size_px = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
+                * uniforms.output_size.1 as f32;
 
-            let cursor_size_percentage = if uniforms.cursor_size <= 0.0 {
+            let cursor_size_factor = if uniforms.cursor_size <= 0.0 {
                 100.0
             } else {
                 uniforms.cursor_size / 100.0
             };
-            let factor = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
-                * uniforms.output_size.1 as f32;
 
-            let cursor_size_constant = factor * cursor_size_percentage;
+            // 0 -> 1 indicating how much to shrink from click
+            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
+            // lerp shrink size
+            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
 
-            Coord::<FrameSpace>::new(if cursor_texture_size_aspect > 1.0 {
+            let size = base_size_px * cursor_size_factor * click_scale_factor;
+
+            let texture_size_aspect = {
+                let texture_size = cursor_texture.texture.size();
+                texture_size.width as f32 / texture_size.height as f32
+            };
+
+            Coord::<FrameSpace>::new(if texture_size_aspect > 1.0 {
                 // Wide cursor: base sizing on width to prevent excessive width
-                let width = cursor_size_constant;
-                let height = cursor_size_constant / cursor_texture_size_aspect;
+                let width = size;
+                let height = size / texture_size_aspect;
                 XY::new(width, height).into()
             } else {
                 // Tall or square cursor: base sizing on height (current behavior)
-                XY::new(
-                    cursor_size_constant * cursor_texture_size_aspect,
-                    cursor_size_constant,
-                )
-                .into()
+                XY::new(size * texture_size_aspect, size).into()
             })
         };
 
         let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
 
+        // Calculate position without hotspot first
         let position = interpolated_cursor.position.to_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
         ) - hotspot;
 
+        // Transform to zoomed space
         let zoomed_position = position.to_zoomed_frame_space(
             &constants.options,
             &uniforms.project,
@@ -339,16 +342,9 @@ impl CursorLayer {
             zoom,
         ) - zoomed_position;
 
-        let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
-        	// lerp shrink size
-            * (1.0 - CLICK_SHRINK_SIZE)
-            + CLICK_SHRINK_SIZE;
-
-        let cursor_size_px = zoomed_size.coord * click_scale_factor as f64;
-
         let uniforms = CursorUniforms {
             position: [zoomed_position.x as f32, zoomed_position.y as f32],
-            size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
+            size: [zoomed_size.x as f32, zoomed_size.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
             velocity,
