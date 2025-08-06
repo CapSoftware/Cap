@@ -317,6 +317,17 @@ impl CursorLayer {
             })
         };
 
+        // Adjust position to keep cursor centered when it shrinks during clicks
+        // let size_difference = zoomed_size.coord * (1.0 - click_scale_factor as f64);
+        // let position_offset = Coord::new(size_difference / 2.0);
+        // let adjusted_position = zoomed_base_position + position_offset;
+
+        let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
+        	// lerp shrink size
+            * (1.0 - CLICK_SHRINK_SIZE)
+            + CLICK_SHRINK_SIZE;
+
+        let size = size * (1.0 - click_scale_factor as f64);
         let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
 
         // Calculate position without hotspot first
@@ -341,21 +352,9 @@ impl CursorLayer {
             zoom,
         ) - zoomed_base_position;
 
-        let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
-        	// lerp shrink size
-            * (1.0 - CLICK_SHRINK_SIZE)
-            + CLICK_SHRINK_SIZE;
-
-        let cursor_size_px = zoomed_size.coord * click_scale_factor as f64;
-
-        // Adjust position to keep cursor centered when it shrinks during clicks
-        let size_difference = zoomed_size.coord * (1.0 - click_scale_factor as f64);
-        let position_offset = Coord::new(size_difference / 2.0);
-        let adjusted_position = zoomed_base_position + position_offset;
-
         let uniforms = CursorUniforms {
-            position: [adjusted_position.x as f32, adjusted_position.y as f32],
-            size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
+            position: [zoomed_base_position.x as f32, zoomed_base_position.y as f32],
+            size: [zoomed_size.x as f32, zoomed_size.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
             velocity,
