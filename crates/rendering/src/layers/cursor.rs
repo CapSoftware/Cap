@@ -317,27 +317,31 @@ impl CursorLayer {
             })
         };
 
-        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
-
-        let position = interpolated_cursor.position.to_frame_space(
+        // Calculate position without hotspot first
+        let base_position = interpolated_cursor.position.to_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
-        ) - hotspot;
+        );
 
-        let zoomed_position = position.to_zoomed_frame_space(
+        // Transform to zoomed space
+        let zoomed_base_position = base_position.to_zoomed_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
             zoom,
         );
 
-        let zoomed_size = (position + size).to_zoomed_frame_space(
+        let zoomed_size = (base_position + size).to_zoomed_frame_space(
             &constants.options,
             &uniforms.project,
             resolution_base,
             zoom,
-        ) - zoomed_position;
+        ) - zoomed_base_position;
+
+        // Apply hotspot adjustment in zoomed space to prevent scaling-related drift
+        let zoomed_hotspot = Coord::new(zoomed_size.coord * cursor_texture.hotspot);
+        let zoomed_position = zoomed_base_position - zoomed_hotspot;
 
         let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
         	// lerp shrink size
