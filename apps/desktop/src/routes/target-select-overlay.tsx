@@ -6,16 +6,14 @@ import {
   createSignal,
   JSX,
   Match,
+  onCleanup,
   onMount,
   Show,
   Switch,
 } from "solid-js";
 import { useSearchParams } from "@solidjs/router";
 import { createStore, reconcile } from "solid-js/store";
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 
 import { createOptionsQuery } from "~/utils/queries";
@@ -38,28 +36,14 @@ export default function () {
     setTargetUnderCursor(reconcile(event.payload));
   });
 
-  createEventListener(document, "keydown", (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      setOptions("targetMode", null);
-    }
-  });
+  // We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
+  const unsub = events.onEscapePress.listen(() =>
+    setOptions("targetMode", null)
+  );
+  onCleanup(() => unsub.then((f) => f()));
 
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
-  });
-
-  onMount(() => {
-    console.log("MOUNTED");
-    getCurrentWindow()
-      .show()
-      .then(() => {
-        commands.todo().then(() => console.log("FOCUS FIXED"));
-      });
-  });
-  createEventListener(document, "mousedown", (e) => {
-    // TODO: Explain this
-    commands.todo().then(() => console.log("COMMAND FIXED"));
   });
 
   return (

@@ -1,7 +1,10 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
+use crate::{
+    App, ArcLock, fake_window, general_settings::AppTheme, permissions,
+    target_select_overlay::WindowFocusManager,
+};
 use cap_displays::DisplayId;
 use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
@@ -275,7 +278,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    // .always_on_top(true) // TODO: For windows only
+                    .always_on_top(cfg!(target_os = "macos"))
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .inner_size(size.width(), size.height())
@@ -284,47 +287,8 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
 
-                // TODO: Stop this when the window is removed.
-                // TODO: Error handling + use Cap window abstraction
-                // TODO: Explain this cursed code
-                let app = app.clone();
-                let window2 = window.clone();
-                tokio::spawn(async move {
-                    use windows::Win32::{
-                        Foundation::HWND,
-                        UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow, ShowWindow, SW_RESTORE}
-                    };
-
-                    loop {
-                        let Some(cap_main_win) = app.get_webview_window("new-main") else {
-                            println!("Failed to find Cap main window");
-                            continue;
-                        };
-
-                        // If either Cap window is focused we know everything is fine.
-                        let should_refocus = cap_main_win.is_focused().unwrap_or(false) || window2.is_focused().unwrap_or(false);
-
-                        // If not we refocus the overlay. The Cap main window is `always_on_top` so we don't need to worry about it.
-                        if !should_refocus {
-                            window2.set_focus().unwrap();
-                            println!("FIXED FOCUS");
-
-                            // if let Some(hwnd) = window2.hwnd().ok() {
-                                // let hwnd = HWND(hwnd.0 as *mut _);
-
-
-                                // unsafe {
-                                //     ShowWindow(hwnd, SW_RESTORE); // Restore if minimized
-                                //     BringWindowToTop(hwnd);
-                                //     SetForegroundWindow(hwnd);
-                                // }
-                                // println!("FIXED");
-                            // }
-                        }
-
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
-                });
+                app.state::<WindowFocusManager>()
+                    .spawn(display_id, window.clone());
 
                 #[cfg(target_os = "macos")]
                 {
@@ -551,10 +515,10 @@ impl ShowCapWindow {
                     ))
                     .build()?;
 
-                // #[cfg(target_os = "macos")]
-                // {
-                //     crate::platform::set_window_level(window.as_ref().window(), 1000);
-                // }
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1000);
+                }
 
                 window
             }

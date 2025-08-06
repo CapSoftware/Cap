@@ -1779,25 +1779,6 @@ fn set_fail(name: String, value: bool) {
     cap_fail::set_fail(&name, value)
 }
 
-#[tauri::command]
-#[specta::specta]
-fn todo(app: AppHandle) {
-    // TODO: Error handling + use Cap window abstraction
-    if let Some(main_window) = app.get_webview_window("main") {
-        // main_window
-        //     .set_always_on_top(true).unwrap();
-        main_window.set_focus().unwrap();
-    }
-
-    if let Some(main_window) = app.get_webview_window("new-main") {
-        // main_window
-        //     .set_always_on_top(true).unwrap();
-        main_window.set_focus().unwrap();
-    }
-
-    println!("FOCUS FIXED?");
-}
-
 async fn check_notification_permissions(app: AppHandle) {
     let Ok(Some(settings)) = GeneralSettingsStore::get(&app) else {
         return;
@@ -1961,7 +1942,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             platform::perform_haptic_feedback,
             list_fails,
             set_fail,
-            todo,
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
@@ -1999,7 +1979,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             UploadProgress,
             captions::DownloadProgress,
             recording::RecordingEvent,
-            target_select_overlay::TargetUnderCursor
+            target_select_overlay::TargetUnderCursor,
+            hotkeys::OnEscapePress
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -2094,6 +2075,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
+            app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
@@ -2230,6 +2212,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let _ = window.show();
                                 }
                                 return;
+                            }
+                            CapWindowId::TargetSelectOverlay { display_id } => {
+                                app.state::<target_select_overlay::WindowFocusManager>()
+                                    .destroy(&display_id);
                             }
                             _ => {}
                         };

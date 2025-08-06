@@ -176,9 +176,6 @@ async listFails() : Promise<{ [key in string]: boolean }> {
 async setFail(name: string, value: boolean) : Promise<void> {
     await TAURI_INVOKE("set_fail", { name, value });
 },
-async todo() : Promise<void> {
-    await TAURI_INVOKE("todo");
-},
 async updateAuthPlan() : Promise<void> {
     await TAURI_INVOKE("update_auth_plan");
 },
@@ -274,6 +271,7 @@ editorStateChanged: EditorStateChanged,
 newNotification: NewNotification,
 newScreenshotAdded: NewScreenshotAdded,
 newStudioRecordingAdded: NewStudioRecordingAdded,
+onEscapePress: OnEscapePress,
 recordingEvent: RecordingEvent,
 recordingOptionsChanged: RecordingOptionsChanged,
 recordingStarted: RecordingStarted,
@@ -293,6 +291,7 @@ editorStateChanged: "editor-state-changed",
 newNotification: "new-notification",
 newScreenshotAdded: "new-screenshot-added",
 newStudioRecordingAdded: "new-studio-recording-added",
+onEscapePress: "on-escape-press",
 recordingEvent: "recording-event",
 recordingOptionsChanged: "recording-options-changed",
 recordingStarted: "recording-started",
@@ -394,6 +393,7 @@ export type NewStudioRecordingAdded = { path: string }
 export type OSPermission = "screenRecording" | "camera" | "microphone" | "accessibility"
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
+export type OnEscapePress = null
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
