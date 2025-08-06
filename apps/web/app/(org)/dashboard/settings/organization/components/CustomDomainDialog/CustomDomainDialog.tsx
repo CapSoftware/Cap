@@ -307,7 +307,10 @@ const CustomDomainDialog = ({
     onClose();
   };
 
-
+  console.log({
+    domainConfig,
+    domain
+  })
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
