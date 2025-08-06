@@ -71,16 +71,32 @@ pub struct GeneralSettingsStore {
     pub server_url: String,
     #[serde(default)]
     pub recording_countdown: Option<u32>,
-    #[serde(default, alias = "open_editor_after_recording")]
-    #[deprecated]
-    _open_editor_after_recording: bool,
-    #[deprecated = "can be removed when native camera preview is ready"]
-    #[serde(default, skip_serializing_if = "yes")]
+    // #[deprecated = "can be removed when native camera preview is ready"]
+    #[serde(
+        default = "default_enable_native_camera_preview",
+        skip_serializing_if = "no"
+    )]
     pub enable_native_camera_preview: bool,
+    // #[deprecated = "can be removed when new recording flow is the default"]
+    #[serde(
+        default = "default_enable_new_recording_flow",
+        skip_serializing_if = "no"
+    )]
+    pub enable_new_recording_flow: bool,
 }
 
-fn yes(_: &bool) -> bool {
-    true
+fn default_enable_native_camera_preview() -> bool {
+    // TODO:
+    // cfg!(target_os = "macos")
+    false
+}
+
+fn default_enable_new_recording_flow() -> bool {
+    cfg!(debug_assertions)
+}
+
+fn no(_: &bool) -> bool {
+    false
 }
 
 fn default_server_url() -> String {
@@ -118,8 +134,8 @@ impl Default for GeneralSettingsStore {
             custom_cursor_capture: false,
             server_url: default_server_url(),
             recording_countdown: Some(3),
-            _open_editor_after_recording: false,
-            enable_native_camera_preview: false,
+            enable_native_camera_preview: default_enable_native_camera_preview(),
+            enable_new_recording_flow: default_enable_new_recording_flow(),
         }
     }
 }

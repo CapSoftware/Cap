@@ -24,6 +24,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       autoCreateShareableLink: false,
       enableNotifications: true,
       enableNativeCameraPreview: false,
+      enableNewRecordingFlow: false,
     }
   );
 
@@ -65,6 +66,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 value={!!settings.enableNativeCameraPreview}
                 onChange={(value) =>
                   handleChange("enableNativeCameraPreview", value)
+                }
+              />
+              <ToggleSetting
+                label="New recording flow"
+                description="New and improved flow for starting a recording! You may need to close and reopen the main window for this to take effect."
+                value={!!settings.enableNewRecordingFlow}
+                onChange={(value) =>
+                  handleChange("enableNewRecordingFlow", value)
                 }
               />
             </div>

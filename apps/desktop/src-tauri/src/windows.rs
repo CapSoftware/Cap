@@ -2,11 +2,12 @@
 #![allow(unused_imports)]
 
 use crate::{
-    App, ArcLock, fake_window, general_settings::AppTheme, permissions,
+    App, ArcLock, fake_window,
+    general_settings::{AppTheme, GeneralSettingsStore},
+    permissions,
     target_select_overlay::WindowFocusManager,
 };
 use cap_displays::DisplayId;
-use cap_flags::FLAGS;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
 use serde::Deserialize;
@@ -223,15 +224,14 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
+                    let new_recording_flow = GeneralSettingsStore::get(&app)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.enable_new_recording_flow)
+                        .unwrap_or_default();
+
                     let window = self
-                        .window_builder(
-                            app,
-                            if FLAGS.new_recording_flow {
-                                "/new-main"
-                            } else {
-                                "/"
-                            },
-                        )
+                        .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
@@ -240,7 +240,7 @@ impl ShowCapWindow {
                         .center()
                         .build()?;
 
-                    if FLAGS.new_recording_flow {
+                    if new_recording_flow {
                         #[cfg(target_os = "macos")]
                         crate::platform::set_window_level(window.as_ref().window(), 50);
                     }
