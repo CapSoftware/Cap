@@ -1960,8 +1960,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::export_captions_srt,
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
-            platform::force_main_window_to_top,
-            platform::refresh_window_layering,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
