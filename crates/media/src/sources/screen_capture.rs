@@ -459,7 +459,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         mut clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -653,7 +653,7 @@ fn inner<T: ScreenCaptureFormat>(
     ready_signal: crate::pipeline::task::PipelineReadySignal,
     mut control_signal: crate::pipeline::control::PipelineControlSignal,
     mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<Result<(), String>>,
-) {
+) -> Result<(), String> {
     trace!("Preparing screen capture source thread...");
 
     let maybe_capture_window_id = match &source.target {
@@ -666,7 +666,7 @@ fn inner<T: ScreenCaptureFormat>(
         Err(e) => {
             error!("Failed to build capturer: {e}");
             let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer".into())));
-            return;
+            return Err(e.to_string());
         }
     };
 
@@ -702,11 +702,11 @@ fn inner<T: ScreenCaptureFormat>(
                     ControlFlow::Break(res) => {
                         warn!("breaking from loop");
 
-                        if let Err(e) = res {
+                        if let Err(e) = &res {
                             error!("Capture loop broke with error: {}", e)
                         }
 
-                        break;
+                        return res;
                     }
                     ControlFlow::Continue(_) => {
                         continue;
@@ -717,6 +717,7 @@ fn inner<T: ScreenCaptureFormat>(
     }
 
     info!("Shut down screen capture source thread.");
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -745,7 +746,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 

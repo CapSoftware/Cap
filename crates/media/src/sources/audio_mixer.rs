@@ -169,7 +169,7 @@ impl PipelineSourceTask for AudioMixer {
         clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         self.run(
             || {
                 control_signal
@@ -180,6 +180,8 @@ impl PipelineSourceTask for AudioMixer {
             || {
                 let _ = ready_signal.send(Ok(()));
             },
-        )
+        );
+
+        Ok(())
     }
 }
