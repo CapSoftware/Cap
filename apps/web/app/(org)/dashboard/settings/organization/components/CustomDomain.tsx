@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../Contexts";
-import CustomDomainDialog from "./CustomDomainDialog";
+import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
 
 type DomainVerification = {
   type: string;
