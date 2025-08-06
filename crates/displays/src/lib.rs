@@ -90,6 +90,10 @@ impl Window {
             .collect()
     }
 
+    pub fn get_topmost_at_cursor() -> Option<Self> {
+        WindowImpl::get_topmost_at_cursor().map(Self)
+    }
+
     pub fn id(&self) -> WindowId {
         WindowId(self.0.id())
     }
