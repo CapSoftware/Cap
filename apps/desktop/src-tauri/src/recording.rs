@@ -968,9 +968,3 @@ fn project_config_from_recording(
         ..default_config.unwrap_or_default()
     }
 }
-
-#[cfg(test)]
-mod test {
-    #[test]
-    fn zoom_segment_gaps() {}
-}
