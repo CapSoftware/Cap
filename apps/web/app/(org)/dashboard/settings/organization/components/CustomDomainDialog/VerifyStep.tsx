@@ -336,7 +336,7 @@ export const VerifyStep = ({
             )}
             Check Status
           </Button>
-          {!isVerified ? (
+          {isVerified ? (
             <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-900 rounded-full">
               <CheckCircle className="text-green-200 size-3" />
               <p className="text-xs font-medium text-white">Domain verified</p>
