@@ -84,9 +84,9 @@ impl<'de> Deserialize<'de> for CursorShape {
             )),
             "Windows" => Ok(CursorShape::Windows(
                 CursorShapeWindows::from_str(variant).map_err(|err| {
-                    serde::de::Error::custom(
-                        format!("Failed to parse MacOS cursor variant: {err}",),
-                    )
+                    serde::de::Error::custom(format!(
+                        "Failed to parse Windows cursor variant: {err}",
+                    ))
                 })?,
             )),
             _ => Err(serde::de::Error::custom("Failed to parse CursorShape kind")),

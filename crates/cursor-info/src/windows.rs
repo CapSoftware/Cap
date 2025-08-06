@@ -40,7 +40,7 @@ pub enum CursorShapeWindows {
     /// MAKEINTRESOURCE(32631)
     Pen,
     /// MAKEINTRESOURCE(32652)
-    ScrolNS,
+    ScrollNS,
     /// MAKEINTRESOURCE(32653)
     ScrollWE,
     /// MAKEINTRESOURCE(32654)
@@ -154,60 +154,114 @@ impl CursorShapeWindows {
 }
 
 #[cfg(target_os = "windows")]
-impl TryFrom<&windows::Win32::UI::WindowsAndMessaging::HCURSOR> for super::CursorShape {
-    type Error = ();
+mod windows {
+    use super::*;
+    use std::{collections::HashMap, sync::OnceLock};
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{
+            IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
+            IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
+            IDC_UPARROW, IDC_WAIT, LoadCursorW,
+        },
+        core::PCWSTR,
+    };
 
-    fn try_from(
-        cursor: &windows::Win32::UI::WindowsAndMessaging::HCURSOR,
-    ) -> Result<Self, Self::Error> {
-        use windows::{
-            Win32::UI::WindowsAndMessaging::{
-                IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO,
-                IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
-                IDC_SIZEWE, IDC_UPARROW, IDC_WAIT, LoadCursorW,
-            },
-            core::PCWSTR,
-        };
+    static CURSOR_CACHE: OnceLock<HashMap<*mut std::ffi::c_void, CursorShapeWindows>> =
+        OnceLock::new();
 
-        #[inline]
-        fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
-            unsafe { LoadCursorW(None, lpcursorname) }
-                .expect("Failed to load default system cursors")
-                .0
+    fn get_cursor_cache() -> &'static HashMap<*mut std::ffi::c_void, CursorShapeWindows> {
+        CURSOR_CACHE.get_or_init(|| {
+            #[inline]
+            fn load_cursor(lpcursorname: PCWSTR) -> *mut std::ffi::c_void {
+                unsafe { LoadCursorW(None, lpcursorname) }
+                    .expect("Failed to load default system cursors")
+                    .0
+            }
+
+            let mut cursors = HashMap::new();
+
+            cursors.insert(load_cursor(IDC_ARROW), CursorShapeWindows::Arrow);
+            cursors.insert(load_cursor(IDC_IBEAM), CursorShapeWindows::IBeam);
+            cursors.insert(load_cursor(IDC_WAIT), CursorShapeWindows::Wait);
+            cursors.insert(load_cursor(IDC_CROSS), CursorShapeWindows::Cross);
+            cursors.insert(load_cursor(IDC_UPARROW), CursorShapeWindows::UpArrow);
+            cursors.insert(load_cursor(IDC_SIZENWSE), CursorShapeWindows::SizeNWSE);
+            cursors.insert(load_cursor(IDC_SIZENESW), CursorShapeWindows::SizeNESW);
+            cursors.insert(load_cursor(IDC_SIZEWE), CursorShapeWindows::SizeWE);
+            cursors.insert(load_cursor(IDC_SIZENS), CursorShapeWindows::SizeNS);
+            cursors.insert(load_cursor(IDC_SIZEALL), CursorShapeWindows::SizeAll);
+            cursors.insert(load_cursor(IDC_NO), CursorShapeWindows::No);
+            cursors.insert(load_cursor(IDC_HAND), CursorShapeWindows::Hand);
+            cursors.insert(
+                load_cursor(IDC_APPSTARTING),
+                CursorShapeWindows::AppStarting,
+            );
+            cursors.insert(load_cursor(IDC_HELP), CursorShapeWindows::Help);
+            cursors.insert(load_cursor(IDC_PIN), CursorShapeWindows::Pin);
+            cursors.insert(load_cursor(IDC_PERSON), CursorShapeWindows::Person);
+            cursors.insert(load_cursor(PCWSTR(32631u16 as _)), CursorShapeWindows::Pen);
+            cursors.insert(
+                load_cursor(PCWSTR(32652u16 as _)),
+                CursorShapeWindows::ScrollNS,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32653u16 as _)),
+                CursorShapeWindows::ScrollWE,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32654u16 as _)),
+                CursorShapeWindows::ScrollNSEW,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32655u16 as _)),
+                CursorShapeWindows::ScrollN,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32656u16 as _)),
+                CursorShapeWindows::ScrollS,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32657u16 as _)),
+                CursorShapeWindows::ScrollW,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32658u16 as _)),
+                CursorShapeWindows::ScrollE,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32659u16 as _)),
+                CursorShapeWindows::ScrollNW,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32660u16 as _)),
+                CursorShapeWindows::ScrollNE,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32661u16 as _)),
+                CursorShapeWindows::ScrollSW,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32662u16 as _)),
+                CursorShapeWindows::ScrollSE,
+            );
+            cursors.insert(
+                load_cursor(PCWSTR(32663u16 as _)),
+                CursorShapeWindows::ArrowCD,
+            );
+
+            cursors
+        })
+    }
+
+    impl TryFrom<&HCURSOR> for super::CursorShape {
+        type Error = ();
+
+        fn try_from(cursor: &HCURSOR) -> Result<Self, Self::Error> {
+            match get_cursor_cache().get(&cursor.0) {
+                Some(cursor_shape) => Ok(super::CursorShape::Windows(*cursor_shape)),
+                None => Err(()),
+            }
         }
-
-        Ok(super::CursorShape::Windows(match cursor.0 {
-            ptr if ptr == load_cursor(IDC_ARROW) => CursorShapeWindows::Arrow,
-            ptr if ptr == load_cursor(IDC_IBEAM) => CursorShapeWindows::IBeam,
-            ptr if ptr == load_cursor(IDC_WAIT) => CursorShapeWindows::Wait,
-            ptr if ptr == load_cursor(IDC_CROSS) => CursorShapeWindows::Cross,
-            ptr if ptr == load_cursor(IDC_UPARROW) => CursorShapeWindows::UpArrow,
-            ptr if ptr == load_cursor(IDC_SIZENWSE) => CursorShapeWindows::SizeNWSE,
-            ptr if ptr == load_cursor(IDC_SIZENESW) => CursorShapeWindows::SizeNESW,
-            ptr if ptr == load_cursor(IDC_SIZEWE) => CursorShapeWindows::SizeWE,
-            ptr if ptr == load_cursor(IDC_SIZENS) => CursorShapeWindows::SizeNS,
-            ptr if ptr == load_cursor(IDC_SIZEALL) => CursorShapeWindows::SizeAll,
-            ptr if ptr == load_cursor(IDC_NO) => CursorShapeWindows::No,
-            ptr if ptr == load_cursor(IDC_HAND) => CursorShapeWindows::Hand,
-            ptr if ptr == load_cursor(IDC_APPSTARTING) => CursorShapeWindows::AppStarting,
-            ptr if ptr == load_cursor(IDC_HELP) => CursorShapeWindows::Help,
-            ptr if ptr == load_cursor(IDC_PIN) => CursorShapeWindows::Pin,
-            ptr if ptr == load_cursor(IDC_PERSON) => CursorShapeWindows::Person,
-            ptr if ptr == load_cursor(PCWSTR(32631u16 as _)) => CursorShapeWindows::Pen,
-            ptr if ptr == load_cursor(PCWSTR(32652u16 as _)) => CursorShapeWindows::ScrolNS,
-            ptr if ptr == load_cursor(PCWSTR(32653u16 as _)) => CursorShapeWindows::ScrollWE,
-            ptr if ptr == load_cursor(PCWSTR(32654u16 as _)) => CursorShapeWindows::ScrollNSEW,
-            ptr if ptr == load_cursor(PCWSTR(32655u16 as _)) => CursorShapeWindows::ScrollN,
-            ptr if ptr == load_cursor(PCWSTR(32656u16 as _)) => CursorShapeWindows::ScrollS,
-            ptr if ptr == load_cursor(PCWSTR(32657u16 as _)) => CursorShapeWindows::ScrollW,
-            ptr if ptr == load_cursor(PCWSTR(32658u16 as _)) => CursorShapeWindows::ScrollE,
-            ptr if ptr == load_cursor(PCWSTR(32659u16 as _)) => CursorShapeWindows::ScrollNW,
-            ptr if ptr == load_cursor(PCWSTR(32660u16 as _)) => CursorShapeWindows::ScrollNE,
-            ptr if ptr == load_cursor(PCWSTR(32661u16 as _)) => CursorShapeWindows::ScrollSW,
-            ptr if ptr == load_cursor(PCWSTR(32662u16 as _)) => CursorShapeWindows::ScrollSE,
-            ptr if ptr == load_cursor(PCWSTR(32663u16 as _)) => CursorShapeWindows::ArrowCD,
-            _ => return Err(()),
-        }))
     }
 }
 
