@@ -339,6 +339,12 @@ pub async fn start_recording(
             .unwrap_or_default()
             .perform(&window);
     }
+    if let Some(window) = CapWindowId::NewMain.get(&app) {
+        let _ = general_settings
+            .map(|v| v.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+            .perform(&window);
+    }
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
     let _ = ShowCapWindow::InProgressRecording { countdown }
