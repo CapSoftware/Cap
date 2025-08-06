@@ -1,5 +1,5 @@
 use std::{
-    ops::{Add, Div, Mul, Sub},
+    ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
 
@@ -145,6 +145,16 @@ impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
             x: self.x / other.x,
             y: self.y / other.y,
         }
+    }
+}
+
+impl<T> SubAssign for XY<T>
+where
+    T: SubAssign + Copy,
+{
+    fn sub_assign(&mut self, rhs: Self) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
     }
 }
 

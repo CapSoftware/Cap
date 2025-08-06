@@ -8,8 +8,8 @@ use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, STANDARD_CURSOR_HEIGHT,
-    zoom::InterpolatedZoom,
+    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
+    STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -243,7 +243,6 @@ impl CursorLayer {
             // Attempt to find and load a higher-quality SVG cursor included in Cap.
             // These are used instead of the OS provided cursor images when possible as the quality is better.
             if let Some(cursor_hash) = cursor_hash
-                && !uniforms.project.cursor.raw
                 && uniforms.project.cursor.use_svg
             {
                 if let Some(info) = ResolvedCursor::from_hash(cursor_hash) {
@@ -288,7 +287,7 @@ impl CursorLayer {
             return;
         };
 
-        let cursor_base_size_px = {
+        let size = {
             let cursor_texture_size = cursor_texture.texture.size();
             let cursor_texture_size_aspect =
                 cursor_texture_size.width as f32 / cursor_texture_size.height as f32;
@@ -301,47 +300,54 @@ impl CursorLayer {
             let factor = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
                 * uniforms.output_size.1 as f32;
 
-            let cursor_size_constant =
-                factor * cursor_size_percentage * zoom.display_amount() as f32;
+            let cursor_size_constant = factor * cursor_size_percentage;
 
-            if cursor_texture_size_aspect > 1.0 {
+            Coord::<FrameSpace>::new(if cursor_texture_size_aspect > 1.0 {
                 // Wide cursor: base sizing on width to prevent excessive width
                 let width = cursor_size_constant;
                 let height = cursor_size_constant / cursor_texture_size_aspect;
-                XY::new(width, height)
+                XY::new(width, height).into()
             } else {
                 // Tall or square cursor: base sizing on height (current behavior)
                 XY::new(
                     cursor_size_constant * cursor_texture_size_aspect,
                     cursor_size_constant,
                 )
-            }
+                .into()
+            })
         };
 
+        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
+
+        let position = interpolated_cursor.position.to_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+        ) - hotspot;
+
+        let zoomed_position = position.to_zoomed_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+            zoom,
+        );
+
+        let zoomed_size = (position + size).to_zoomed_frame_space(
+            &constants.options,
+            &uniforms.project,
+            resolution_base,
+            zoom,
+        ) - zoomed_position;
+
         let click_scale_factor = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0)
+        	// lerp shrink size
             * (1.0 - CLICK_SHRINK_SIZE)
             + CLICK_SHRINK_SIZE;
 
-        let cursor_size_px: XY<f64> = (cursor_base_size_px * click_scale_factor).into();
-
-        let hotspot_px = cursor_texture.hotspot * cursor_size_px;
-
-        let position = {
-            let mut frame_position = interpolated_cursor.position.to_frame_space(
-                &constants.options,
-                &uniforms.project,
-                resolution_base,
-            );
-
-            frame_position.coord = frame_position.coord - hotspot_px.map(|v| v as f64);
-
-            frame_position
-                .to_zoomed_frame_space(&constants.options, &uniforms.project, resolution_base, zoom)
-                .coord
-        };
+        let cursor_size_px = zoomed_size.coord * click_scale_factor as f64;
 
         let uniforms = CursorUniforms {
-            position: [position.x as f32, position.y as f32],
+            position: [zoomed_position.x as f32, zoomed_position.y as f32],
             size: [cursor_size_px.x as f32, cursor_size_px.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
@@ -526,22 +532,15 @@ impl CursorTexture {
         // Calculate scale to fit the SVG into the target size while maintaining aspect ratio
         let scale_x = width as f32 / rtree.size().width();
         let scale_y = SVG_CURSOR_RASTERIZED_HEIGHT as f32 / rtree.size().height();
-        let scale = scale_x.min(scale_y) * 1.5;
-        let transform = tiny_skia::Transform::from_row(
-            scale,
-            0.0,
-            0.0,
-            scale,
-            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
-            (SVG_CURSOR_RASTERIZED_HEIGHT / 4) as f32 * -1.0,
-        );
+        let scale = scale_x.min(scale_y);
+        let transform = tiny_skia::Transform::from_scale(scale, scale);
 
         resvg::render(&rtree, transform, &mut pixmap.as_mut());
 
         let rgba: Vec<u8> = pixmap
             .pixels()
             .iter()
-            .flat_map(|p| [p.red(), p.green(), p.red(), p.alpha()])
+            .flat_map(|p| [p.red(), p.green(), p.blue(), p.alpha()])
             .collect();
 
         Ok(Self::prepare(

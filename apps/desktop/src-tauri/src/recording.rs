@@ -192,7 +192,7 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     CameraFeed::list_cameras()
 }
 
-#[derive(Deserialize, Type, Clone)]
+#[derive(Deserialize, Type, Clone, Debug)]
 pub struct StartRecordingInputs {
     pub capture_target: ScreenCaptureTarget,
     #[serde(default)]
@@ -325,6 +325,12 @@ pub async fn start_recording(
                 .await;
         }
         _ => {}
+    }
+
+    // Set pending state BEFORE closing main window and starting countdown
+    {
+        let mut state = state_mtx.write().await;
+        state.set_pending_recording();
     }
 
     if let Some(window) = CapWindowId::Main.get(&app) {
@@ -496,7 +502,7 @@ pub async fn start_recording(
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
+    if let Some(recording) = state.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
     }
 
@@ -508,7 +514,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
+    if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
     }
 
@@ -595,7 +601,7 @@ async fn handle_recording_end(
     app: &mut App,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
-    app.current_recording.take();
+    app.clear_current_recording();
 
     let res = if let Some(recording) = recording {
         // we delay reporting errors here so that everything else happens first
