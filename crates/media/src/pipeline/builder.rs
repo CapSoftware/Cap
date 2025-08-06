@@ -45,8 +45,7 @@ impl<T> PipelineBuilder<T> {
         let control_signal = self.control.add_listener(name.clone());
 
         self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal);
-            Ok(())
+            task.run(clock, ready_signal, control_signal)
         });
     }
 

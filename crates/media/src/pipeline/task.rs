@@ -14,7 +14,7 @@ pub trait PipelineSourceTask: Send {
         clock: Self::Clock,
         ready_signal: PipelineReadySignal,
         control_signal: PipelineControlSignal,
-    );
+    ) -> Result<(), String>;
 
     fn queue_size(&self) -> usize {
         DEFAULT_QUEUE_SIZE

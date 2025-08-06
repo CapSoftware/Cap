@@ -244,7 +244,7 @@ pub struct CursorMeta {
     pub image_path: RelativePathBuf,
     pub hotspot: XY<f64>,
     #[serde(default)]
-    pub hash: Option<String>,
+    pub shape: Option<cap_cursor_info::CursorShape>,
 }
 
 impl MultipleSegments {
