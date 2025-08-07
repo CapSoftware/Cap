@@ -9,7 +9,10 @@ use std::{
     os::windows::ffi::OsStringExt,
     ptr::null_mut,
     slice::from_raw_parts,
-    sync::{Mutex, Mutex},
+    sync::{
+        Mutex,
+        mpsc::{Receiver, Sender, channel},
+    },
     time::{Duration, Instant},
 };
 
@@ -17,9 +20,9 @@ use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
-    System::Com::{CLSCTX_I, CLSCTX_INPROC_SERVER, CLSCTX_INPROC_SERVER},
+    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
 };
-use windows_core::{implement, implement, implement, implement};
+use windows_core::{ComObjectInner, PWSTR, implement};
 
 pub fn initialize_mediafoundation() -> windows_core::Result<()> {
     unsafe { CoInitialize(None) }.ok()?;

@@ -47,6 +47,7 @@ impl RelativeCursorPosition {
 
         #[cfg(windows)]
         {
+            let _ = (raw, display);
             todo!()
         }
     }
@@ -75,6 +76,7 @@ impl RelativeCursorPosition {
         };
 
         #[cfg(windows)]
+        #[allow(unused_variables)]
         let (x, y) = {
             todo!();
             // let display_bounds = self.display().raw_handle().bounds();

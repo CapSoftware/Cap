@@ -16,7 +16,7 @@ use windows::{
         Foundation::*,
         Media::{
             DirectShow::*,
-            KernelStreaming::{IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER},
+            KernelStreaming::{IKsPropertySet, KS_VIDEOINFOHEADER},
             MediaFoundation::*,
         },
         System::{
@@ -33,7 +33,12 @@ pub fn initialize_directshow() -> windows_core::Result<()> {
 }
 
 pub trait IPinExt {
+    /// # Safety
+    /// Do it correctly
     unsafe fn matches_category(&self, category: GUID) -> bool;
+
+    /// # Safety
+    /// Do it correctly
     unsafe fn matches_major_type(&self, major_type: GUID) -> bool;
 }
 
@@ -193,11 +198,11 @@ impl<'a> IAMStreamConfigMediaTypes<'a> {
 }
 
 pub trait IAMStreamConfigExt {
-    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes>;
+    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes<'_>>;
 }
 
 impl IAMStreamConfigExt for IAMStreamConfig {
-    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes> {
+    fn media_types(&self) -> windows_core::Result<IAMStreamConfigMediaTypes<'_>> {
         let mut count = 0;
         unsafe { self.GetNumberOfCapabilities(&mut count, &mut 0) }?;
 
@@ -282,6 +287,8 @@ pub trait IPropertyBagExt {
 }
 
 impl IPropertyBagExt for IPropertyBag {
+    /// # Safety
+    /// Do it correctly
     unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
         P0: windows_core::Param<windows_core::PCWSTR>,
@@ -403,7 +410,7 @@ impl VideoInputDevice {
             .and_then(|v| get_device_model_id(&v.to_string_lossy()))
     }
 
-    pub fn media_types(&self) -> Option<VideoMediaTypesIterator> {
+    pub fn media_types(&self) -> Option<VideoMediaTypesIterator<'_>> {
         self.stream_config
             .media_types()
             .map(|inner| VideoMediaTypesIterator { inner })
@@ -797,34 +804,34 @@ struct SinkInputPin {
     first_ref_time: RefCell<Option<Instant>>,
 }
 
-impl SinkInputPin {
-    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool {
-        unsafe {
-            let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
+// impl SinkInputPin {
+//     unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool {
+//         unsafe {
+//             let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
 
-            video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
-            video_info_header.bmiHeader.biPlanes = 1;
-            video_info_header.bmiHeader.biClrImportant = 0;
-            video_info_header.bmiHeader.biClrUsed = 0;
+//             video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
+//             video_info_header.bmiHeader.biPlanes = 1;
+//             video_info_header.bmiHeader.biClrImportant = 0;
+//             video_info_header.bmiHeader.biClrUsed = 0;
 
-            media_type.majortype = MEDIATYPE_Video;
-            media_type.formattype = FORMAT_VideoInfo;
-            media_type.bTemporalCompression = false.into();
+//             media_type.majortype = MEDIATYPE_Video;
+//             media_type.formattype = FORMAT_VideoInfo;
+//             media_type.bTemporalCompression = false.into();
 
-            if index == 0 {
-                video_info_header.bmiHeader.biCompression =
-                    u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
-                video_info_header.bmiHeader.biBitCount = 16;
-                video_info_header.bmiHeader.biWidth = 640;
-                video_info_header.bmiHeader.biHeight = 480;
-                media_type.subtype = MEDIASUBTYPE_YUY2;
-                true
-            } else {
-                false
-            }
-        }
-    }
-}
+//             if index == 0 {
+//                 video_info_header.bmiHeader.biCompression =
+//                     u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
+//                 video_info_header.bmiHeader.biBitCount = 16;
+//                 video_info_header.bmiHeader.biWidth = 640;
+//                 video_info_header.bmiHeader.biHeight = 480;
+//                 media_type.subtype = MEDIASUBTYPE_YUY2;
+//                 true
+//             } else {
+//                 false
+//             }
+//         }
+//     }
+// }
 
 impl IPin_Impl for SinkInputPin_Impl {
     fn Connect(
@@ -1149,7 +1156,7 @@ unsafe fn copy_media_type(src: &AM_MEDIA_TYPE) -> AM_MEDIA_TYPE {
 }
 
 fn get_device_model_id(device_id: &str) -> Option<String> {
-    const VID_PID_SIZE: usize = 4;
+    // const VID_PID_SIZE: usize = 4;
 
     let vid_location = device_id.find("vid_")?;
     let pid_location = device_id.find("pid_")?;
