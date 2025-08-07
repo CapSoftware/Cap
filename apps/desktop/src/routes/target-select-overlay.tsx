@@ -129,11 +129,9 @@ export default function () {
                   <Show when={windowUnderCursor.icon}>
                     {(icon) => (
                       <img
-                        src={`data:image/png;base64,${btoa(
-                          String.fromCharCode(...new Uint8Array(icon()))
-                        )}`}
+                        src={icon()}
                         alt={`${windowUnderCursor.app_name} icon`}
-                        class="w-16 h-16 mb-3 rounded-lg"
+                        class="w-32 h-32 mb-3 rounded-lg"
                       />
                     )}
                   </Show>

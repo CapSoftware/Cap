@@ -122,7 +122,7 @@ impl Window {
         &self.0
     }
 
-    pub fn app_icon(&self) -> Option<Vec<u8>> {
+    pub fn app_icon(&self) -> Option<String> {
         self.0.app_icon()
     }
 }

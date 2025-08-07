@@ -1,5 +1,7 @@
 use std::{ffi::c_void, str::FromStr};
 
+use base64::prelude::*;
+
 use core_foundation::{base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
@@ -311,7 +313,7 @@ impl WindowImpl {
         })
     }
 
-    pub fn app_icon(&self) -> Option<Vec<u8>> {
+    pub fn app_icon(&self) -> Option<String> {
         use cocoa::base::{id, nil};
         use cocoa::foundation::{NSArray, NSAutoreleasePool, NSString};
         use objc::{class, msg_send, sel, sel_impl};
@@ -370,7 +372,12 @@ impl WindowImpl {
                                             if !bytes_ptr.is_null() && length > 0 {
                                                 let bytes =
                                                     std::slice::from_raw_parts(bytes_ptr, length);
-                                                app_icon_data = Some(bytes.to_vec());
+                                                let base64_string =
+                                                    base64::prelude::BASE64_STANDARD.encode(bytes);
+                                                app_icon_data = Some(format!(
+                                                    "data:image/png;base64,{}",
+                                                    base64_string
+                                                ));
                                             }
                                         }
                                     }

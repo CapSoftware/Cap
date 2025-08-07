@@ -28,7 +28,7 @@ pub struct WindowUnderCursor {
     id: WindowId,
     app_name: String,
     bounds: LogicalBounds,
-    icon: Option<Vec<u8>>,
+    icon: Option<String>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -51,7 +51,7 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
             .await;
     }
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         loop {
             let display = cap_displays::Display::get_containing_cursor();
             let window = cap_displays::Window::get_topmost_at_cursor();
@@ -96,6 +96,7 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
 // Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
 #[derive(Default)]
 pub struct WindowFocusManager {
+    // target_select_overlays: Option<JoinHandle<()>>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
