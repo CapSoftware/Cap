@@ -64,13 +64,13 @@ export function CustomDomain() {
           <div className="flex gap-3 items-center pt-3">
             {isVerified && orgCustomDomain ? (
               <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-green-900 rounded-full">
-                <CheckCircle className="text-green-200 size-3.5" />
+                <CheckCircle className="text-green-200 size-3" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">verified</span></p>
               </div>
             ) : orgCustomDomain ? (
               <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-red-900 rounded-full">
-                <XCircle className="text-red-200 size-3.5" />
+                <XCircle className="text-red-200 size-3" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">not verified</span></p>
               </div>

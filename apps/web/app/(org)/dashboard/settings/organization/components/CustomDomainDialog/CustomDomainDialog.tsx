@@ -118,6 +118,7 @@ const CustomDomainDialog = ({
   );
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
+  const [initialConfigLoading, setInitialConfigLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -145,6 +146,10 @@ const CustomDomainDialog = ({
         activeOrganization.organization.id
       );
 
+      if (domainConfig === null) {
+        setInitialConfigLoading(true);
+      }
+
       setIsVerified(data.verified);
       setDomainConfig(data.config);
 
@@ -168,6 +173,7 @@ const CustomDomainDialog = ({
       }
     } finally {
       setVerifying(false);
+      setInitialConfigLoading(false);
     }
   };
 
@@ -371,6 +377,7 @@ const CustomDomainDialog = ({
           {currentStep.id === 'verify' && (
             <VerifyStep
               domain={domain}
+              initialConfigLoading={initialConfigLoading}
               domainConfig={domainConfig}
               isVerified={isVerified}
             />
@@ -381,67 +388,70 @@ const CustomDomainDialog = ({
             <SuccesStep />
           )}
         </div>
-        <DialogFooter>
 
-          {currentStep.id === "verify" && (
-            <div className="flex justify-between items-center w-full">
-              <div className="flex gap-3 items-center">
-                {isVerified ? (
-                  <div className="flex gap-2 items-center px-3 h-10 bg-green-900 rounded-full">
-                    <CheckCircle className="text-green-200 size-4" />
-                    <p className="text-sm font-medium text-white">Domain verified</p>
-                  </div>
-                ) : (
-                  <div className="flex gap-2 items-center px-3 h-10 bg-red-900 rounded-full">
-                    <XCircle className="text-red-200 size-4" />
-                    <p className="text-sm font-medium text-white">Domain not verified</p>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2 items-center">
-                <Button
-                  type="button"
-                  variant="gray"
-                  size="sm"
-                  onClick={() => checkVerification(false)}
-                  disabled={verifying}
-                  className="min-w-[100px]"
-                >
-                  {verifying ? (
-                    <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3.5" icon={faRefresh} />
+        {currentStep.id !== 'succses' && (
+          <DialogFooter>
+
+            {currentStep.id === "verify" && (
+              <div className="flex justify-between items-center w-full">
+                <div className="flex gap-3 items-center">
+                  {isVerified ? (
+                    <div className="flex gap-2 items-center px-3 h-10 bg-green-900 rounded-full">
+                      <CheckCircle className="text-green-200 size-4" />
+                      <p className="text-sm font-medium text-white">Domain verified</p>
+                    </div>
                   ) : (
-                    <FontAwesomeIcon className="mr-1 opacity-70 size-3.5" icon={faRefresh} />
+                    <div className="flex gap-2 items-center px-3 h-10 bg-red-900 rounded-full">
+                      <XCircle className="text-red-200 size-4" />
+                      <p className="text-sm font-medium text-white">Domain not verified</p>
+                    </div>
                   )}
-                  Check Status
-                </Button>
-
-                {isVerified && (
+                </div>
+                <div className="flex gap-2 items-center">
                   <Button
-                    onClick={handleNext}
+                    type="button"
+                    variant="gray"
                     size="sm"
-                    variant="dark"
-                    className="min-w-[80px]"
+                    onClick={() => checkVerification(false)}
+                    disabled={verifying}
+                    className="min-w-[100px]"
                   >
-                    Next
+                    {verifying ? (
+                      <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3.5" icon={faRefresh} />
+                    ) : (
+                      <FontAwesomeIcon className="mr-1 opacity-70 size-3.5" icon={faRefresh} />
+                    )}
+                    Check Status
                   </Button>
-                )}
-              </div>
-            </div>
-          )}
 
-          {currentStep.id === 'domain' && (
-            <Button
-              onClick={handleDomainSubmit}
-              size="sm"
-              spinner={loading}
-              disabled={loading || !domain.trim()}
-              variant="dark"
-              className="min-w-[100px]"
-            >
-              Next
-            </Button>
-          )}
-        </DialogFooter>
+                  {isVerified && (
+                    <Button
+                      onClick={handleNext}
+                      size="sm"
+                      variant="dark"
+                      className="min-w-[80px]"
+                    >
+                      Next
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {currentStep.id === 'domain' && (
+              <Button
+                onClick={handleDomainSubmit}
+                size="sm"
+                spinner={loading}
+                disabled={loading || !domain.trim()}
+                variant="dark"
+                className="min-w-[100px]"
+              >
+                Next
+              </Button>
+            )}
+          </DialogFooter>
+        )}
 
       </DialogContent>
     </Dialog>
