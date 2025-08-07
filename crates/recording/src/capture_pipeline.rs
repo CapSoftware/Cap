@@ -10,16 +10,13 @@ use cap_media::{
     feeds::AudioInputFeed,
     pipeline::{RealTimeClock, builder::PipelineBuilder},
     sources::{
-        AVFrameCapture, AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
-        ScreenCaptureSource, ScreenCaptureTarget,
+        AVFrameCapture, AudioInputSource, AudioMixer, ScreenCaptureFormat, ScreenCaptureSource,
+        ScreenCaptureTarget,
     },
 };
 use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
 use cap_media_info::AudioInfo;
-use ffmpeg::ffi::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
-use tokio::sync::oneshot;
-use tracing::error;
 
 use crate::RecordingError;
 
@@ -149,8 +146,11 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         ));
 
         use cidre::cm;
+        use ffmpeg::ffi::AV_TIME_BASE_Q;
+        use tracing::error;
 
-        let (first_frame_tx, mut first_frame_rx) = oneshot::channel::<(cm::Time, f64)>();
+        let (first_frame_tx, mut first_frame_rx) =
+            tokio::sync::oneshot::channel::<(cm::Time, f64)>();
 
         if has_audio_sources {
             builder.spawn_source("audio_mixer", audio_mixer);
@@ -360,7 +360,7 @@ type ScreenCaptureReturn<T> = (
 );
 
 #[cfg(target_os = "macos")]
-pub type ScreenCaptureMethod = CMSampleBufferCapture;
+pub type ScreenCaptureMethod = cap_media::sources::CMSampleBufferCapture;
 
 #[cfg(not(target_os = "macos"))]
 pub type ScreenCaptureMethod = AVFrameCapture;

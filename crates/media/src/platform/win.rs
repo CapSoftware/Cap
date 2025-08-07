@@ -44,13 +44,17 @@ unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     let mut lpexename = [0u16; 1024];
     let mut lpdwsize = lpexename.len() as u32;
 
-    let query = QueryFullProcessImageNameW(
-        handle,
-        PROCESS_NAME_FORMAT::default(),
-        windows::core::PWSTR(lpexename.as_mut_ptr()),
-        &mut lpdwsize,
-    );
-    CloseHandle(handle).ok();
+    let query = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT::default(),
+            windows::core::PWSTR(lpexename.as_mut_ptr()),
+            &mut lpdwsize,
+        )
+    };
+    unsafe {
+        CloseHandle(handle).ok();
+    }
     query?;
 
     let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
@@ -64,9 +68,9 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         if hwnd.is_invalid() {
             return TRUE;
         }
-        let windows = &mut *(lparam.0 as *mut Vec<Window>);
+        let windows = unsafe { &mut *(lparam.0 as *mut Vec<Window>) };
 
-        if !IsWindowVisible(hwnd).as_bool() {
+        if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
             return TRUE;
         }
 
@@ -84,16 +88,16 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         }
 
         let mut process_id = 0;
-        let _thrad_id = GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        let _thrad_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
 
-        let wnamelen = GetWindowTextLengthW(hwnd);
+        let wnamelen = unsafe { GetWindowTextLengthW(hwnd) };
         if wnamelen == 0 {
             return TRUE;
         }
         let mut wname = [0u16; 512];
-        let len = GetWindowTextW(hwnd, &mut wname);
+        let len = unsafe { GetWindowTextW(hwnd, &mut wname) };
 
-        let owner_process_path = match pid_to_exe_path(process_id) {
+        let owner_process_path = match unsafe { pid_to_exe_path(process_id) } {
             Ok(path) => path,
             Err(_) => return TRUE,
         };
@@ -110,18 +114,20 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         // Windows 10 build 1607 or later
         // Credits: TAO src/platform_impl/windows/dpi.rs
         const BASE_DPI: u32 = 96;
-        let dpi = match GetDpiForWindow(hwnd) {
+        let _dpi = match GetDpiForWindow(hwnd) {
             0 => BASE_DPI,
             dpi => dpi,
         } as i32;
 
         let mut rect = RECT::default();
-        DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_EXTENDED_FRAME_BOUNDS,
-            &mut rect as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<RECT>() as u32,
-        )
+        unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut rect as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<RECT>() as u32,
+            )
+        }
         .ok();
 
         let rect_left = rect.left as f64;
@@ -164,23 +170,27 @@ pub fn monitor_bounds(id: u32) -> Bounds {
         _lprc_clip: *mut RECT,
         lparam: LPARAM,
     ) -> BOOL {
-        let (target_id, bounds) = &mut *(lparam.0 as *mut (u32, Option<Bounds>));
+        let (target_id, bounds) = unsafe { &mut *(lparam.0 as *mut (u32, Option<Bounds>)) };
 
         let mut minfo = MONITORINFOEXW::default();
         minfo.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-        if !GetMonitorInfoW(hmonitor, &mut minfo as *mut MONITORINFOEXW as *mut _).as_bool() {
+        if !unsafe { GetMonitorInfoW(hmonitor, &mut minfo as *mut MONITORINFOEXW as *mut _) }
+            .as_bool()
+        {
             return TRUE;
         }
 
         let mut display_device = DISPLAY_DEVICEW::default();
         display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
 
-        if !EnumDisplayDevicesW(
-            PWSTR(minfo.szDevice.as_ptr() as _),
-            0,
-            &mut display_device,
-            0,
-        )
+        if !unsafe {
+            EnumDisplayDevicesW(
+                PWSTR(minfo.szDevice.as_ptr() as _),
+                0,
+                &mut display_device,
+                0,
+            )
+        }
         .as_bool()
         {
             return TRUE;

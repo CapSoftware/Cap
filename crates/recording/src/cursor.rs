@@ -6,7 +6,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use cap_cursor_capture::RawCursorPosition;
 use cap_cursor_info::CursorShape;
 use cap_displays::Display;
 use cap_media::{platform::Bounds, sources::CropRatio};
@@ -67,7 +66,7 @@ pub fn spawn_cursor_recorder(
         let mut last_mouse_state = device_state.get_mouse();
 
         #[cfg(target_os = "macos")]
-        let mut last_position = RawCursorPosition::get();
+        let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
         // Create cursors directory if it doesn't exist
         std::fs::create_dir_all(&cursors_dir).unwrap();
@@ -138,7 +137,7 @@ pub fn spawn_cursor_recorder(
             // TODO: use this on windows too
             #[cfg(target_os = "macos")]
             let position = {
-                let position = RawCursorPosition::get();
+                let position = use cap_cursor_capture::RawCursorPosition::get();
 
                 if position != last_position {
                     last_position = position;
