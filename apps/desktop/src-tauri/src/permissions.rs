@@ -68,6 +68,8 @@ pub fn open_permission_settings(permission: OSPermission) {
 pub async fn request_permission(permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
+        use futures::executor::block_on;
+
         match permission {
             OSPermission::ScreenRecording => {
                 scap::request_permission();
