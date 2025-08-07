@@ -46,6 +46,7 @@ pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
+    let global_shortcut = app.global_shortcut();
     let displays = cap_displays::Display::list()
         .into_iter()
         .map(|d| d.id())
@@ -55,11 +56,6 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await;
     }
-
-    app.global_shortcut()
-        .register("Escape")
-        .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
-        .ok();
 
     let handle = tokio::spawn(async move {
         loop {
@@ -95,6 +91,12 @@ pub async fn open_target_select_overlays(
         .replace(handle)
     {
         task.abort();
+    } else {
+        // If task is already set we know we have already registered this.
+        global_shortcut
+            .register("Escape")
+            .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
+            .ok();
     }
 
     Ok(())
