@@ -68,13 +68,13 @@ export function CustomDomain() {
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">verified</span></p>
               </div>
-            ) : (
+            ) : orgCustomDomain ? (
               <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-red-900 rounded-full">
                 <XCircle className="text-red-200 size-3.5" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">not verified</span></p>
               </div>
-            )}
+            ) : null}
           </div>
         </div>
         <Button
