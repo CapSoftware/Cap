@@ -2233,8 +2233,25 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
-                                app.state::<target_select_overlay::WindowFocusManager>()
-                                    .destroy(&display_id);
+                                let focus_manager =
+                                    app.state::<target_select_overlay::WindowFocusManager>();
+
+                                focus_manager.destroy(&display_id);
+
+                                // We cleanup the task if this is the last overlay being closed
+                                if app
+                                    .webview_windows()
+                                    .into_iter()
+                                    .filter_map(|(label, _)| CapWindowId::from_str(&label).ok())
+                                    .filter(|id| {
+                                        matches!(id, CapWindowId::TargetSelectOverlay { .. })
+                                    })
+                                    .count()
+                                    == 0
+                                {
+                                    println!("It's the last one");
+                                    focus_manager.stop_task();
+                                }
                             }
                             _ => {}
                         };

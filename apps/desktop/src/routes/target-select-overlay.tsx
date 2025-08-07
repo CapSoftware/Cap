@@ -8,7 +8,6 @@ import {
   JSX,
   Match,
   onCleanup,
-  onMount,
   Show,
   Switch,
 } from "solid-js";

@@ -40,7 +40,10 @@ pub struct ScreenUnderCursor {
 
 #[specta::specta]
 #[tauri::command]
-pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
+pub async fn open_target_select_overlays(
+    app: AppHandle,
+    state: tauri::State<'_, WindowFocusManager>,
+) -> Result<(), String> {
     let displays = cap_displays::Display::list()
         .into_iter()
         .map(|d| d.id())
@@ -78,17 +81,31 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
         }
     });
 
+    if let Some(task) = state
+        .task
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .replace(handle)
+    {
+        task.abort();
+    }
+
     Ok(())
 }
 
 #[specta::specta]
 #[tauri::command]
-pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
+pub async fn close_target_select_overlays(
+    app: AppHandle,
+    state: tauri::State<'_, WindowFocusManager>,
+) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
             let _ = window.close();
         }
     }
+
+    state.stop_task();
 
     Ok(())
 }
@@ -96,7 +113,7 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
 // Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
 #[derive(Default)]
 pub struct WindowFocusManager {
-    // target_select_overlays: Option<JoinHandle<()>>,
+    task: Mutex<Option<JoinHandle<()>>>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
@@ -149,6 +166,17 @@ impl WindowFocusManager {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.remove(&id.to_string()) {
             let _ = task.abort();
+        }
+    }
+
+    pub fn stop_task(&self) {
+        if let Some(task) = self
+            .task
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            task.abort();
         }
     }
 }
