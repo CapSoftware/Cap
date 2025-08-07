@@ -4,17 +4,17 @@ import { revalidatePath } from 'next/cache'
 import { db } from "@cap/database"
 import { getCurrentUser } from "@cap/database/auth/session"
 import { sharedVideos, videos, spaces, organizationMembers, organizations, spaceVideos } from "@cap/database/schema"
-import { eq, and, inArray, or } from "drizzle-orm"
+import { eq, and, inArray } from "drizzle-orm"
 import { nanoId } from "@cap/database/helpers"
 
 interface ShareCapParams {
   capId: string
   spaceIds: string[]
+  public?: boolean
 }
 
-export async function shareCap({ capId, spaceIds }: ShareCapParams) {
+export async function shareCap({ capId, spaceIds, public: isPublic }: ShareCapParams) {
   try {
-    
     const user = await getCurrentUser()
     if (!user) {
       return { success: false, error: "Unauthorized" }
@@ -122,6 +122,15 @@ export async function shareCap({ capId, spaceIds }: ShareCapParams) {
         })
       }
     }
+
+    // Update public status if provided
+    if (typeof isPublic === 'boolean') {
+      await db()
+        .update(videos)
+        .set({ public: isPublic })
+        .where(eq(videos.id, capId))
+    }
+
     revalidatePath('/dashboard/caps')
     revalidatePath(`/dashboard/caps/${capId}`)
     return { success: true }
