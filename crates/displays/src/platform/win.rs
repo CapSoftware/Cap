@@ -1,8 +1,9 @@
 use std::{mem, str::FromStr};
 
+use base64::prelude::*;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
             DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject, ENUM_CURRENT_SETTINGS,
@@ -22,12 +23,11 @@ use windows::{
             },
         },
         UI::{
-            Shell::{ExtractIconExW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGetFileInfoW},
+            Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GetClassLongPtrW, GetCursorPos,
-                GetIconInfo, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, HICON,
-                ICONINFO, IsIconic, IsWindowVisible, LoadIconW, SendMessageW, WM_GETICON,
-                WindowFromPoint,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GetClassLongPtrW,
+                GetCursorPos, GetIconInfo, GetWindowRect, GetWindowThreadProcessId, HICON,
+                ICONINFO, IsIconic, IsWindowVisible, SendMessageW, WM_GETICON,
             },
         },
     },
@@ -267,7 +267,7 @@ impl DisplayImpl {
             if RegOpenKeyExW(
                 HKEY_LOCAL_MACHINE,
                 PCWSTR(registry_path_wide.as_ptr()),
-                0,
+                Some(0),
                 KEY_READ,
                 &mut key,
             )
@@ -499,11 +499,11 @@ impl WindowImpl {
             let mut buffer = vec![0u8; size as usize];
             if !GetFileVersionInfoW(
                 PCWSTR(wide_path.as_ptr()),
-                0,
+                Some(0),
                 size,
                 buffer.as_mut_ptr() as *mut _,
             )
-            .as_bool()
+            .is_ok()
             {
                 return None;
             }
@@ -533,10 +533,15 @@ impl WindowImpl {
         }
     }
 
-    pub fn app_icon(&self) -> Option<Vec<u8>> {
+    pub fn app_icon(&self) -> Option<String> {
         unsafe {
             // Try to get the window's icon first
-            let mut icon = SendMessageW(self.0, WM_GETICON, 1, 0); // ICON_BIG = 1
+            let mut icon = SendMessageW(
+                self.0,
+                WM_GETICON,
+                Some(WPARAM(1usize)),
+                Some(LPARAM(0isize)),
+            ); // ICON_BIG = 1
             if icon.0 == 0 {
                 // Try to get the class icon
                 icon.0 = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
@@ -602,17 +607,17 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes(&self, icon: HICON) -> Option<Vec<u8>> {
+    fn hicon_to_png_bytes(&self, icon: HICON) -> Option<String> {
         unsafe {
             // Get icon info
             let mut icon_info = ICONINFO::default();
-            if !GetIconInfo(icon, &mut icon_info).as_bool() {
+            if !GetIconInfo(icon, &mut icon_info).is_ok() {
                 return None;
             }
 
             // Get device context
-            let screen_dc = GetDC(HWND::default());
-            let mem_dc = CreateCompatibleDC(screen_dc);
+            let screen_dc = GetDC(Some(HWND::default()));
+            let mem_dc = CreateCompatibleDC(Some(screen_dc));
 
             // Assume 32x32 icon size (standard)
             let width = 32i32;
@@ -638,7 +643,7 @@ impl WindowImpl {
 
             // Create a bitmap
             let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-            let old_bitmap = SelectObject(mem_dc, bitmap);
+            let old_bitmap = SelectObject(mem_dc, bitmap.into());
 
             // Draw the icon onto the bitmap
             let _ = DrawIconEx(
@@ -650,7 +655,7 @@ impl WindowImpl {
                 height,
                 0,
                 Default::default(),
-                0x0003, // DI_NORMAL
+                DI_FLAGS(0x0003), // DI_NORMAL
             );
 
             // Get bitmap bits
@@ -667,11 +672,11 @@ impl WindowImpl {
 
             // Cleanup
             let _ = SelectObject(mem_dc, old_bitmap);
-            let _ = DeleteObject(bitmap);
+            let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(HWND::default(), screen_dc);
-            let _ = DeleteObject(icon_info.hbmColor);
-            let _ = DeleteObject(icon_info.hbmMask);
+            let _ = ReleaseDC(Some(HWND::default()), screen_dc);
+            let _ = DeleteObject(icon_info.hbmColor.into());
+            let _ = DeleteObject(icon_info.hbmMask.into());
 
             if result == 0 {
                 return None;
@@ -684,9 +689,9 @@ impl WindowImpl {
                 chunk.swap(0, 2);
             }
 
-            // Return raw RGBA data (not actual PNG, but usable image data)
-            // In a real implementation, you'd encode this as PNG using a library like image or png
-            Some(buffer)
+            // Encode as base64 data URL string to match macOS interface
+            let base64_string = BASE64_STANDARD.encode(&buffer);
+            Some(format!("data:image/png;base64,{}", base64_string))
         }
     }
 
