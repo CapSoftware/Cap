@@ -6,7 +6,10 @@ use std::{
 };
 
 use crate::windows::{CapWindowId, ShowCapWindow};
-use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
+use cap_displays::{
+    DisplayId, WindowId,
+    bounds::{LogicalBounds, PhysicalSize},
+};
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -17,6 +20,7 @@ use tokio::task::JoinHandle;
 pub struct TargetUnderCursor {
     display_id: Option<DisplayId>,
     window: Option<WindowUnderCursor>,
+    screen: Option<ScreenUnderCursor>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -24,6 +28,13 @@ pub struct WindowUnderCursor {
     id: WindowId,
     app_name: String,
     bounds: LogicalBounds,
+}
+
+#[derive(Serialize, Type, Clone)]
+pub struct ScreenUnderCursor {
+    name: String,
+    physical_size: PhysicalSize,
+    refresh_rate: String,
 }
 
 #[specta::specta]
@@ -52,6 +63,11 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
                         bounds: w.bounds()?,
                         app_name: w.owner_name()?,
                     })
+                }),
+                screen: display.map(|d| ScreenUnderCursor {
+                    name: d.name(),
+                    physical_size: d.physical_size(),
+                    refresh_rate: d.refresh_rate().to_string(),
                 }),
             }
             .emit(&app);

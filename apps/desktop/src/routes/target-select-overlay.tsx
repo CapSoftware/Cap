@@ -35,7 +35,11 @@ export default function () {
   const { rawOptions, setOptions } = createOptionsQuery();
 
   const [targetUnderCursor, setTargetUnderCursor] =
-    createStore<TargetUnderCursor>({ display_id: null, window: null });
+    createStore<TargetUnderCursor>({
+      display_id: null,
+      window: null,
+      screen: null,
+    });
 
   events.targetUnderCursor.listen((event) => {
     setTargetUnderCursor(reconcile(event.payload));
@@ -63,16 +67,25 @@ export default function () {
     <Switch>
       <Match when={rawOptions.targetMode === "screen"}>
         {(_) => (
-          <div
-            data-over={targetUnderCursor.display_id === params.displayId}
-            class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors"
-          >
-            <span class="text-3xl font-semibold mb-2">{params.displayId}</span>
+          <Show when={targetUnderCursor.screen} keyed>
+            {(screenUnderCursor) => (
+              <div
+                data-over={targetUnderCursor.display_id === params.displayId}
+                class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors"
+              >
+                <span class="text-3xl font-semibold mb-2">
+                  {screenUnderCursor.name}
+                </span>
+                <span class="text-xs mb-2">
+                  {`${screenUnderCursor.physical_size.height}x${screenUnderCursor.physical_size.width} · ${screenUnderCursor.refresh_rate}FPS`}
+                </span>
 
-            <RecordingControls
-              target={{ variant: "screen", id: Number(params.displayId) }}
-            />
-          </div>
+                <RecordingControls
+                  target={{ variant: "screen", id: Number(params.displayId) }}
+                />
+              </div>
+            )}
+          </Show>
         )}
       </Match>
       <Match

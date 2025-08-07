@@ -9,9 +9,15 @@ use windows::{
             MONITORINFOEXW, MonitorFromPoint,
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
-        System::Threading::{
-            GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
-            PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+        System::{
+            Registry::{
+                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_SZ, RegCloseKey, RegOpenKeyExW,
+                RegQueryValueExW,
+            },
+            Threading::{
+                GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
+                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+            },
         },
         UI::WindowsAndMessaging::{
             EnumWindows, GetCursorPos, GetWindowRect, GetWindowThreadProcessId, IsIconic,
@@ -208,6 +214,88 @@ impl DisplayImpl {
                 0.0
             }
         }
+    }
+
+    pub fn name(&self) -> String {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+        unsafe {
+            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
+                // Convert the device name from wide string to String
+                let device_name = &info.szDevice;
+                let null_pos = device_name
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(device_name.len());
+                let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
+
+                // Try to get friendly name from registry
+                if let Some(friendly_name) = self.get_friendly_name_from_registry(&device_name_str)
+                {
+                    return friendly_name;
+                }
+
+                // Fallback to device name
+                device_name_str
+            } else {
+                format!("Unknown Display")
+            }
+        }
+    }
+
+    fn get_friendly_name_from_registry(&self, device_name: &str) -> Option<String> {
+        unsafe {
+            // Registry path for display devices
+            let registry_path = format!(
+                "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{}",
+                device_name.replace("\\\\.\\", "")
+            );
+            let registry_path_wide: Vec<u16> = registry_path
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+
+            let mut key: HKEY = HKEY::default();
+            if RegOpenKeyExW(
+                HKEY_LOCAL_MACHINE,
+                PCWSTR(registry_path_wide.as_ptr()),
+                0,
+                KEY_READ,
+                &mut key,
+            )
+            .is_ok()
+            {
+                // Try to get DeviceDesc value
+                let value_name = "DeviceDesc\0".encode_utf16().collect::<Vec<u16>>();
+                let mut buffer = [0u16; 256];
+                let mut buffer_size = (buffer.len() * 2) as u32;
+                let mut value_type = REG_SZ;
+
+                if RegQueryValueExW(
+                    key,
+                    PCWSTR(value_name.as_ptr()),
+                    None,
+                    Some(&mut value_type),
+                    Some(buffer.as_mut_ptr() as *mut u8),
+                    Some(&mut buffer_size),
+                )
+                .is_ok()
+                {
+                    let _ = RegCloseKey(key);
+                    let null_pos = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+                    let desc = String::from_utf16_lossy(&buffer[..null_pos]);
+
+                    // DeviceDesc often contains a prefix like "PCI\VEN_...", extract just the display name
+                    if let Some(semicolon_pos) = desc.rfind(';') {
+                        return Some(desc[semicolon_pos + 1..].trim().to_string());
+                    }
+                    return Some(desc);
+                }
+                let _ = RegCloseKey(key);
+            }
+        }
+        None
     }
 }
 

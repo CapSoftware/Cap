@@ -119,6 +119,13 @@ impl DisplayImpl {
 
         refresh_rate
     }
+
+    pub fn name(&self) -> String {
+        // For now, return a generic name with the display ID
+        // Getting the actual display name on macOS requires IOKit APIs
+        // that are not easily accessible through the core-graphics crate
+        format!("Display {}", self.0.id)
+    }
 }
 
 fn get_cursor_position() -> Option<LogicalPosition> {

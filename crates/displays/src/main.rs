@@ -5,6 +5,7 @@ fn main() {
     println!("=== Display Information ===");
     for display in cap_displays::Display::list() {
         println!("Display ID: {}", display.id());
+        println!("Display Name: {}", display.name());
         let logical_size = display.raw_handle().logical_size();
         let physical_size = display.physical_size();
         let refresh_rate = display.refresh_rate();

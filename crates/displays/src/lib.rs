@@ -32,6 +32,10 @@ impl Display {
         DisplayImpl::get_containing_cursor().map(Self)
     }
 
+    pub fn name(&self) -> String {
+        self.0.name()
+    }
+
     pub fn physical_size(&self) -> PhysicalSize {
         self.0.physical_size()
     }
