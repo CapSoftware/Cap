@@ -45,6 +45,29 @@ export default function () {
     setTargetUnderCursor(reconcile(event.payload));
   });
 
+  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), {
+    initialValue: 1,
+  });
+  const [bounds, _setBounds] = createStore({
+    position: { x: 0, y: 0 },
+    size: { width: 400, height: 300 },
+  });
+
+  const setBounds = (newBounds: typeof bounds) => {
+    newBounds.position.x = Math.max(0, newBounds.position.x);
+    newBounds.position.y = Math.max(0, newBounds.position.y);
+    newBounds.size.width = Math.min(
+      window.innerWidth - newBounds.position.x,
+      newBounds.size.width
+    );
+    newBounds.size.height = Math.min(
+      window.innerHeight - newBounds.position.y,
+      newBounds.size.height
+    );
+
+    _setBounds(newBounds);
+  };
+
   // We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
   const unsub = events.onEscapePress.listen(() =>
     setOptions("targetMode", null)
@@ -53,10 +76,6 @@ export default function () {
 
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
-  });
-
-  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), {
-    initialValue: 1,
   });
 
   // This prevents browser keyboard shortcuts from firing.
@@ -148,6 +167,20 @@ export default function () {
                     id: Number(windowUnderCursor.id),
                   }}
                 />
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  class="mt-4"
+                  onClick={() => {
+                    _setBounds(windowUnderCursor.bounds);
+                    setOptions({
+                      targetMode: "area",
+                    });
+                  }}
+                >
+                  Adjust recording area
+                </Button>
               </div>
             </div>
           )}
@@ -155,26 +188,6 @@ export default function () {
       </Match>
       <Match when={rawOptions.targetMode === "area"}>
         {(_) => {
-          const [bounds, _setBounds] = createStore({
-            position: { x: 0, y: 0 },
-            size: { width: 400, height: 300 },
-          });
-
-          const setBounds = (newBounds: typeof bounds) => {
-            newBounds.position.x = Math.max(0, newBounds.position.x);
-            newBounds.position.y = Math.max(0, newBounds.position.y);
-            newBounds.size.width = Math.min(
-              window.innerWidth - newBounds.position.x,
-              newBounds.size.width
-            );
-            newBounds.size.height = Math.min(
-              window.innerHeight - newBounds.position.y,
-              newBounds.size.height
-            );
-
-            _setBounds(newBounds);
-          };
-
           const [dragging, setDragging] = createSignal(false);
 
           function createOnMouseDown(
