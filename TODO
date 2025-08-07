@@ -1,8 +1,0 @@
-TODO:
- - Fix cursor positioning (thanks Brendan for cleaning up the code)
- - Cursor hashes are resolution dependent on Windows so SVG cursors aren't working properly
-
-Issues:
- - Cap window on top on Windows
- - Windows support for selecting windows
- - Rest of recording overlay PR
