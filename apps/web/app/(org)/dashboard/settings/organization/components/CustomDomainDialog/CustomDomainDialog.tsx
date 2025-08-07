@@ -146,10 +146,6 @@ const CustomDomainDialog = ({
         activeOrganization.organization.id
       );
 
-      if (domainConfig === null) {
-        setInitialConfigLoading(true);
-      }
-
       setIsVerified(data.verified);
       setDomainConfig(data.config);
 
@@ -173,7 +169,6 @@ const CustomDomainDialog = ({
       }
     } finally {
       setVerifying(false);
-      setInitialConfigLoading(false);
     }
   };
 
@@ -300,6 +295,8 @@ const CustomDomainDialog = ({
       toast.success("Domain settings updated");
       router.refresh();
 
+      setInitialConfigLoading(true);
+
       if (data) {
         setDomainConfig(data.status);
         setIsVerified(data.verified);
@@ -319,6 +316,7 @@ const CustomDomainDialog = ({
       );
     } finally {
       setLoading(false);
+      setInitialConfigLoading(false);
     }
   };
 
