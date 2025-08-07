@@ -1,8 +1,6 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
-use cap_media::data::RawVideoFormat;
-use cap_media::data::VideoInfo;
 // use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
@@ -67,7 +65,7 @@ impl EditorInstance {
         let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, &recording_meta, meta)
+            RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
                 .unwrap(),
         );

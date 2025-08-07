@@ -144,10 +144,10 @@ export const CapCardContent: React.FC<CapContentProps> = ({
       hideSharedStatus ? "pointer-events-none" : "cursor-pointer"
     );
     if (isOwner && !hideSharedStatus) {
-      if (
-        (cap.sharedOrganizations?.length === 0 || !cap.sharedOrganizations) &&
-        (cap.sharedSpaces?.length === 0 || !cap.sharedSpaces)
-      ) {
+      const hasSpaceSharing = (cap.sharedOrganizations?.length ?? 0) > 0 || (cap.sharedSpaces?.length ?? 0) > 0;
+      const isPublic = cap.public;
+
+      if (!hasSpaceSharing && !isPublic) {
         return (
           <p
             className={baseClassName}

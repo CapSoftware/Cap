@@ -3,29 +3,31 @@ use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
-use super::{Bounds, CursorShape, LogicalBounds, LogicalPosition, LogicalSize, Window};
+use super::{Bounds, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
-use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, BOOL, FALSE, HWND, LPARAM, RECT, TRUE};
-use windows::Win32::Graphics::Dwm::{
-    DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
-};
-use windows::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
-    MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
-    MONITOR_DEFAULTTONULL,
-};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
-};
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
-use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
-    IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
-    IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::Win32::{
+    Foundation::{CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
+    Graphics::{
+        Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
+        Gdi::{
+            EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
+            MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO,
+            MONITORINFOEXW, MONITOR_DEFAULTTONULL,
+        },
+    },
+    System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    },
+    UI::HiDpi::GetDpiForWindow,
+    UI::WindowsAndMessaging::{
+        EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
+        IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
+        IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+    },
 };
 
 #[inline]
@@ -33,89 +35,8 @@ pub fn bring_window_to_focus(window_id: u32) {
     let _ = unsafe { SetForegroundWindow(HWND(window_id as *mut c_void)) };
 }
 
-pub fn get_cursor_shape(cursors: &DefaultCursors) -> CursorShape {
-    let mut cursor_info = CURSORINFO {
-        cbSize: std::mem::size_of::<CURSORINFO>() as u32,
-        ..Default::default()
-    };
-    match unsafe { GetCursorInfo(&mut cursor_info) } {
-        Ok(_) => match cursor_info.hCursor.0 {
-            ptr if ptr == cursors.arrow => CursorShape::Arrow,
-            ptr if ptr == cursors.ibeam => CursorShape::IBeam,
-            ptr if ptr == cursors.wait => CursorShape::Wait,
-            ptr if ptr == cursors.cross => CursorShape::Crosshair,
-            ptr if ptr == cursors.up_arrow => CursorShape::ResizeUp,
-            ptr if ptr == cursors.size_we => CursorShape::ResizeLeftRight,
-            ptr if ptr == cursors.size_ns => CursorShape::ResizeUpDown,
-            ptr if ptr == cursors.size_nwse => CursorShape::ResizeUpLeftAndDownRight,
-            ptr if ptr == cursors.size_nesw => CursorShape::ResizeUpRightAndDownLeft,
-            ptr if ptr == cursors.size_all => CursorShape::ResizeAll,
-            ptr if ptr == cursors.hand => CursorShape::OpenHand,
-            ptr if ptr == cursors.no => CursorShape::NotAllowed,
-            ptr if ptr == cursors.appstarting => CursorShape::Appstarting,
-            ptr if ptr == cursors.help => CursorShape::Help,
-            ptr if ptr == cursors.pin || ptr == cursors.person => CursorShape::OpenHand,
-            // Usually 0, meaning the cursor is hidden. On Windows 8+, a value of 2 means the cursor is supressed
-            // as the user is using touch input instead.
-            _ => CursorShape::Hidden,
-        },
-        Err(_) => CursorShape::Unknown,
-    }
-}
-
-/// Keeps handles to default cursor.
-/// Read more: [MS Doc - About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)
-pub struct DefaultCursors {
-    arrow: *mut c_void,
-    ibeam: *mut c_void,
-    wait: *mut c_void,
-    cross: *mut c_void,
-    up_arrow: *mut c_void,
-    size_nwse: *mut c_void,
-    size_nesw: *mut c_void,
-    size_we: *mut c_void,
-    size_ns: *mut c_void,
-    size_all: *mut c_void,
-    no: *mut c_void,
-    hand: *mut c_void,
-    appstarting: *mut c_void,
-    help: *mut c_void,
-    pin: *mut c_void,
-    person: *mut c_void,
-}
-
-impl Default for DefaultCursors {
-    fn default() -> Self {
-        #[inline]
-        fn load_cursor(lpcursorname: PCWSTR) -> *mut c_void {
-            unsafe { LoadCursorW(None, lpcursorname) }
-                .expect("Failed to load default system cursors")
-                .0
-        }
-
-        DefaultCursors {
-            arrow: load_cursor(IDC_ARROW),
-            ibeam: load_cursor(IDC_IBEAM),
-            cross: load_cursor(IDC_CROSS),
-            hand: load_cursor(IDC_HAND),
-            help: load_cursor(IDC_HELP),
-            no: load_cursor(IDC_NO),
-            size_all: load_cursor(IDC_SIZEALL),
-            size_ns: load_cursor(IDC_SIZENS),
-            size_we: load_cursor(IDC_SIZEWE),
-            size_nwse: load_cursor(IDC_SIZENWSE),
-            size_nesw: load_cursor(IDC_SIZENESW),
-            up_arrow: load_cursor(IDC_UPARROW),
-            wait: load_cursor(IDC_WAIT),
-            appstarting: load_cursor(IDC_APPSTARTING),
-            pin: load_cursor(IDC_PIN),
-            person: load_cursor(IDC_PERSON),
-        }
-    }
-}
-
 unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
-    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)?;
+    let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)?;
     if handle.is_invalid() {
         tracing::error!("Invalid PID {}", pid);
     }

@@ -16,11 +16,13 @@ import {
   createSignal,
   For,
   JSX,
+  onCleanup,
   ParentProps,
   Show,
 } from "solid-js";
 
 import { trackEvent } from "~/utils/analytics";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
 type Recording = {
@@ -74,6 +76,8 @@ export default function Recordings() {
     Tabs[0].id
   );
   const recordings = createQuery(() => recordingsQuery);
+
+  createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
 
   const filteredRecordings = createMemo(() => {
     if (!recordings.data) {

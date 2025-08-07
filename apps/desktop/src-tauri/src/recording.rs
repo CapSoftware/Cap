@@ -6,9 +6,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{
-        GeneralSettingsStore, MainWindowRecordingStartBehaviour, PostStudioRecordingBehaviour,
-    },
+    general_settings::{GeneralSettingsStore, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     upload::{
@@ -25,8 +23,9 @@ use cap_media::{
     sources::{CaptureScreen, CaptureWindow},
 };
 use cap_project::{
-    Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomSegment,
+    CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
+    ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
@@ -190,16 +189,25 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub fn list_cameras() -> Vec<String> {
+pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     CameraFeed::list_cameras()
 }
 
-#[derive(Deserialize, Type, Clone)]
+#[derive(Deserialize, Type, Clone, Debug)]
 pub struct StartRecordingInputs {
     pub capture_target: ScreenCaptureTarget,
     #[serde(default)]
     pub capture_system_audio: bool,
     pub mode: RecordingMode,
+}
+
+#[derive(tauri_specta::Event, specta::Type, Clone, Debug, serde::Serialize)]
+#[serde(tag = "variant")]
+pub enum RecordingEvent {
+    Countdown { value: u32 },
+    Started,
+    Stopped,
+    Failed { error: String },
 }
 
 #[tauri::command]
@@ -211,6 +219,8 @@ pub async fn start_recording(
     inputs: StartRecordingInputs,
 ) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
+    let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
+    let general_settings = general_settings.as_ref();
 
     let recording_dir = app
         .path()
@@ -220,20 +230,11 @@ pub async fn start_recording(
         .join(format!("{id}.cap"));
 
     ensure_dir(&recording_dir).map_err(|e| format!("Failed to create recording directory: {e}"))?;
-    let logfile = std::fs::File::create(recording_dir.join("recording-logs.log"))
-        .map_err(|e| format!("Failed to create logfile: {e}"))?;
-
     state_mtx
         .write()
         .await
-        .recording_logging_handle
-        .reload(Some(Box::new(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(logfile),
-        ) as DynLoggingLayer))
-        .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+        .add_recording_logging_handle(&recording_dir.join("recording-logs.log"))
+        .await?;
 
     let target_name = {
         let title = inputs.capture_target.get_title();
@@ -310,7 +311,9 @@ pub async fn start_recording(
                 else {
                     unreachable!();
                 };
-                display_for_window(target.raw_handle).unwrap().0 as u32
+                display_for_window(windows::Win32::Foundation::HWND(target.raw_handle.0))
+                    .unwrap()
+                    .0 as u32
             };
 
             let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
@@ -323,6 +326,34 @@ pub async fn start_recording(
                 .await;
         }
         _ => {}
+    }
+
+    // Set pending state BEFORE closing main window and starting countdown
+    {
+        let mut state = state_mtx.write().await;
+        state.set_pending_recording();
+    }
+
+    if let Some(window) = CapWindowId::Main.get(&app) {
+        let _ = general_settings
+            .map(|v| v.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+            .perform(&window);
+    }
+
+    let countdown = general_settings.and_then(|v| v.recording_countdown);
+    let _ = ShowCapWindow::InProgressRecording { countdown }
+        .show(&app)
+        .await;
+
+    if let Some(countdown) = countdown {
+        for t in 0..countdown {
+            let _ = RecordingEvent::Countdown {
+                value: countdown - t,
+            }
+            .emit(&app);
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
@@ -344,7 +375,7 @@ pub async fn start_recording(
     // done in spawn to catch panics just in case
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
-        let app = app.clone();
+        let general_settings = general_settings.cloned();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
@@ -362,9 +393,7 @@ pub async fn start_recording(
                         recording_dir.clone(),
                         base_inputs,
                         state.camera_feed.clone(),
-                        GeneralSettingsStore::get(&app)
-                            .ok()
-                            .flatten()
+                        general_settings
                             .map(|s| s.custom_cursor_capture)
                             .unwrap_or_default(),
                     )
@@ -423,6 +452,8 @@ pub async fn start_recording(
     .await
     .map_err(|e| format!("Failed to spawn recording actor: {}", e))??;
 
+    let _ = RecordingEvent::Started.emit(&app);
+
     spawn_actor({
         let app = app.clone();
         let state_mtx = Arc::clone(&state_mtx);
@@ -431,10 +462,13 @@ pub async fn start_recording(
             match actor_done_rx.await {
                 Ok(Ok(_)) => {
                     let _ = finish_upload_tx.send(());
+                    let _ = RecordingEvent::Stopped.emit(&app);
                     return;
                 }
                 Ok(Err(e)) => {
                     let mut state = state_mtx.write().await;
+
+                    let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
@@ -457,30 +491,6 @@ pub async fn start_recording(
         }
     });
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        match GeneralSettingsStore::get(&app)
-            .ok()
-            .flatten()
-            .map(|s| s.main_window_recording_start_behaviour)
-            .unwrap_or_default()
-        {
-            MainWindowRecordingStartBehaviour::Close => {
-                let _ = window.close();
-            }
-            MainWindowRecordingStartBehaviour::Minimise => {
-                let _ = window.minimize();
-            }
-        }
-    }
-
-    if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
-        window.eval("window.location.reload()").ok();
-    } else {
-        let _ = ShowCapWindow::InProgressRecording { position: None }
-            .show(&app)
-            .await;
-    }
-
     AppSounds::StartRecording.play();
 
     RecordingStarted.emit(&app).ok();
@@ -493,7 +503,7 @@ pub async fn start_recording(
 pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
+    if let Some(recording) = state.current_recording_mut() {
         recording.pause().await.map_err(|e| e.to_string())?;
     }
 
@@ -505,7 +515,7 @@ pub async fn pause_recording(state: MutableState<'_, App>) -> Result<(), String>
 pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
 
-    if let Some(recording) = state.current_recording.as_mut() {
+    if let Some(recording) = state.current_recording_mut() {
         recording.resume().await.map_err(|e| e.to_string())?;
     }
 
@@ -592,10 +602,13 @@ async fn handle_recording_end(
     app: &mut App,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
-    app.current_recording.take();
+    app.clear_current_recording();
 
-    if let Some(recording) = recording {
-        handle_recording_finish(&handle, recording).await?;
+    let res = if let Some(recording) = recording {
+        // we delay reporting errors here so that everything else happens first
+        Some(handle_recording_finish(&handle, recording).await)
+    } else {
+        None
     };
 
     let _ = RecordingStopped.emit(&handle);
@@ -617,6 +630,10 @@ async fn handle_recording_end(
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
+
+    if let Some(res) = res {
+        res?;
+    }
 
     Ok(())
 }
@@ -659,6 +676,7 @@ async fn handle_recording_finish(
             let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
 
             let config = project_config_from_recording(
+                &app,
                 &recording,
                 &recordings,
                 PresetsStore::get_default_preset(&app)?.map(|p| p.config),
@@ -813,55 +831,121 @@ async fn handle_recording_finish(
     Ok(())
 }
 
-fn generate_zoom_segments_from_clicks(
-    recording: &CompletedStudioRecording,
+/// Core logic for generating zoom segments based on mouse click events.
+/// This is an experimental feature that automatically creates zoom effects
+/// around user interactions to highlight important moments.
+fn generate_zoom_segments_from_clicks_impl(
+    mut clicks: Vec<CursorClickEvent>,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
-    let mut segments = vec![];
+    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    const ZOOM_SEGMENT_BEFORE_CLICK_PADDING: f64 = 0.8;
+    const ZOOM_DURATION: f64 = 1.0;
+    const CLICK_GROUP_THRESHOLD: f64 = 0.6; // seconds
+    const MIN_SEGMENT_PADDING: f64 = 2.0; // minimum gap between segments
 
     let max_duration = recordings.duration();
 
-    const ZOOM_SEGMENT_AFTER_CLICK_PADDING: f64 = 1.5;
+    clicks.sort_by(|a, b| {
+        a.time_ms
+            .partial_cmp(&b.time_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    // single-segment only
-    // for click in &recording.cursor_data.clicks {
-    //     let time = click.process_time_ms / 1000.0;
+    let mut segments = Vec::<ZoomSegment>::new();
 
-    //     if segments.last().is_none() {
-    //         segments.push(ZoomSegment {
-    //             start: (click.process_time_ms / 1000.0 - (ZOOM_DURATION + 0.2)).max(0.0),
-    //             end: click.process_time_ms / 1000.0 + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //             amount: 2.0,
-    //         });
-    //     } else {
-    //         let last_segment = segments.last_mut().unwrap();
+    // Generate segments around mouse clicks
+    for click in &clicks {
+        if !click.down {
+            continue;
+        }
 
-    //         if click.down {
-    //             if last_segment.end > time {
-    //                 last_segment.end =
-    //                     (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //             } else if time < max_duration - ZOOM_DURATION {
-    //                 segments.push(ZoomSegment {
-    //                     start: (time - ZOOM_DURATION).max(0.0),
-    //                     end: time + ZOOM_SEGMENT_AFTER_CLICK_PADDING,
-    //                     amount: 2.0,
-    //                 });
-    //             }
-    //         } else {
-    //             last_segment.end =
-    //                 (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(recordings.duration());
-    //         }
-    //     }
-    // }
+        let time = click.time_ms / 1000.0;
+
+        let proposed_start = (time - ZOOM_SEGMENT_BEFORE_CLICK_PADDING).max(0.0);
+        let proposed_end = (time + ZOOM_SEGMENT_AFTER_CLICK_PADDING).min(max_duration);
+
+        if let Some(last) = segments.last_mut() {
+            // Merge if within group threshold OR if segments would be too close together
+            if time <= last.end + CLICK_GROUP_THRESHOLD
+                || proposed_start <= last.end + MIN_SEGMENT_PADDING
+            {
+                last.end = proposed_end;
+                continue;
+            }
+        }
+
+        if time < max_duration - ZOOM_DURATION {
+            segments.push(ZoomSegment {
+                start: proposed_start,
+                end: proposed_end,
+                amount: 2.0,
+                mode: ZoomMode::Auto,
+            });
+        }
+    }
 
     segments
 }
 
+/// Generates zoom segments based on mouse click events during recording.
+/// Used during the recording completion process.
+pub fn generate_zoom_segments_from_clicks(
+    recording: &CompletedStudioRecording,
+    recordings: &ProjectRecordingsMeta,
+) -> Vec<ZoomSegment> {
+    // Build a temporary RecordingMeta so we can use the common implementation
+    let recording_meta = RecordingMeta {
+        platform: None,
+        project_path: recording.project_path.clone(),
+        pretty_name: String::new(),
+        sharing: None,
+        inner: RecordingMetaInner::Studio(recording.meta.clone()),
+    };
+
+    generate_zoom_segments_for_project(&recording_meta, recordings)
+}
+
+/// Generates zoom segments from clicks for an existing project.
+/// Used in the editor context where we have RecordingMeta.
+pub fn generate_zoom_segments_for_project(
+    recording_meta: &RecordingMeta,
+    recordings: &ProjectRecordingsMeta,
+) -> Vec<ZoomSegment> {
+    let RecordingMetaInner::Studio(studio_meta) = &recording_meta.inner else {
+        return Vec::new();
+    };
+
+    let all_events = match studio_meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            if let Some(cursor_path) = &segment.cursor {
+                CursorEvents::load_from_file(&recording_meta.path(cursor_path))
+                    .unwrap_or_default()
+                    .clicks
+            } else {
+                vec![]
+            }
+        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+            .segments
+            .iter()
+            .flat_map(|s| s.cursor_events(recording_meta).clicks)
+            .collect(),
+    };
+
+    generate_zoom_segments_from_clicks_impl(all_events, recordings)
+}
+
 fn project_config_from_recording(
+    app: &AppHandle,
     completed_recording: &CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
+    let settings = GeneralSettingsStore::get(app)
+        .unwrap_or(None)
+        .unwrap_or_default();
+
     ProjectConfiguration {
         timeline: Some(TimelineConfiguration {
             segments: recordings
@@ -875,7 +959,11 @@ fn project_config_from_recording(
                     timescale: 1.0,
                 })
                 .collect(),
-            zoom_segments: generate_zoom_segments_from_clicks(&completed_recording, &recordings),
+            zoom_segments: if settings.auto_zoom_on_clicks {
+                generate_zoom_segments_from_clicks(&completed_recording, &recordings)
+            } else {
+                Vec::new()
+            },
         }),
         ..default_config.unwrap_or_default()
     }

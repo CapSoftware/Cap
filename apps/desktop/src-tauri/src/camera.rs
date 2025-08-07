@@ -498,13 +498,33 @@ impl Renderer {
             cache: None,
         });
 
+        let surface_capabilities = surface.get_capabilities(&adapter);
+        let alpha_mode = if surface_capabilities
+            .alpha_modes
+            .contains(&CompositeAlphaMode::PreMultiplied)
+        {
+            CompositeAlphaMode::PreMultiplied
+        } else if surface_capabilities
+            .alpha_modes
+            .contains(&CompositeAlphaMode::PostMultiplied)
+        {
+            CompositeAlphaMode::PostMultiplied
+        } else if surface_capabilities
+            .alpha_modes
+            .contains(&CompositeAlphaMode::PostMultiplied)
+        {
+            CompositeAlphaMode::PostMultiplied
+        } else {
+            CompositeAlphaMode::Inherit
+        };
+
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: CompositeAlphaMode::PostMultiplied,
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -693,6 +713,7 @@ impl Renderer {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
+                    // depth_slice: None,
                     resolve_target: None, // Some(&surface_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {

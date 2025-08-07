@@ -29,6 +29,7 @@ import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
 import { commands, events, FramesRendered, UploadResult } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE } from "./editor/context";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 type MediaEntry = {
   path: string;
@@ -78,12 +79,12 @@ export default function () {
     }, 3000);
   };
 
-  events.newStudioRecordingAdded.listen((event) => {
-    addMediaEntry(event.payload.path, "recording");
+  createTauriEventListener(events.newStudioRecordingAdded, (payload) => {
+    addMediaEntry(payload.path, "recording");
   });
 
-  events.newScreenshotAdded.listen((event) => {
-    addMediaEntry(event.payload.path, "screenshot");
+  createTauriEventListener(events.newScreenshotAdded, (payload) => {
+    addMediaEntry(payload.path, "screenshot");
   });
 
   const allMedia = createMemo(() => [...recordings, ...screenshots]);

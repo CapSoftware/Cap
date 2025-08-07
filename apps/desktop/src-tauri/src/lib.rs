@@ -2,6 +2,7 @@ mod audio;
 mod audio_meter;
 mod auth;
 mod camera;
+mod camera_legacy;
 mod captions;
 mod deeplink_actions;
 mod editor_window;
@@ -31,7 +32,9 @@ use cap_media::platform::Bounds;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
-use cap_project::{ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta};
+use cap_project::{
+    ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
+};
 use cap_rendering::ProjectRecordingsMeta;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
@@ -41,13 +44,14 @@ use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use recording::InProgressRecording;
+use recording::{InProgressRecording, StartRecordingInputs};
 use relative_path::RelativePathBuf;
 
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use scap::frame::VideoFrame;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
@@ -68,6 +72,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
@@ -82,9 +87,20 @@ use windows::EditorWindowIds;
 use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
+pub enum RecordingState {
+    None,
+    Pending,
+    Active(InProgressRecording),
+}
+
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
+    #[serde(skip)]
+    #[deprecated = "can be removed when native camera preview is ready"]
+    camera_tx: flume::Sender<RawCameraFrame>,
+    #[deprecated = "can be removed when native camera preview is ready"]
+    camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
@@ -96,7 +112,7 @@ pub struct App {
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
-    current_recording: Option<InProgressRecording>,
+    recording_state: RecordingState,
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
     server_url: String,
@@ -132,16 +148,27 @@ pub struct VideoUploadInfo {
 }
 
 impl App {
-    pub fn set_current_recording(&mut self, actor: InProgressRecording) {
-        self.current_recording = Some(actor);
+    pub fn set_pending_recording(&mut self) {
+        self.recording_state = RecordingState::Pending;
+        CurrentRecordingChanged.emit(&self.handle).ok();
+    }
 
+    pub fn set_current_recording(&mut self, actor: InProgressRecording) {
+        self.recording_state = RecordingState::Active(actor);
         CurrentRecordingChanged.emit(&self.handle).ok();
     }
 
     pub fn clear_current_recording(&mut self) -> Option<InProgressRecording> {
-        self.close_occluder_windows();
-
-        self.current_recording.take()
+        match std::mem::replace(&mut self.recording_state, RecordingState::None) {
+            RecordingState::Active(recording) => {
+                self.close_occluder_windows();
+                Some(recording)
+            }
+            _ => {
+                self.close_occluder_windows();
+                None
+            }
+        }
     }
 
     fn close_occluder_windows(&self) {
@@ -150,6 +177,40 @@ impl App {
                 let _ = window.1.close();
             }
         }
+    }
+
+    async fn add_recording_logging_handle(&mut self, path: &PathBuf) -> Result<(), String> {
+        let logfile =
+            std::fs::File::create(path).map_err(|e| format!("Failed to create logfile: {e}"))?;
+
+        self.recording_logging_handle
+            .reload(Some(Box::new(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_target(true)
+                    .with_writer(logfile),
+            ) as DynLoggingLayer))
+            .map_err(|e| format!("Failed to reload logging layer: {e}"))?;
+
+        Ok(())
+    }
+
+    pub fn current_recording(&self) -> Option<&InProgressRecording> {
+        match &self.recording_state {
+            RecordingState::Active(recording) => Some(recording),
+            _ => None,
+        }
+    }
+
+    pub fn current_recording_mut(&mut self) -> Option<&mut InProgressRecording> {
+        match &mut self.recording_state {
+            RecordingState::Active(recording) => Some(recording),
+            _ => None,
+        }
+    }
+
+    pub fn is_recording_active_or_pending(&self) -> bool {
+        !matches!(self.recording_state, RecordingState::None)
     }
 }
 
@@ -185,21 +246,21 @@ async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     camera_preview: State<'_, CameraPreview>,
-    label: Option<String>,
+    id: Option<cap_media::feeds::DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
 
-    match (&label, app.camera_feed.as_ref()) {
-        (Some(label), Some(camera_feed)) => {
+    match (id, app.camera_feed.as_ref()) {
+        (Some(id), Some(camera_feed)) => {
             camera_feed
                 .lock()
                 .await
-                .switch_cameras(label)
+                .switch_cameras(id)
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(true)
         }
-        (Some(label), None) => {
+        (Some(id), None) => {
             let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
             if let Some(cancel) = app.camera_feed_initialization.as_ref() {
                 // Ask currently running setup to abort
@@ -219,15 +280,25 @@ async fn set_camera_input(
                 win.set_focus().ok();
             };
 
-            let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
-            camera_preview
-                .init_preview_window(window, camera_rx)
-                .await
-                .unwrap();
+            let camera_tx = if GeneralSettingsStore::get(&app_handle)
+                .ok()
+                .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                .unwrap_or_default()
+            {
+                let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+                camera_preview
+                    .init_preview_window(window, camera_rx)
+                    .await
+                    .unwrap();
+                Some(camera_tx)
+            } else {
+                None
+            };
 
+            let legacy_camera_tx = app.camera_tx.clone();
             drop(app);
 
-            let fut = CameraFeed::init(label);
+            let fut = CameraFeed::init(id);
 
             tokio::select! {
                 result = fut => {
@@ -239,7 +310,11 @@ async fn set_camera_input(
                     }
 
                     if app.camera_feed.is_none() {
-                        feed.attach(camera_tx);
+                        if let Some(camera_tx) = camera_tx {
+                            feed.attach(camera_tx);
+                        } else {
+                            feed.attach(legacy_camera_tx);
+                        }
                         app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                         return Ok(true);
                     } else {
@@ -269,6 +344,12 @@ pub struct RecordingOptionsChanged;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewStudioRecordingAdded {
+    path: PathBuf,
+}
+
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+pub struct RecordingDeleted {
+    #[allow(unused)]
     path: PathBuf,
 }
 
@@ -351,7 +432,7 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording.as_ref().map(|r| {
+    Ok(JsonValue::new(&state.current_recording().map(|r| {
         let bounds = r.bounds();
 
         let target = match r.capture_target() {
@@ -820,6 +901,13 @@ async fn get_editor_meta(editor: WindowEditorInstance) -> Result<RecordingMeta, 
     let path = editor.project_path.clone();
     RecordingMeta::load_for_project(&path).map_err(|e| e.to_string())
 }
+#[tauri::command]
+#[specta::specta]
+async fn set_pretty_name(editor: WindowEditorInstance, pretty_name: String) -> Result<(), String> {
+    let mut meta = editor.meta().clone();
+    meta.pretty_name = pretty_name;
+    meta.save_for_project().map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 #[specta::specta]
@@ -976,6 +1064,19 @@ async fn set_project_config(
     editor_instance.project_config.0.send(config).ok();
 
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+async fn generate_zoom_segments_from_clicks(
+    editor_instance: WindowEditorInstance,
+) -> Result<Vec<ZoomSegment>, String> {
+    let meta = editor_instance.meta();
+    let recordings = &editor_instance.recordings;
+
+    let zoom_segments = recording::generate_zoom_segments_for_project(meta, recordings);
+
+    Ok(zoom_segments)
 }
 
 #[tauri::command]
@@ -1825,6 +1926,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             stop_playback,
             set_playhead_position,
             set_project_config,
+            generate_zoom_segments_from_clicks,
             permissions::open_permission_settings,
             permissions::do_permissions_check,
             permissions::request_permission,
@@ -1852,6 +1954,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             update_auth_plan,
             set_window_transparent,
             get_editor_meta,
+            set_pretty_name,
             set_server_url,
             set_camera_preview_state,
             await_camera_preview_ready,
@@ -1882,6 +1985,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::AudioInputLevelChange,
             UploadProgress,
             captions::DownloadProgress,
+            recording::RecordingEvent,
+            RecordingDeleted
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -1898,6 +2003,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             "../src/utils/tauri.ts",
         )
         .expect("Failed to export typescript bindings");
+
+    let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
     let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
 
@@ -1985,12 +2092,14 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             {
                 app.manage(Arc::new(RwLock::new(App {
+                    camera_tx,
+                    camera_ws_port,
                     handle: app.clone(),
                     camera_feed: None,
                     camera_feed_initialization: None,
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
-                    current_recording: None,
+                    recording_state: RecordingState::None,
                     recording_logging_handle,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
@@ -2079,7 +2188,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let state = app.state::<Arc<RwLock<App>>>();
                                     let app_state = &mut *state.write().await;
 
-                                    if app_state.current_recording.is_none() {
+                                    if !app_state.is_recording_active_or_pending() {
                                         app_state.mic_feed.take();
                                         app_state.camera_feed.take();
 

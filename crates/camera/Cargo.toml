@@ -1,0 +1,25 @@
+[package]
+name = "cap-camera"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+specta = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }
+cap-camera-avfoundation = { path = "../camera-avfoundation" }
+objc2-av-foundation = { version = "0.3.1", features = ["objc2-core-media"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true }
+windows-core = { workspace = true }
+cap-camera-windows = { path = "../camera-windows" }
+
+[dev-dependencies]
+inquire = "0.7.5"
+
+[lints]
+workspace = true

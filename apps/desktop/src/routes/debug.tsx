@@ -20,6 +20,14 @@ export default function Debug() {
         >
           Show Setup Window
         </button>
+        <button
+          class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded"
+          onClick={() =>
+            commands.showWindow({ InProgressRecording: { countdown: 3 } })
+          }
+        >
+          Show In Progress Recording Window
+        </button>
       </div>
 
       <h2 class="text-2xl font-bold">Fail Points</h2>

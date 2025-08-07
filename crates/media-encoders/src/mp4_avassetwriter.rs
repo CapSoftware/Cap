@@ -1,17 +1,9 @@
-use std::{
-    path::PathBuf,
-    ptr::null,
-    sync::{Arc, Mutex},
-};
-
-use crate::{
-    data::{AudioInfo, FFAudio, PlanarData, VideoInfo},
-    pipeline::task::PipelineSinkTask,
-    MediaError,
-};
-
 use arc::Retained;
+use cap_media_info::{AudioInfo, PlanarData, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
+use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
+use std::path::PathBuf;
+use tracing::{debug, info};
 
 pub struct MP4AVAssetWriterEncoder {
     tag: &'static str,
@@ -31,6 +23,46 @@ pub struct MP4AVAssetWriterEncoder {
     audio_frames_appended: usize,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum InitError {
+    #[error("AssetWriterCreate/{0}")]
+    AssetWriterCreate(&'static cidre::ns::Error),
+    #[error("No settings assistant")]
+    NoSettingsAssistant,
+    #[error("No video settings assistant")]
+    NoVideoSettingsAssistant,
+    #[error("VideoAssetWriterInputCreate/{0}")]
+    VideoAssetWriterInputCreate(&'static cidre::ns::Exception),
+    #[error("AddVideoInput/{0}")]
+    AddVideoInput(&'static cidre::ns::Exception),
+    #[error("AudioAssetWriterInputCreate/{0}")]
+    AudioAssetWriterInputCreate(&'static cidre::ns::Exception),
+    #[error("AddAudioInput/{0}")]
+    AddAudioInput(&'static cidre::ns::Exception),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum QueueVideoFrameError {
+    #[error("AppendError/{0}")]
+    AppendError(&'static cidre::ns::Exception),
+    #[error("Failed")]
+    Failed,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum QueueAudioFrameError {
+    #[error("No audio input")]
+    NoAudioInput,
+    #[error("Not ready")]
+    NotReady,
+    #[error("Setup/{0}")]
+    Setup(cidre::os::Error),
+    #[error("AppendError/{0}")]
+    AppendError(&'static cidre::ns::Exception),
+    #[error("Failed")]
+    Failed,
+}
+
 impl MP4AVAssetWriterEncoder {
     pub fn init(
         tag: &'static str,
@@ -38,7 +70,7 @@ impl MP4AVAssetWriterEncoder {
         audio_config: Option<AudioInfo>,
         output: PathBuf,
         output_height: Option<u32>,
-    ) -> Result<Self, MediaError> {
+    ) -> Result<Self, InitError> {
         debug!("{video_config:#?}");
         debug!("{audio_config:#?}");
 
@@ -48,19 +80,17 @@ impl MP4AVAssetWriterEncoder {
             cf::Url::with_path(output.as_path(), false).unwrap().as_ns(),
             av::FileType::mp4(),
         )
-        .map_err(|_| MediaError::Any("Failed to create AVAssetWriter".into()))?;
+        .map_err(InitError::AssetWriterCreate)?;
 
         let video_input = {
             let assistant = av::OutputSettingsAssistant::with_preset(
                 av::OutputSettingsPreset::h264_3840x2160(),
             )
-            .ok_or(MediaError::Any(
-                "Failed to create output settings assistant".into(),
-            ))?;
+            .ok_or(InitError::NoSettingsAssistant)?;
 
             let mut output_settings = assistant
                 .video_settings()
-                .ok_or(MediaError::Any("No assistant video settings".into()))?
+                .ok_or(InitError::NoVideoSettingsAssistant)?
                 .copy_mut();
 
             let downscale = output_height
@@ -97,12 +127,12 @@ impl MP4AVAssetWriterEncoder {
                 av::MediaType::video(),
                 Some(output_settings.as_ref()),
             )
-            .map_err(|_| MediaError::Any("Failed to create AVAssetWriterInput".into()))?;
+            .map_err(InitError::VideoAssetWriterInputCreate)?;
             video_input.set_expects_media_data_in_real_time(true);
 
             asset_writer
                 .add_input(&video_input)
-                .map_err(|_| MediaError::Any("Failed to add asset writer video input".into()))?;
+                .map_err(InitError::AddVideoInput)?;
 
             video_input
         };
@@ -129,15 +159,15 @@ impl MP4AVAssetWriterEncoder {
                     av::MediaType::audio(),
                     Some(output_settings.as_ref()),
                 )
-                .map_err(|_| MediaError::Any("Failed to create AVAssetWriterInput".into()))?;
+                .map_err(InitError::AudioAssetWriterInputCreate)?;
 
                 audio_input.set_expects_media_data_in_real_time(true);
 
-                asset_writer.add_input(&audio_input).map_err(|_| {
-                    MediaError::Any("Failed to add asset writer audio input".into())
-                })?;
+                asset_writer
+                    .add_input(&audio_input)
+                    .map_err(InitError::AddAudioInput)?;
 
-                Ok::<_, MediaError>(audio_input)
+                Ok::<_, InitError>(audio_input)
             })
             .transpose()?;
 
@@ -162,7 +192,10 @@ impl MP4AVAssetWriterEncoder {
         })
     }
 
-    pub fn queue_video_frame(&mut self, frame: &cidre::cm::SampleBuf) -> Result<(), MediaError> {
+    pub fn queue_video_frame(
+        &mut self,
+        frame: &cidre::cm::SampleBuf,
+    ) -> Result<(), QueueVideoFrameError> {
         if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
             return Ok(());
         }
@@ -186,11 +219,8 @@ impl MP4AVAssetWriterEncoder {
 
         self.video_input
             .append_sample_buf(&frame)
-            .map_err(|e| MediaError::Any(format!("video append sample buf / {e}").into()))
-            .and_then(|v| {
-                v.then(|| ())
-                    .ok_or_else(|| MediaError::Any("video append sample buf failed".into()))
-            })?;
+            .map_err(QueueVideoFrameError::AppendError)
+            .and_then(|v| v.then(|| ()).ok_or_else(|| QueueVideoFrameError::Failed))?;
 
         self.first_timestamp.get_or_insert(time);
         self.segment_first_timestamp.get_or_insert(time);
@@ -201,17 +231,17 @@ impl MP4AVAssetWriterEncoder {
         Ok(())
     }
 
-    pub fn queue_audio_frame(&mut self, frame: FFAudio) -> Result<(), MediaError> {
+    pub fn queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), QueueAudioFrameError> {
         if self.is_paused {
             return Ok(());
         }
 
         let Some(audio_input) = &mut self.audio_input else {
-            return Err(MediaError::Any("no audio input".into()));
+            return Err(QueueAudioFrameError::NoAudioInput);
         };
 
         if !audio_input.is_ready_for_more_media_data() {
-            return Err(MediaError::Any("not ready for more media data".into()));
+            return Err(QueueAudioFrameError::NotReady);
         }
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
@@ -222,12 +252,12 @@ impl MP4AVAssetWriterEncoder {
 
         let total_data = frame.samples() * frame.channels() as usize * frame.format().bytes();
 
-        let mut block_buf = cm::BlockBuf::with_mem_block(total_data, None)
-            .map_err(|_| MediaError::Any("failed to allocate block buffer".into()))?;
+        let mut block_buf =
+            cm::BlockBuf::with_mem_block(total_data, None).map_err(QueueAudioFrameError::Setup)?;
 
         let block_buf_slice = block_buf
             .as_mut_slice()
-            .map_err(|_| MediaError::Any("failed to map block buffer".into()))?;
+            .map_err(QueueAudioFrameError::Setup)?;
 
         if frame.is_planar() {
             let mut offset = 0;
@@ -241,8 +271,8 @@ impl MP4AVAssetWriterEncoder {
             block_buf_slice.copy_from_slice(&frame.data(0)[0..total_data]);
         }
 
-        let format_desc = cm::AudioFormatDesc::with_asbd(&audio_desc)
-            .map_err(|_| MediaError::Any("Failed to create audio format desc".into()))?;
+        let format_desc =
+            cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
 
         let time = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
 
@@ -263,15 +293,12 @@ impl MP4AVAssetWriterEncoder {
             }],
             &[],
         )
-        .map_err(|_| MediaError::Any("Failed to create sample buffer".into()))?;
+        .map_err(QueueAudioFrameError::Setup)?;
 
         audio_input
             .append_sample_buf(&buffer)
-            .map_err(|e| MediaError::Any(format!("append sample buf / {e}").into()))
-            .and_then(|v| {
-                v.then(|| ())
-                    .ok_or_else(|| MediaError::Any("append sample buf failed".into()))
-            })?;
+            .map_err(QueueAudioFrameError::AppendError)
+            .and_then(|v| v.then(|| ()).ok_or_else(|| QueueAudioFrameError::Failed))?;
 
         self.audio_frames_appended += 1;
 
@@ -302,9 +329,7 @@ impl MP4AVAssetWriterEncoder {
         self.is_paused = false;
     }
 
-    fn process_frame(&mut self) {}
-
-    fn finish(&mut self) {
+    pub fn finish(&mut self) {
         if !self.is_writing {
             return;
         }
@@ -328,50 +353,8 @@ impl MP4AVAssetWriterEncoder {
     }
 }
 
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
-use tracing::{debug, info};
-
-impl PipelineSinkTask<arc::R<cm::SampleBuf>> for MP4AVAssetWriterEncoder {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<arc::R<cm::SampleBuf>>,
-    ) {
-        ready_signal.send(Ok(())).ok();
-
-        while let Ok(frame) = input.recv() {
-            self.queue_video_frame(&frame);
-            self.process_frame();
-        }
-    }
-
-    fn finish(&mut self) {
-        self.finish();
-    }
-}
-
-impl PipelineSinkTask<FFAudio> for Arc<Mutex<MP4AVAssetWriterEncoder>> {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        input: &flume::Receiver<FFAudio>,
-    ) {
-        ready_signal.send(Ok(())).ok();
-
-        while let Ok(frame) = input.recv() {
-            let mut this = self.lock().unwrap();
-            this.queue_audio_frame(frame);
-            this.process_frame();
-        }
-    }
-
-    fn finish(&mut self) {
-        self.lock().unwrap().finish();
-    }
-}
-
 #[link(name = "AVFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     static AVVideoAverageBitRateKey: &'static cidre::ns::String;
 }
 
@@ -460,7 +443,7 @@ impl SampleBufExt for cm::SampleBuf {
         sample_timings: &[cm::SampleTimingInfo],
     ) -> os::Result<arc::R<cm::SampleBuf>> {
         unsafe {
-            extern "C-unwind" {
+            unsafe extern "C-unwind" {
                 fn CMSampleBufferCreateCopyWithNewTiming(
                     allocator: Option<&cf::Allocator>,
                     original_buf: &cm::SampleBuf,

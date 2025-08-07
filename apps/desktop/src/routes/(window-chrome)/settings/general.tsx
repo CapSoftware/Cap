@@ -17,7 +17,6 @@ import {
   type MainWindowRecordingStartBehaviour,
   type PostStudioRecordingBehaviour,
 } from "~/utils/tauri";
-// import { themeStore } from "~/store/theme";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
@@ -74,7 +73,8 @@ function AppearanceSection(props: {
                     class={cx(
                       `w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
                       {
-                        "ring-2 ring-gray-12 ring-offset-2": props.currentTheme === theme.id,
+                        "ring-2 ring-gray-12 ring-offset-2":
+                          props.currentTheme === theme.id,
                         "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
                           props.currentTheme !== theme.id,
                       }
@@ -115,6 +115,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      enableNativeCameraPreview: false,
+      autoZoomOnClicks: false,
     }
   );
 
@@ -143,8 +145,13 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     label: string;
     type: "select";
     description: string;
-    value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour;
-    onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) => void | Promise<void>;
+    value:
+      | MainWindowRecordingStartBehaviour
+      | PostStudioRecordingBehaviour
+      | number;
+    onChange: (
+      value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour
+    ) => void | Promise<void>;
   };
 
   type SettingItem = ToggleSettingItem | SelectSettingItem;
@@ -159,14 +166,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const settingsGroups: SettingsGroup[] = [
     {
       title: "Cap Pro",
-      titleStyling: "bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg",
+      titleStyling:
+        "bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg",
       items: [
         {
           label: "Disable automatic link opening",
           type: "toggle",
-          description: "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
-          get value() { return !!settings.disableAutoOpenLinks; },
-          onChange: (value: boolean) => handleChange("disableAutoOpenLinks", value),
+          description:
+            "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+          get value() {
+            return !!settings.disableAutoOpenLinks;
+          },
+          onChange: (value: boolean) =>
+            handleChange("disableAutoOpenLinks", value),
         },
       ],
     },
@@ -177,16 +189,22 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           label: "Hide dock icon",
           type: "toggle",
           os: "macos",
-          description: "The dock icon will be hidden when there are no windows available to close.",
-          get value() { return !!settings.hideDockIcon; },
+          description:
+            "The dock icon will be hidden when there are no windows available to close.",
+          get value() {
+            return !!settings.hideDockIcon;
+          },
           onChange: (value: boolean) => handleChange("hideDockIcon", value),
         },
         {
           label: "Enable system notifications",
           type: "toggle",
           os: "macos",
-          description: "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
-          get value() { return !!settings.enableNotifications; },
+          description:
+            "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
+          get value() {
+            return !!settings.enableNotifications;
+          },
           onChange: async (value: boolean) => {
             if (value) {
               // Check current permission state
@@ -214,29 +232,63 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           type: "toggle",
           os: "macos",
           description: "Use haptics on Force Touch™ trackpads",
-          get value() { return !!settings.hapticsEnabled; },
+          get value() {
+            return !!settings.hapticsEnabled;
+          },
           onChange: (value: boolean) => handleChange("hapticsEnabled", value),
-        }
+        },
       ],
     },
     {
       title: "Recording",
       items: [
         {
+          label: "Recording countdown",
+          description: "Countdown before recording starts",
+          type: "select",
+          get value() {
+            return settings.recordingCountdown ?? 0;
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | number
+          ) => handleChange("recordingCountdown", value as number),
+        },
+        {
           label: "Main window recording start behaviour",
           description: "The main window recording start behaviour",
           type: "select",
-          get value() { return settings.mainWindowRecordingStartBehaviour ?? "close"; },
-          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) =>
-            handleChange("mainWindowRecordingStartBehaviour", value as MainWindowRecordingStartBehaviour),
+          get value() {
+            return settings.mainWindowRecordingStartBehaviour ?? "close";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+          ) =>
+            handleChange(
+              "mainWindowRecordingStartBehaviour",
+              value as MainWindowRecordingStartBehaviour
+            ),
         },
         {
           label: "Studio recording finish behaviour",
           description: "The studio recording finish behaviour",
           type: "select",
-          get value() { return settings.postStudioRecordingBehaviour ?? "openEditor"; },
-          onChange: (value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour) =>
-            handleChange("postStudioRecordingBehaviour", value as PostStudioRecordingBehaviour),
+          get value() {
+            return settings.postStudioRecordingBehaviour ?? "openEditor";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+          ) =>
+            handleChange(
+              "postStudioRecordingBehaviour",
+              value as PostStudioRecordingBehaviour
+            ),
         },
       ],
     },
@@ -246,7 +298,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const renderRecordingSelect = (
     label: string,
     description: string,
-    getValue: () => MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour,
+    getValue: () =>
+      | MainWindowRecordingStartBehaviour
+      | PostStudioRecordingBehaviour
+      | number,
     onChange: (value: any) => void,
     options: { text: string; value: any }[]
   ) => {
@@ -256,7 +311,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
           onClick={async () => {
             const currentValue = getValue();
-            const items = options.map(option =>
+            const items = options.map((option) =>
               CheckMenuItem.new({
                 text: option.text,
                 checked: currentValue === option.value,
@@ -272,7 +327,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
         >
           {(() => {
             const currentValue = getValue();
-            const option = options.find(opt => opt.value === currentValue);
+            const option = options.find((opt) => opt.value === currentValue);
             return option ? option.text : currentValue;
           })()}
           <IconCapChevronDown class="size-4" />
@@ -296,12 +351,23 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           <For each={settingsGroups}>
             {(group) => (
               <div>
-                <h3 class={cx("mb-3 text-sm text-gray-12 w-fit", group.titleStyling)}>{group.title}</h3>
+                <h3
+                  class={cx(
+                    "mb-3 text-sm text-gray-12 w-fit",
+                    group.titleStyling
+                  )}
+                >
+                  {group.title}
+                </h3>
                 <div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
                   <For each={group.items}>
                     {(item) => {
                       // Check OS compatibility
-                      if (item.type === "toggle" && item.os && item.os !== ostype) {
+                      if (
+                        item.type === "toggle" &&
+                        item.os &&
+                        item.os !== ostype
+                      ) {
                         return null;
                       }
 
@@ -316,7 +382,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                           />
                         );
                       } else if (item.type === "select") {
-                        if (item.label === "Main window recording start behaviour") {
+                        if (
+                          item.label === "Main window recording start behaviour"
+                        ) {
                           return renderRecordingSelect(
                             item.label,
                             item.description,
@@ -327,7 +395,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                               { text: "Minimise", value: "minimise" },
                             ]
                           );
-                        } else if (item.label === "Studio recording finish behaviour") {
+                        } else if (
+                          item.label === "Studio recording finish behaviour"
+                        ) {
                           return renderRecordingSelect(
                             item.label,
                             item.description,
@@ -345,9 +415,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                             () => item.value,
                             item.onChange,
                             [
-                              { text: "Off", value: "off" },
-                              { text: "3 seconds", value: "three" },
-                              { text: "5 seconds", value: "five" },
+                              { text: "Off", value: 0 },
+                              { text: "3 seconds", value: 3 },
+                              { text: "5 seconds", value: 5 },
+                              { text: "10 seconds", value: 10 },
                             ]
                           );
                         }
