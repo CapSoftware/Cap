@@ -40,12 +40,9 @@ impl DisplayImpl {
         DisplayIdImpl(self.0.id)
     }
 
-    pub fn id(&self) -> String {
-        self.0.id.to_string()
-    }
-
     pub fn from_id(id: String) -> Option<Self> {
-        Self::list().into_iter().find(|d| d.id() == id)
+        let parsed_id = id.parse::<u32>().ok()?;
+        Self::list().into_iter().find(|d| d.0.id == parsed_id)
     }
 
     pub fn logical_size(&self) -> LogicalSize {
@@ -73,20 +70,13 @@ impl DisplayImpl {
     pub fn get_containing_cursor() -> Option<Self> {
         let cursor = get_cursor_position()?;
 
-        for display in Self::list() {
-            let position = display.logical_position_raw();
-            let size = display.logical_size();
-
-            if cursor.x() >= position.x()
-                && cursor.x() < position.x() + size.width()
-                && cursor.y() >= position.y()
-                && cursor.y() < position.y() + size.height()
-            {
-                return Some(display);
-            }
-        }
-
-        None
+        Self::list().into_iter().find(|display| {
+            let bounds = LogicalBounds {
+                position: display.logical_position_raw(),
+                size: display.logical_size(),
+            };
+            bounds.contains_point(cursor)
+        })
     }
 
     pub fn physical_size(&self) -> PhysicalSize {
@@ -142,35 +132,33 @@ impl DisplayImpl {
                     NSString::alloc(nil).init_str("NSScreenNumber"),
                 ) as id;
 
-                // Use raw objc to get the u32 value
                 let num_value: u32 = msg_send![num, unsignedIntValue];
 
                 if num_value == self.0.id {
                     let name: id = msg_send![screen, localizedName];
-                    let name = CStr::from_ptr(NSString::UTF8String(name))
-                        .to_string_lossy()
-                        .to_string();
-                    return name;
+                    if !name.is_null() {
+                        let name = CStr::from_ptr(NSString::UTF8String(name))
+                            .to_string_lossy()
+                            .to_string();
+                        return name;
+                    }
                 }
             }
-        }
 
-        // Fallback to generic name with display ID
-        format!("Display {}", self.0.id)
+            // Fallback to generic name with display ID
+            format!("Display {}", self.0.id)
+        }
     }
 }
 
 fn get_cursor_position() -> Option<LogicalPosition> {
-    let location = {
-        let event = core_graphics::event::CGEvent::new(
-            core_graphics::event_source::CGEventSource::new(
-                core_graphics::event_source::CGEventSourceStateID::Private,
-            )
-            .ok()?,
-        )
-        .ok()?;
-        event.location()
-    };
+    let event_source = core_graphics::event_source::CGEventSource::new(
+        core_graphics::event_source::CGEventSourceStateID::Private,
+    )
+    .ok()?;
+
+    let event = core_graphics::event::CGEvent::new(event_source).ok()?;
+    let location = event.location();
 
     Some(LogicalPosition {
         x: location.x,
@@ -225,13 +213,7 @@ impl WindowImpl {
             .into_iter()
             .filter_map(|window| {
                 let bounds = window.bounds()?;
-
-                let contains_cursor = cursor.x() > bounds.position().x()
-                    && cursor.x() < bounds.position().x() + bounds.size().width()
-                    && cursor.y() > bounds.position().y()
-                    && cursor.y() < bounds.position().y() + bounds.size().height();
-
-                contains_cursor.then_some(window)
+                bounds.contains_point(cursor).then_some(window)
             })
             .collect()
     }
@@ -250,11 +232,7 @@ impl WindowImpl {
 
         windows_with_level.sort_by(|a, b| b.1.cmp(&a.1));
 
-        if windows_with_level.len() > 0 {
-            Some(windows_with_level.swap_remove(0).0)
-        } else {
-            None
-        }
+        windows_with_level.first().map(|(window, _)| *window)
     }
 
     pub fn id(&self) -> WindowIdImpl {
@@ -323,74 +301,71 @@ impl WindowImpl {
         unsafe {
             let pool = NSAutoreleasePool::new(nil);
 
-            // Get shared workspace
             let workspace_class = class!(NSWorkspace);
             let workspace: id = msg_send![workspace_class, sharedWorkspace];
-
-            // Get running applications
             let running_apps: id = msg_send![workspace, runningApplications];
             let app_count = NSArray::count(running_apps);
 
-            let mut app_icon_data = None;
-
-            // Find the application by name
-            for i in 0..app_count {
+            let result = (0..app_count).find_map(|i| {
                 let app: id = running_apps.objectAtIndex(i);
                 let localized_name: id = msg_send![app, localizedName];
 
-                if !localized_name.is_null() {
-                    let name_str = NSString::UTF8String(localized_name);
-                    if !name_str.is_null() {
-                        let name = std::ffi::CStr::from_ptr(name_str)
-                            .to_string_lossy()
-                            .to_string();
-
-                        if name == owner_name {
-                            // Get the app icon
-                            let icon: id = msg_send![app, icon];
-                            if !icon.is_null() {
-                                // Convert NSImage to PNG data
-                                let tiff_data: id = msg_send![icon, TIFFRepresentation];
-                                if !tiff_data.is_null() {
-                                    let bitmap_rep_class = class!(NSBitmapImageRep);
-                                    let bitmap_rep: id = msg_send![
-                                        bitmap_rep_class,
-                                        imageRepWithData: tiff_data
-                                    ];
-
-                                    if !bitmap_rep.is_null() {
-                                        let png_data: id = msg_send![
-                                            bitmap_rep,
-                                            representationUsingType: 4u64 // NSBitmapImageFileTypePNG
-                                            properties: nil
-                                        ];
-
-                                        if !png_data.is_null() {
-                                            let length: usize = msg_send![png_data, length];
-                                            let bytes_ptr: *const u8 = msg_send![png_data, bytes];
-
-                                            if !bytes_ptr.is_null() && length > 0 {
-                                                let bytes =
-                                                    std::slice::from_raw_parts(bytes_ptr, length);
-                                                let base64_string =
-                                                    base64::prelude::BASE64_STANDARD.encode(bytes);
-                                                app_icon_data = Some(format!(
-                                                    "data:image/png;base64,{}",
-                                                    base64_string
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                    }
+                if localized_name.is_null() {
+                    return None;
                 }
-            }
+
+                let name_str = NSString::UTF8String(localized_name);
+                if name_str.is_null() {
+                    return None;
+                }
+
+                let name = std::ffi::CStr::from_ptr(name_str)
+                    .to_string_lossy()
+                    .to_string();
+
+                if name != owner_name {
+                    return None;
+                }
+
+                let icon: id = msg_send![app, icon];
+                if icon.is_null() {
+                    return None;
+                }
+
+                let tiff_data: id = msg_send![icon, TIFFRepresentation];
+                if tiff_data.is_null() {
+                    return None;
+                }
+
+                let bitmap_rep_class = class!(NSBitmapImageRep);
+                let bitmap_rep: id = msg_send![bitmap_rep_class, imageRepWithData: tiff_data];
+                if bitmap_rep.is_null() {
+                    return None;
+                }
+
+                let png_data: id = msg_send![
+                    bitmap_rep,
+                    representationUsingType: 4u64 // NSBitmapImageFileTypePNG
+                    properties: nil
+                ];
+                if png_data.is_null() {
+                    return None;
+                }
+
+                let length: usize = msg_send![png_data, length];
+                let bytes_ptr: *const u8 = msg_send![png_data, bytes];
+
+                if bytes_ptr.is_null() || length == 0 {
+                    return None;
+                }
+
+                let bytes = std::slice::from_raw_parts(bytes_ptr, length);
+                let base64_string = base64::prelude::BASE64_STANDARD.encode(bytes);
+                Some(format!("data:image/png;base64,{}", base64_string))
+            });
 
             pool.drain();
-            app_icon_data
+            result
         }
     }
 }

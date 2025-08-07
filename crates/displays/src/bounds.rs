@@ -19,6 +19,13 @@ impl LogicalBounds {
     pub fn size(&self) -> LogicalSize {
         self.size
     }
+
+    pub fn contains_point(&self, point: LogicalPosition) -> bool {
+        point.x() >= self.position.x()
+            && point.x() < self.position.x() + self.size.width()
+            && point.y() >= self.position.y()
+            && point.y() < self.position.y() + self.size.height()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Type, Serialize)]

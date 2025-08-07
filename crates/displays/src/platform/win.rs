@@ -110,10 +110,6 @@ impl DisplayImpl {
         DisplayIdImpl(self.0.0 as u64)
     }
 
-    pub fn id(&self) -> String {
-        (self.0.0 as u64).to_string()
-    }
-
     pub fn from_id(id: String) -> Option<Self> {
         let parsed_id = id.parse::<u64>().ok()?;
         Self::list().into_iter().find(|d| d.raw_id().0 == parsed_id)
@@ -575,16 +571,8 @@ impl WindowImpl {
         unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let context = unsafe { &mut *(lparam.0 as *mut EnumContext) };
 
-            // Only include visible windows
-            if unsafe { IsWindowVisible(hwnd) }.as_bool() {
-                // Get the process ID of this window
-                let mut process_id = 0u32;
-                unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
-
-                // Only add the window if it doesn't belong to the current process
-                if process_id != context.current_process_id {
-                    context.list.push(WindowImpl(hwnd));
-                }
+            if is_window_valid_for_enumeration(hwnd, context.current_process_id) {
+                context.list.push(WindowImpl(hwnd));
             }
 
             TRUE
@@ -621,28 +609,13 @@ impl WindowImpl {
         unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let data = unsafe { &mut *(lparam.0 as *mut HitTestData) };
 
-            // Skip invisible or minimized windows
-            if !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() {
+            if !is_window_valid_for_enumeration(hwnd, data.current_process_id) {
                 return TRUE;
             }
 
-            // Skip own process windows
-            let mut process_id = 0u32;
-            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut process_id)) };
-            if process_id == data.current_process_id {
-                return TRUE;
-            }
-
-            let mut rect = RECT::default();
-            if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() {
-                if data.pt.x >= rect.left
-                    && data.pt.x < rect.right
-                    && data.pt.y >= rect.top
-                    && data.pt.y < rect.bottom
-                {
-                    data.found = Some(hwnd);
-                    return windows::Win32::Foundation::FALSE; // Found match, stop enumerating
-                }
+            if is_point_in_window(hwnd, data.pt) {
+                data.found = Some(hwnd);
+                return windows::Win32::Foundation::FALSE;
             }
 
             TRUE
@@ -673,12 +646,7 @@ impl WindowImpl {
             .into_iter()
             .filter_map(|window| {
                 let bounds = window.bounds()?;
-                let contains_cursor = cursor.x() > bounds.position().x()
-                    && cursor.x() < bounds.position().x() + bounds.size().width()
-                    && cursor.y() > bounds.position().y()
-                    && cursor.y() < bounds.position().y() + bounds.size().height();
-
-                contains_cursor.then_some(window)
+                bounds.contains_point(cursor).then_some(window)
             })
             .collect()
     }
@@ -1373,6 +1341,34 @@ impl WindowImpl {
             } else {
                 None
             }
+        }
+    }
+}
+
+fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool {
+    unsafe {
+        // Skip invisible or minimized windows
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
+
+        // Skip own process windows
+        let mut process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        process_id != current_process_id
+    }
+}
+
+fn is_point_in_window(hwnd: HWND, point: POINT) -> bool {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_ok() {
+            point.x >= rect.left
+                && point.x < rect.right
+                && point.y >= rect.top
+                && point.y < rect.bottom
+        } else {
+            false
         }
     }
 }
