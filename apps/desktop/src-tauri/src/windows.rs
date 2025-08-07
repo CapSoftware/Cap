@@ -609,11 +609,11 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
+pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
     position_traffic_lights_impl(
-        &window,
-        controls_inset.map(LogicalPosition::from).or_else(|| {
+        &_window,
+        _controls_inset.map(LogicalPosition::from).or_else(|| {
             // Attempt to get the default inset from the window's traffic lights position
             CapWindowId::from_str(window.label())
                 .ok()
@@ -674,16 +674,16 @@ impl MonitorExt for Monitor {
 
 #[specta::specta]
 #[tauri::command(async)]
-pub fn set_window_transparent(window: tauri::Window, value: bool) {
+pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     #[cfg(target_os = "macos")]
     {
-        let ns_win = window
+        let ns_win = _window
             .ns_window()
             .expect("Failed to get native window handle")
             as *const objc2_app_kit::NSWindow;
 
         unsafe {
-            (*ns_win).setOpaque(!value);
+            (*ns_win).setOpaque(!_value);
         }
     }
 }

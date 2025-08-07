@@ -11,7 +11,7 @@ use scap::{
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, ops::ControlFlow, rc::Rc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
 #[cfg(target_os = "windows")]
 use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
@@ -110,7 +110,7 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
-    options: Arc<Options>,
+    options: Rc<Options>,
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
@@ -227,7 +227,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             output_type,
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
-            options: Arc::new(Default::default()),
+            options: std::rc::Rc::new(Default::default()),
             bounds,
             display_size,
             show_camera,
@@ -240,7 +240,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let options = this.create_options(scap_target, crop_area, captures_audio)?;
 
-        this.options = Arc::new(options);
+        this.options = std::rc::Rc::new(options);
 
         #[cfg(target_os = "macos")]
         let video_size = {

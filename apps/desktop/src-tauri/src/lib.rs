@@ -1007,11 +1007,11 @@ fn close_recordings_overlay_window(app: AppHandle) {
 
 #[tauri::command(async)]
 #[specta::specta]
-fn focus_captures_panel(app: AppHandle) {
+fn focus_captures_panel(_app: AppHandle) {
     #[cfg(target_os = "macos")]
     {
         use tauri_nspanel::ManagerExt;
-        if let Ok(panel) = app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
+        if let Ok(panel) = _app.get_webview_panel(&CapWindowId::RecordingsOverlay.label()) {
             panel.make_key_window();
         }
     }

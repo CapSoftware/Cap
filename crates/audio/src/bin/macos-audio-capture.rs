@@ -1,3 +1,14 @@
+#[tokio::main]
+pub async fn main() {
+    #[cfg(target_os = "macos")]
+    macos::main().await;
+    #[cfg(not(target_os = "macos"))]
+    panic!("This example is only supported on macOS");
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+
 use std::{sync::mpsc::Sender, time::Duration};
 
 use cidre::{
@@ -85,4 +96,5 @@ pub async fn main() {
         .collect::<Vec<_>>();
 
     std::fs::write("./bruh.raw", &bytes).unwrap();
+}
 }

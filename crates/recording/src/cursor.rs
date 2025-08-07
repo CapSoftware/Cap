@@ -7,13 +7,11 @@ use std::{
 };
 
 use cap_cursor_info::CursorShape;
-use cap_displays::Display;
-use cap_media::{platform::Bounds, sources::CropRatio};
+use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_utils::spawn_actor;
 use device_query::{DeviceQuery, DeviceState};
 use futures::future::Either;
-use sha2::{Digest, Sha256};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -51,7 +49,7 @@ impl CursorActor {
 pub fn spawn_cursor_recorder(
     #[allow(unused)] screen_bounds: Bounds,
     #[cfg(target_os = "macos")] display: Display,
-    #[cfg(target_os = "macos")] crop_ratio: CropRatio,
+    #[cfg(target_os = "macos")] crop_ratio: cap_media::platform::sources::CropRatio,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
@@ -137,7 +135,7 @@ pub fn spawn_cursor_recorder(
             // TODO: use this on windows too
             #[cfg(target_os = "macos")]
             let position = {
-                let position = use cap_cursor_capture::RawCursorPosition::get();
+                let position = cap_cursor_capture::RawCursorPosition::get();
 
                 if position != last_position {
                     last_position = position;
@@ -250,6 +248,7 @@ struct CursorData {
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
     use objc2_app_kit::NSCursor;
+    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
@@ -426,13 +425,13 @@ fn get_cursor_data() -> Option<CursorData> {
         std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
 
         // Calculate hotspot
-        let mut hotspot_x = if icon_info.fIcon.as_bool() == false {
+        let mut hotspot_x = if !icon_info.fIcon.as_bool() {
             icon_info.xHotspot as f64 / width as f64
         } else {
             0.5
         };
 
-        let mut hotspot_y = if icon_info.fIcon.as_bool() == false {
+        let mut hotspot_y = if !icon_info.fIcon.as_bool() {
             icon_info.yHotspot as f64 / height as f64
         } else {
             0.5
@@ -454,9 +453,7 @@ fn get_cursor_data() -> Option<CursorData> {
         for i in (0..size).step_by(4) {
             // Windows DIB format is BGRA, we need to:
             // 1. Swap B and R channels
-            let b = image_data[i];
-            image_data[i] = image_data[i + 2]; // B <- R
-            image_data[i + 2] = b; // R <- B
+            image_data.swap(i, i + 2); // R <- B
 
             // 2. Pre-multiply alpha if needed
             // This is already handled by DrawIconEx
@@ -486,8 +483,8 @@ fn get_cursor_data() -> Option<CursorData> {
                                 // Skip if out of bounds or same pixel
                                 if nx < 0
                                     || ny < 0
-                                    || nx >= width as i32
-                                    || ny >= height as i32
+                                    || nx >= width
+                                    || ny >= height
                                     || (*dx == 0 && *dy == 0)
                                 {
                                     continue;

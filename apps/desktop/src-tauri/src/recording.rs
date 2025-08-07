@@ -301,9 +301,9 @@ pub async fn start_recording(
     };
 
     match &inputs.capture_target {
-        ScreenCaptureTarget::Window { id } => {
+        ScreenCaptureTarget::Window { id: _id } => {
             #[cfg(target_os = "macos")]
-            let display = display_for_window(*id).unwrap().id;
+            let display = display_for_window(*_id).unwrap().id;
 
             #[cfg(windows)]
             let display = {
