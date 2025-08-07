@@ -321,10 +321,10 @@ fn get_cursor_data() -> Option<CursorData> {
         {
             // Clean up handles
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -378,10 +378,10 @@ fn get_cursor_data() -> Option<CursorData> {
             DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -407,14 +407,14 @@ fn get_cursor_data() -> Option<CursorData> {
         {
             // Clean up
             SelectObject(mem_dc, old_bitmap);
-            DeleteObject(dib.into());
+            let _ = DeleteObject(dib.into());
             DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -439,14 +439,14 @@ fn get_cursor_data() -> Option<CursorData> {
 
         // Cleanup
         SelectObject(mem_dc, old_bitmap);
-        DeleteObject(dib.into());
+        let _ = DeleteObject(dib.into());
         DeleteDC(mem_dc);
         ReleaseDC(Some(HWND::default()), screen_dc);
         if !icon_info.hbmColor.is_invalid() {
-            DeleteObject(icon_info.hbmColor.into());
+            let _ = DeleteObject(icon_info.hbmColor.into());
         }
         if !icon_info.hbmMask.is_invalid() {
-            DeleteObject(icon_info.hbmMask.into());
+            let _ = DeleteObject(icon_info.hbmMask.into());
         }
 
         // Process the image data to ensure proper alpha channel

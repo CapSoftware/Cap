@@ -192,7 +192,7 @@ impl ShowCapWindow {
             return Ok(window);
         }
 
-        let id = self.id(app);
+        let _id = self.id(app);
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -497,9 +497,9 @@ impl ShowCapWindow {
         // window.hide().ok();
 
         #[cfg(target_os = "macos")]
-        if let Some(position) = id.traffic_lights_position() {
+        if let Some(position) = _id.traffic_lights_position() {
             add_traffic_lights(&window, position);
-        }
+
 
         Ok(window)
     }
