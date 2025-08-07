@@ -338,7 +338,6 @@ function useRequestPermission() {
       if (type === "camera") {
         await commands.resetCameraPermissions();
       } else if (type === "microphone") {
-        console.log("wowzers");
         await commands.resetMicrophonePermissions();
       }
       await commands.requestPermission(type);
