@@ -1073,7 +1073,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_internal(&self, icon: HICON, high_res: bool) -> Option<(Vec<u8>, i32)> {
+    fn hicon_to_png_bytes_internal(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -1088,18 +1088,14 @@ impl WindowImpl {
             // Get the native icon size to prioritize it
             let native_size = self.get_icon_size(icon);
 
-            // Choose size array based on resolution preference
-            let mut sizes = if high_res {
-                vec![512, 256, 128, 96, 64, 48, 32, 24, 16]
-            } else {
-                vec![256, 128, 64, 48, 32, 24, 16]
-            };
+            // Always try for the highest resolution possible, starting with the largest sizes
+            let mut sizes = vec![2048, 1024, 512, 256, 128, 96, 64, 48, 32, 24, 16];
 
             // If we have native size info, prioritize it
             if let Some((width, height)) = native_size {
                 let native_dim = width.max(height);
-                let max_size = if high_res { 512 } else { 256 };
-                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= max_size {
+                const MAX_SIZE: i32 = 4096;
+                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= MAX_SIZE {
                     sizes.insert(0, native_dim);
                 }
             }
@@ -1220,15 +1216,6 @@ impl WindowImpl {
 
             best_result
         }
-    }
-
-    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
-        self.hicon_to_png_bytes_internal(icon, true)
-    }
-
-    fn hicon_to_png_bytes(&self, icon: HICON) -> Option<Vec<u8>> {
-        self.hicon_to_png_bytes_internal(icon, false)
-            .map(|(data, _)| data)
     }
 
     pub fn bounds(&self) -> Option<LogicalBounds> {
