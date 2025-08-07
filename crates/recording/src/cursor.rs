@@ -376,7 +376,7 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if dib.is_err() {
             // Clean up
-            DeleteDC(mem_dc);
+            let _ = DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
                 let _ = DeleteObject(icon_info.hbmColor.into());
@@ -409,7 +409,7 @@ fn get_cursor_data() -> Option<CursorData> {
             // Clean up
             SelectObject(mem_dc, old_bitmap);
             let _ = DeleteObject(dib.into());
-            DeleteDC(mem_dc);
+            let _ = DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
                 let _ = DeleteObject(icon_info.hbmColor.into());
@@ -441,7 +441,7 @@ fn get_cursor_data() -> Option<CursorData> {
         // Cleanup
         SelectObject(mem_dc, old_bitmap);
         let _ = DeleteObject(dib.into());
-        DeleteDC(mem_dc);
+        let _ = DeleteDC(mem_dc);
         ReleaseDC(Some(HWND::default()), screen_dc);
         if !icon_info.hbmColor.is_invalid() {
             let _ = DeleteObject(icon_info.hbmColor.into());

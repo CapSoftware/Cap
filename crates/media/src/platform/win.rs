@@ -179,7 +179,9 @@ pub fn monitor_bounds(id: u32) -> Bounds {
 
         let mut display_device = DISPLAY_DEVICEW::default();
         #[allow(clippy::field_reassign_with_default)]
-        display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        {
+            display_device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+        }
 
         if !unsafe {
             EnumDisplayDevicesW(
