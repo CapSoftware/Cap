@@ -4,13 +4,13 @@
 use std::{
     cell::RefCell,
     ffi::{OsString, c_void},
-    mem::ManuallyDrop,
+    mem::{ManuallyDrop, MaybeUninit},
     ops::Deref,
     os::windows::ffi::OsStringExt,
     ptr::{self, null, null_mut},
     time::{Duration, Instant},
 };
-use tracing::trace;
+use tracing::{trace, warn};
 use windows::{
     Win32::{
         Foundation::*,
@@ -275,7 +275,7 @@ impl IPropertyBagExt for IPropertyBag {
 }
 
 pub struct VideoInputDeviceIterator {
-    enum_moniker: IEnumMoniker,
+    enum_moniker: Option<IEnumMoniker>,
     moniker: [Option<IMoniker>; 1],
 }
 
@@ -296,7 +296,13 @@ impl VideoInputDeviceIterator {
                 0,
             )?;
 
-            enum_moniker.expect("enum_moniker is None after create succeeded!")
+            if enum_moniker.is_none() {
+                warn!("VideoInputDeviceIterator::new produced no enum moniker");
+            }
+
+            // CreateClassEnumerator can return S_FALSE which is treated as success,
+            // so we can't assume this exists
+            enum_moniker
         };
 
         Ok(Self {
@@ -310,7 +316,11 @@ impl Iterator for VideoInputDeviceIterator {
     type Item = VideoInputDevice;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while unsafe { self.enum_moniker.Next(&mut self.moniker, None) } == S_OK {
+        let Some(enum_moniker) = &mut self.enum_moniker else {
+            return None;
+        };
+
+        while unsafe { enum_moniker.Next(&mut self.moniker, None) } == S_OK {
             if let Some(device) = self.moniker[0]
                 .take()
                 .and_then(|moniker| VideoInputDevice::new(moniker).ok())
@@ -528,7 +538,9 @@ impl AMMediaType {
     }
 
     pub fn into_inner(mut self) -> AM_MEDIA_TYPE {
-        let inner = std::mem::replace(&mut self.0, unsafe { std::mem::uninitialized() });
+        // SAFETY: Getting the inner value without triggering Drop
+        #[expect(invalid_value)]
+        let inner = std::mem::replace(&mut self.0, unsafe { MaybeUninit::uninit().assume_init() });
         std::mem::forget(self);
         inner
     }
