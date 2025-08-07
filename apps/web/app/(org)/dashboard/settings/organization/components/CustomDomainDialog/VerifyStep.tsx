@@ -8,22 +8,14 @@ interface VerifyStepProps {
   domain: string;
   domainConfig?: DomainConfig | null;
   isVerified?: boolean;
-  verifying?: boolean;
-  checkVerification: (showToasts?: boolean) => Promise<void>;
-  onNext: () => void;
-  onPrev: () => void;
 }
 
 export const VerifyStep = ({
   domain,
   domainConfig,
   isVerified,
-  checkVerification,
-  verifying,
-  onNext,
-  onPrev
 }: VerifyStepProps) => {
-  const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   // Get the recommended values from Vercel's response
   const recommendedCnames = domainConfig?.recommendedCNAME || [];
@@ -33,7 +25,6 @@ export const VerifyStep = ({
   const currentAValues = domainConfig?.currentAValues || [];
 
   // Determine what records to show based on what Vercel actually provides
-  const hasVerificationRecord = domainConfig?.verification?.[0];
   const hasRecommendedA = recommendedARecord || recommendedIPv4.length > 0;
   const hasRecommendedCNAME = recommendedCnames.length > 0;
 
@@ -42,13 +33,13 @@ export const VerifyStep = ({
   const cnameConfigured = recommendedCnames.length > 0 &&
     recommendedCnames.some(rec => currentCnames.includes(rec.value));
 
-  const showARecord = !hasVerificationRecord && hasRecommendedA && !aRecordConfigured;
-  const showCNAMERecord = !hasVerificationRecord && hasRecommendedCNAME && !cnameConfigured;
+  const showARecord = hasRecommendedA && !aRecordConfigured;
+  const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 
-  const handleCopy = async (text: string, field: "name" | "value") => {
+  const handleCopy = async (text: string, fieldId: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedField(field);
+      setCopiedField(fieldId);
       setTimeout(() => setCopiedField(null), 2000);
       toast.success("Copied to clipboard");
     } catch (err) {
@@ -133,11 +124,11 @@ export const VerifyStep = ({
                         {recommendedARecord && (
                           <button
                             type="button"
-                            onClick={() => handleCopy(recommendedARecord, "value")}
+                            onClick={() => handleCopy(recommendedARecord, "a-record-value")}
                             className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
                             title="Copy to clipboard"
                           >
-                            {copiedField === "value" ? (
+                            {copiedField === "a-record-value" ? (
                               <Check className="size-3.5 text-green-500" />
                             ) : (
                               <Copy className="size-3.5 text-gray-10" />
@@ -213,118 +204,40 @@ export const VerifyStep = ({
                   {/* Show ranked CNAME options */}
                   {recommendedCnames
                     .sort((a, b) => a.rank - b.rank)
-                    .map((cname, index) => (
-                      <div key={cname.rank} className="grid grid-cols-[100px,1fr] items-center">
-                        <dt className="text-sm font-medium text-gray-12">
-                          {index === 0 ? "Value" : `Option ${index + 1}`}
-                        </dt>
-                        <dd className="flex gap-2 items-center text-sm text-gray-10">
-                          <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
-                            <code className="text-xs text-gray-10">
-                              {cname.value}
-                            </code>
-                            <button
-                              type="button"
-                              onClick={() => handleCopy(cname.value, "value")}
-                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                              title="Copy to clipboard"
-                            >
-                              {copiedField === "value" ? (
-                                <Check className="size-3.5 text-green-500" />
-                              ) : (
-                                <Copy className="size-3.5 text-gray-10" />
-                              )}
-                            </button>
-                          </div>
-                        </dd>
-                      </div>
-                    ))}
+                    .map((cname, index) => {
+                      const fieldId = `cname-${cname.rank}`;
+                      return (
+                        <div key={cname.rank} className="grid grid-cols-[100px,1fr] items-center">
+                          <dt className="text-sm font-medium text-gray-12">
+                            {index === 0 ? "Value" : `Option ${index + 1}`}
+                          </dt>
+                          <dd className="flex gap-2 items-center text-sm text-gray-10">
+                            <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
+                              <code className="text-xs text-gray-10">
+                                {cname.value}
+                              </code>
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(cname.value, fieldId)}
+                                className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+                                title="Copy to clipboard"
+                              >
+                                {copiedField === fieldId ? (
+                                  <Check className="size-3.5 text-green-500" />
+                                ) : (
+                                  <Copy className="size-3.5 text-gray-10" />
+                                )}
+                              </button>
+                            </div>
+                          </dd>
+                        </div>
+                      );
+                    })}
                 </dl>
               </div>
             </div>
           )}
 
-          {/* TXT Record Configuration for verification */}
-          {hasVerificationRecord && (
-            <div className="overflow-hidden rounded-lg border border-gray-4">
-              <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
-                <p className="font-medium text-md text-gray-12">
-                  Domain Verification Required
-                </p>
-                <p className="mt-1 text-sm text-gray-10">
-                  First, verify domain ownership with this TXT record:
-                </p>
-              </div>
-              <div className="px-4 py-3">
-                <dl className="grid gap-4">
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Type</dt>
-                    <dd className="text-sm text-gray-10">
-                      {domainConfig?.verification?.[0]?.type || 'TXT'}
-                    </dd>
-                  </div>
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Name</dt>
-                    <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
-                        <code className="text-xs truncate">
-                          {domainConfig?.verification?.[0]?.domain}
-                        </code>
-                        {domainConfig?.verification?.[0]?.domain && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const verification = domainConfig?.verification?.[0];
-                              if (verification?.domain) {
-                                handleCopy(verification.domain, "name");
-                              }
-                            }}
-                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                            title="Copy to clipboard"
-                          >
-                            {copiedField === "name" ? (
-                              <Check className="size-3.5 text-green-500" />
-                            ) : (
-                              <Copy className="size-3.5 text-gray-10" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </dd>
-                  </div>
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Value</dt>
-                    <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
-                        <code className="font-mono text-xs break-all">
-                          {domainConfig?.verification?.[0]?.value || ''}
-                        </code>
-                        {domainConfig?.verification?.[0]?.value && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const verification = domainConfig?.verification?.[0];
-                              if (verification?.value) {
-                                handleCopy(verification.value, "value");
-                              }
-                            }}
-                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                            title="Copy to clipboard"
-                          >
-                            {copiedField === "value" ? (
-                              <Check className="size-3.5 text-green-500" />
-                            ) : (
-                              <Copy className="size-3.5 text-gray-10" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </div>
-          )}
         </div>
       )}
     </div>

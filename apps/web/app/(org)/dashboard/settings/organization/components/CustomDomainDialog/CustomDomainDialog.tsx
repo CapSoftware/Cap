@@ -353,10 +353,6 @@ const CustomDomainDialog = ({
               domain={domain}
               domainConfig={domainConfig}
               isVerified={isVerified}
-              verifying={verifying}
-              checkVerification={checkVerification}
-              onNext={handleNext}
-              onPrev={handlePrev}
             />
           )}
 
@@ -371,12 +367,12 @@ const CustomDomainDialog = ({
             <div className="flex justify-between items-center w-full">
               <div className="flex gap-3 items-center">
                 {isVerified ? (
-                  <div className="flex gap-2 items-center px-3 h-10 text-sm bg-green-900 rounded-full">
+                  <div className="flex gap-2 items-center px-3 h-10 bg-green-900 rounded-full">
                     <CheckCircle className="text-green-200 size-4" />
                     <p className="text-sm font-medium text-white">Domain verified</p>
                   </div>
                 ) : (
-                  <div className="flex gap-2 items-center px-3 h-10 text-sm bg-red-900 rounded-full">
+                  <div className="flex gap-2 items-center px-3 h-10 bg-red-900 rounded-full">
                     <XCircle className="text-red-200 size-4" />
                     <p className="text-sm font-medium text-white">Domain not verified</p>
                   </div>

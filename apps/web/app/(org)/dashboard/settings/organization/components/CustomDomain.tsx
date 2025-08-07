@@ -6,6 +6,7 @@ import { useDashboardContext } from "../../../Contexts";
 import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { toast } from "sonner";
+import { CheckCircle, XCircle } from "lucide-react";
 
 
 
@@ -43,7 +44,7 @@ export function CustomDomain() {
     }
   };
 
-  const domainVerifiedCheck = activeOrganization?.organization.customDomain
+  const orgCustomDomain = activeOrganization?.organization.customDomain
 
 
   return (
@@ -59,8 +60,20 @@ export function CustomDomain() {
             Set up a custom domain for your organization's shared caps and make
             it unique.
           </p>
-          <div>
-            <p className="text-sm text-gray-10">{activeOrganization?.organization.customDomain}</p>
+          <div className="flex gap-3 items-center pt-3">
+            {isVerified ? (
+              <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-green-900 rounded-full">
+                <CheckCircle className="text-green-200 size-3.5" />
+                <p className="text-xs italic font-medium text-white">{orgCustomDomain}
+                  <span className="ml-1 not-italic text-white/60">verified</span></p>
+              </div>
+            ) : (
+              <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-red-900 rounded-full">
+                <XCircle className="text-red-200 size-3.5" />
+                <p className="text-xs italic font-medium text-white">{orgCustomDomain}
+                  <span className="ml-1 not-italic text-white/60">not verified</span></p>
+              </div>
+            )}
           </div>
         </div>
         <Button
