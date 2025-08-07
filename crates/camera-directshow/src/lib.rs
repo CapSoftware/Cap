@@ -17,7 +17,7 @@ use windows::{
         Media::{
             DirectShow::*,
             KernelStreaming::{
-                IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFO, KS_VIDEOINFOHEADER,
+                IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER,
             },
             MediaFoundation::*,
         },
@@ -40,7 +40,7 @@ pub trait IPinExt {
 }
 
 impl IPinExt for IPin {
-    unsafe fn matches_category(&self, category: GUID) -> bool {
+    unsafe fn matches_category(&self, category: GUID) -> bool { unsafe {
         let ks_property = self.cast::<IKsPropertySet>().unwrap();
         let mut return_value_size = 0;
         let mut pin_category = GUID::zeroed();
@@ -57,13 +57,13 @@ impl IPinExt for IPin {
             .unwrap();
 
         return_value_size as usize == std::mem::size_of_val(&category) && pin_category == category
-    }
-    unsafe fn matches_major_type(&self, major_type: GUID) -> bool {
+    }}
+    unsafe fn matches_major_type(&self, major_type: GUID) -> bool { unsafe {
         let mut connection_media_type = AM_MEDIA_TYPE::default();
         self.ConnectionMediaType(&mut connection_media_type)
             .map(|_| connection_media_type.majortype == major_type)
             .unwrap_or(false)
-    }
+    }}
 }
 
 pub trait IBaseFilterExt {
@@ -93,13 +93,12 @@ impl IBaseFilterExt for IBaseFilter {
                     continue;
                 };
 
-                if pin_dir == direction {
-                    if (category == GUID::zeroed() || pin.matches_category(category))
+                if pin_dir == direction
+                    && (category == GUID::zeroed() || pin.matches_category(category))
                         && (major_type == GUID::zeroed() || pin.matches_major_type(major_type))
                     {
                         return Some(pin);
                     }
-                }
             }
         }
 
@@ -110,7 +109,7 @@ impl IBaseFilterExt for IBaseFilter {
         &self,
         direction: PIN_DIRECTION,
         _name: Option<&PWSTR>,
-    ) -> windows_core::Result<Option<IPin>> {
+    ) -> windows_core::Result<Option<IPin>> { unsafe {
         let pin_enum = self.EnumPins()?;
 
         let _ = pin_enum.Reset();
@@ -129,7 +128,7 @@ impl IBaseFilterExt for IBaseFilter {
         }
 
         Ok(None)
-    }
+    }}
 }
 
 pub trait VARIANTExt {
@@ -192,7 +191,7 @@ impl IAMStreamConfigExt for IAMStreamConfig {
         unsafe { self.GetNumberOfCapabilities(&mut count, &mut 0) }?;
 
         Ok(IAMStreamConfigMediaTypes {
-            stream_config: &self,
+            stream_config: self,
             count: count as u32,
             caps: VIDEO_STREAM_CONFIG_CAPS::default(),
             i: 0,
@@ -209,9 +208,9 @@ pub trait AM_MEDIA_TYPEVideoExt {
 }
 
 impl AM_MEDIA_TYPEVideoExt for AM_MEDIA_TYPEVideo {
-    unsafe fn video_info(&self) -> &KS_VIDEOINFOHEADER {
+    unsafe fn video_info(&self) -> &KS_VIDEOINFOHEADER { unsafe {
         &*self.pbFormat.cast::<KS_VIDEOINFOHEADER>()
-    }
+    }}
 }
 
 #[allow(non_camel_case_types)]
@@ -242,7 +241,7 @@ pub trait IAMVideoControlExt {
 }
 
 impl IAMVideoControlExt for IAMVideoControl {
-    unsafe fn time_per_frame_list<'a>(&self, pin: &'a IPin, i: i32, dimensions: SIZE) -> &'a [i64] {
+    unsafe fn time_per_frame_list<'a>(&self, pin: &'a IPin, i: i32, dimensions: SIZE) -> &'a [i64] { unsafe {
         let mut time_per_frame_list = null_mut();
         let mut list_size = 0;
 
@@ -254,7 +253,7 @@ impl IAMVideoControlExt for IAMVideoControl {
         }
 
         &[]
-    }
+    }}
 }
 
 pub trait IPropertyBagExt {
@@ -267,11 +266,11 @@ impl IPropertyBagExt for IPropertyBag {
     unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
         P0: windows_core::Param<windows_core::PCWSTR>,
-    {
+    { unsafe {
         let mut ret = VARIANT::default();
         self.Read(pszpropname, &mut ret, None)?;
         Ok(ret)
-    }
+    }}
 }
 
 pub struct VideoInputDeviceIterator {
@@ -753,8 +752,8 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
     }
 
     fn Clone(&self) -> windows_core::Result<IEnumPins> {
-        let result = unsafe { self.cast() };
-        result
+        
+        unsafe { self.cast() }
     }
 }
 
@@ -778,7 +777,7 @@ struct SinkInputPin {
 }
 
 impl SinkInputPin {
-    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool {
+    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool { unsafe {
         let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
 
         video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
@@ -801,7 +800,7 @@ impl SinkInputPin {
         } else {
             false
         }
-    }
+    }}
 }
 
 impl IPin_Impl for SinkInputPin_Impl {
@@ -844,19 +843,19 @@ impl IPin_Impl for SinkInputPin_Impl {
     }
 
     fn Disconnect(&self) -> windows_core::Result<()> {
-        let result = match self.connected_pin.borrow_mut().take() {
+        
+        match self.connected_pin.borrow_mut().take() {
             Some(_) => S_OK.ok(),
             None => VFW_E_NOT_CONNECTED.ok(),
-        };
-        result
+        }
     }
 
     fn ConnectedTo(&self) -> windows_core::Result<IPin> {
-        let result = match self.connected_pin.borrow().as_ref() {
+        
+        match self.connected_pin.borrow().as_ref() {
             Some(connected_pin) => Ok(connected_pin.clone()),
             None => Err(VFW_E_NOT_CONNECTED.into()),
-        };
-        result
+        }
     }
 
     fn ConnectionMediaType(
@@ -880,7 +879,7 @@ impl IPin_Impl for SinkInputPin_Impl {
         unsafe {
             (*pinfo).dir = PINDIR_INPUT;
             (*pinfo).pFilter =
-                ManuallyDrop::new(self.owner.borrow().as_ref().map(|v| (&*v).clone()));
+                ManuallyDrop::new(self.owner.borrow().as_ref().map(|v| (*v).clone()));
             (*pinfo).achName[0] = '\0' as u16;
         }
 
@@ -969,12 +968,11 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         };
 
         unsafe {
-            if let Ok(new_media_type) = psample.GetMediaType() {
-                if !new_media_type.is_null() {
+            if let Ok(new_media_type) = psample.GetMediaType()
+                && !new_media_type.is_null() {
                     self.current_media_type
                         .replace(AMMediaType::new(&*new_media_type));
                 }
-            }
         }
 
         let media_type = self.current_media_type.borrow();
@@ -1002,10 +1000,10 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         let timestamp = timestamp.get_or_insert(Instant::now() - *first_ref_time);
 
         (self.callback.borrow_mut())(CallbackData {
-            sample: &psample,
+            sample: psample,
             media_type: &media_type,
-            reference_time: first_ref_time.clone(),
-            timestamp: timestamp.clone(),
+            reference_time: *first_ref_time,
+            timestamp: *timestamp,
         });
 
         Ok(())

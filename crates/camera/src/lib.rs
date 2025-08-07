@@ -98,7 +98,7 @@ impl Debug for Format {
                 }
                 #[cfg(windows)]
                 {
-                    use crate::windows::NativeFormat;
+                    
                     use cap_camera_windows::VideoFormatInner;
 
                     match &self.native {

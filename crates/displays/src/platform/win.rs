@@ -1,13 +1,11 @@
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
+        Foundation::{FALSE, LPARAM, RECT},
         Graphics::Gdi::{
-            DEVMODEW, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors,
-            EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONULL,
-            MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
+            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
         },
     },
-    core::{BOOL, PCWSTR, PWSTR},
+    core::BOOL,
 };
 
 #[derive(Clone, Copy)]
@@ -20,13 +18,13 @@ impl DisplayImpl {
             _hdc: HDC,
             _lprc_clip: *mut RECT,
             lparam: LPARAM,
-        ) -> BOOL {
+        ) -> BOOL { unsafe {
             let list = &mut *(lparam.0 as *mut Vec<DisplayImpl>);
 
             list.push(DisplayImpl(hmonitor));
 
             FALSE
-        }
+        }}
 
         let mut list = vec![];
         unsafe {
@@ -48,7 +46,7 @@ impl DisplayImpl {
         unsafe {
             GetMonitorInfoW(self.0, &mut minfo as *mut MONITORINFOEXW as *mut _)
                 .as_bool()
-                .then(|| minfo.monitorInfo.rcMonitor)
+                .then_some(minfo.monitorInfo.rcMonitor)
         }
     }
 

@@ -7,9 +7,9 @@ use std::{
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
-    ptr::{null, null_mut},
+    ptr::null_mut,
     slice::from_raw_parts,
-    sync::{Mutex, mpsc::*},
+    sync::{Mutex, Mutex, },
     time::{Duration, Instant},
 };
 
@@ -17,9 +17,9 @@ use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
-    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
+    System::Com::{CLSCTX_INPROC_SERVER, CLSCTX_INPROC_SERVER, CLSCTX_I},
 };
-use windows_core::{ComObjectInner, GUID, Interface, PWSTR, implement};
+use windows_core::{ implement, implement, implement, implement};
 
 pub fn initialize_mediafoundation() -> windows_core::Result<()> {
     unsafe { CoInitialize(None) }.ok()?;
@@ -152,7 +152,7 @@ impl Device {
     pub fn model_id(&self) -> Option<String> {
         self.id()
             .ok()
-            .and_then(|v| get_device_model_id(&*v.to_string_lossy()))
+            .and_then(|v| get_device_model_id(&v.to_string_lossy()))
     }
 
     // Returns an iterator of IMFMediaTypes available for this device.
@@ -388,7 +388,7 @@ impl Display for Device {
             "{}",
             self.name()
                 .map(|v| v.to_string_lossy().to_string())
-                .unwrap_or_else(|_| format!("Unknown device name"))
+                .unwrap_or_else(|_| "Unknown device name".to_string())
         )
     }
 }
@@ -402,7 +402,7 @@ impl SourceReader {
     pub fn native_media_types(
         &self,
         stream_index: u32,
-    ) -> windows_core::Result<NativeMediaTypesIterator> {
+    ) -> windows_core::Result<NativeMediaTypesIterator<'_>> {
         NativeMediaTypesIterator::new(&self.inner, stream_index)
     }
 
@@ -494,13 +494,8 @@ impl Iterator for NativeMediaTypesIterator<'_> {
     type Item = IMFMediaType;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some(ret) = unsafe { self.reader.GetNativeMediaType(self.stream_index, self.i) }.ok()
-        else {
-            return None;
-        };
-
+        let ret = unsafe { self.reader.GetNativeMediaType(self.stream_index, self.i) }.ok()?;
         self.i += 1;
-
         Some(ret)
     }
 }
@@ -538,11 +533,11 @@ fn get_device_model_id(device_id: &str) -> Option<String> {
 }
 
 pub trait IMFMediaBufferExt {
-    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock>;
+    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock<'_>>;
 }
 
 impl IMFMediaBufferExt for IMFMediaBuffer {
-    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock> {
+    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock<'_>> {
         let mut bytes_ptr = null_mut();
         let mut size = 0;
 
@@ -552,7 +547,7 @@ impl IMFMediaBufferExt for IMFMediaBuffer {
 
         Ok(IMFMediaBufferLock {
             source: self,
-            bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr as *mut u8, size as usize) },
+            bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr, size as usize) },
         })
     }
 }
@@ -572,13 +567,13 @@ impl<'a> Deref for IMFMediaBufferLock<'a> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.bytes
+        self.bytes
     }
 }
 
 impl<'a> DerefMut for IMFMediaBufferLock<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.bytes
+        self.bytes
     }
 }
 
@@ -611,7 +606,7 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
         let raw_time_stamp = unsafe { sample.GetSampleTime() }.unwrap_or(0);
         let timestamp = Duration::from_micros((raw_time_stamp / 10) as u64);
 
-        let mut raw_capture_begin_time =
+        let raw_capture_begin_time =
             unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) }
                 .or_else(
                     // retry, it's what chromium does /shrug
