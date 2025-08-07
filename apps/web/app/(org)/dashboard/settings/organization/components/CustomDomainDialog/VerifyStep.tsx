@@ -37,8 +37,13 @@ export const VerifyStep = ({
   const hasRecommendedA = recommendedARecord || recommendedIPv4.length > 0;
   const hasRecommendedCNAME = recommendedCnames.length > 0;
 
-  const showARecord = !hasVerificationRecord && hasRecommendedA;
-  const showCNAMERecord = !hasVerificationRecord && hasRecommendedCNAME;
+  // Check if DNS records are already correctly configured
+  const aRecordConfigured = recommendedARecord && currentAValues.includes(recommendedARecord);
+  const cnameConfigured = recommendedCnames.length > 0 &&
+    recommendedCnames.some(rec => currentCnames.includes(rec.value));
+
+  const showARecord = !hasVerificationRecord && hasRecommendedA && !aRecordConfigured;
+  const showCNAMERecord = !hasVerificationRecord && hasRecommendedCNAME && !cnameConfigured;
 
   const handleCopy = async (text: string, field: "name" | "value") => {
     try {
@@ -70,10 +75,10 @@ export const VerifyStep = ({
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
-                  Option 1: A Record {recommendedCnames.length > 0 ? "(Recommended for apex domains)" : ""}
+                  A Record Configuration
                 </p>
                 <p className="mt-1 text-sm text-gray-10">
-                  Point your domain to Vercel using an A record:
+                  Add this A record to your domain:
                 </p>
               </div>
               <div className="px-4 py-3">
@@ -152,10 +157,10 @@ export const VerifyStep = ({
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
-                  {showARecord ? "Option 2: CNAME Record" : "CNAME Record"} {showARecord ? "(Alternative)" : ""}
+                  CNAME Record Configuration
                 </p>
                 <p className="mt-1 text-sm text-gray-10">
-                  {showARecord ? "Alternatively, point your domain using a CNAME record:" : "Point your domain to Vercel using a CNAME record:"}
+                  Add this CNAME record to your domain:
                 </p>
               </div>
               <div className="px-4 py-3">
