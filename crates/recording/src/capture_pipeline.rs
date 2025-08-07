@@ -1,18 +1,18 @@
 use std::{
     future::Future,
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::SystemTime,
 };
 
 use cap_media::{
+    MediaError,
     feeds::AudioInputFeed,
-    pipeline::{builder::PipelineBuilder, RealTimeClock},
+    pipeline::{RealTimeClock, builder::PipelineBuilder},
     sources::{
         AVFrameCapture, AudioInputSource, AudioMixer, CMSampleBufferCapture, ScreenCaptureFormat,
         ScreenCaptureSource, ScreenCaptureTarget,
     },
-    MediaError,
 };
 use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
 use cap_media_info::AudioInfo;

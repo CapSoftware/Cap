@@ -4,10 +4,10 @@ pub mod instant_recording;
 pub mod studio_recording;
 
 pub use studio_recording::{
-    spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
+    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_media::{feeds::AudioInputFeed, platform::Bounds, sources::*, MediaError};
+use cap_media::{MediaError, feeds::AudioInputFeed, platform::Bounds, sources::*};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

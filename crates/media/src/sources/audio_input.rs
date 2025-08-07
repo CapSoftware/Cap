@@ -10,13 +10,13 @@ use tracing::{error, info};
 
 use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
+    MediaError,
     data::FFAudio,
     pipeline::{
         clock::{LocalTimestamp, RealTimeClock},
         control::Control,
         task::PipelineSourceTask,
     },
-    MediaError,
 };
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;

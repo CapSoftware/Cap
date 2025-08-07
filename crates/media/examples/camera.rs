@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use cap_media::feeds::{CameraFeed, DeviceOrModelID};
 use ffmpeg::format::Pixel;
-use image::{codecs::jpeg, ColorType};
+use image::{ColorType, codecs::jpeg};
 
 #[tokio::main]
 async fn main() {

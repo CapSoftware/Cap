@@ -1,26 +1,26 @@
 use std::{
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use cap_media::{
+    MediaError,
     feeds::AudioInputFeed,
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
-    MediaError,
 };
 use cap_media_info::VideoInfo;
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, trace, Instrument};
+use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
-    capture_pipeline::{create_screen_capture, MakeCapturePipeline},
     ActorError, RecordingBaseInputs, RecordingError,
+    capture_pipeline::{MakeCapturePipeline, create_screen_capture},
 };
 
 struct InstantRecordingPipeline {

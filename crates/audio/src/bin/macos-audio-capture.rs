@@ -8,8 +8,8 @@ use cidre::{
     },
 };
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::frame as avframe;
 use ffmpeg::ChannelLayout;
+use ffmpeg::frame as avframe;
 
 #[repr(C)]
 struct DelegateInner {

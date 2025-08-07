@@ -6,11 +6,11 @@ use std::{
 };
 
 use cap_media::{
+    MediaError,
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
-    MediaError,
 };
 use cap_media_encoders::{H264Encoder, MP4File, OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
@@ -18,13 +18,13 @@ use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
 use flume::Receiver;
 use relative_path::RelativePathBuf;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, trace};
 
 use crate::{
-    capture_pipeline::{create_screen_capture, MakeCapturePipeline, ScreenCaptureMethod},
-    cursor::{spawn_cursor_recorder, CursorActor, Cursors},
     ActorError, RecordingBaseInputs, RecordingError,
+    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
+    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
 };
 
 enum StudioRecordingActorState {

@@ -8,10 +8,10 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::pipeline::{
+    MediaError, Pipeline, PipelineClock,
     clock::CloneFrom,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
-    MediaError, Pipeline, PipelineClock,
 };
 
 struct Task {

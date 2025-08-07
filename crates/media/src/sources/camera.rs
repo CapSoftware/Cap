@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use tracing::{error, info};
 
 use crate::{
+    MediaError,
     feeds::{CameraConnection, CameraFeed, RawCameraFrame},
     pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
-    MediaError,
 };
 
 pub struct CameraSource {

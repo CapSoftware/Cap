@@ -2,23 +2,23 @@ use cap_audio::{AudioData, StereoMode};
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{
+    ChannelLayout,
     codec::decoder,
     format::{
         self, self as avformat,
         sample::{Sample, Type},
     },
     software::resampling,
-    ChannelLayout,
 };
 use ringbuf::{
-    traits::{Consumer, Observer, Producer},
     HeapRb,
+    traits::{Consumer, Observer, Producer},
 };
 use std::sync::Arc;
 
 use crate::{
-    data::{cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, FFAudio, FromSampleBytes},
     MediaError,
+    data::{FFAudio, FromSampleBytes, cast_bytes_to_f32_slice, cast_f32_slice_to_bytes},
 };
 
 fn decode_audio_to_f32(
@@ -302,11 +302,7 @@ impl AudioRenderer {
                         f32::NEG_INFINITY
                     } else {
                         let g = t.gain(&project.audio);
-                        if g < -30.0 {
-                            f32::NEG_INFINITY
-                        } else {
-                            g
-                        }
+                        if g < -30.0 { f32::NEG_INFINITY } else { g }
                     },
                     t.stereo_mode(&project.audio),
                 )

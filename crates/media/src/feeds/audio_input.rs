@@ -1,5 +1,5 @@
 use cap_fail::fail_err;
-use cap_media_info::{ffmpeg_sample_format_for, AudioInfo};
+use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig};
 use flume::{Receiver, Sender, TrySendError};

@@ -1,34 +1,35 @@
 use std::collections::HashMap;
-use std::ffi::{c_void, OsString};
+use std::ffi::{OsString, c_void};
 use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 
 use super::{Bounds, LogicalBounds, LogicalPosition, LogicalSize, Window};
 
 use tracing::debug;
-use windows::core::{BOOL, PCWSTR, PWSTR};
 use windows::Win32::{
     Foundation::{CloseHandle, FALSE, HWND, LPARAM, RECT, TRUE},
     Graphics::{
-        Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS},
+        Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
         Gdi::{
-            EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW,
-            MonitorFromWindow, DEVMODEW, DISPLAY_DEVICEW, HDC, HMONITOR, MONITORINFO,
-            MONITORINFOEXW, MONITOR_DEFAULTTONULL,
+            DEVMODEW, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors,
+            EnumDisplaySettingsW, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONULL,
+            MONITORINFO, MONITORINFOEXW, MonitorFromWindow,
         },
     },
     System::Threading::{
-        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-        PROCESS_QUERY_LIMITED_INFORMATION,
+        OpenProcess, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
     },
     UI::HiDpi::GetDpiForWindow,
     UI::WindowsAndMessaging::{
-        EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-        IsWindowVisible, LoadCursorW, SetForegroundWindow, CURSORINFO, IDC_APPSTARTING, IDC_ARROW,
-        IDC_CROSS, IDC_HAND, IDC_HELP, IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL,
-        IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT,
+        CURSORINFO, EnumWindows, GetCursorInfo, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND, IDC_HELP,
+        IDC_IBEAM, IDC_NO, IDC_PERSON, IDC_PIN, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+        IDC_SIZENWSE, IDC_SIZEWE, IDC_UPARROW, IDC_WAIT, IsWindowVisible, LoadCursorW,
+        SetForegroundWindow,
     },
 };
+use windows::core::{BOOL, PCWSTR, PWSTR};
 
 #[inline]
 pub fn bring_window_to_focus(window_id: u32) {

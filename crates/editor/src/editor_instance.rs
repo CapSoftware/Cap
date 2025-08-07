@@ -6,12 +6,12 @@ use cap_media::frame_ws::create_frame_ws;
 use cap_project::StudioRecordingMeta;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_rendering::{
-    get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
-    RenderVideoConstants, SegmentVideoPaths,
+    ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
+    SegmentVideoPaths, get_duration,
 };
 use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 

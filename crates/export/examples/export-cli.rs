@@ -1,6 +1,6 @@
 use std::{fmt::Display, path::PathBuf};
 
-use cap_export::{gif::GifExportSettings, mp4::Mp4ExportSettings, ExporterBase};
+use cap_export::{ExporterBase, gif::GifExportSettings, mp4::Mp4ExportSettings};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
