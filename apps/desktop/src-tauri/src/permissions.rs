@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use cidre::av;
-use tauri::async_runtime::block_on;
 use tracing::error;
 
 #[cfg(target_os = "macos")]

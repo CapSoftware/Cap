@@ -31,7 +31,7 @@ mod mac {
         .join();
     }
 
-    pub fn pts_to_frame(pts: i64, time_base: (f64, f64), fps: u32) -> u32 {
-        (fps as f64 * ((pts as f64 * time_base.0) / (time_base.1))).round() as u32
-    }
+    // pub fn pts_to_frame(pts: i64, time_base: (f64, f64), fps: u32) -> u32 {
+    //     (fps as f64 * ((pts as f64 * time_base.0) / (time_base.1))).round() as u32
+    // }
 }
