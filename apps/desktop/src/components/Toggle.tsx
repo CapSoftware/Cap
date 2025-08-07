@@ -19,7 +19,7 @@ const toggleControlStyles = cva(
 );
 
 const toggleThumbStyles = cva(
-  "bg-white rounded-full transition-transform ui-checked:translate-x-[calc(100%)]",
+  "relative bg-white rounded-full transition-transform ui-checked:translate-x-[calc(100%)]",
   {
     variants: {
       size: {

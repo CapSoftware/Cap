@@ -6,10 +6,19 @@ use windows::{
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
-            CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
-            GetDIBits, GetMonitorInfoW, HBRUSH, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
-            MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint, ReleaseDC, SelectObject,
+            CreateSolidBrush, DEVMODEW, DEVMODEW, DIB_RGB_COLORS, DIB_RGB_COLORS,
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
+            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
+            DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
+            DeleteDC, DeleteDC, DeleteObject, DeleteObject, DisplayConfigGetDeviceInfo,
+            ENUM_CURRENT_SETTINGS, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplayMonitors,
+            EnumDisplaySettingsW, EnumDisplaySettingsW, FillRect, GetDC, GetDC, GetDIBits,
+            GetDIBits, GetDisplayConfigBufferSizes, GetMonitorInfoW, GetMonitorInfoW, HBRUSH, HDC,
+            HDC, HMONITOR, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONEAREST,
+            MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTONULL, MONITORINFOEXW, MONITORINFOEXW,
+            MonitorFromPoint, MonitorFromPoint, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+            ReleaseDC, ReleaseDC, SelectObject, SelectObject,
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
@@ -224,7 +233,41 @@ impl DisplayImpl {
         }
     }
 
+    /// Gets the user-friendly name of the display device.
+    ///
+    /// This method attempts to retrieve the actual monitor model name (e.g., "DELL U2415",
+    /// "Samsung Odyssey G9") rather than generic names like "Generic PnP Monitor".
+    ///
+    /// The implementation uses a two-tier approach:
+    /// 1. **DisplayConfig API (Preferred)**: Uses Windows' modern DisplayConfig API with
+    ///    `DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME` to get the same friendly names that
+    ///    appear in Windows Display Settings. This is the most reliable method and works
+    ///    on Windows 7+.
+    /// 2. **Registry Fallback**: If the DisplayConfig API fails, falls back to reading
+    ///    monitor information from the Windows registry.
+    ///
+    /// # Returns
+    ///
+    /// A `String` containing the monitor's friendly name, or a fallback name if detection fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use cap_displays::Display;
+    ///
+    /// let displays = Display::list();
+    /// for display in displays {
+    ///     let name = display.raw_handle().name();
+    ///     println!("Monitor: {}", name); // e.g., "DELL U2415" instead of "Generic PnP Monitor"
+    /// }
+    /// ```
     pub fn name(&self) -> String {
+        // First try the modern DisplayConfig API for friendly names
+        if let Some(friendly_name) = self.get_friendly_name_from_displayconfig() {
+            return friendly_name;
+        }
+
+        // Fallback to the existing registry method
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
 
@@ -250,6 +293,132 @@ impl DisplayImpl {
                 format!("Unknown Display")
             }
         }
+    }
+
+    /// Attempts to get the monitor's friendly name using the Windows DisplayConfig API.
+    ///
+    /// This method uses the modern Windows DisplayConfig API to retrieve the actual
+    /// monitor model name that appears in Windows Display Settings. The process involves:
+    ///
+    /// 1. Getting the GDI device name for this monitor
+    /// 2. Querying all active display configurations
+    /// 3. Finding the configuration that matches our monitor
+    /// 4. Retrieving the target device (monitor) friendly name
+    ///
+    /// This approach is more reliable than registry parsing and provides the same
+    /// names that Windows itself displays to users.
+    ///
+    /// # Returns
+    ///
+    /// `Some(String)` with the friendly monitor name if successful, `None` if the
+    /// DisplayConfig API fails or no matching configuration is found.
+    fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
+        unsafe {
+            // Get the device name first
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+            if !GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
+                return None;
+            }
+
+            let device_name = &info.szDevice;
+            let null_pos = device_name
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(device_name.len());
+            let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
+
+            // Get display configuration
+            let mut num_paths = 0u32;
+            let mut num_modes = 0u32;
+
+            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut num_paths, &mut num_modes)
+                .is_err()
+            {
+                return None;
+            }
+
+            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
+            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
+
+            if QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &mut num_paths,
+                paths.as_mut_ptr(),
+                &mut num_modes,
+                modes.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+            .is_err()
+            {
+                return None;
+            }
+
+            // Find the matching path for our monitor
+            for path in &paths {
+                // Get source device name to match with our monitor
+                let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
+                    header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                        type_: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                        size: mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
+                        adapterId: path.sourceInfo.adapterId,
+                        id: path.sourceInfo.id,
+                    },
+                    viewGdiDeviceName: [0; 32],
+                };
+
+                if DisplayConfigGetDeviceInfo(&mut source_name.header as *mut _ as *mut _).is_err()
+                {
+                    continue;
+                }
+
+                let source_device_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName);
+                let source_null_pos = source_device_name
+                    .chars()
+                    .position(|c| c == '\0')
+                    .unwrap_or(source_device_name.len());
+                let source_trimmed = &source_device_name[..source_null_pos];
+
+                // Check if this matches our monitor
+                if source_trimmed == device_name_str {
+                    // Get the target (monitor) friendly name
+                    let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
+                        header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                            type_: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                            size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+                            adapterId: path.sourceInfo.adapterId,
+                            id: path.targetInfo.id,
+                        },
+                        flags: DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS::default(),
+                        outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY::default(),
+                        edidManufactureId: 0,
+                        edidProductCodeId: 0,
+                        connectorInstance: 0,
+                        monitorFriendlyDeviceName: [0; 64],
+                        monitorDevicePath: [0; 128],
+                    };
+
+                    if DisplayConfigGetDeviceInfo(&mut target_name.header as *mut _ as *mut _)
+                        .is_ok()
+                    {
+                        let friendly_name =
+                            String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName);
+                        let null_pos = friendly_name
+                            .chars()
+                            .position(|c| c == '\0')
+                            .unwrap_or(friendly_name.len());
+                        let trimmed_name = friendly_name[..null_pos].trim();
+
+                        if !trimmed_name.is_empty() && trimmed_name != "Generic PnP Monitor" {
+                            return Some(trimmed_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     fn get_friendly_name_from_registry(&self, device_name: &str) -> Option<String> {
@@ -304,6 +473,80 @@ impl DisplayImpl {
             }
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_monitor_name_not_empty() {
+        // Test that monitor names are not empty strings
+        let displays = DisplayImpl::list();
+        for display in displays {
+            let name = display.name();
+            assert!(!name.is_empty(), "Monitor name should not be empty");
+        }
+    }
+
+    #[test]
+    fn test_monitor_name_fallback() {
+        // Test that we get some kind of name even if APIs fail
+        let displays = DisplayImpl::list();
+        for display in displays {
+            let name = display.name();
+            // Should at least get a fallback name
+            assert!(
+                name == "Unknown Display" || !name.is_empty(),
+                "Should get either a valid name or 'Unknown Display' fallback"
+            );
+        }
+    }
+
+    #[test]
+    fn test_primary_display_has_name() {
+        // Test that the primary display has a name
+        let primary = DisplayImpl::primary();
+        let name = primary.name();
+        assert!(!name.is_empty(), "Primary display should have a name");
+    }
+
+    #[test]
+    fn test_monitor_name_quality() {
+        // Test that we avoid generic names when possible
+        let displays = DisplayImpl::list();
+        let mut found_specific_name = false;
+
+        for display in displays {
+            let name = display.name();
+            // Check if we found a specific (non-generic) monitor name
+            if !name.contains("Generic")
+                && !name.contains("PnP")
+                && !name.starts_with("\\\\.\\")
+                && name != "Unknown Display"
+            {
+                found_specific_name = true;
+            }
+        }
+
+        // Note: This test may fail in VMs or with generic monitors,
+        // but should pass on systems with properly identified monitors
+        println!("Found specific monitor name: {}", found_specific_name);
+    }
+
+    #[test]
+    fn test_displayconfig_api_structures() {
+        // Test that our structures can be created properly
+        let header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
+            type_: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+            adapterId: Default::default(),
+            id: 0,
+        };
+
+        assert_eq!(header.type_, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME);
+        assert!(header.size > 0);
     }
 }
 

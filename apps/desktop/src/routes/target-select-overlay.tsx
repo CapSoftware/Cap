@@ -89,7 +89,7 @@ export default function () {
             {(screenUnderCursor) => (
               <div
                 data-over={targetUnderCursor.display_id === params.displayId}
-                class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors text-white dark:text-black"
+                class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
               >
                 <span class="text-3xl font-semibold mb-2">
                   {screenUnderCursor.name}
@@ -116,10 +116,10 @@ export default function () {
           {(windowUnderCursor) => (
             <div
               data-over={targetUnderCursor.display_id === params.displayId}
-              class="w-screen h-screen bg-black/40 relative text-white dark:text-black"
+              class="w-screen h-screen bg-black/50 relative"
             >
               <div
-                class="bg-blue-600/30 absolute flex flex-col items-center justify-center"
+                class="bg-blue-600/40 absolute flex flex-col items-center justify-center"
                 style={{
                   width: `${
                     ostype() === "macos"
@@ -451,12 +451,12 @@ export default function () {
               <>
                 {/* Left */}
                 <div
-                  class="bg-black/40 absolute top-0 left-0 bottom-0"
+                  class="bg-black/50 absolute top-0 left-0 bottom-0"
                   style={{ width: `${bounds.position.x}px` }}
                 />
                 {/* Right */}
                 <div
-                  class="bg-black/40 absolute top-0 right-0 bottom-0"
+                  class="bg-black/50 absolute top-0 right-0 bottom-0"
                   style={{
                     width: `${
                       window.innerWidth -
@@ -466,7 +466,7 @@ export default function () {
                 />
                 {/* Top center */}
                 <div
-                  class="bg-black/40 absolute top-0"
+                  class="bg-black/50 absolute top-0"
                   style={{
                     left: `${bounds.position.x}px`,
                     width: `${bounds.size.width}px`,
@@ -475,7 +475,7 @@ export default function () {
                 />
                 {/* Bottom center */}
                 <div
-                  class="bg-black/40 absolute bottom-0"
+                  class="bg-black/50 absolute bottom-0"
                   style={{
                     left: `${bounds.position.x}px`,
                     width: `${bounds.size.width}px`,
@@ -490,7 +490,7 @@ export default function () {
           }
 
           return (
-            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/30 transition-colors relative cursor-crosshair text-white dark:text-black">
+            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair">
               <Occluders />
 
               <div
