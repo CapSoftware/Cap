@@ -781,14 +781,18 @@ async fn handle_recording_finish(
         }
     };
 
+    let date_time = if cfg!(windows) {
+        // Windows doesn't support colon in file paths
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
         sharing,
-        pretty_name: format!(
-            "{target_name} {}",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-        ),
+        pretty_name: format!("{target_name} {date_time}"),
         inner: meta_inner,
     };
 

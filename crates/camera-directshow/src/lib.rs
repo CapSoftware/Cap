@@ -539,7 +539,6 @@ impl AMMediaType {
 
     pub fn into_inner(mut self) -> AM_MEDIA_TYPE {
         // SAFETY: Getting the inner value without triggering Drop
-        #[expect(invalid_value)]
         let inner = std::mem::replace(&mut self.0, unsafe { MaybeUninit::uninit().assume_init() });
         std::mem::forget(self);
         inner
@@ -595,6 +594,7 @@ impl SinkFilter {
         }
         .into_object();
 
+        // SAFETY: SinkFilter always implements IBaseFilter
         *this.input_pin.owner.borrow_mut() = Some(this.cast::<IBaseFilter>().unwrap());
 
         this
@@ -606,6 +606,7 @@ impl SinkFilter {
 
     pub fn get_pin(&self, i: u32) -> Option<IPin> {
         if i == 0 {
+            // SAFETY: SinkInputPin always implements IPin
             Some(unsafe { self.input_pin.get().cast() }.unwrap())
         } else {
             None

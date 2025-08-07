@@ -13,8 +13,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tracing::error;
 use windows::Win32::{
-    Foundation::*,
+    Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
 };
@@ -85,9 +86,16 @@ impl Iterator for DeviceSourcesIterator {
                 continue;
             };
 
+            let media_source = match unsafe { device.ActivateObject::<IMFMediaSource>() } {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Failed to activate IMFMediaSource: {}", e);
+                    return None;
+                }
+            };
+
             return Some(Device {
-                media_source: unsafe { device.ActivateObject::<IMFMediaSource>() }
-                    .expect("media source doesn't have IMFMediaSource"),
+                media_source,
                 activate: device.clone(),
             });
         }
@@ -156,7 +164,8 @@ impl Device {
         let reader = unsafe {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 1)?;
-            let attributes = attributes.expect("Attribute creation succeeded but still None!");
+            let attributes =
+                attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE))?;
             // Media source shuts down on drop if this isn't specified
             attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
             MFCreateSourceReaderFromMediaSource(&self.media_source, &attributes)
@@ -202,7 +211,9 @@ impl Device {
 
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 1).map_err(StartCapturingError::ConfigureEngine)?;
-            let attributes = attributes.expect("Attribute creation succeeded but still None!");
+            let attributes = attributes.ok_or_else(|| {
+                StartCapturingError::ConfigureEngine(windows_core::Error::from_hresult(S_FALSE))
+            })?;
             attributes
                 .SetUINT32(&MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY, 1)
                 .map_err(StartCapturingError::ConfigureEngine)?;
@@ -219,7 +230,9 @@ impl Device {
                 .map_err(StartCapturingError::InitializeEngine)?;
 
             let Ok(_) = wait_for_event(&event_rx, CaptureEngineEventVariant::Initialized) else {
-                panic!("Engine initialization failed");
+                return Err(StartCapturingError::InitializeEngine(
+                    windows_core::Error::from_hresult(S_FALSE),
+                ));
             };
 
             println!("Engine initialized.");
@@ -260,7 +273,9 @@ impl Device {
                         break;
                     }
 
-                    let media_type = media_type.expect("Failed to get media type");
+                    let Some(media_type) = media_type else {
+                        continue;
+                    };
 
                     media_type_index += 1;
 
@@ -272,7 +287,7 @@ impl Device {
 
             let Some((format, stream_index)) = maybe_format else {
                 return Err(StartCapturingError::ConfigureSource(
-                    MF_E_INVALIDREQUEST.ok().unwrap_err(),
+                    MF_E_INVALIDREQUEST.into(),
                 ));
             };
 
@@ -283,7 +298,8 @@ impl Device {
             let sink = engine
                 .GetSink(MF_CAPTURE_ENGINE_SINK_TYPE_PREVIEW)
                 .map_err(StartCapturingError::ConfigureSink)?;
-            let preview_sink: IMFCapturePreviewSink = sink.cast().expect("CapturePreviewSink");
+            let preview_sink: IMFCapturePreviewSink =
+                sink.cast().map_err(StartCapturingError::ConfigureSink)?;
             preview_sink
                 .RemoveAllStreams()
                 .map_err(StartCapturingError::ConfigureSink)?;
@@ -440,7 +456,7 @@ pub struct VideoSample(IMFSample);
 impl VideoSample {
     pub fn bytes(&self) -> windows_core::Result<Vec<u8>> {
         unsafe {
-            let bytes = self.0.GetTotalLength().unwrap();
+            let bytes = self.0.GetTotalLength()?;
             let mut out = Vec::with_capacity(bytes as usize);
 
             let buffer_count = self.0.GetBufferCount()?;
@@ -687,7 +703,7 @@ fn wait_for_event(
     variant: CaptureEngineEventVariant,
 ) -> Result<CaptureEngineEvent, windows_core::HRESULT> {
     rx.iter()
-        .find_map(|e| match dbg!(e.variant()) {
+        .find_map(|e| match e.variant() {
             Some(v) if v == variant => Some(Ok(e)),
             Some(CaptureEngineEventVariant::Error) => {
                 Some(Err(unsafe { e.0.GetStatus() }.unwrap()))
