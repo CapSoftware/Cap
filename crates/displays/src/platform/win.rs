@@ -35,10 +35,11 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GWL_EXSTYLE,
-                GetClassLongPtrW, GetCursorPos, GetIconInfo, GetWindowLongW, GetWindowRect,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
+                GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
+                GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
                 GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
-                WM_GETICON, WS_EX_TOPMOST,
+                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
     },
@@ -890,22 +891,55 @@ impl WindowImpl {
             y: cursor.y() as i32,
         };
 
+        unsafe {
+            // Use WindowFromPoint first as a quick check
+            let hwnd_at_point = WindowFromPoint(point);
+            if hwnd_at_point != HWND(0) {
+                let current_process_id = GetCurrentProcessId();
+
+                // Walk up the Z-order chain to find the topmost valid window
+                let mut current_hwnd = hwnd_at_point;
+
+                loop {
+                    // Check if this window is valid for our purposes
+                    if is_window_valid_for_topmost_selection(
+                        current_hwnd,
+                        current_process_id,
+                        point,
+                    ) {
+                        return Some(Self(current_hwnd));
+                    }
+
+                    // Move to the next window in Z-order (towards background)
+                    current_hwnd = GetWindow(current_hwnd, GW_HWNDNEXT);
+                    if current_hwnd == HWND(0) {
+                        break;
+                    }
+
+                    // Check if this window still contains the point
+                    if !is_point_in_window(current_hwnd, point) {
+                        continue;
+                    }
+                }
+            }
+
+            // Fallback to enumeration if WindowFromPoint fails
+            Self::get_topmost_at_cursor_fallback(point)
+        }
+    }
+
+    fn get_topmost_at_cursor_fallback(point: POINT) -> Option<Self> {
         struct HitTestData {
             pt: POINT,
-            found: Option<HWND>,
+            candidates: Vec<HWND>,
             current_process_id: u32,
         }
 
         unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             let data = unsafe { &mut *(lparam.0 as *mut HitTestData) };
 
-            if !is_window_valid_for_enumeration(hwnd, data.current_process_id) {
-                return TRUE;
-            }
-
-            if is_point_in_window(hwnd, data.pt) {
-                data.found = Some(hwnd);
-                return windows::Win32::Foundation::FALSE;
+            if is_window_valid_for_topmost_selection(hwnd, data.current_process_id, data.pt) {
+                data.candidates.push(hwnd);
             }
 
             TRUE
@@ -913,7 +947,7 @@ impl WindowImpl {
 
         let mut data = HitTestData {
             pt: point,
-            found: None,
+            candidates: Vec::new(),
             current_process_id: unsafe { GetCurrentProcessId() },
         };
 
@@ -922,9 +956,22 @@ impl WindowImpl {
                 Some(enum_windows_proc),
                 LPARAM(std::ptr::addr_of_mut!(data) as isize),
             );
-        }
 
-        data.found.map(Self)
+            // Sort candidates by Z-order (topmost first)
+            data.candidates.sort_by(|&a, &b| {
+                // Use GetWindowLong to check topmost status
+                let a_topmost = (GetWindowLongW(a, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as i32) != 0;
+                let b_topmost = (GetWindowLongW(b, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as i32) != 0;
+
+                match (a_topmost, b_topmost) {
+                    (true, false) => std::cmp::Ordering::Less, // a is more topmost
+                    (false, true) => std::cmp::Ordering::Greater, // b is more topmost
+                    _ => std::cmp::Ordering::Equal,            // Same topmost level
+                }
+            });
+
+            data.candidates.first().map(|&hwnd| Self(hwnd))
+        }
     }
 
     pub fn list_containing_cursor() -> Vec<Self> {
@@ -1646,6 +1693,70 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         process_id != current_process_id
+    }
+}
+
+fn is_window_valid_for_topmost_selection(
+    hwnd: HWND,
+    current_process_id: u32,
+    point: POINT,
+) -> bool {
+    unsafe {
+        // Skip invisible or minimized windows
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
+
+        // Skip own process windows (includes overlays)
+        let mut process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        if process_id == current_process_id {
+            return false;
+        }
+
+        // Check if point is actually in this window
+        if !is_point_in_window(hwnd, point) {
+            return false;
+        }
+
+        // Skip certain window classes that should be ignored
+        let mut class_name = [0u16; 256];
+        let len = GetClassNameW(hwnd, &mut class_name);
+        if len > 0 {
+            let class_name_str = String::from_utf16_lossy(&class_name[..len as usize]);
+            match class_name_str.as_str() {
+                "Shell_TrayWnd" | "Button" | "Tooltip" | "ToolTips_Class32" => return false,
+                _ => {}
+            }
+        }
+
+        // Skip windows with certain extended styles
+        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if (ex_style & WS_EX_TRANSPARENT.0) != 0 || (ex_style & WS_EX_LAYERED.0) != 0 {
+            // Allow layered windows only if they have proper alpha
+            if (ex_style & WS_EX_LAYERED.0) != 0 {
+                let mut alpha = 0u8;
+                let mut color_key = 0u32;
+                let mut flags = 0u32;
+                if GetLayeredWindowAttributes(
+                    hwnd,
+                    Some(&mut color_key),
+                    Some(&mut alpha),
+                    &mut flags,
+                )
+                .is_ok()
+                {
+                    if alpha < 50 {
+                        // Skip nearly transparent windows
+                        return false;
+                    }
+                }
+            } else {
+                return false; // Skip fully transparent windows
+            }
+        }
+
+        true
     }
 }
 
