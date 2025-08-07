@@ -31,6 +31,7 @@ use windows::{
             },
         },
         UI::{
+            HiDpi::GetDpiForWindow,
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
                 DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GWL_EXSTYLE,
@@ -1112,14 +1113,22 @@ impl WindowImpl {
         let mut rect = RECT::default();
         unsafe {
             if GetWindowRect(self.0, &mut rect).is_ok() {
+                // Get DPI scaling factor to convert physical to logical coordinates
+                const BASE_DPI: f64 = 96.0;
+                let dpi = match GetDpiForWindow(self.0) {
+                    0 => BASE_DPI as u32,
+                    dpi => dpi,
+                } as f64;
+                let scale_factor = dpi / BASE_DPI;
+
                 Some(LogicalBounds {
                     position: LogicalPosition {
-                        x: rect.left as f64,
-                        y: rect.top as f64,
+                        x: rect.left as f64 / scale_factor,
+                        y: rect.top as f64 / scale_factor,
                     },
                     size: LogicalSize {
-                        width: (rect.right - rect.left) as f64,
-                        height: (rect.bottom - rect.top) as f64,
+                        width: (rect.right - rect.left) as f64 / scale_factor,
+                        height: (rect.bottom - rect.top) as f64 / scale_factor,
                     },
                 })
             } else {

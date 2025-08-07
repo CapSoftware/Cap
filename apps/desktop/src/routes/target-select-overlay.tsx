@@ -2,7 +2,6 @@ import { Button } from "@cap/ui-solid";
 import {
   ComponentProps,
   createEffect,
-  createResource,
   createRoot,
   createSignal,
   JSX,
@@ -27,7 +26,6 @@ import {
   TargetUnderCursor,
 } from "~/utils/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { type as ostype } from "@tauri-apps/plugin-os";
 
 export default function () {
   const [params] = useSearchParams<{ displayId: string }>();
@@ -44,9 +42,6 @@ export default function () {
     setTargetUnderCursor(reconcile(event.payload));
   });
 
-  const [scale] = createResource(() => getCurrentWindow().scaleFactor(), {
-    initialValue: 1,
-  });
   const [bounds, _setBounds] = createStore({
     position: { x: 0, y: 0 },
     size: { width: 400, height: 300 },
@@ -121,26 +116,10 @@ export default function () {
               <div
                 class="bg-blue-600/40 absolute flex flex-col items-center justify-center"
                 style={{
-                  width: `${
-                    ostype() === "macos"
-                      ? windowUnderCursor.bounds.size.width
-                      : windowUnderCursor.bounds.size.width / scale()
-                  }px`,
-                  height: `${
-                    ostype() === "macos"
-                      ? windowUnderCursor.bounds.size.height
-                      : windowUnderCursor.bounds.size.height / scale()
-                  }px`,
-                  left: `${
-                    ostype() === "macos"
-                      ? windowUnderCursor.bounds.position.x
-                      : windowUnderCursor.bounds.position.x / scale()
-                  }px`,
-                  top: `${
-                    ostype() === "macos"
-                      ? windowUnderCursor.bounds.position.y
-                      : windowUnderCursor.bounds.position.y / scale()
-                  }px`,
+                  width: `${windowUnderCursor.bounds.size.width}px`,
+                  height: `${windowUnderCursor.bounds.size.height}px`,
+                  left: `${windowUnderCursor.bounds.position.x}px`,
+                  top: `${windowUnderCursor.bounds.position.y}px`,
                 }}
               >
                 <div class="flex flex-col items-center justify-center">
