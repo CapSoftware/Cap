@@ -22,6 +22,7 @@ import { Stepper } from "./Stepper";
 import { faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { CheckCircle, XCircle } from "lucide-react";
 import { SuccesStep } from "./SuccessStep";
+import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 
 const STEP_CONFIGS: StepConfig[] = [
   {
@@ -278,6 +279,13 @@ const CustomDomainDialog = ({
     setDomain(cleanedDomain);
 
     try {
+      //if theres a domain already, remove it
+      if (activeOrganization?.organization.customDomain) {
+        await removeOrganizationDomain(
+          activeOrganization?.organization.id as string
+        );
+      }
+
       const data = await updateDomain(
         cleanedDomain,
         activeOrganization?.organization.id as string
@@ -286,8 +294,11 @@ const CustomDomainDialog = ({
       toast.success("Domain settings updated");
       router.refresh();
 
-      setDomainConfig(data.status);
-      setIsVerified(data.verified);
+      if (data) {
+        setDomainConfig(data.status);
+        setIsVerified(data.verified);
+        handleNext();
+      }
 
       setTimeout(() => {
         checkVerification(false);
@@ -297,15 +308,12 @@ const CustomDomainDialog = ({
         checkVerification(false);
       }, POLL_INTERVAL);
     } catch (error) {
-      console.error("Error updating domain:", error);
       toast.error(
         error instanceof Error ? error.message : "Failed to update domain settings"
       );
     } finally {
       setLoading(false);
     }
-
-    handleNext();
   };
 
   const handleClose = () => {
