@@ -118,7 +118,6 @@ const CustomDomainDialog = ({
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [loading, setLoading] = useState(false);
-  const [initialConfigLoading, setInitialConfigLoading] = useState(true);
   const router = useRouter();
 
 
@@ -195,7 +194,9 @@ const CustomDomainDialog = ({
   const steps = STEP_CONFIGS.map((config, index) => ({
     ...config,
     status: index < stepState.currentIndex ? StepStatus.COMPLETED :
-      index === stepState.currentIndex ? StepStatus.CURRENT :
+      index === stepState.currentIndex ?
+        // Mark success as completed when reached, others as current
+        (config.id === 'success' ? StepStatus.COMPLETED : StepStatus.CURRENT) :
         StepStatus.PENDING,
     hasError: !!stepState.errors[config.id]
   }));
@@ -313,10 +314,15 @@ const CustomDomainDialog = ({
   };
 
   useEffect(() => {
-    if (isVerified) {
+    //if current step is success, close dialog in 1.5 seconds
+    if (stepState.currentIndex === 2) {
+      setTimeout(() => {
+        handleClose();
+      }, 1500);
+    } else if (isVerified) {
       handleNext();
     }
-  }, [isVerified])
+  }, [isVerified, stepState.currentIndex])
 
 
   console.log({
@@ -338,7 +344,6 @@ const CustomDomainDialog = ({
 
         <Stepper
           steps={steps}
-          currentIndex={stepState.currentIndex}
           onStepClick={handleStepClick}
         />
         <div className="p-5">

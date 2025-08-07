@@ -69,9 +69,9 @@ export const VerifyStep = ({
   return (
     <div className="space-y-6">
       <div className="text-center">
-        <h3 className="text-lg font-semibold text-gray-12">Verify your domain</h3>
+        <h3 className="text-lg font-semibold text-gray-12">{isVerified ? "Domain Verified" : "Verify your domain"}</h3>
         <p className="text-sm text-gray-11">
-          Add the DNS records below to verify ownership of {domain}
+          {isVerified ? "Your domain is verified!" : `Add the DNS records below to verify ownership of ${domain}`}
         </p>
       </div>
 

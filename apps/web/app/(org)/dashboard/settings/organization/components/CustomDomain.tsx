@@ -20,6 +20,8 @@ export function CustomDomain() {
   );
   const [loading, setLoading] = useState(false);
 
+  const orgCustomDomain = activeOrganization?.organization.customDomain
+
 
   const handleRemoveDomain = async () => {
     if (!isSubscribed) {
@@ -43,9 +45,6 @@ export function CustomDomain() {
       setLoading(false);
     }
   };
-
-  const orgCustomDomain = activeOrganization?.organization.customDomain
-
 
   return (
     <>
