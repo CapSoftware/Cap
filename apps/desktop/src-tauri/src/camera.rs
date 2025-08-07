@@ -701,8 +701,8 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let surface_width = surface.texture.width();
-        let surface_height = surface.texture.height();
+        // let surface_width = surface.texture.width();
+        // let surface_height = surface.texture.height();
 
         let mut encoder = self
             .device

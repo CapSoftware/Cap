@@ -215,7 +215,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn run(
-        name: &'static str,
+        _name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -235,6 +235,7 @@ impl AVAssetReaderDecoder {
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
+        #[allow(unused)]
         let mut last_active_frame = None::<u32>;
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 

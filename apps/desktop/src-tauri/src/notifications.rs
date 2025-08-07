@@ -95,7 +95,7 @@ pub fn send_notification(app: &tauri::AppHandle, notification_type: Notification
         return;
     }
 
-    let (title, body, is_error) = notification_type.details();
+    let (title, body, _is_error) = notification_type.details();
 
     app.notification()
         .builder()

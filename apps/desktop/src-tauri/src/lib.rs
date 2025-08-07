@@ -750,7 +750,11 @@ async fn copy_screenshot_to_clipboard(
 
     let img_data = clipboard_rs::RustImageData::from_path(&path)
         .map_err(|e| format!("Failed to copy screenshot to clipboard: {e}"))?;
-    clipboard.write().await.set_image(img_data);
+    clipboard
+        .write()
+        .await
+        .set_image(img_data)
+        .map_err(|err| format!("Failed to copy screenshot to clipboard: {err}"))?;
     Ok(())
 }
 
@@ -1233,7 +1237,8 @@ async fn upload_screenshot(
             link: uploaded.link.clone(),
             id: uploaded.id.clone(),
         });
-        meta.save_for_project();
+        meta.save_for_project()
+            .map_err(|err| format!("Error saving project: {err}"))?;
 
         uploaded.link
     };
@@ -1468,12 +1473,18 @@ pub enum RecordingType {
     Instant,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FileType {
+    Recording,
+    Screenshot,
+}
+
 #[tauri::command(async)]
 #[specta::specta]
 fn get_recording_meta(
-    app: AppHandle,
     path: PathBuf,
-    file_type: String,
+    _file_type: FileType,
 ) -> Result<RecordingMetaWithType, String> {
     RecordingMeta::load_for_project(&path)
         .map(RecordingMetaWithType::new)
@@ -1503,7 +1514,7 @@ fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithType
                 return None;
             }
 
-            get_recording_meta(app.clone(), path.clone(), "recording".to_string())
+            get_recording_meta(path.clone(), FileType::Recording)
                 .ok()
                 .map(|meta| (path, meta))
         })
@@ -1537,11 +1548,10 @@ fn list_screenshots(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMeta)>, Str
             let entry = entry.ok()?;
             let path = entry.path();
             if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-                let meta =
-                    match get_recording_meta(app.clone(), path.clone(), "screenshot".to_string()) {
-                        Ok(meta) => meta.inner,
-                        Err(_) => return None,
-                    };
+                let meta = match get_recording_meta(path.clone(), FileType::Screenshot) {
+                    Ok(meta) => meta.inner,
+                    Err(_) => return None,
+                };
 
                 let png_path = std::fs::read_dir(&path)
                     .ok()?

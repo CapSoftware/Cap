@@ -207,7 +207,9 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
                         let _ = first_frame_tx.send((frame.pts(), unix_time));
                     }
 
-                    mp4.queue_video_frame(frame.as_ref());
+                    mp4.queue_video_frame(frame.as_ref())
+                        .map_err(|err| error!("Error queueing video frame: {err}"))
+                        .ok();
                 }
             }
             if let Ok(mut mp4) = mp4.lock() {
@@ -331,7 +333,7 @@ impl MakeCapturePipeline for AVFrameCapture {
 
         builder.spawn_task("screen_encoder", move |ready| {
             let _ = ready.send(Ok(()));
-            while let Ok((frame, unix_time)) = source.1.recv() {
+            while let Ok((frame, _unix_time)) = source.1.recv() {
                 if let Ok(mut mp4) = mp4.lock() {
                     // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     //     mp4.pause();

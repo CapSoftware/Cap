@@ -74,7 +74,7 @@ pub struct FfmpegDecoder;
 
 impl FfmpegDecoder {
     pub fn spawn(
-        name: &'static str,
+        _name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -98,6 +98,7 @@ impl FfmpegDecoder {
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
+            #[allow(unused)]
             let mut last_active_frame = None::<u32>;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));

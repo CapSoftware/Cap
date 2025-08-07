@@ -692,7 +692,7 @@ impl InstantMultipartUpload {
                 if realtime_is_done.unwrap_or(false) {
                     info!("realtime video done, uploading header chunk");
 
-                    match Self::upload_chunk(
+                    let part = Self::upload_chunk(
                         &app,
                         &client,
                         &file_path,
@@ -703,15 +703,10 @@ impl InstantMultipartUpload {
                         uploaded_parts[0].size as u64,
                     )
                     .await
-                    {
-                        Ok(part) => {
-                            uploaded_parts[0] = part;
-                            println!("Successfully re-uploaded first chunk",);
-                        }
-                        Err(e) => {
-                            return Err("Failed to re-upload first chunk".to_string());
-                        }
-                    }
+                    .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
+
+                    uploaded_parts[0] = part;
+                    println!("Successfully re-uploaded first chunk",);
                 }
 
                 // All leftover chunks are now uploaded. We finalize.

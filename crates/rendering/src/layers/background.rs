@@ -11,14 +11,14 @@ use crate::{
 };
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
-struct Gradient {
+pub struct Gradient {
     start: [f32; 4],
     end: [f32; 4],
     angle: f32,
 }
 
 #[derive(PartialEq)]
-enum ColorOrGradient {
+pub enum ColorOrGradient {
     Color([f32; 4]),
     Gradient(Gradient),
 }

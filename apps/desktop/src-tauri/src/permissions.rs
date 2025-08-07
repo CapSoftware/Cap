@@ -1,7 +1,10 @@
+use std::thread;
+
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 use cidre::av;
+use tauri::async_runtime::block_on;
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -66,10 +69,20 @@ pub async fn request_permission(permission: OSPermission) {
                 scap::request_permission();
             }
             OSPermission::Camera => {
-                av::CaptureDevice::request_access_for_media_type(av::MediaType::video());
+                thread::spawn(|| {
+                    block_on(av::CaptureDevice::request_access_for_media_type(
+                        av::MediaType::video(),
+                    ))
+                    .ok();
+                });
             }
             OSPermission::Microphone => {
-                av::CaptureDevice::request_access_for_media_type(av::MediaType::audio());
+                thread::spawn(|| {
+                    block_on(av::CaptureDevice::request_access_for_media_type(
+                        av::MediaType::audio(),
+                    ))
+                    .ok();
+                });
             }
             OSPermission::Accessibility => request_accessibility_permission(),
         }
