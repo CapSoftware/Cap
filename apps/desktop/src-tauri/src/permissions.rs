@@ -61,15 +61,28 @@ pub fn open_permission_settings(permission: OSPermission) {
 pub async fn request_permission(permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
+        use futures::executor::block_on;
+
         match permission {
             OSPermission::ScreenRecording => {
                 scap::request_permission();
             }
             OSPermission::Camera => {
-                av::CaptureDevice::request_access_for_media_type(av::MediaType::video());
+                println!("BRUH");
+                std::thread::spawn(|| {
+                    let res = block_on(av::CaptureDevice::request_access_for_media_type(
+                        av::MediaType::video(),
+                    ));
+
+                    dbg!(res);
+                });
             }
             OSPermission::Microphone => {
-                av::CaptureDevice::request_access_for_media_type(av::MediaType::audio());
+                std::thread::spawn(|| {
+                    block_on(av::CaptureDevice::request_access_for_media_type(
+                        av::MediaType::audio(),
+                    ))
+                });
             }
             OSPermission::Accessibility => request_accessibility_permission(),
         }
