@@ -895,6 +895,7 @@ dependencies = [
  "cidre",
  "clap",
  "inquire",
+ "tracing",
 ]
 
 [[package]]
