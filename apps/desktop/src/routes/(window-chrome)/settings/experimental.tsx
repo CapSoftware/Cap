@@ -24,6 +24,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       enableNotifications: true,
       enableNativeCameraPreview: false,
       enableNewRecordingFlow: false,
+      autoZoomOnClicks: false,
     }
   );
 
@@ -66,6 +67,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 onChange={(value) =>
                   handleChange("enableNativeCameraPreview", value)
                 }
+              />
+              <ToggleSetting
+                label="Auto zoom on clicks"
+                description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
+                value={!!settings.autoZoomOnClicks}
+                onChange={(value) => handleChange("autoZoomOnClicks", value)}
               />
               <ToggleSetting
                 label="New recording flow"

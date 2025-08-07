@@ -869,15 +869,13 @@ impl RendererLayers {
             constants,
         );
 
-        if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
-            constants.options.camera_size,
-            &segment_frames.camera_frame,
-            &uniforms.camera,
-        ) {
+        if let (Some(camera_size), Some(camera_frame)) =
+            (constants.options.camera_size, &segment_frames.camera_frame)
+        {
             self.camera.prepare(
                 &constants.device,
                 &constants.queue,
-                *uniforms,
+                uniforms.camera,
                 camera_size,
                 camera_frame,
             );

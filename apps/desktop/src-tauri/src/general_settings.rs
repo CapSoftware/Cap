@@ -77,6 +77,8 @@ pub struct GeneralSettingsStore {
         skip_serializing_if = "no"
     )]
     pub enable_native_camera_preview: bool,
+    #[serde(default)]
+    pub auto_zoom_on_clicks: bool,
     // #[deprecated = "can be removed when new recording flow is the default"]
     #[serde(
         default = "default_enable_new_recording_flow",
@@ -135,6 +137,7 @@ impl Default for GeneralSettingsStore {
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
+            auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
         }
     }

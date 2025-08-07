@@ -116,6 +116,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       enableNotifications: true,
       enableNativeCameraPreview: false,
       enableNewRecordingFlow: false,
+      autoZoomOnClicks: false,
     }
   );
 
