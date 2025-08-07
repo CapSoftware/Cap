@@ -1,4 +1,4 @@
-use std::{mem, str::FromStr};
+use std::{io, mem, str::FromStr};
 
 use windows::{
     Win32::{
@@ -46,6 +46,7 @@ use windows::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use image::{ImageFormat, RgbaImage};
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
@@ -1171,14 +1172,23 @@ impl WindowImpl {
                                 chunk.swap(0, 2); // Swap B and R
                             }
 
-                            // Create a simple PNG using a basic implementation
-                            if let Some(png_data) =
-                                self.create_png_data(width as u32, height as u32, &buffer)
+                            // Create PNG using the image crate
+                            if let Ok(img) =
+                                image::RgbaImage::from_raw(width as u32, height as u32, buffer)
                             {
-                                // Keep the result if it's our first success or if this size is larger
-                                if best_result.is_none() || size > best_size {
-                                    best_result = Some((png_data, size));
-                                    best_size = size;
+                                let mut png_data = Vec::new();
+                                if img
+                                    .write_to(
+                                        &mut std::io::Cursor::new(&mut png_data),
+                                        image::ImageFormat::Png,
+                                    )
+                                    .is_ok()
+                                {
+                                    // Keep the result if it's our first success or if this size is larger
+                                    if best_result.is_none() || size > best_size {
+                                        best_result = Some((png_data, size));
+                                        best_size = size;
+                                    }
                                 }
                             }
                         }
@@ -1307,14 +1317,23 @@ impl WindowImpl {
                                 chunk.swap(0, 2); // Swap B and R
                             }
 
-                            // Create a simple PNG using a basic implementation
-                            if let Some(png_data) =
-                                self.create_png_data(width as u32, height as u32, &buffer)
+                            // Create PNG using the image crate
+                            if let Ok(img) =
+                                image::RgbaImage::from_raw(width as u32, height as u32, buffer)
                             {
-                                // Keep the result if it's our first success or if this size is larger
-                                if best_result.is_none() || size > best_size {
-                                    best_result = Some(png_data);
-                                    best_size = size;
+                                let mut png_data = Vec::new();
+                                if img
+                                    .write_to(
+                                        &mut std::io::Cursor::new(&mut png_data),
+                                        image::ImageFormat::Png,
+                                    )
+                                    .is_ok()
+                                {
+                                    // Keep the result if it's our first success or if this size is larger
+                                    if best_result.is_none() || size > best_size {
+                                        best_result = Some(png_data);
+                                        best_size = size;
+                                    }
                                 }
                             }
                         }
@@ -1334,127 +1353,6 @@ impl WindowImpl {
 
             best_result
         }
-    }
-
-    fn create_png_data(&self, width: u32, height: u32, rgba_data: &[u8]) -> Option<Vec<u8>> {
-        // Simple PNG creation - this creates a minimal but valid PNG file
-        let mut png_data = Vec::new();
-
-        // PNG signature
-        png_data.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
-
-        // IHDR chunk
-        let ihdr_data = {
-            let mut data = Vec::new();
-            data.extend_from_slice(&width.to_be_bytes());
-            data.extend_from_slice(&height.to_be_bytes());
-            data.push(8); // bit depth
-            data.push(6); // color type (RGBA)
-            data.push(0); // compression
-            data.push(0); // filter
-            data.push(0); // interlace
-            data
-        };
-        self.write_png_chunk(&mut png_data, b"IHDR", &ihdr_data);
-
-        // IDAT chunk with zlib compression
-        let mut idat_data = Vec::new();
-
-        // Add filter bytes (0 = None filter) for each row
-        for y in 0..height {
-            idat_data.push(0); // Filter type: None
-            let row_start = (y * width * 4) as usize;
-            let row_end = row_start + (width * 4) as usize;
-            if row_end <= rgba_data.len() {
-                idat_data.extend_from_slice(&rgba_data[row_start..row_end]);
-            }
-        }
-
-        // Simple zlib compression (deflate with no compression)
-        let compressed = self.simple_deflate(&idat_data)?;
-        self.write_png_chunk(&mut png_data, b"IDAT", &compressed);
-
-        // IEND chunk
-        self.write_png_chunk(&mut png_data, b"IEND", &[]);
-
-        Some(png_data)
-    }
-
-    fn write_png_chunk(&self, output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
-        // Length
-        output.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        // Type
-        output.extend_from_slice(chunk_type);
-        // Data
-        output.extend_from_slice(data);
-        // CRC
-        let crc = self.crc32(chunk_type, data);
-        output.extend_from_slice(&crc.to_be_bytes());
-    }
-
-    fn simple_deflate(&self, data: &[u8]) -> Option<Vec<u8>> {
-        let mut result = Vec::new();
-
-        // Zlib header
-        result.push(0x78); // CMF
-        result.push(0x01); // FLG (no compression)
-
-        // Process data in blocks
-        let block_size = 65535;
-        let mut offset = 0;
-
-        while offset < data.len() {
-            let remaining = data.len() - offset;
-            let current_block_size = remaining.min(block_size);
-            let is_final = remaining <= block_size;
-
-            // Block header
-            result.push(if is_final { 0x01 } else { 0x00 }); // BFINAL and BTYPE
-
-            // Block length (little endian)
-            result.extend_from_slice(&(current_block_size as u16).to_le_bytes());
-            let negated_size = !(current_block_size as u16);
-            result.extend_from_slice(&negated_size.to_le_bytes());
-
-            // Block data
-            result.extend_from_slice(&data[offset..offset + current_block_size]);
-            offset += current_block_size;
-        }
-
-        // Adler32 checksum
-        let checksum = self.adler32(data);
-        result.extend_from_slice(&checksum.to_be_bytes());
-
-        Some(result)
-    }
-
-    fn crc32(&self, chunk_type: &[u8], data: &[u8]) -> u32 {
-        let mut crc = 0xFFFFFFFF_u32;
-
-        for &byte in chunk_type.iter().chain(data.iter()) {
-            crc ^= byte as u32;
-            for _ in 0..8 {
-                if crc & 1 != 0 {
-                    crc = (crc >> 1) ^ 0xEDB88320;
-                } else {
-                    crc >>= 1;
-                }
-            }
-        }
-
-        !crc
-    }
-
-    fn adler32(&self, data: &[u8]) -> u32 {
-        let mut a = 1_u32;
-        let mut b = 0_u32;
-
-        for &byte in data {
-            a = (a + byte as u32) % 65521;
-            b = (b + a) % 65521;
-        }
-
-        (b << 16) | a
     }
 
     pub fn bounds(&self) -> Option<LogicalBounds> {

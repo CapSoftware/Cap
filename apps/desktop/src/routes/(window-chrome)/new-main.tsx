@@ -307,18 +307,11 @@ function Page() {
           }
           name="Area"
         />
-        {/* <div class="flex-1 text-center flex flex-col items-center justify-end gap-1 py-1 rounded-lg">
-          <IconMaterialSymbolsScreenshotFrame2Rounded class="size-7 -mb-0.5" />
-          <span>Area</span>
-        </div> */}
       </div>
       <CameraSelect
         disabled={cameras.isPending}
         options={cameras.data ?? []}
-        value={
-          // cameras.isPending ? rawOptions.cameraID :
-          options.camera() ?? null
-        }
+        value={options.camera() ?? null}
         onChange={(c) => {
           if (!c) setCamera.mutate(null);
           else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
@@ -330,10 +323,7 @@ function Page() {
         options={mics.isPending ? [] : mics.data ?? []}
         // this prevents options.micName() from suspending on initial load
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
-        onChange={(v) => {
-          console.log({ v });
-          setMicInput.mutate(v);
-        }}
+        onChange={(v) => setMicInput.mutate(v)}
       />
       <SystemAudio />
     </div>
@@ -370,12 +360,11 @@ import * as updater from "@tauri-apps/plugin-updater";
 
 import { generalSettingsStore } from "~/store";
 import { apiClient } from "~/utils/web-api";
-// import { useWindowChrome, WindowChromeHeader } from "./Context";
 import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
-import { Component } from "solid-js";
+import type { Component } from "solid-js";
 import { WindowChromeHeader } from "./Context";
 import { createEventListener } from "@solid-primitives/event-listener";
 
