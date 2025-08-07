@@ -1,9 +1,7 @@
 use windows::{
     Win32::{
         Foundation::{FALSE, LPARAM, RECT},
-        Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
-        },
+        Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW},
     },
     core::BOOL,
 };
@@ -18,13 +16,15 @@ impl DisplayImpl {
             _hdc: HDC,
             _lprc_clip: *mut RECT,
             lparam: LPARAM,
-        ) -> BOOL { unsafe {
-            let list = &mut *(lparam.0 as *mut Vec<DisplayImpl>);
+        ) -> BOOL {
+            unsafe {
+                let list = &mut *(lparam.0 as *mut Vec<DisplayImpl>);
 
-            list.push(DisplayImpl(hmonitor));
+                list.push(DisplayImpl(hmonitor));
 
-            FALSE
-        }}
+                FALSE
+            }
+        }
 
         let mut list = vec![];
         unsafe {

@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use cap_camera_directshow::{AMMediaType, AM_MEDIA_TYPEVideoExt};
+use cap_camera_directshow::{AM_MEDIA_TYPEVideoExt, AMMediaType};
 use cap_camera_mediafoundation::{IMFMediaBufferExt, IMFMediaBufferLock};
 use std::{
     ffi::{OsStr, OsString},

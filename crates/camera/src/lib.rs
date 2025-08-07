@@ -98,7 +98,6 @@ impl Debug for Format {
                 }
                 #[cfg(windows)]
                 {
-                    
                     use cap_camera_windows::VideoFormatInner;
 
                     match &self.native {

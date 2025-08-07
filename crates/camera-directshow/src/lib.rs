@@ -16,9 +16,7 @@ use windows::{
         Foundation::*,
         Media::{
             DirectShow::*,
-            KernelStreaming::{
-                IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER,
-            },
+            KernelStreaming::{IKsPropertySet, KS_BITMAPINFOHEADER, KS_VIDEOINFOHEADER},
             MediaFoundation::*,
         },
         System::{
@@ -40,35 +38,42 @@ pub trait IPinExt {
 }
 
 impl IPinExt for IPin {
-    unsafe fn matches_category(&self, category: GUID) -> bool { unsafe {
-        let ks_property = self.cast::<IKsPropertySet>().unwrap();
-        let mut return_value_size = 0;
-        let mut pin_category = GUID::zeroed();
-        ks_property
-            .Get(
-                &AMPROPSETID_Pin,
-                AMPROPERTY_PIN_CATEGORY.0 as u32,
-                null(),
-                0,
-                (&mut pin_category) as *mut _ as *mut c_void,
-                std::mem::size_of_val(&pin_category) as u32,
-                &mut return_value_size,
-            )
-            .unwrap();
+    unsafe fn matches_category(&self, category: GUID) -> bool {
+        unsafe {
+            let ks_property = self.cast::<IKsPropertySet>().unwrap();
+            let mut return_value_size = 0;
+            let mut pin_category = GUID::zeroed();
+            ks_property
+                .Get(
+                    &AMPROPSETID_Pin,
+                    AMPROPERTY_PIN_CATEGORY.0 as u32,
+                    null(),
+                    0,
+                    (&mut pin_category) as *mut _ as *mut c_void,
+                    std::mem::size_of_val(&pin_category) as u32,
+                    &mut return_value_size,
+                )
+                .unwrap();
 
-        return_value_size as usize == std::mem::size_of_val(&category) && pin_category == category
-    }}
-    unsafe fn matches_major_type(&self, major_type: GUID) -> bool { unsafe {
-        let mut connection_media_type = AM_MEDIA_TYPE::default();
-        self.ConnectionMediaType(&mut connection_media_type)
-            .map(|_| connection_media_type.majortype == major_type)
-            .unwrap_or(false)
-    }}
+            return_value_size as usize == std::mem::size_of_val(&category)
+                && pin_category == category
+        }
+    }
+    unsafe fn matches_major_type(&self, major_type: GUID) -> bool {
+        unsafe {
+            let mut connection_media_type = AM_MEDIA_TYPE::default();
+            self.ConnectionMediaType(&mut connection_media_type)
+                .map(|_| connection_media_type.majortype == major_type)
+                .unwrap_or(false)
+        }
+    }
 }
 
 pub trait IBaseFilterExt {
     fn get_pin(&self, direction: PIN_DIRECTION, category: GUID, major_type: GUID) -> Option<IPin>;
 
+    /// # Safety
+    /// Don't mess it up
     unsafe fn get_pin_by_name(
         &self,
         direction: PIN_DIRECTION,
@@ -95,10 +100,10 @@ impl IBaseFilterExt for IBaseFilter {
 
                 if pin_dir == direction
                     && (category == GUID::zeroed() || pin.matches_category(category))
-                        && (major_type == GUID::zeroed() || pin.matches_major_type(major_type))
-                    {
-                        return Some(pin);
-                    }
+                    && (major_type == GUID::zeroed() || pin.matches_major_type(major_type))
+                {
+                    return Some(pin);
+                }
             }
         }
 
@@ -109,26 +114,28 @@ impl IBaseFilterExt for IBaseFilter {
         &self,
         direction: PIN_DIRECTION,
         _name: Option<&PWSTR>,
-    ) -> windows_core::Result<Option<IPin>> { unsafe {
-        let pin_enum = self.EnumPins()?;
+    ) -> windows_core::Result<Option<IPin>> {
+        unsafe {
+            let pin_enum = self.EnumPins()?;
 
-        let _ = pin_enum.Reset();
+            let _ = pin_enum.Reset();
 
-        let mut pin = [None];
-        while pin_enum.Next(&mut pin, None) == S_OK {
-            let Some(pin) = pin[0].take() else {
-                break;
-            };
+            let mut pin = [None];
+            while pin_enum.Next(&mut pin, None) == S_OK {
+                let Some(pin) = pin[0].take() else {
+                    break;
+                };
 
-            let pin_dir = pin.QueryDirection().unwrap();
+                let pin_dir = pin.QueryDirection().unwrap();
 
-            if pin_dir == direction {
-                return Ok(Some(pin));
+                if pin_dir == direction {
+                    return Ok(Some(pin));
+                }
             }
-        }
 
-        Ok(None)
-    }}
+            Ok(None)
+        }
+    }
 }
 
 pub trait VARIANTExt {
@@ -151,8 +158,10 @@ pub struct IAMStreamConfigMediaTypes<'a> {
     i: i32,
 }
 
-impl<'a> IAMStreamConfigMediaTypes<'a> {
-    pub fn next(&mut self) -> Option<(&'a AM_MEDIA_TYPEVideo, i32)> {
+impl<'a> Iterator for IAMStreamConfigMediaTypes<'a> {
+    type Item = (&'a AM_MEDIA_TYPEVideo, i32);
+
+    fn next(&mut self) -> Option<Self::Item> {
         let i = self.i;
 
         if i >= self.count as i32 {
@@ -175,7 +184,9 @@ impl<'a> IAMStreamConfigMediaTypes<'a> {
             Some((&*media_type, i))
         }
     }
+}
 
+impl<'a> IAMStreamConfigMediaTypes<'a> {
     pub fn count(&self) -> u32 {
         self.count
     }
@@ -204,17 +215,21 @@ type AM_MEDIA_TYPEVideo = AM_MEDIA_TYPE;
 
 #[allow(non_camel_case_types)]
 pub trait AM_MEDIA_TYPEVideoExt {
+    /// # Safety
+    /// Just don't do it wrong
     unsafe fn video_info(&self) -> &KS_VIDEOINFOHEADER;
 }
 
 impl AM_MEDIA_TYPEVideoExt for AM_MEDIA_TYPEVideo {
-    unsafe fn video_info(&self) -> &KS_VIDEOINFOHEADER { unsafe {
-        &*self.pbFormat.cast::<KS_VIDEOINFOHEADER>()
-    }}
+    unsafe fn video_info(&self) -> &KS_VIDEOINFOHEADER {
+        unsafe { &*self.pbFormat.cast::<KS_VIDEOINFOHEADER>() }
+    }
 }
 
 #[allow(non_camel_case_types)]
 pub trait AM_MEDIA_TYPEExt {
+    /// # Safety
+    /// Just don't do it wrong
     unsafe fn subtype_str(&self) -> Option<&'static str>;
 }
 
@@ -237,23 +252,27 @@ impl AM_MEDIA_TYPEExt for AM_MEDIA_TYPE {
 }
 
 pub trait IAMVideoControlExt {
+    /// # Safety
+    /// Just don't do it wrong
     unsafe fn time_per_frame_list<'a>(&self, pin: &'a IPin, i: i32, dimensions: SIZE) -> &'a [i64];
 }
 
 impl IAMVideoControlExt for IAMVideoControl {
-    unsafe fn time_per_frame_list<'a>(&self, pin: &'a IPin, i: i32, dimensions: SIZE) -> &'a [i64] { unsafe {
-        let mut time_per_frame_list = null_mut();
-        let mut list_size = 0;
+    unsafe fn time_per_frame_list<'a>(&self, pin: &'a IPin, i: i32, dimensions: SIZE) -> &'a [i64] {
+        unsafe {
+            let mut time_per_frame_list = null_mut();
+            let mut list_size = 0;
 
-        self.GetFrameRateList(pin, i, dimensions, &mut list_size, &mut time_per_frame_list)
-            .unwrap();
+            self.GetFrameRateList(pin, i, dimensions, &mut list_size, &mut time_per_frame_list)
+                .unwrap();
 
-        if list_size > 0 && !time_per_frame_list.is_null() {
-            return std::slice::from_raw_parts(time_per_frame_list, list_size as usize);
+            if list_size > 0 && !time_per_frame_list.is_null() {
+                return std::slice::from_raw_parts(time_per_frame_list, list_size as usize);
+            }
+
+            &[]
         }
-
-        &[]
-    }}
+    }
 }
 
 pub trait IPropertyBagExt {
@@ -266,11 +285,13 @@ impl IPropertyBagExt for IPropertyBag {
     unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
         P0: windows_core::Param<windows_core::PCWSTR>,
-    { unsafe {
-        let mut ret = VARIANT::default();
-        self.Read(pszpropname, &mut ret, None)?;
-        Ok(ret)
-    }}
+    {
+        unsafe {
+            let mut ret = VARIANT::default();
+            self.Read(pszpropname, &mut ret, None)?;
+            Ok(ret)
+        }
+    }
 }
 
 pub struct VideoInputDeviceIterator {
@@ -752,7 +773,6 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
     }
 
     fn Clone(&self) -> windows_core::Result<IEnumPins> {
-        
         unsafe { self.cast() }
     }
 }
@@ -769,6 +789,7 @@ pub type SinkCallback = Box<dyn FnMut(CallbackData)>;
 #[implement(IPin, IMemInputPin)]
 struct SinkInputPin {
     desired_media_type: AMMediaType,
+    #[allow(unused)]
     current_media_type: RefCell<AMMediaType>,
     connected_pin: RefCell<Option<IPin>>,
     owner: RefCell<Option<IBaseFilter>>,
@@ -777,30 +798,32 @@ struct SinkInputPin {
 }
 
 impl SinkInputPin {
-    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool { unsafe {
-        let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
+    unsafe fn get_valid_media_type(&self, index: i32, media_type: &mut AM_MEDIA_TYPE) -> bool {
+        unsafe {
+            let video_info_header = &mut *(media_type.pbFormat as *mut KS_VIDEOINFOHEADER);
 
-        video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
-        video_info_header.bmiHeader.biPlanes = 1;
-        video_info_header.bmiHeader.biClrImportant = 0;
-        video_info_header.bmiHeader.biClrUsed = 0;
+            video_info_header.bmiHeader.biSize = size_of::<KS_BITMAPINFOHEADER>() as u32;
+            video_info_header.bmiHeader.biPlanes = 1;
+            video_info_header.bmiHeader.biClrImportant = 0;
+            video_info_header.bmiHeader.biClrUsed = 0;
 
-        media_type.majortype = MEDIATYPE_Video;
-        media_type.formattype = FORMAT_VideoInfo;
-        media_type.bTemporalCompression = false.into();
+            media_type.majortype = MEDIATYPE_Video;
+            media_type.formattype = FORMAT_VideoInfo;
+            media_type.bTemporalCompression = false.into();
 
-        if index == 0 {
-            video_info_header.bmiHeader.biCompression =
-                u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
-            video_info_header.bmiHeader.biBitCount = 16;
-            video_info_header.bmiHeader.biWidth = 640;
-            video_info_header.bmiHeader.biHeight = 480;
-            media_type.subtype = MEDIASUBTYPE_YUY2;
-            true
-        } else {
-            false
+            if index == 0 {
+                video_info_header.bmiHeader.biCompression =
+                    u32::from_ne_bytes(*"yuy2".as_bytes().first_chunk::<4>().unwrap());
+                video_info_header.bmiHeader.biBitCount = 16;
+                video_info_header.bmiHeader.biWidth = 640;
+                video_info_header.bmiHeader.biHeight = 480;
+                media_type.subtype = MEDIASUBTYPE_YUY2;
+                true
+            } else {
+                false
+            }
         }
-    }}
+    }
 }
 
 impl IPin_Impl for SinkInputPin_Impl {
@@ -843,7 +866,6 @@ impl IPin_Impl for SinkInputPin_Impl {
     }
 
     fn Disconnect(&self) -> windows_core::Result<()> {
-        
         match self.connected_pin.borrow_mut().take() {
             Some(_) => S_OK.ok(),
             None => VFW_E_NOT_CONNECTED.ok(),
@@ -851,7 +873,6 @@ impl IPin_Impl for SinkInputPin_Impl {
     }
 
     fn ConnectedTo(&self) -> windows_core::Result<IPin> {
-        
         match self.connected_pin.borrow().as_ref() {
             Some(connected_pin) => Ok(connected_pin.clone()),
             None => Err(VFW_E_NOT_CONNECTED.into()),
@@ -969,10 +990,11 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
 
         unsafe {
             if let Ok(new_media_type) = psample.GetMediaType()
-                && !new_media_type.is_null() {
-                    self.current_media_type
-                        .replace(AMMediaType::new(&*new_media_type));
-                }
+                && !new_media_type.is_null()
+            {
+                self.current_media_type
+                    .replace(AMMediaType::new(&*new_media_type));
+            }
         }
 
         let media_type = self.current_media_type.borrow();
@@ -1035,16 +1057,16 @@ struct TypeEnumerator<'a> {
     pin: &'a SinkInputPin,
 }
 
-impl<'a> TypeEnumerator<'a> {
-    unsafe fn free_allocated_media_types(allocated: usize, types: *mut *mut AM_MEDIA_TYPE) {
-        for i in 0..allocated {
-            unsafe {
-                CoTaskMemFree(Some((*(*types.add(i))).pbFormat as *const _));
-                CoTaskMemFree(Some(*types.add(i) as *const _));
-            }
-        }
-    }
-}
+// impl<'a> TypeEnumerator<'a> {
+//     unsafe fn free_allocated_media_types(allocated: usize, types: *mut *mut AM_MEDIA_TYPE) {
+//         for i in 0..allocated {
+//             unsafe {
+//                 CoTaskMemFree(Some((*(*types.add(i))).pbFormat as *const _));
+//                 CoTaskMemFree(Some(*types.add(i) as *const _));
+//             }
+//         }
+//     }
+// }
 
 impl<'a> IEnumMediaTypes_Impl for TypeEnumerator_Impl<'a> {
     fn Next(
