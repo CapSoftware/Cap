@@ -4,11 +4,10 @@ use cap_camera::{CameraInfo, Format};
 
 fn main() {
     let cameras: Vec<_> = cap_camera::list_cameras()
-        .into_iter()
         .map(CameraSelectOption)
         .collect();
 
-    if cameras.len() < 1 {
+    if cameras.is_empty() {
         eprintln!("No cameras found");
         return;
     }
@@ -30,7 +29,7 @@ fn main() {
 
     let _handle = selected_camera
         .start_capturing(selected_format.0, |frame| {
-            dbg!(frame);
+            frame;
         })
         .unwrap();
 
@@ -44,7 +43,7 @@ impl Display for CameraSelectOption {
         write!(f, "{}", self.0.display_name())?;
 
         if let Some(model_id) = self.0.model_id() {
-            write!(f, " (Model ID: {})", model_id)?;
+            write!(f, " (Model ID: {model_id})")?;
         }
 
         Ok(())
