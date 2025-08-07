@@ -78,7 +78,7 @@ pub fn init(app: &AppHandle) {
                 let store = state.lock().unwrap();
 
                 for (action, hotkey) in &store.hotkeys {
-                    if &Shortcut::from(hotkey.clone()) == shortcut {
+                    if &Shortcut::from(*hotkey) == shortcut {
                         tokio::spawn(handle_hotkey(app.clone(), *action));
                     }
                 }
@@ -92,7 +92,7 @@ pub fn init(app: &AppHandle) {
     let global_shortcut = app.global_shortcut();
 
     for hotkey in store.hotkeys.values() {
-        global_shortcut.register(hotkey.map(Shortcut::from)).ok();
+        global_shortcut.register(Shortcut::from(*hotkey)).ok();
     }
 
     app.manage(Mutex::new(store));
