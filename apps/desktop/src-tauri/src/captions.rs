@@ -1255,7 +1255,7 @@ fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 // Helper function to mix two sample arrays together
-fn mix_samples(dest: &mut Vec<f32>, source: &[f32]) -> usize {
+fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
     let length = dest.len().min(source.len());
     for i in 0..length {
         // Simple mix with equal weight (0.5) to prevent clipping

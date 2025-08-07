@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use cap_recording::RecordingMode;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
@@ -138,7 +140,7 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
-                crate::open_project_from_path(&project_path, app.clone())
+                crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await

@@ -56,6 +56,7 @@ pub struct CameraWindowState {
 }
 
 pub struct CameraPreview {
+    #[allow(clippy::type_complexity)]
     reconfigure: (
         broadcast::Sender<Option<(u32, u32)>>,
         broadcast::Receiver<Option<(u32, u32)>>,
@@ -504,11 +505,6 @@ impl Renderer {
             .contains(&CompositeAlphaMode::PreMultiplied)
         {
             CompositeAlphaMode::PreMultiplied
-        } else if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PostMultiplied)
-        {
-            CompositeAlphaMode::PostMultiplied
         } else if surface_capabilities
             .alpha_modes
             .contains(&CompositeAlphaMode::PostMultiplied)

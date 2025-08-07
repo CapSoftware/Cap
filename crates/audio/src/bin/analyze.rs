@@ -10,5 +10,5 @@ pub fn main() {
     data.channels();
     data.sample_count();
     data.samples().len();
-    data.samples().len() as f32 / AudioData::SAMPLE_RATE as f32;data.channels() as f32;
+    data.samples().len();AudioData::SAMPLE_RATE as f32;data.channels();
 }

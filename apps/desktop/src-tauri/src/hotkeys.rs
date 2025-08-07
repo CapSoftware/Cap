@@ -20,7 +20,7 @@ pub struct Hotkey {
 }
 
 impl Hotkey {
-    fn to_shortcut(&self) -> Shortcut {
+    fn as_shortcut(&self) -> Shortcut {
         let mut modifiers = Modifiers::empty();
 
         if self.meta {
@@ -42,6 +42,7 @@ impl Hotkey {
 
 #[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::enum_variant_names)]
 pub enum HotkeyAction {
     StartRecording,
     StopRecording,
@@ -77,7 +78,7 @@ pub fn init(app: &AppHandle) {
                 let store = state.lock().unwrap();
 
                 for (action, hotkey) in &store.hotkeys {
-                    if &hotkey.to_shortcut() == shortcut {
+                    if &hotkey.as_shortcut() == shortcut {
                         tokio::spawn(handle_hotkey(app.clone(), *action));
                     }
                 }
@@ -91,7 +92,7 @@ pub fn init(app: &AppHandle) {
     let global_shortcut = app.global_shortcut();
 
     for hotkey in store.hotkeys.values() {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(hotkey.as_shortcut()).ok();
     }
 
     app.manage(Mutex::new(store));
@@ -127,12 +128,12 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
 
     if let Some(prev) = prev {
         if !store.hotkeys.values().any(|h| h == &prev) {
-            global_shortcut.unregister(prev.to_shortcut()).ok();
+            global_shortcut.unregister(prev.as_shortcut()).ok();
         }
     }
 
     if let Some(hotkey) = hotkey {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(hotkey.as_shortcut()).ok();
     }
 
     Ok(())
