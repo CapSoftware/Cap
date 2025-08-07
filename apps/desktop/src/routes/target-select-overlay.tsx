@@ -89,7 +89,7 @@ export default function () {
             {(screenUnderCursor) => (
               <div
                 data-over={targetUnderCursor.display_id === params.displayId}
-                class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors"
+                class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors text-white dark:text-black"
               >
                 <span class="text-3xl font-semibold mb-2">
                   {screenUnderCursor.name}
@@ -116,7 +116,7 @@ export default function () {
           {(windowUnderCursor) => (
             <div
               data-over={targetUnderCursor.display_id === params.displayId}
-              class="w-screen h-screen bg-black/40 relative"
+              class="w-screen h-screen bg-black/40 relative text-white dark:text-black"
             >
               <div
                 class="bg-blue-600/30 absolute flex flex-col items-center justify-center"
@@ -490,7 +490,7 @@ export default function () {
           }
 
           return (
-            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/30 transition-colors relative cursor-crosshair">
+            <div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/30 transition-colors relative cursor-crosshair text-white dark:text-black">
               <Occluders />
 
               <div
