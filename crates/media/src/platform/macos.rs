@@ -4,16 +4,16 @@ use core_foundation::{
     array::CFArrayGetCount,
     base::FromVoid,
     dictionary::CFDictionaryGetValue,
-    number::{kCFNumberIntType, CFNumberGetValue, CFNumberRef},
+    number::{CFNumberGetValue, CFNumberRef, kCFNumberIntType},
     string::{CFString, CFStringRef},
 };
 use core_graphics::{
     base::boolean_t,
     display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGDisplay, CGDisplayBounds, CGRect},
     window::{
-        kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
-        kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+        CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowName,
+        kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
     },
 };
 use std::{collections::HashMap, ffi::c_void};
@@ -130,21 +130,23 @@ unsafe fn get_string_value_from_dict(
         .map(|value_ref| CFString::from_void(value_ref).to_string())
 }
 
-unsafe fn get_window_bounds(window_cf_dictionary_ref: CFDictionaryRef) -> Option<Bounds> {
-    get_nullable_value_from_dict(window_cf_dictionary_ref, kCGWindowBounds).map(|value_ref| {
-        let rect: CGRect = {
-            let mut rect = std::mem::zeroed();
-            CGRectMakeWithDictionaryRepresentation(value_ref.cast(), &mut rect);
-            rect
-        };
+fn get_window_bounds(window_cf_dictionary_ref: CFDictionaryRef) -> Option<Bounds> {
+    unsafe { get_nullable_value_from_dict(window_cf_dictionary_ref, kCGWindowBounds) }.map(
+        |value_ref| {
+            let rect: CGRect = {
+                let mut rect = unsafe { std::mem::zeroed() };
+                unsafe { CGRectMakeWithDictionaryRepresentation(value_ref.cast(), &mut rect) };
+                rect
+            };
 
-        Bounds {
-            x: rect.origin.x,
-            y: rect.origin.y,
-            width: rect.size.width,
-            height: rect.size.height,
-        }
-    })
+            Bounds {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            }
+        },
+    )
 }
 
 pub fn bring_window_to_focus(window_id: u32) {

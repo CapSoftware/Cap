@@ -4,9 +4,9 @@ use ffmpeg::{format::Sample, frame};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
+    Target,
     capturer::{Area, Capturer, Options, Point, Resolution as ScapResolution, Size},
     frame::{Frame, FrameType, VideoFrame},
-    Target,
 };
 
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,9 @@ use tracing::{debug, error, info, trace, warn};
 use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
-    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform::{self, logical_monitor_bounds, Bounds, Window},
     MediaError,
+    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
+    platform::{self, Bounds, Window, logical_monitor_bounds},
 };
 
 static EXCLUDED_WINDOWS: &[&str] = &[
@@ -456,7 +456,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     // #[instrument(skip_all)]
     fn run(
         &mut self,
-        clock: Self::Clock,
+        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
@@ -743,7 +743,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
     fn run(
         &mut self,
-        clock: Self::Clock,
+        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
