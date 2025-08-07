@@ -54,6 +54,7 @@ pub struct StudioRecordingActor {
     recording_dir: PathBuf,
     fps: u32,
     segments: Vec<StudioRecordingSegment>,
+    #[allow(unused)]
     start_instant: Instant,
 }
 

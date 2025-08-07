@@ -27,6 +27,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    #[allow(unused)]
     total_frames: u32,
 }
 

@@ -6,8 +6,11 @@ use std::path::PathBuf;
 use tracing::{debug, info};
 
 pub struct MP4AVAssetWriterEncoder {
+    #[allow(unused)]
     tag: &'static str,
+    #[allow(unused)]
     last_pts: Option<i64>,
+    #[allow(unused)]
     config: VideoInfo,
     asset_writer: Retained<av::AssetWriter>,
     video_input: Retained<av::AssetWriterInput>,

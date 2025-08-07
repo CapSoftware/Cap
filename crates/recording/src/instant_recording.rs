@@ -25,6 +25,7 @@ use crate::{
 
 struct InstantRecordingPipeline {
     pub inner: Pipeline<RealTimeClock<()>>,
+    #[allow(unused)]
     pub output_path: PathBuf,
     pub pause_flag: Arc<AtomicBool>,
 }

@@ -137,6 +137,7 @@ impl H264EncoderBuilder {
 }
 
 pub struct H264Encoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Video,
     config: VideoInfo,

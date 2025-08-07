@@ -9,7 +9,6 @@ use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
-use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -28,53 +27,53 @@ pub struct S3UploadMeta {
     id: String,
 }
 
-fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct StringOrObject;
+// fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+// where
+//     D: Deserializer<'de>,
+// {
+//     struct StringOrObject;
 
-    impl<'de> de::Visitor<'de> for StringOrObject {
-        type Value = String;
+//     impl<'de> de::Visitor<'de> for StringOrObject {
+//         type Value = String;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("string or empty object")
-        }
+//         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+//             formatter.write_str("string or empty object")
+//         }
 
-        fn visit_str<E>(self, value: &str) -> Result<String, E>
-        where
-            E: de::Error,
-        {
-            Ok(value.to_string())
-        }
+//         fn visit_str<E>(self, value: &str) -> Result<String, E>
+//         where
+//             E: de::Error,
+//         {
+//             Ok(value.to_string())
+//         }
 
-        fn visit_string<E>(self, value: String) -> Result<String, E>
-        where
-            E: de::Error,
-        {
-            Ok(value)
-        }
+//         fn visit_string<E>(self, value: String) -> Result<String, E>
+//         where
+//             E: de::Error,
+//         {
+//             Ok(value)
+//         }
 
-        fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
-        where
-            M: de::MapAccess<'de>,
-        {
-            // Return empty string for empty objects
-            Ok(String::new())
-        }
-    }
+//         fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
+//         where
+//             M: de::MapAccess<'de>,
+//         {
+//             // Return empty string for empty objects
+//             Ok(String::new())
+//         }
+//     }
 
-    deserializer.deserialize_any(StringOrObject)
-}
+//     deserializer.deserialize_any(StringOrObject)
+// }
 
 impl S3UploadMeta {
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub fn new(id: String) -> Self {
-        Self { id }
-    }
+    // pub fn new(id: String) -> Self {
+    //     Self { id }
+    // }
 }
 
 #[derive(serde::Serialize)]
@@ -111,19 +110,20 @@ struct S3ImageUploadBody {
     base: S3UploadBody,
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3AudioUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-    duration: String,
-    audio_codec: String,
-    is_mp3: bool,
-}
+// #[derive(serde::Serialize)]
+// #[serde(rename_all = "camelCase")]
+// struct S3AudioUploadBody {
+//     #[serde(flatten)]
+//     base: S3UploadBody,
+//     duration: String,
+//     audio_codec: String,
+//     is_mp3: bool,
+// }
 
 pub struct UploadedVideo {
     pub link: String,
     pub id: String,
+    #[allow(unused)]
     pub config: S3UploadMeta,
 }
 
@@ -132,11 +132,11 @@ pub struct UploadedImage {
     pub id: String,
 }
 
-pub struct UploadedAudio {
-    pub link: String,
-    pub id: String,
-    pub config: S3UploadMeta,
-}
+// pub struct UploadedAudio {
+//     pub link: String,
+//     pub id: String,
+//     pub config: S3UploadMeta,
+// }
 
 pub async fn upload_video(
     app: &AppHandle,
@@ -433,32 +433,32 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
-fn build_audio_upload_body(
-    path: &PathBuf,
-    base: S3UploadBody,
-) -> Result<S3AudioUploadBody, String> {
-    let input =
-        ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
-    let stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
+// fn build_audio_upload_body(
+//     path: &PathBuf,
+//     base: S3UploadBody,
+// ) -> Result<S3AudioUploadBody, String> {
+//     let input =
+//         ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
+//     let stream = input
+//         .streams()
+//         .best(ffmpeg::media::Type::Audio)
+//         .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
 
-    let duration_millis = input.duration() as f64 / 1000.;
+//     let duration_millis = input.duration() as f64 / 1000.;
 
-    let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-        .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
-    let codec_name = codec.id();
+//     let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+//         .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
+//     let codec_name = codec.id();
 
-    let is_mp3 = path.extension().is_some_and(|ext| ext == "mp3");
+//     let is_mp3 = path.extension().is_some_and(|ext| ext == "mp3");
 
-    Ok(S3AudioUploadBody {
-        base,
-        duration: duration_millis.to_string(),
-        audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
-        is_mp3,
-    })
-}
+//     Ok(S3AudioUploadBody {
+//         base,
+//         duration: duration_millis.to_string(),
+//         audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
+//         is_mp3,
+//     })
+// }
 
 pub async fn prepare_screenshot_upload(
     app: &AppHandle,
@@ -516,7 +516,7 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
-const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
+// const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
 
 pub struct InstantMultipartUpload {
     pub handle: tokio::task::JoinHandle<Result<(), String>>,

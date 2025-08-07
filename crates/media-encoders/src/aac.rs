@@ -20,6 +20,7 @@ pub enum AACEncoderError {
 }
 
 pub struct AACEncoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,

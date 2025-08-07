@@ -6,8 +6,8 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use ffmpeg::{Codec, codec, format, frame, software};
-use ffmpeg_sys_next::{AVHWDeviceType, avcodec_find_decoder};
+use ffmpeg::{format, frame, software};
+use ffmpeg_sys_next::AVHWDeviceType;
 use log::debug;
 use tokio::sync::oneshot;
 
@@ -103,13 +103,11 @@ impl FfmpegDecoder {
 
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
-            let mut peekable_requests = PeekableReceiver { rx, peeked: None };
-
             let mut frames = this.frames();
 
             let _ = ready_tx.send(Ok(()));
 
-            while let Ok(r) = peekable_requests.recv() {
+            while let Ok(r) = rx.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
@@ -266,60 +264,60 @@ impl FfmpegDecoder {
     }
 }
 
-pub fn find_decoder(
-    s: &format::context::Input,
-    st: &format::stream::Stream,
-    codec_id: codec::Id,
-) -> Option<Codec> {
-    unsafe {
-        use ffmpeg::media::Type;
-        let codec = match st.parameters().medium() {
-            Type::Video => Some((*s.as_ptr()).video_codec),
-            Type::Audio => Some((*s.as_ptr()).audio_codec),
-            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
-            _ => None,
-        };
+// pub fn find_decoder(
+//     s: &format::context::Input,
+//     st: &format::stream::Stream,
+//     codec_id: codec::Id,
+// ) -> Option<Codec> {
+//     unsafe {
+//         use ffmpeg::media::Type;
+//         let codec = match st.parameters().medium() {
+//             Type::Video => Some((*s.as_ptr()).video_codec),
+//             Type::Audio => Some((*s.as_ptr()).audio_codec),
+//             Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+//             _ => None,
+//         };
 
-        if let Some(codec) = codec {
-            if !codec.is_null() {
-                return Some(Codec::wrap(codec));
-            }
-        }
+//         if let Some(codec) = codec {
+//             if !codec.is_null() {
+//                 return Some(Codec::wrap(codec));
+//             }
+//         }
 
-        let found = avcodec_find_decoder(codec_id.into());
+//         let found = avcodec_find_decoder(codec_id.into());
 
-        if found.is_null() {
-            return None;
-        }
-        Some(Codec::wrap(found))
-    }
-}
+//         if found.is_null() {
+//             return None;
+//         }
+//         Some(Codec::wrap(found))
+//     }
+// }
 
-struct PeekableReceiver<T> {
-    rx: mpsc::Receiver<T>,
-    peeked: Option<T>,
-}
+// struct PeekableReceiver<T> {
+//     rx: mpsc::Receiver<T>,
+//     peeked: Option<T>,
+// }
 
-impl<T> PeekableReceiver<T> {
-    fn peek(&mut self) -> Option<&T> {
-        if self.peeked.is_some() {
-            self.peeked.as_ref()
-        } else {
-            match self.rx.try_recv() {
-                Ok(value) => {
-                    self.peeked = Some(value);
-                    self.peeked.as_ref()
-                }
-                Err(_) => None,
-            }
-        }
-    }
+// impl<T> PeekableReceiver<T> {
+//     fn peek(&mut self) -> Option<&T> {
+//         if self.peeked.is_some() {
+//             self.peeked.as_ref()
+//         } else {
+//             match self.rx.try_recv() {
+//                 Ok(value) => {
+//                     self.peeked = Some(value);
+//                     self.peeked.as_ref()
+//                 }
+//                 Err(_) => None,
+//             }
+//         }
+//     }
 
-    fn recv(&mut self) -> Result<T, mpsc::RecvError> {
-        if let Some(value) = self.peeked.take() {
-            Ok(value)
-        } else {
-            self.rx.recv()
-        }
-    }
-}
+//     fn recv(&mut self) -> Result<T, mpsc::RecvError> {
+//         if let Some(value) = self.peeked.take() {
+//             Ok(value)
+//         } else {
+//             self.rx.recv()
+//         }
+//     }
+// }

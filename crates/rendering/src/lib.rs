@@ -387,6 +387,7 @@ impl ProjectUniforms {
         })
     }
 
+    #[allow(unused)]
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);
 
@@ -821,6 +822,7 @@ pub struct RendererLayers {
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
+    #[allow(unused)]
     captions: CaptionsLayer,
 }
 
@@ -1177,6 +1179,6 @@ fn srgb_to_linear(c: u16) -> f32 {
     }
 }
 
-fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left { a } else { b }
-}
+// fn get_either<T>((a, b): (T, T), left: bool) -> T {
+//     if left { a } else { b }
+// }

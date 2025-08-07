@@ -165,7 +165,7 @@ mod tests {
 
     // Helper function to create a mock Display for testing
     fn mock_display() -> Display {
-        Display::list()[0].clone()
+        Display::list()[0]
     }
 
     #[test]

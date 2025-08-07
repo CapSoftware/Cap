@@ -80,6 +80,7 @@ pub enum Inner {
     },
     ColorOrGradient {
         value: ColorOrGradient,
+        #[allow(unused)]
         buffer: wgpu::Buffer,
         bind_group: wgpu::BindGroup,
     },

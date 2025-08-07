@@ -76,9 +76,6 @@ use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 use tracing::error;
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::EditorWindowIds;
@@ -566,55 +563,55 @@ async fn create_screenshot(
     result
 }
 
-async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
-    println!("Creating thumbnail: input={input:?}, output={output:?}, size={size:?}");
+// async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
+//     println!("Creating thumbnail: input={input:?}, output={output:?}, size={size:?}");
 
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let img = image::open(&input).map_err(|e| {
-            eprintln!("Failed to open image: {e}");
-            e.to_string()
-        })?;
+//     tokio::task::spawn_blocking(move || -> Result<(), String> {
+//         let img = image::open(&input).map_err(|e| {
+//             eprintln!("Failed to open image: {e}");
+//             e.to_string()
+//         })?;
 
-        let width = img.width() as usize;
-        let height = img.height() as usize;
-        let bytes_per_pixel = 3;
-        let src_stride = width * bytes_per_pixel;
+//         let width = img.width() as usize;
+//         let height = img.height() as usize;
+//         let bytes_per_pixel = 3;
+//         let src_stride = width * bytes_per_pixel;
 
-        let rgb_img = img.to_rgb8();
-        let img_buffer = rgb_img.as_raw();
+//         let rgb_img = img.to_rgb8();
+//         let img_buffer = rgb_img.as_raw();
 
-        let mut corrected_buffer = vec![0u8; height * src_stride];
+//         let mut corrected_buffer = vec![0u8; height * src_stride];
 
-        for y in 0..height {
-            let src_slice = &img_buffer[y * src_stride..(y + 1) * src_stride];
-            let dst_slice = &mut corrected_buffer[y * src_stride..(y + 1) * src_stride];
-            dst_slice.copy_from_slice(src_slice);
-        }
+//         for y in 0..height {
+//             let src_slice = &img_buffer[y * src_stride..(y + 1) * src_stride];
+//             let dst_slice = &mut corrected_buffer[y * src_stride..(y + 1) * src_stride];
+//             dst_slice.copy_from_slice(src_slice);
+//         }
 
-        let corrected_img =
-            image::RgbImage::from_raw(width as u32, height as u32, corrected_buffer)
-                .ok_or("Failed to create corrected image")?;
+//         let corrected_img =
+//             image::RgbImage::from_raw(width as u32, height as u32, corrected_buffer)
+//                 .ok_or("Failed to create corrected image")?;
 
-        let thumbnail = image::imageops::resize(
-            &corrected_img,
-            size.0,
-            size.1,
-            image::imageops::FilterType::Lanczos3,
-        );
+//         let thumbnail = image::imageops::resize(
+//             &corrected_img,
+//             size.0,
+//             size.1,
+//             image::imageops::FilterType::Lanczos3,
+//         );
 
-        thumbnail
-            .save_with_format(&output, image::ImageFormat::Png)
-            .map_err(|e| {
-                eprintln!("Failed to save thumbnail: {e}");
-                e.to_string()
-            })?;
+//         thumbnail
+//             .save_with_format(&output, image::ImageFormat::Png)
+//             .map_err(|e| {
+//                 eprintln!("Failed to save thumbnail: {e}");
+//                 e.to_string()
+//             })?;
 
-        println!("Thumbnail created successfully");
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
+//         println!("Thumbnail created successfully");
+//         Ok(())
+//     })
+//     .await
+//     .map_err(|e| format!("Task join error: {e}"))?
+// }
 
 #[tauri::command]
 #[specta::specta]
@@ -1808,30 +1805,30 @@ async fn check_notification_permissions(app: AppHandle) {
     }
 }
 
-fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::WorkerGuard {
-    let file_appender = tracing_appender::rolling::daily(folder, "cap-logs.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+// fn configure_logging(folder: &PathBuf) -> tracing_appender::non_blocking::WorkerGuard {
+//     let file_appender = tracing_appender::rolling::daily(folder, "cap-logs.log");
+//     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    let filter = || tracing_subscriber::filter::EnvFilter::builder().parse_lossy("cap-*=TRACE");
+//     let filter = || tracing_subscriber::filter::EnvFilter::builder().parse_lossy("cap-*=TRACE");
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_target(false)
-                .with_writer(non_blocking)
-                .with_filter(filter()),
-        )
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_ansi(true)
-                .with_target(false)
-                .with_filter(filter()),
-        )
-        .init();
+//     tracing_subscriber::registry()
+//         .with(
+//             tracing_subscriber::fmt::layer()
+//                 .with_ansi(false)
+//                 .with_target(false)
+//                 .with_writer(non_blocking)
+//                 .with_filter(filter()),
+//         )
+//         .with(
+//             tracing_subscriber::fmt::layer()
+//                 .with_ansi(true)
+//                 .with_target(false)
+//                 .with_filter(filter()),
+//         )
+//         .init();
 
-    _guard
-}
+//     _guard
+// }
 
 #[tauri::command]
 #[specta::specta]
@@ -2319,9 +2316,9 @@ fn recordings_path(app: &AppHandle) -> PathBuf {
     path
 }
 
-fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
-    recordings_path(app).join(format!("{recording_id}.cap"))
-}
+// fn recording_path(app: &AppHandle, recording_id: &str) -> PathBuf {
+//     recordings_path(app).join(format!("{recording_id}.cap"))
+// }
 
 fn screenshots_path(app: &AppHandle) -> PathBuf {
     let path = app.path().app_data_dir().unwrap().join("screenshots");
@@ -2329,9 +2326,9 @@ fn screenshots_path(app: &AppHandle) -> PathBuf {
     path
 }
 
-fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
-    screenshots_path(app).join(format!("{screenshot_id}.cap"))
-}
+// fn screenshot_path(app: &AppHandle, screenshot_id: &str) -> PathBuf {
+//     screenshots_path(app).join(format!("{screenshot_id}.cap"))
+// }
 
 #[tauri::command]
 #[specta::specta]

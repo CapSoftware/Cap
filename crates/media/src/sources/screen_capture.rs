@@ -801,7 +801,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             };
 
                             if check_skip_send().is_ok() {
-                                if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
+                                if video_tx.send((sample_buffer, relative_time)).is_err() {
                                     error!("Pipeline is unreachable. Shutting down recording.");
                                     return ControlFlow::Continue(());
                                 }

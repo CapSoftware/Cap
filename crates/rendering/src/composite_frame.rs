@@ -40,12 +40,12 @@ impl CompositeVideoFrameUniforms {
     }
 }
 
-pub struct CompositeFrameResources {
-    pub bind_group: wgpu::BindGroup,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    pub uniforms_buffer: wgpu::Buffer,
-    pub sampler: wgpu::Sampler,
-}
+// pub struct CompositeFrameResources {
+//     pub bind_group: wgpu::BindGroup,
+//     pub bind_group_layout: wgpu::BindGroupLayout,
+//     pub uniforms_buffer: wgpu::Buffer,
+//     pub sampler: wgpu::Sampler,
+// }
 
 impl CompositeVideoFramePipeline {
     pub fn new(device: &wgpu::Device) -> Self {

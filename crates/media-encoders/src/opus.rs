@@ -41,6 +41,7 @@ impl OggFile {
 }
 
 pub struct OpusEncoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,

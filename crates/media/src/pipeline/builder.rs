@@ -171,7 +171,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
     }
 }
 
-pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
-    pipeline: PipelineBuilder<Clock>,
-    next_input: Receiver<PreviousOutput>,
-}
+// pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
+//     pipeline: PipelineBuilder<Clock>,
+//     next_input: Receiver<PreviousOutput>,
+// }

@@ -8,6 +8,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct InterpolatedCursorPosition {
     pub position: Coord<RawDisplayUVSpace>,
+    #[allow(unused)]
     pub velocity: XY<f32>,
     pub cursor_id: String,
 }

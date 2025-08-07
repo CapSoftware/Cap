@@ -61,9 +61,9 @@ percent-encoding = "2.3.1"
 
 # TODO: Reenable these
 [workspace.lints.rust]
-deprecated = "allow"
+deprecated = "allow" # TODO: Add an issue for this
 unexpected_cfgs = "allow"
-dead_code = "allow"
+# dead_code = "allow"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"

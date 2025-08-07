@@ -1,6 +1,7 @@
 use crate::{AppSounds, general_settings::GeneralSettingsStore};
 use tauri_plugin_notification::NotificationExt;
 
+#[allow(unused)]
 pub enum NotificationType {
     VideoSaved,
     VideoCopiedToClipboard,
@@ -64,6 +65,7 @@ impl NotificationType {
         }
     }
 
+    #[allow(unused)]
     pub fn message(&self) -> &'static str {
         match self {
             NotificationType::UploadFailed => {
@@ -73,6 +75,7 @@ impl NotificationType {
         }
     }
 
+    #[allow(unused)]
     pub fn title(&self) -> &'static str {
         match self {
             NotificationType::UploadFailed => "Upload Failed",

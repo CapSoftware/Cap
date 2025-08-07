@@ -22,7 +22,7 @@ async fn main() {
     let (tx, rx) = flume::bounded(1);
     feed.attach(tx);
     let frame = rx.recv_async().await.unwrap().frame;
-    dbg!(frame.format(), frame.width(), frame.height());
+    (frame.format(), frame.width(), frame.height());
 
     let mut converter = ffmpeg::software::converter(
         (frame.width(), frame.height()),
@@ -34,7 +34,7 @@ async fn main() {
     let mut converted_frame = ffmpeg::frame::Video::empty();
     converter.run(&frame, &mut converted_frame).unwrap();
 
-    dbg!(converted_frame.data(0).len());
+    converted_frame.data(0).len();
     let mut file = std::fs::File::create("./out.jpeg").unwrap();
     jpeg::JpegEncoder::new(&mut file)
         .encode(

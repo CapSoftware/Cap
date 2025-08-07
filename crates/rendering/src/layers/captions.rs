@@ -1,3 +1,5 @@
+#![allow(unused)] // TODO: This module is still being implemented
+
 use bytemuck::{Pod, Zeroable};
 use cap_project::XY;
 use glyphon::{
