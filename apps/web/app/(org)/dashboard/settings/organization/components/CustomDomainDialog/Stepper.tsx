@@ -26,15 +26,15 @@ export const Stepper = ({ steps, currentIndex, onStepClick }: StepperProps) => {
             className={clsx(
               "flex gap-2 items-center",
               onStepClick &&
-              step.status === StepStatus.COMPLETED &&
+              (step.status === StepStatus.COMPLETED || step.name === "Success") &&
               "cursor-pointer hover:opacity-80 transition-opacity"
             )}
-            onClick={() => onStepClick && step.status === StepStatus.COMPLETED && onStepClick(index)}
+            onClick={() => onStepClick && (step.status === StepStatus.COMPLETED || step.name === "Success") && onStepClick(index)}
           >
             <div
               className={clsx(
                 "flex justify-center items-center rounded-full border size-5 transition-colors duration-200",
-                step.status === StepStatus.COMPLETED && "bg-green-500 border-green-500",
+                (step.status === StepStatus.COMPLETED || step.name === "Success") && "bg-green-500 border-green-500",
                 step.hasError ? "border-red-500 bg-red-500" :
                   step.status !== StepStatus.PENDING
                     ? "border-transparent bg-blue-9"
@@ -43,7 +43,7 @@ export const Stepper = ({ steps, currentIndex, onStepClick }: StepperProps) => {
             >
               {step.hasError ? (
                 <span className="text-white text-[10px]">!</span>
-              ) : step.status === StepStatus.COMPLETED ? (
+              ) : step.status === StepStatus.COMPLETED || step.name === "Success" ? (
                 <FontAwesomeIcon icon={faCheck} className="text-white text-[8px]" />
               ) : (
                 <p className={clsx(
@@ -65,8 +65,8 @@ export const Stepper = ({ steps, currentIndex, onStepClick }: StepperProps) => {
           {index !== steps.length - 1 && (
             <div className="relative flex-1 mx-5 h-[2px] border-t border-dashed border-gray-5">
               <motion.div
-                initial={{ width: step.status === StepStatus.COMPLETED ? "100%" : 0 }}
-                animate={{ width: step.status === StepStatus.COMPLETED ? "100%" : 0 }}
+                initial={{ width: step.status === StepStatus.COMPLETED || step.name === "Success" ? "100%" : 0 }}
+                animate={{ width: step.status === StepStatus.COMPLETED || step.name === "Success" ? "100%" : 0 }}
                 transition={{ duration: 0.3 }}
                 className="absolute left-0 -top-px z-10 h-full bg-gray-12"
               />

@@ -50,6 +50,8 @@ export function CustomDomain() {
   return (
     <>
       <CustomDomainDialog
+        isVerified={isVerified}
+        setIsVerified={setIsVerified}
         open={showCustomDomainDialog}
         onClose={() => setShowCustomDomainDialog(false)}
       />
@@ -61,7 +63,7 @@ export function CustomDomain() {
             it unique.
           </p>
           <div className="flex gap-3 items-center pt-3">
-            {isVerified ? (
+            {isVerified && orgCustomDomain ? (
               <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-green-900 rounded-full">
                 <CheckCircle className="text-green-200 size-3.5" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}

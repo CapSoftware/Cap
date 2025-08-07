@@ -23,7 +23,6 @@ export const VerifyStep = ({
   const currentCnames = domainConfig?.cnames || [];
   const currentAValues = domainConfig?.currentAValues || [];
 
-  const hasRecommendedA = recommendedARecord || recommendedIPv4.length > 0;
   const hasRecommendedCNAME = recommendedCnames.length > 0;
 
   const getRecommendedAValues = () => {
@@ -53,7 +52,7 @@ export const VerifyStep = ({
   const cnameConfigured = recommendedCnames.length > 0 &&
     recommendedCnames.some(rec => currentCnames.includes(rec.value));
 
-  const showARecord = hasRecommendedA && !aRecordConfigured;
+  const showARecord = recommendedARecord && !aRecordConfigured;
   const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 
   const handleCopy = async (text: string, fieldId: string) => {
