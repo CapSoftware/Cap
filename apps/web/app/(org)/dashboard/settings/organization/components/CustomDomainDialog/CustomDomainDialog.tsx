@@ -1,8 +1,10 @@
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
-  DialogTitle
+  DialogTitle,
+  Button
 } from "@cap/ui";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons";
@@ -17,6 +19,9 @@ import { StepConfig, DomainConfig, StepAction, StepState, StepStatus } from "./t
 import { VerifyStep } from "./VerifyStep";
 import { DomainStep } from "./DomainStep";
 import { Stepper } from "./Stepper";
+import { faRefresh } from "@fortawesome/free-solid-svg-icons";
+import { CheckCircle, XCircle } from "lucide-react";
+import { SuccesStep } from "./SuccessStep";
 
 const STEP_CONFIGS: StepConfig[] = [
   {
@@ -112,6 +117,7 @@ const CustomDomainDialog = ({
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [loading, setLoading] = useState(false);
+  const [initialConfigLoading, setInitialConfigLoading] = useState(true);
   const router = useRouter();
 
 
@@ -305,6 +311,11 @@ const CustomDomainDialog = ({
     onClose();
   };
 
+  const handleVerifyClick = async () => {
+    await checkVerification(false);
+  };
+
+
   console.log({
     domainConfig,
     domain
@@ -327,7 +338,6 @@ const CustomDomainDialog = ({
           currentIndex={stepState.currentIndex}
           onStepClick={handleStepClick}
         />
-
         <div className="p-5">
           {/* Domain Step */}
           {currentStep.id === 'domain' && (
@@ -356,11 +366,71 @@ const CustomDomainDialog = ({
 
           {/* Success Step */}
           {currentStep.id === 'success' && (
-            <div className="py-8 text-center">
-              <p className="text-gray-11">Success step - implement your success logic here</p>
-            </div>
+            <SuccesStep />
           )}
         </div>
+        <DialogFooter>
+
+          {currentStep.id === "verify" && (
+            <div className="flex justify-between items-center w-full">
+              <div className="flex gap-3 items-center">
+                {isVerified ? (
+                  <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-900 rounded-full">
+                    <CheckCircle className="text-green-200 size-3" />
+                    <p className="text-xs font-medium text-white">Domain verified</p>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 items-center px-3 py-2 text-sm bg-red-900 rounded-full">
+                    <XCircle className="text-red-200 size-3" />
+                    <p className="text-xs font-medium text-white">Domain not verified</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2 items-center">
+                <Button
+                  type="button"
+                  variant="gray"
+                  size="xs"
+                  onClick={handleVerifyClick}
+                  disabled={verifying}
+                  className="min-w-[100px]"
+                >
+                  {verifying ? (
+                    <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3" icon={faRefresh} />
+                  ) : (
+                    <FontAwesomeIcon className="mr-1 opacity-70 size-3" icon={faRefresh} />
+                  )}
+                  Check Status
+                </Button>
+
+                {isVerified && (
+                  <Button
+                    onClick={handleNext}
+                    size="xs"
+                    variant="dark"
+                    className="min-w-[80px]"
+                  >
+                    Next
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {currentStep.id === 'domain' && (
+            <Button
+              onClick={handleDomainSubmit}
+              size="sm"
+              spinner={loading}
+              disabled={loading || !domain.trim()}
+              variant="dark"
+              className="min-w-[100px] mx-auto"
+            >
+              Next
+            </Button>
+          )}
+        </DialogFooter>
+
       </DialogContent>
     </Dialog>
   );

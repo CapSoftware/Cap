@@ -1,12 +1,7 @@
-import {
-  Button
-} from "@cap/ui";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { useState } from "react";
 import clsx from "clsx";
 import { DomainConfig } from "./types";
-import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 
 interface VerifyStepProps {
@@ -52,7 +47,6 @@ export const VerifyStep = ({
 
   const handleVerifyClick = async () => {
     await checkVerification(false);
-    onNext();
   };
 
   return (
@@ -89,7 +83,7 @@ export const VerifyStep = ({
                   <div className="grid grid-cols-[100px,1fr] items-center">
                     <dt className="text-sm font-medium text-gray-12">Name</dt>
                     <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex items-center justify-between gap-1.5 bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
+                      <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
                         <code className="text-xs truncate">
                           {domainConfig?.verification?.[0]?.domain}
                         </code>
@@ -118,7 +112,7 @@ export const VerifyStep = ({
                   <div className="grid grid-cols-[100px,1fr] items-center">
                     <dt className="text-sm font-medium text-gray-12">Value</dt>
                     <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-4 border-gray-6">
+                      <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-3 border-gray-4">
                         <code className="font-mono text-xs break-all">
                           {domainConfig.verification[0].value}
                         </code>
@@ -316,50 +310,6 @@ export const VerifyStep = ({
           )}
         </div>
       )}
-
-      {/* Action Buttons */}
-      <div className="flex gap-4 justify-between items-center">
-
-        <div className="flex gap-3 items-center pt-10">
-          <Button
-            type="button"
-            variant="gray"
-            size="xs"
-            onClick={handleVerifyClick}
-            disabled={verifying}
-            className="min-w-[100px]"
-          >
-            {verifying ? (
-              <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3" icon={faRefresh} />
-            ) : (
-              <FontAwesomeIcon className="mr-1 opacity-70 size-3" icon={faRefresh} />
-            )}
-            Check Status
-          </Button>
-          {isVerified ? (
-            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-900 rounded-full">
-              <CheckCircle className="text-green-200 size-3" />
-              <p className="text-xs font-medium text-white">Domain verified</p>
-            </div>
-          ) : (
-            <div className="flex gap-2 items-center px-3 py-2 text-sm bg-red-900 rounded-full">
-              <XCircle className="text-red-200 size-3" />
-              <p className="text-xs font-medium text-white">Domain not verified</p>
-            </div>
-          )}
-        </div>
-
-        {isVerified && (
-          <Button
-            onClick={onNext}
-            size="sm"
-            variant="dark"
-            className="min-w-[100px]"
-          >
-            Next
-          </Button>
-        )}
-      </div>
     </div>
   );
 };
