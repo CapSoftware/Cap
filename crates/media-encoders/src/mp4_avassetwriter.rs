@@ -220,7 +220,7 @@ impl MP4AVAssetWriterEncoder {
         self.video_input
             .append_sample_buf(&frame)
             .map_err(QueueVideoFrameError::AppendError)
-            .and_then(|v| v.then(|| ()).ok_or_else(|| QueueVideoFrameError::Failed))?;
+            .and_then(|v| v.then_some(()).ok_or(QueueVideoFrameError::Failed))?;
 
         self.first_timestamp.get_or_insert(time);
         self.segment_first_timestamp.get_or_insert(time);
@@ -298,7 +298,7 @@ impl MP4AVAssetWriterEncoder {
         audio_input
             .append_sample_buf(&buffer)
             .map_err(QueueAudioFrameError::AppendError)
-            .and_then(|v| v.then(|| ()).ok_or_else(|| QueueAudioFrameError::Failed))?;
+            .and_then(|v| v.then_some(()).ok_or(QueueAudioFrameError::Failed))?;
 
         self.audio_frames_appended += 1;
 
@@ -339,7 +339,7 @@ impl MP4AVAssetWriterEncoder {
         self.asset_writer
             .end_session_at_src_time(self.last_timestamp.unwrap_or(cm::Time::zero()));
         self.video_input.mark_as_finished();
-        self.audio_input.as_mut().map(|i| i.mark_as_finished());
+        if let Some(i) = self.audio_input.as_mut() { i.mark_as_finished() }
 
         self.asset_writer.finish_writing();
 

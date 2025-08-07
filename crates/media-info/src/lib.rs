@@ -219,7 +219,7 @@ impl VideoInfo {
         let mut frame = frame::Video::new(self.pixel_format, self.width, self.height);
         frame.set_pts(Some(timestamp));
 
-        let frame_stride = frame.stride(0) as usize;
+        let frame_stride = frame.stride(0);
         let frame_height = self.height as usize;
 
         // Ensure we don't try to copy more data than we have

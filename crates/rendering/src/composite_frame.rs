@@ -114,7 +114,9 @@ impl CompositeVideoFramePipeline {
             }),
         );
 
-        let bind_group = device.create_bind_group(
+        
+
+        device.create_bind_group(
             &(wgpu::BindGroupDescriptor {
                 layout: &self.bind_group_layout,
                 entries: &[
@@ -133,9 +135,7 @@ impl CompositeVideoFramePipeline {
                 ],
                 label: Some("bind_group"),
             }),
-        );
-
-        bind_group
+        )
     }
 
     pub fn create_frame_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {

@@ -260,12 +260,12 @@ impl AudioPlayback {
 
                 elapsed += buffer.len() / output_info.channels;
             },
-            |_err| eprintln!("Audio stream error: {}", _err),
+            |_err| eprintln!("Audio stream error: {_err}"),
             None,
         );
 
         let stream = stream_result.map_err(|e| {
-            MediaError::TaskLaunch(format!("Failed to build audio output stream: {}", e))
+            MediaError::TaskLaunch(format!("Failed to build audio output stream: {e}"))
         })?;
 
         Ok((stop_rx, stream))

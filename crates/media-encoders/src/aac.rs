@@ -70,7 +70,7 @@ impl AACEncoder {
             rate
         };
 
-        let mut output_config = input_config.clone();
+        let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
@@ -136,7 +136,7 @@ impl AACEncoder {
 
         for i in 0..frame.planes() {
             self.buffer[i]
-                .extend(&frame.data(i)[0..frame_size_bytes(&frame) / frame.channels() as usize]);
+                .extend(&frame.data(i)[0..frame_size_bytes(frame) / frame.channels() as usize]);
         }
 
         let channel_size_bytes = self.encoder.frame_size() as usize * self.encoder.format().bytes();
@@ -218,7 +218,7 @@ impl AACEncoder {
                 }
             }
 
-            while self.buffer[0].len() > 0 {
+            while !self.buffer[0].is_empty() {
                 let channel_size_bytes =
                     (frame_size_bytes / self.encoder.channels() as usize).min(self.buffer[0].len());
                 let frame_size = channel_size_bytes / self.encoder.format().bytes();

@@ -45,7 +45,7 @@ impl AudioMixer {
         .unwrap()
     }
 
-    pub fn run(&mut self, mut get_is_stopped: impl FnMut() -> bool, on_ready: impl FnOnce() -> ()) {
+    pub fn run(&mut self, mut get_is_stopped: impl FnMut() -> bool, on_ready: impl FnOnce()) {
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
         let mut abuffers = self
@@ -132,7 +132,7 @@ impl AudioMixer {
                     };
                     let frame = &value.0;
 
-                    abuffers[i].source().add(&frame).unwrap();
+                    abuffers[i].source().add(frame).unwrap();
                 }
             }
 

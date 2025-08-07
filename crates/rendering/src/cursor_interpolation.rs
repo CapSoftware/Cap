@@ -23,7 +23,7 @@ pub fn interpolate_cursor(
         return None;
     }
 
-    if cursor.moves[0].time_ms > time_ms.into() {
+    if cursor.moves[0].time_ms > time_ms {
         let event = &cursor.moves[0];
 
         return Some(InterpolatedCursorPosition {
@@ -37,7 +37,7 @@ pub fn interpolate_cursor(
     }
 
     if let Some(event) = cursor.moves.last() {
-        if event.time_ms < time_ms.into() {
+        if event.time_ms < time_ms {
             return Some(InterpolatedCursorPosition {
                 position: Coord::new(XY {
                     x: event.x,
@@ -56,8 +56,7 @@ pub fn interpolate_cursor(
         let (pos, cursor_id) = cursor
             .moves
             .windows(2)
-            .enumerate()
-            .find_map(|(_i, chunk)| {
+            .find_map(|chunk| {
                 if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
                     let c = &chunk[0];
                     Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))

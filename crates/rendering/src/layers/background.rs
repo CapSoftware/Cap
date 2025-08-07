@@ -208,7 +208,7 @@ impl BackgroundLayer {
                         self.inner = Some(Inner::Image {
                             path,
                             bind_group: self.image_pipeline.bind_group(
-                                &device,
+                                device,
                                 &uniform_buffer,
                                 &texture_view,
                             ),
@@ -483,15 +483,15 @@ impl GradientOrColorPipeline {
     }
 
     pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        
+
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniforms.as_entire_binding(),
             }],
             label: Some("bind_group"),
-        });
-
-        bind_group
+        })
     }
 }

@@ -38,11 +38,11 @@ impl RelativeCursorPosition {
             let raw_display = display.raw_handle().inner();
             let display_bounds = raw_display.bounds();
 
-            return Self {
+            Self {
                 x: raw.x - display_bounds.origin.x as i32,
                 y: raw.y - display_bounds.origin.y as i32,
                 display,
-            };
+            }
         }
 
         #[cfg(windows)]

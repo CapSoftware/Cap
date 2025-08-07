@@ -70,8 +70,8 @@ fn decode_audio_to_f32(
         resampled_frame: &mut FFAudio,
         samples: &mut Vec<f32>,
     ) {
-        while let Ok(_) = decoder.receive_frame(decoded_frame) {
-            let resample_delay = resampler.run(&decoded_frame, resampled_frame).unwrap();
+        while decoder.receive_frame(decoded_frame).is_ok() {
+            let resample_delay = resampler.run(decoded_frame, resampled_frame).unwrap();
 
             let slice = &resampled_frame.data(0)
                 [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
@@ -260,8 +260,8 @@ impl AudioRenderer {
         res
     }
 
-    pub fn render_frame_raw<'a>(
-        &'a mut self,
+    pub fn render_frame_raw(
+        &mut self,
         samples: usize,
         project: &ProjectConfiguration,
     ) -> Option<(usize, Vec<f32>)> {
@@ -339,7 +339,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
     pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
         // println!("Input info: {:?}", data[0][0].info);
-        println!("Output info: {:?}", output_info);
+        println!("Output info: {output_info:?}");
 
         let resampler = AudioResampler::new(output_info).unwrap();
 

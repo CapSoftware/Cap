@@ -205,7 +205,7 @@ fn run_camera_feed(
         Ok(state) => {
             let _ = ready_tx.send(Ok(CameraFeedInfo {
                 camera: state.camera_info.clone(),
-                video_info: state.video_info.clone(),
+                video_info: state.video_info,
                 reference_time: state.reference_time,
             }));
             state
@@ -238,7 +238,7 @@ fn run_camera_feed(
                     Ok(new_state) => {
                         let _ = switch_result.send(Ok(CameraFeedInfo {
                             camera: new_state.camera_info.clone(),
-                            video_info: new_state.video_info.clone(),
+                            video_info: new_state.video_info,
                             reference_time: new_state.reference_time,
                         }));
                         state = new_state;

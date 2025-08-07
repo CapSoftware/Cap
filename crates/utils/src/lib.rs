@@ -44,6 +44,6 @@ where
 }
 
 pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
-    std::fs::create_dir_all(&path)?;
+    std::fs::create_dir_all(path)?;
     Ok(path.clone())
 }

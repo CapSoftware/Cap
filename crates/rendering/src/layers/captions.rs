@@ -110,10 +110,10 @@ impl CaptionsLayer {
 
     /// Update the current caption text and timing
     pub fn update_caption(&mut self, text: Option<String>, time: f32) {
-        debug!("Updating caption - Text: {:?}, Time: {}", text, time);
+        debug!("Updating caption - Text: {text:?}, Time: {time}");
         if self.current_text != text {
             if let Some(content) = &text {
-                info!("Setting new caption text: {}", content);
+                info!("Setting new caption text: {content}");
                 // Update the text buffer with new content
                 let metrics = Metrics::new(24.0, 24.0 * 1.2);
                 self.text_buffer = Buffer::new_empty(metrics);
@@ -347,15 +347,12 @@ impl CaptionsLayer {
                             &mut self.swash_cache,
                         ) {
                             Ok(_) => {}
-                            Err(e) => warn!("Error preparing text: {:?}", e),
+                            Err(e) => warn!("Error preparing text: {e:?}"),
                         }
                     }
-                } else {
-                }
-            } else {
-            }
-        } else {
-        }
+                } 
+            } 
+        } 
     }
 
     /// Render the current caption to the frame
@@ -365,7 +362,7 @@ impl CaptionsLayer {
             .render(&self.text_atlas, &self.viewport, pass)
         {
             Ok(_) => {}
-            Err(e) => warn!("Error rendering text: {:?}", e),
+            Err(e) => warn!("Error rendering text: {e:?}"),
         }
     }
 }

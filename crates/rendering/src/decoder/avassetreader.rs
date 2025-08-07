@@ -39,7 +39,7 @@ impl CachedFrame {
                 );
 
                 let data = if matches!(format, format::Pixel::RGBA) {
-                    let _lock = unsafe {
+                    unsafe {
                         image_buf
                             .lock_base_addr(LockFlags::READ_ONLY)
                             .result()
@@ -47,7 +47,7 @@ impl CachedFrame {
                     };
 
                     let bytes_per_row = image_buf.plane_bytes_per_row(0);
-                    let width = image_buf.width() as usize;
+                    let width = image_buf.width();
                     let height = image_buf.height();
 
                     let slice = unsafe {
@@ -78,7 +78,7 @@ impl CachedFrame {
                         image_buf.height() as u32,
                     );
 
-                    let _lock = unsafe {
+                    unsafe {
                         image_buf
                             .lock_base_addr(LockFlags::READ_ONLY)
                             .result()

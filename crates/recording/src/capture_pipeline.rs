@@ -67,7 +67,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             "screen",
             screen_config,
             None,
-            output_path.into(),
+            output_path,
             None,
         )
         .map_err(|e| MediaError::Any(e.to_string().into()))?;
@@ -75,7 +75,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
-            use std::time::Duration;
+            
 
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
@@ -89,7 +89,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             }
 
             let result = loop {
-                use flume::RecvTimeoutError;
+                
 
                 match source.1.recv() {
                     Ok(frame) => {
@@ -146,7 +146,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
                 "mp4",
                 source.0.info(),
                 has_audio_sources.then_some(AudioMixer::info()),
-                output_path.into(),
+                output_path,
                 Some(1080),
             )
             .map_err(|e| MediaError::Any(e.to_string().into()))?,
@@ -242,7 +242,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         let screen_config = source.0.info();
         let mut screen_encoder = MP4File::init(
             "screen",
-            output_path.into(),
+            output_path,
             |o| H264Encoder::builder("screen", screen_config).build(o),
             |_| None,
         )
@@ -303,7 +303,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         let mp4 = Arc::new(std::sync::Mutex::new(
             MP4File::init(
                 "screen",
-                output_path.into(),
+                output_path,
                 |o| H264Encoder::builder("screen", screen_config).build(o),
                 |o| {
                     has_audio_sources.then(|| {

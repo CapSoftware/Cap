@@ -140,7 +140,7 @@ impl RecordingMeta {
 
     pub fn studio_meta(&self) -> Option<&StudioRecordingMeta> {
         match &self.inner {
-            RecordingMetaInner::Studio(meta) => Some(&meta),
+            RecordingMetaInner::Studio(meta) => Some(meta),
             _ => None,
         }
     }
@@ -296,7 +296,7 @@ impl MultipleSegment {
         match CursorEvents::load_from_file(&full_path) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Failed to load cursor data: {}", e);
+                eprintln!("Failed to load cursor data: {e}");
                 CursorEvents::default()
             }
         }

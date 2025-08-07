@@ -105,7 +105,7 @@ pub fn spawn_cursor_recorder(
                 } else {
                     // New cursor data - save it
                     let cursor_id = response.next_cursor_id.to_string();
-                    let file_name = format!("cursor_{}.png", cursor_id);
+                    let file_name = format!("cursor_{cursor_id}.png");
                     let cursor_path = cursors_dir.join(&file_name);
 
                     if let Ok(image) = image::load_from_memory(&data.image) {

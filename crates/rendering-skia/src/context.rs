@@ -82,8 +82,7 @@ impl SkiaRenderContext {
     ) -> Result<Surface, SkiaRenderingError> {
         if width == 0 || height == 0 {
             return Err(SkiaRenderingError::InvalidDimensions(format!(
-                "Invalid surface dimensions: {}x{}",
-                width, height
+                "Invalid surface dimensions: {width}x{height}"
             )));
         }
 
@@ -109,8 +108,7 @@ impl SkiaRenderContext {
                 )
                 .ok_or_else(|| {
                     SkiaRenderingError::SurfaceCreationFailed(format!(
-                        "Failed to create {}x{} GPU surface",
-                        width, height
+                        "Failed to create {width}x{height} GPU surface"
                     ))
                 });
             }
@@ -120,8 +118,7 @@ impl SkiaRenderContext {
         tracing::debug!("Creating CPU surface with dimensions {}x{}", width, height);
         surfaces::raster_n32_premul((width as i32, height as i32)).ok_or_else(|| {
             SkiaRenderingError::SurfaceCreationFailed(format!(
-                "Failed to create {}x{} surface",
-                width, height
+                "Failed to create {width}x{height} surface"
             ))
         })
     }

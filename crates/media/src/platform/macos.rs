@@ -153,7 +153,7 @@ pub fn bring_window_to_focus(window_id: u32) {
     use std::process::Command;
     use tempfile::NamedTempFile;
 
-    println!("Attempting to bring window {} to focus", window_id);
+    println!("Attempting to bring window {window_id} to focus");
 
     // Get the window information associated with the window id
     let windows = get_on_screen_windows();
@@ -241,15 +241,15 @@ pub fn bring_window_to_focus(window_id: u32) {
                     println!("Successfully executed AppleScript");
                 } else {
                     let error_message = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("AppleScript execution failed: {}", error_message);
+                    eprintln!("AppleScript execution failed: {error_message}");
                 }
             }
-            Err(e) => eprintln!("Failed to execute AppleScript: {}", e),
+            Err(e) => eprintln!("Failed to execute AppleScript: {e}"),
         }
 
-        println!("Finished attempt to bring window {} to focus", window_id);
+        println!("Finished attempt to bring window {window_id} to focus");
     } else {
-        eprintln!("Window with id {} not found", window_id);
+        eprintln!("Window with id {window_id} not found");
     }
 }
 
@@ -340,7 +340,7 @@ pub fn get_display_refresh_rate(
     let display = CGDisplay::new(display_id);
     let rate = display
         .display_mode()
-        .ok_or_else(|| "no display_mode")?
+        .ok_or("no display_mode")?
         .refresh_rate()
         .round() as u32;
 
@@ -491,9 +491,9 @@ mod test {
 
     #[test]
     fn bruh() {
-        dbg!(MonitorHandle::list_all()
+        MonitorHandle::list_all()
             .into_iter()
             .map(|v| logical_monitor_bounds(v.0))
-            .collect::<Vec<_>>());
+            .collect::<Vec<_>>();
     }
 }

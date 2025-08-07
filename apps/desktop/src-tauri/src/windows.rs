@@ -67,7 +67,7 @@ impl FromStr for CapWindowId {
                     .parse::<u32>()
                     .map_err(|e| e.to_string())?,
             },
-            _ => return Err(format!("unknown window label: {}", s)),
+            _ => return Err(format!("unknown window label: {s}")),
         })
     }
 }
@@ -177,7 +177,7 @@ impl ShowCapWindow {
         if let Self::Editor { project_path } = self {
             let state = app.state::<EditorWindowIds>();
             let mut s = state.ids.lock().unwrap();
-            if s.iter().find(|(path, _)| path == project_path).is_none() {
+            if !s.iter().any(|(path, _)| path == project_path) {
                 s.push((
                     project_path.clone(),
                     state
@@ -239,14 +239,14 @@ impl ShowCapWindow {
                     let _ = main.close();
                 };
 
-                let window = self
+                
+
+                self
                     .window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
-                    .build()?;
-
-                window
+                    .build()?
             }
             Self::Upgrade => {
                 // Hide main window when upgrade window opens
@@ -303,7 +303,7 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .initialization_script(&format!(
+                    .initialization_script(format!(
                         "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {port};
@@ -398,7 +398,7 @@ impl ShowCapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(&app) {
+                if let Some(main_window) = CapWindowId::Main.get(app) {
                     if let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
                     {
@@ -565,7 +565,7 @@ impl ShowCapWindow {
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
+            ShowCapWindow::Camera => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
@@ -590,7 +590,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
                 tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
                     position_traffic_lights_impl(
                         &c_win.as_ref().window(),
-                        controls_inset.map(LogicalPosition::from),
+                        controls_inset,
                     );
                 }
                 _ => {}

@@ -1,8 +1,7 @@
 use flume::{Receiver, Sender, TryRecvError};
 use indexmap::IndexMap;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::pipeline::MediaError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {

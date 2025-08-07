@@ -232,6 +232,6 @@ pub struct RecordingHandle {
 
 impl RecordingHandle {
     pub fn stop_capturing(self) {
-        let _ = self.native.stop_capturing();
+        self.native.stop_capturing();
     }
 }

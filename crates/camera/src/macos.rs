@@ -79,7 +79,7 @@ fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
         .find(
             |d| match (ModelID::from_avfoundation(d).as_ref(), info.model_id()) {
                 (Some(a), Some(b)) => a == b,
-                (None, None) => &d.unique_id().to_string() == info.device_id(),
+                (None, None) => d.unique_id().to_string() == info.device_id(),
                 _ => false,
             },
         )
@@ -134,7 +134,7 @@ pub(super) fn start_capturing_impl(
     {
         let mut _lock = device.config_lock().map_err(AVFoundationError::Retained)?;
 
-        _lock.set_active_format(&format.native());
+        _lock.set_active_format(format.native());
 
         session.start_running();
     }
@@ -196,8 +196,8 @@ impl Deref for AVFoundationError {
 impl Debug for AVFoundationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AVFoundationError::Static(err) => write!(f, "{}", err),
-            AVFoundationError::Retained(err) => write!(f, "{}", err),
+            AVFoundationError::Static(err) => write!(f, "{err}"),
+            AVFoundationError::Retained(err) => write!(f, "{err}"),
         }
     }
 }

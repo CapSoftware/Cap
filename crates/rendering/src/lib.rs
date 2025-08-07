@@ -190,13 +190,13 @@ pub async fn render_video_to_channel(
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(recordings, recording_meta, meta, &project);
+    let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
     let mut frame_number = 0;
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(constants);
 
     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
@@ -225,8 +225,8 @@ pub async fn render_video_to_channel(
             .await
         {
             let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
+                constants,
+                project,
                 frame_number,
                 fps,
                 resolution_base,
@@ -268,9 +268,9 @@ pub fn get_duration(
         if let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
         {
-            println!("Camera recording duration: {}", camera_duration);
+            println!("Camera recording duration: {camera_duration}");
             max_duration = max_duration.max(camera_duration);
-            println!("New max duration after camera check: {}", max_duration);
+            println!("New max duration after camera check: {max_duration}");
         }
     }
 
@@ -288,7 +288,7 @@ pub fn get_duration(
         // }
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {}", max_duration);
+        println!("No timeline found, using max_duration: {max_duration}");
         max_duration
     }
 }
@@ -454,7 +454,7 @@ impl ProjectUniforms {
 
         let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        return (scaled_width, scaled_height);
+        (scaled_width, scaled_height)
 
         // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
@@ -545,7 +545,7 @@ impl ProjectUniforms {
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
             segment_frames.recording_time,
-            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+            (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                 tension: project.cursor.tension,
                 mass: project.cursor.mass,
                 friction: project.cursor.friction,
@@ -564,7 +564,7 @@ impl ProjectUniforms {
             interpolate_cursor(
                 cursor_events,
                 (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                     tension: project.cursor.tension,
                     mass: project.cursor.mass,
                     friction: project.cursor.friction,
@@ -842,7 +842,7 @@ impl RendererLayers {
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
-                &constants,
+                constants,
                 uniforms,
                 Background::from(uniforms.project.background.source.clone()),
             )
@@ -1074,14 +1074,14 @@ async fn produce_frame(
 
     layers.render(&constants.device, &mut encoder, session);
 
-    Ok(finish_encoder(
+    finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await?)
+    .await
 }
 
 // Helper function to parse color components from hex strings

@@ -30,7 +30,7 @@ impl CachedFrame {
                             .unwrap();
 
                     let mut rgb_frame = frame::Video::empty();
-                    scaler.run(&frame, &mut rgb_frame).unwrap();
+                    scaler.run(frame, &mut rgb_frame).unwrap();
                     rgb_frame
                 } else {
                     std::mem::replace(frame, frame::Video::empty())
@@ -143,7 +143,7 @@ impl FfmpegDecoder {
                                 })
                                 .unwrap_or(true)
                         {
-                            debug!("seeking to {}", requested_frame);
+                            debug!("seeking to {requested_frame}");
 
                             let _ = this.reset(requested_time);
                             frames = this.frames();

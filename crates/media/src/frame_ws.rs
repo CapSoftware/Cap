@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use flume::Receiver;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub struct WSFrame {

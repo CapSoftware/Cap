@@ -5,7 +5,6 @@ use std::{
 
 use ffmpeg::{
     codec,
-    format::Pixel,
     frame::{self, Video},
 };
 use ffmpeg_sys_next::{

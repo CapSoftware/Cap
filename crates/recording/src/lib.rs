@@ -3,21 +3,19 @@ pub mod cursor;
 pub mod instant_recording;
 pub mod studio_recording;
 
-use std::sync::Arc;
 
 pub use studio_recording::{
     spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
 
 use cap_media::{
-    feeds::{AudioInputFeed, CameraFeed},
+    feeds::AudioInputFeed,
     platform::Bounds,
     sources::*,
     MediaError,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::Mutex;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "camelCase")]

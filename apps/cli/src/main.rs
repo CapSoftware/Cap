@@ -161,7 +161,7 @@ impl Export {
         let exporter_base = ExporterBase::builder(self.project_path)
             .build()
             .await
-            .map_err(|v| format!("Exporter build error: {}", v.to_string()))?;
+            .map_err(|v| format!("Exporter build error: {}", v))?;
 
         let mut stdout = stdout();
 
@@ -176,7 +176,7 @@ impl Export {
             stdout.flush().unwrap();
         })
         .await
-        .map_err(|v| format!("Exporter error: {}", v.to_string()))?;
+        .map_err(|v| format!("Exporter error: {}", v))?;
 
         let output_path = if let Some(output_path) = self.output_path {
             std::fs::copy(&exporter_output_path, &output_path).unwrap();

@@ -63,7 +63,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {}", e);
+                eprintln!("Failed to handle deep link action: {e}");
             }
         }
     });

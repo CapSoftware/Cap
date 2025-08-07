@@ -59,7 +59,7 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = &self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
+        let (codec, encoder_options) = get_codec_and_options(input_config, self.preset)
             .ok_or(H264EncoderError::CodecNotFound)?;
 
         let (format, converter) = if !codec

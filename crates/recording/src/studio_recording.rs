@@ -162,7 +162,7 @@ pub async fn spawn_studio_recording_actor<'a>(
     let mut segment_pipeline_factory = SegmentPipelineFactory::new(
         segments_dir,
         cursors_dir,
-        base_inputs.capture_target.clone(),
+        base_inputs.capture_target,
         audio_input_feed,
         base_inputs.capture_system_audio,
         camera_feed,
@@ -374,7 +374,7 @@ async fn run_actor_iteration(
                     Err(e) => (Err(e), HashMap::new(), 0),
                 };
 
-            send_response!(tx, res.map_err(Into::into));
+            send_response!(tx, res);
 
             Some((
                 State::Paused {
@@ -440,7 +440,7 @@ async fn run_actor_iteration(
                     ))
                 }
                 Err(e) => {
-                    send_response!(tx, Err(e.into()));
+                    send_response!(tx, Err(e));
                     None
                 }
             }
@@ -476,7 +476,7 @@ async fn stop_recording(
     use cap_project::*;
 
     let make_relative = |path: &PathBuf| {
-        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap().to_owned())
+        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap())
             .unwrap()
     };
 
@@ -501,7 +501,7 @@ async fn stop_recording(
                         }),
                         mic: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
                             path: make_relative(&mic.path),
-                            start_time: recv_timestamp(&mic),
+                            start_time: recv_timestamp(mic),
                         }),
                         cursor: s
                             .pipeline
@@ -676,7 +676,7 @@ async fn create_segment_pipeline(
     trace!("preparing segment pipeline {index}");
 
     let screen = {
-        let bounds = screen_source.get_bounds().clone();
+        let bounds = *screen_source.get_bounds();
         let video_info = screen_source.info();
 
         let (pipeline_builder_, screen_timestamp_rx) =
@@ -690,7 +690,7 @@ async fn create_segment_pipeline(
         info!(
             r#"screen pipeline prepared, will output to "{}""#,
             screen_output_path
-                .strip_prefix(&segments_dir)
+                .strip_prefix(segments_dir)
                 .unwrap()
                 .display()
         );
@@ -740,7 +740,7 @@ async fn create_segment_pipeline(
 
         info!(
             "mic pipeline prepared, will output to {}",
-            output_path.strip_prefix(&segments_dir).unwrap().display()
+            output_path.strip_prefix(segments_dir).unwrap().display()
         );
 
         Some(PipelineOutput {
@@ -835,7 +835,7 @@ async fn create_segment_pipeline(
 
         info!(
             "camera pipeline prepared, will output to {}",
-            output_path.strip_prefix(&segments_dir).unwrap().display()
+            output_path.strip_prefix(segments_dir).unwrap().display()
         );
 
         Some(CameraPipelineInfo {
@@ -851,7 +851,7 @@ async fn create_segment_pipeline(
 
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
-            screen.bounds.clone(),
+            screen.bounds,
             #[cfg(target_os = "macos")]
             cap_displays::Display::list()
                 .into_iter()
@@ -905,7 +905,7 @@ struct CameraPipelineInfo {
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
-    std::fs::create_dir_all(&path)?;
+    std::fs::create_dir_all(path)?;
     Ok(path.clone())
 }
 

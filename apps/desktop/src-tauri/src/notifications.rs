@@ -88,7 +88,7 @@ impl NotificationType {
 pub fn send_notification(app: &tauri::AppHandle, notification_type: NotificationType) {
     // Check if notifications are enabled in settings
     let enable_notifications = GeneralSettingsStore::get(app)
-        .map(|settings| settings.map_or(false, |s| s.enable_notifications))
+        .map(|settings| settings.is_some_and(|s| s.enable_notifications))
         .unwrap_or(false);
 
     if !enable_notifications {

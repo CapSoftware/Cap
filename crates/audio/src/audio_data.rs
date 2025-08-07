@@ -23,7 +23,7 @@ impl AudioData {
             let input_stream = input_ctx
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
-                .ok_or_else(|| format!("No Stream"))?;
+                .ok_or_else(|| "No Stream".to_string())?;
 
             let decoder_ctx = avcodec::Context::from_parameters(input_stream.parameters())
                 .map_err(|e| format!("AudioData Parameters / {e}"))?;
@@ -64,7 +64,7 @@ impl AudioData {
                     .send_packet(&packet)
                     .map_err(|e| format!("Send Packet / {e}"))?;
 
-                while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
+                while decoder.receive_frame(&mut decoded_frame).is_ok() {
                     let resample_delay = resampler
                         .run(&decoded_frame, &mut resampled_frame)
                         .map_err(|e| format!("Run Resampler / {e:?}"))?;
@@ -108,7 +108,7 @@ impl AudioData {
 
             decoder.send_eof().unwrap();
 
-            while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
                 let resample_delay = resampler
                     .run(&decoded_frame, &mut resampled_frame)
                     .map_err(|e| format!("Run Resampler / {e}"))?;

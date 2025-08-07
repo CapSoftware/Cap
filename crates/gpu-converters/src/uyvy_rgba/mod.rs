@@ -141,7 +141,7 @@ impl UYVYToRGBA {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         let output_buffer =

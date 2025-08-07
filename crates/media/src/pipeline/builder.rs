@@ -85,7 +85,7 @@ impl<T> PipelineBuilder<T> {
                                 } else if let Some(s) = e.downcast_ref::<String>() {
                                     format!("Panicked: {s}")
                                 } else {
-                                    format!("Panicked: Unknown error")
+                                    "Panicked: Unknown error".to_string()
                                 }
                             })
                         })

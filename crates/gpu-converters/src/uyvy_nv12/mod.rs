@@ -184,7 +184,7 @@ impl UYVYToNV12 {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups((width + 3) / 4, (height + 7) / 8, 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(4), height.div_ceil(8), 1);
         }
 
         let y_read_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {

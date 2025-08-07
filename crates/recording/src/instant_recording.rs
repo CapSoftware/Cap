@@ -252,7 +252,7 @@ pub async fn spawn_instant_recording_actor<'a>(
         InstantRecordingHandle {
             ctrl_tx,
             capture_target: inputs.capture_target,
-            bounds: screen_source.get_bounds().clone(),
+            bounds: *screen_source.get_bounds(),
         },
         done_rx,
     ))

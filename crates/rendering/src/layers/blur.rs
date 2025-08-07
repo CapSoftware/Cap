@@ -62,9 +62,9 @@ impl BlurLayer {
         pass.set_bind_group(
             0,
             &self.pipeline.bind_group(
-                &device,
+                device,
                 &self.uniforms_buffer,
-                &source_texture,
+                source_texture,
                 &self.sampler,
             ),
             &[],

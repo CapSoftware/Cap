@@ -1,6 +1,6 @@
 use std::{fmt::Display, path::PathBuf};
 
-use cap_export::{gif::GifExportSettings, mp4::Mp4ExportSettings, ExporterBase, ExporterBuilder};
+use cap_export::{gif::GifExportSettings, mp4::Mp4ExportSettings, ExporterBase};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -53,7 +53,7 @@ async fn main() {
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {
-                    print!("Exporting frame {} of {}\r", progress, total_frames);
+                    print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();
@@ -63,7 +63,7 @@ async fn main() {
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {
-                    print!("Exporting frame {} of {}\r", progress, total_frames);
+                    print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();

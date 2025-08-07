@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use cap_cursor_info::ResolvedCursor;
 use cap_project::*;
 use image::GenericImageView;
 use tracing::error;
@@ -234,7 +233,7 @@ impl CursorLayer {
                         },
                 }) => cursors
                     .get(&interpolated_cursor.cursor_id)
-                    .and_then(|v| v.shape.clone()),
+                    .and_then(|v| v.shape),
                 _ => None,
             };
 
@@ -244,7 +243,7 @@ impl CursorLayer {
                 && uniforms.project.cursor.use_svg
             {
                 if let Some(info) = cursor_shape.resolve() {
-                    cursor = CursorTexture::prepare_svg(&constants, info.raw, info.hotspot.into())
+                    cursor = CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
                         .map_err(|err| {
                             error!(
                                 "Error loading SVG cursor {:?}: {err}",
@@ -392,7 +391,9 @@ pub fn find_cursor_move(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
         return &cursor.moves[0];
     }
 
-    let event = cursor
+    
+
+    (cursor
         .moves
         .iter()
         .rev()
@@ -400,9 +401,7 @@ pub fn find_cursor_move(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
             // println!("Checking event at time: {}ms", event.process_time_ms);
             event.time_ms <= time_ms.into()
         })
-        .unwrap_or(&cursor.moves[0]);
-
-    event
+        .unwrap_or(&cursor.moves[0])) as _
 }
 
 fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
@@ -489,7 +488,7 @@ impl CursorTexture {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * dimensions.0),
@@ -512,7 +511,7 @@ impl CursorTexture {
         hotspot: XY<f64>,
     ) -> Result<Self, String> {
         let rtree = resvg::usvg::Tree::from_str(svg_data, &resvg::usvg::Options::default())
-            .map_err(|e| format!("Failed to parse SVG: {}", e))?;
+            .map_err(|e| format!("Failed to parse SVG: {e}"))?;
 
         // Although we could probably determine the size that the cursor is going to be render,
         // that would depend on the cursor size the user selects.
@@ -522,7 +521,7 @@ impl CursorTexture {
         let aspect_ratio = rtree.size().width() / rtree.size().height();
         let width = (aspect_ratio * SVG_CURSOR_RASTERIZED_HEIGHT as f32) as u32;
 
-        let mut pixmap = tiny_skia::Pixmap::new(width as u32, SVG_CURSOR_RASTERIZED_HEIGHT as u32)
+        let mut pixmap = tiny_skia::Pixmap::new(width, SVG_CURSOR_RASTERIZED_HEIGHT)
             .ok_or("Failed to create pixmap")?;
 
         // Calculate scale to fit the SVG into the target size while maintaining aspect ratio

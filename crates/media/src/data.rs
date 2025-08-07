@@ -1,4 +1,3 @@
-use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
     sample::{Sample, Type},

@@ -167,10 +167,10 @@ unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
 impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
-            target: self.target.clone(),
+            target: self.target,
             output_type: self.output_type,
             fps: self.fps,
-            video_info: self.video_info.clone(),
+            video_info: self.video_info,
             options: self.options.clone(),
             show_camera: self.show_camera,
             force_show_cursor: self.force_show_cursor,
@@ -179,7 +179,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
             _phantom: std::marker::PhantomData,
-            start_time: self.start_time.clone(),
+            start_time: self.start_time,
         }
     }
 }
@@ -214,19 +214,19 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             bounds,
             crop_area,
             display_size,
-        } = Self::get_options_config(&target)?;
+        } = Self::get_options_config(target)?;
 
         let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
 
-        if !(fps > 0) {
+        if fps <= 0 {
             return Err("FPS must be greater than 0".to_string());
         }
 
         let captures_audio = audio_tx.is_some();
 
         let mut this = Self {
-            target: target.clone(),
+            target: *target,
             output_type,
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
@@ -432,7 +432,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
             output_resolution: ScapResolution::Captured,
-            excluded_targets: (!excluded_targets.is_empty()).then(|| excluded_targets),
+            excluded_targets: (!excluded_targets.is_empty()).then_some(excluded_targets),
             captures_audio,
             exclude_current_process_audio: true,
         })
@@ -456,7 +456,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     // #[instrument(skip_all)]
     fn run(
         &mut self,
-        mut clock: Self::Clock,
+        clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
@@ -814,7 +814,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
                             };
-                            if let Err(_) = res() {
+                            if res().is_err() {
                                 return ControlFlow::Continue(());
                             }
 
