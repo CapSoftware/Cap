@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
@@ -164,7 +165,7 @@ impl Device {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 1)?;
             let attributes =
-                attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE.0))?;
+                attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE))?;
             // Media source shuts down on drop if this isn't specified
             attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
             MFCreateSourceReaderFromMediaSource(&self.media_source, &attributes)
