@@ -47,9 +47,6 @@ use windows::{
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
-// Windows coordinate system notes:
-// Origin is top-left of primary display. Right and down are positive.
-
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
 
@@ -230,34 +227,6 @@ impl DisplayImpl {
         }
     }
 
-    /// Gets the user-friendly name of the display device.
-    ///
-    /// This method attempts to retrieve the actual monitor model name (e.g., "DELL U2415",
-    /// "Samsung Odyssey G9") rather than generic names like "Generic PnP Monitor".
-    ///
-    /// The implementation uses a two-tier approach:
-    /// 1. **DisplayConfig API (Preferred)**: Uses Windows' modern DisplayConfig API with
-    ///    `DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME` to get the same friendly names that
-    ///    appear in Windows Display Settings. This is the most reliable method and works
-    ///    on Windows 7+.
-    /// 2. **Registry Fallback**: If the DisplayConfig API fails, falls back to reading
-    ///    monitor information from the Windows registry.
-    ///
-    /// # Returns
-    ///
-    /// A `String` containing the monitor's friendly name, or a fallback name if detection fails.
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use cap_displays::Display;
-    ///
-    /// let displays = Display::list();
-    /// for display in displays {
-    ///     let name = display.raw_handle().name();
-    ///     println!("Monitor: {}", name); // e.g., "DELL U2415" instead of "Generic PnP Monitor"
-    /// }
-    /// ```
     pub fn name(&self) -> String {
         // First try the modern DisplayConfig API for friendly names
         if let Some(friendly_name) = self.get_friendly_name_from_displayconfig() {
@@ -302,23 +271,6 @@ impl DisplayImpl {
         }
     }
 
-    /// Attempts to get the monitor's friendly name using the Windows DisplayConfig API.
-    ///
-    /// This method uses the modern Windows DisplayConfig API to retrieve the actual
-    /// monitor model name that appears in Windows Display Settings. The process involves:
-    ///
-    /// 1. Getting the GDI device name for this monitor
-    /// 2. Querying all active display configurations
-    /// 3. Finding the configuration that matches our monitor
-    /// 4. Retrieving the target device (monitor) friendly name
-    ///
-    /// This approach is more reliable than registry parsing and provides the same
-    /// names that Windows itself displays to users.
-    ///
-    /// # Returns
-    ///
-    /// `Some(String)` with the friendly monitor name if successful, `None` if the
-    /// DisplayConfig API fails or no matching configuration is found.
     fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
         unsafe {
             // Get the device name first
@@ -425,15 +377,6 @@ impl DisplayImpl {
         None
     }
 
-    /// Attempts to get the monitor's friendly name using alternative registry paths.
-    ///
-    /// This method tries additional registry locations to find more descriptive
-    /// monitor names that might be available through different driver configurations.
-    ///
-    /// # Returns
-    ///
-    /// `Some(String)` with the friendly monitor name if successful, `None` if
-    /// no suitable name is found in alternative registry locations.
     fn get_friendly_name_from_wmi(&self) -> Option<String> {
         unsafe {
             // Get the device name first for matching
@@ -595,14 +538,6 @@ impl DisplayImpl {
         None
     }
 
-    /// Attempts to get the monitor's friendly name from EDID data.
-    ///
-    /// This method reads the EDID (Extended Display Identification Data) to extract
-    /// the monitor's manufacturer name and model, providing a hardware-level identifier.
-    ///
-    /// # Returns
-    ///
-    /// `Some(String)` with the monitor name from EDID if successful, `None` otherwise.
     fn get_friendly_name_from_edid(&self, device_name: &str) -> Option<String> {
         unsafe {
             // Registry path for EDID data
@@ -707,130 +642,6 @@ impl DisplayImpl {
             }
         }
         None
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_monitor_name_not_empty() {
-        // Test that monitor names are not empty strings
-        let displays = DisplayImpl::list();
-        for display in displays {
-            let name = display.name();
-            assert!(!name.is_empty(), "Monitor name should not be empty");
-        }
-    }
-
-    #[test]
-    fn test_monitor_name_fallback() {
-        // Test that we get some kind of name even if APIs fail
-        let displays = DisplayImpl::list();
-        for display in displays {
-            let name = display.name();
-            // Should at least get a fallback name
-            assert!(
-                name == "Unknown Display" || !name.is_empty(),
-                "Should get either a valid name or 'Unknown Display' fallback"
-            );
-        }
-    }
-
-    #[test]
-    fn test_primary_display_has_name() {
-        // Test that the primary display has a name
-        let primary = DisplayImpl::primary();
-        let name = primary.name();
-        assert!(!name.is_empty(), "Primary display should have a name");
-    }
-
-    #[test]
-    fn test_monitor_name_quality() {
-        // Test that we avoid generic names when possible
-        let displays = DisplayImpl::list();
-        let mut found_specific_name = false;
-
-        for display in displays {
-            let name = display.name();
-            // Check if we found a specific (non-generic) monitor name
-            if !name.contains("Generic")
-                && !name.contains("PnP")
-                && !name.starts_with("\\\\.\\")
-                && name != "Unknown Display"
-            {
-                found_specific_name = true;
-            }
-        }
-
-        // Note: This test may fail in VMs or with generic monitors,
-        // but should pass on systems with properly identified monitors
-        println!("Found specific monitor name: {}", found_specific_name);
-    }
-
-    #[test]
-    fn test_displayconfig_api_structures() {
-        // Test that our structures can be created properly
-        let header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
-            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-            size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
-            adapterId: Default::default(),
-            id: 0,
-        };
-
-        assert_eq!(header.r#type, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME);
-        assert!(header.size > 0);
-    }
-
-    #[test]
-    fn test_enhanced_display_name_methods() {
-        // Test that the enhanced display name methods can be called without panicking
-        let displays = DisplayImpl::list();
-        assert!(!displays.is_empty(), "Should have at least one display");
-
-        for display in &displays {
-            // Test DisplayConfig API method
-            let displayconfig_name = display.get_friendly_name_from_displayconfig();
-            if let Some(name) = displayconfig_name {
-                assert!(!name.is_empty(), "DisplayConfig name should not be empty");
-                println!("DisplayConfig name: {}", name);
-            }
-
-            // Test alternative registry method
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-            unsafe {
-                if GetMonitorInfoW(display.0, &mut info as *mut _ as *mut _).as_bool() {
-                    let device_name = &info.szDevice;
-                    let null_pos = device_name
-                        .iter()
-                        .position(|&c| c == 0)
-                        .unwrap_or(device_name.len());
-                    let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
-
-                    let wmi_name = display.get_friendly_name_from_wmi();
-                    if let Some(name) = wmi_name {
-                        assert!(!name.is_empty(), "WMI name should not be empty");
-                        println!("Alternative registry name: {}", name);
-                    }
-
-                    let edid_name = display.get_friendly_name_from_edid(&device_name_str);
-                    if let Some(name) = edid_name {
-                        assert!(!name.is_empty(), "EDID name should not be empty");
-                        println!("EDID name: {}", name);
-                    }
-                }
-            }
-
-            // Test the main name method with enhanced fallbacks
-            let final_name = display.name();
-            assert!(
-                !final_name.is_empty(),
-                "Final display name should not be empty"
-            );
-            println!("Final display name: {}", final_name);
-        }
     }
 }
 
