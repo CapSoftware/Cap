@@ -98,7 +98,12 @@ impl NV12ToRGBA {
         }
     }
 
-    pub fn convert(&self, input: NV12Input, width: u32, height: u32) -> Vec<u8> {
+    pub fn convert(
+        &self,
+        input: NV12Input,
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, wgpu::PollError> {
         // Create textures for Y and UV planes
         let y_texture = self.device.create_texture_with_data(
             &self.queue,
@@ -239,10 +244,10 @@ impl NV12ToRGBA {
         buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
             tx.send(result).unwrap();
         });
-        self.device.poll(wgpu::PollType::Wait);
+        self.device.poll(wgpu::PollType::Wait)?;
         rx.recv().unwrap().unwrap();
 
         let data = buffer_slice.get_mapped_range();
-        data.to_vec()
+        Ok(data.to_vec())
     }
 }

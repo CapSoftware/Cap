@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use cap_cursor_info::{CursorShape, CursorShapeMacOS};
 use sha2::{Digest, Sha256};
 
+#[allow(unreachable_code)]
 fn main() {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     return run();
-    #[allow(unreachable_code)]
     panic!("Unsupported platform!");
 }
 

@@ -7,8 +7,9 @@ pub fn main() {
 
     let data = AudioData::from_file(&path).unwrap();
 
-    data.channels();
-    data.sample_count();
-    data.samples().len();
-    data.samples().len();AudioData::SAMPLE_RATE as f32;data.channels();
+    println!("Channels: {}", data.channels());
+    println!("Sample count: {}", data.sample_count());
+    println!("Samples len: {}", data.samples().len());
+    println!("Sample Rate: {}", AudioData::SAMPLE_RATE as f32);
+    println!("Channels: {}", data.channels());
 }

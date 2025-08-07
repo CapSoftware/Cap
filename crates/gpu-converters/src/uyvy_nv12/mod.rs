@@ -10,6 +10,7 @@ pub struct UYVYToNV12 {
 }
 
 impl UYVYToNV12 {
+    #[allow(unreachable_code)]
     pub async fn new() -> Self {
         todo!("implement UV downsampling for UYVYToNV12");
 
@@ -109,7 +110,12 @@ impl UYVYToNV12 {
         }
     }
 
-    pub fn convert(&self, uyvy_data: &[u8], width: u32, height: u32) -> (Vec<u8>, Vec<u8>) {
+    pub fn convert(
+        &self,
+        uyvy_data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(Vec<u8>, Vec<u8>), wgpu::PollError> {
         let uyvy_texture =
             uyvy::create_input_texture(&self.device, &self.queue, uyvy_data, width, height);
 
@@ -213,9 +219,9 @@ impl UYVYToNV12 {
         // Submit commands
         self.queue.submit(std::iter::once(encoder.finish()));
 
-        (
-            read_buffer_to_vec(&y_read_buffer, &self.device),
-            read_buffer_to_vec(&uv_read_buffer, &self.device),
-        )
+        Ok((
+            read_buffer_to_vec(&y_read_buffer, &self.device)?,
+            read_buffer_to_vec(&uv_read_buffer, &self.device)?,
+        ))
     }
 }
