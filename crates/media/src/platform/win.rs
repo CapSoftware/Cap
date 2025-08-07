@@ -35,27 +35,25 @@ pub fn bring_window_to_focus(window_id: u32) {
 
 unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
-        if handle.is_invalid() {
-            tracing::error!("Invalid PID {}", pid);
-        }
-        let mut lpexename = [0u16; 1024];
-        let mut lpdwsize = lpexename.len() as u32;
+    if handle.is_invalid() {
+        tracing::error!("Invalid PID {}", pid);
+    }
+    let mut lpexename = [0u16; 1024];
+    let mut lpdwsize = lpexename.len() as u32;
 
-        let query = unsafe {
-            QueryFullProcessImageNameW(
-                handle,
-                PROCESS_NAME_FORMAT::default(),
-                windows::core::PWSTR(lpexename.as_mut_ptr()),
-                &mut lpdwsize,
-            )
-        };
-        unsafe {
-            CloseHandle(handle)
-        }.ok();
-        query?;
+    let query = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT::default(),
+            windows::core::PWSTR(lpexename.as_mut_ptr()),
+            &mut lpdwsize,
+        )
+    };
+    unsafe { CloseHandle(handle) }.ok();
+    query?;
 
-        let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
-        Ok(PathBuf::from(os_str))
+    let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
+    Ok(PathBuf::from(os_str))
 }
 
 pub fn get_on_screen_windows() -> Vec<Window> {
@@ -72,12 +70,14 @@ pub fn get_on_screen_windows() -> Vec<Window> {
         }
 
         let mut pvattribute_cloaked = 0u32;
-        unsafe { DwmGetWindowAttribute(
-            hwnd,
-            DWMWA_CLOAKED,
-            &mut pvattribute_cloaked as *mut _ as *mut std::ffi::c_void,
-            std::mem::size_of::<u32>() as u32,
-        ) }
+        unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAKED,
+                &mut pvattribute_cloaked as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        }
         .ok();
 
         if pvattribute_cloaked != 0 {

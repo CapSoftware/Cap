@@ -499,7 +499,7 @@ impl ShowCapWindow {
         #[cfg(target_os = "macos")]
         if let Some(position) = _id.traffic_lights_position() {
             add_traffic_lights(&window, position);
-
+        }
 
         Ok(window)
     }

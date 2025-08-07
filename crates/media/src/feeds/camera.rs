@@ -226,7 +226,11 @@ fn run_camera_feed(
                     break 'outer;
                 }
                 Ok(CameraControl::Shutdown) => {
-                    state.handle.stop_capturing().map_err(|err| error!("Error stopping capture: {err:?}")).ok();
+                    state
+                        .handle
+                        .stop_capturing()
+                        .map_err(|err| error!("Error stopping capture: {err:?}"))
+                        .ok();
                     println!("Deliberate shutdown");
                     break 'outer;
                 }

@@ -3,12 +3,10 @@ use crate::*;
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
     let devices = cap_camera_windows::get_devices().unwrap_or_default();
 
-    devices.into_iter().map(|d| {
-        CameraInfo {
-            device_id: d.id().to_string_lossy().to_string(),
-            model_id: ModelID::from_windows(&d),
-            display_name: d.name().to_string_lossy().to_string(),
-        }
+    devices.into_iter().map(|d| CameraInfo {
+        device_id: d.id().to_string_lossy().to_string(),
+        model_id: ModelID::from_windows(&d),
+        display_name: d.name().to_string_lossy().to_string(),
     })
 }
 
