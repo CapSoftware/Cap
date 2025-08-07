@@ -319,7 +319,7 @@ const CustomDomainDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="p-0 w-[calc(100%-20px)] max-w-[600px] rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent className="p-0 w-[calc(100%-20px)] focus:outline-none focus:ring-0 max-w-[600px] rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faGlobe} />}
           description="Let's get you setup with your custom domain for your caps."
