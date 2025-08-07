@@ -200,7 +200,7 @@ function Page() {
     mutationFn: async () => {
       if (!isRecording()) {
         await commands.startRecording({
-          capture_target: rawOptions.captureTarget,
+          capture_target: options.target(),
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
@@ -438,11 +438,13 @@ function Page() {
       <SystemAudio />
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
-          <SignInButton>
-            Sign In for{" "}
-            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
-            Instant Mode
-          </SignInButton>
+          <>
+            <SignInButton>
+              Sign In for{" "}
+              <IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+              Instant Mode
+            </SignInButton>
+          </>
         ) : (
           <Button
             disabled={toggleRecording.isPending}
@@ -520,6 +522,7 @@ import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -794,22 +797,9 @@ function MicrophoneSelect(props: {
     });
   };
 
-  // Create a single event listener using onMount
-  onMount(() => {
-    const listener = (event: Event) => {
-      const dbs = (event as CustomEvent<number>).detail;
-      if (!props.value) setDbs();
-      else setDbs(dbs);
-    };
-
-    events.audioInputLevelChange.listen((dbs) => {
-      if (!props.value) setDbs();
-      else setDbs(dbs.payload);
-    });
-
-    return () => {
-      window.removeEventListener("audioLevelChange", listener);
-    };
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
+    if (!props.value) setDbs();
+    else setDbs(dbs);
   });
 
   // visual audio level from 0 -> 1

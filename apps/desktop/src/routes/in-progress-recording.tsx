@@ -20,6 +20,7 @@ import {
 } from "~/utils/queries";
 import { commands, events } from "~/utils/tauri";
 import { createMemo } from "solid-js";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 type State =
   | { variant: "countdown"; from: number; current: number }
@@ -58,8 +59,7 @@ export default function () {
       ]
   >([]);
 
-  const unlisten = events.recordingEvent.listen((data) => {
-    const payload = data.payload;
+  createTauriEventListener(events.recordingEvent, (payload) => {
     if (payload.variant === "Countdown") {
       setState((s) => {
         if (s.variant === "countdown") return { ...s, current: payload.value };
@@ -71,7 +71,6 @@ export default function () {
       setStart(Date.now());
     }
   });
-  onCleanup(() => unlisten.then((f) => f()));
 
   createTimer(
     () => {
@@ -288,11 +287,11 @@ function formatTime(secs: number) {
 function createAudioInputLevel() {
   const [level, setLevel] = createSignal(0);
 
-  events.audioInputLevelChange.listen((dbs) => {
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
     const DB_MIN = -60;
     const DB_MAX = 0;
 
-    const dbValue = dbs.payload ?? DB_MIN;
+    const dbValue = dbs ?? DB_MIN;
     const normalizedLevel = Math.max(
       0,
       Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN))

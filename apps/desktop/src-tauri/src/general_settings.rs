@@ -75,8 +75,10 @@ pub struct GeneralSettingsStore {
     #[deprecated]
     _open_editor_after_recording: bool,
     #[deprecated = "can be removed when native camera preview is ready"]
-    #[serde(default, skip_serializing_if = "yes")]
+    #[serde(default)]
     pub enable_native_camera_preview: bool,
+    #[serde(default)]
+    pub auto_zoom_on_clicks: bool,
 }
 
 fn yes(_: &bool) -> bool {
@@ -120,6 +122,7 @@ impl Default for GeneralSettingsStore {
             recording_countdown: Some(3),
             _open_editor_after_recording: false,
             enable_native_camera_preview: false,
+            auto_zoom_on_clicks: false,
         }
     }
 }
