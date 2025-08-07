@@ -49,10 +49,6 @@ const NotificationTabSettings = [
     label: "Setting 6",
     description: "Set the default random settings",
   },
-  {
-    label: "Setting 7",
-    description: "Set the default random settings",
-  },
 ]
 
 
