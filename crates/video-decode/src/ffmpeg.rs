@@ -81,7 +81,7 @@ impl FFmpegDecoder {
         self.input.seek(position, ..position)
     }
 
-    pub fn frames(&mut self) -> FramesIter {
+    pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
             packets: self.input.packets(),
             decoder: &mut self.decoder,

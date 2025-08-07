@@ -180,12 +180,11 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 
                     frame.set_pts(Some(time.value / (time.scale / AV_TIME_BASE_Q.den) as i64));
 
-                    if let Ok(mut mp4) = mp4.lock() {
-                        if let Err(e) = mp4.queue_audio_frame(frame) {
+                    if let Ok(mut mp4) = mp4.lock()
+                        && let Err(e) = mp4.queue_audio_frame(frame) {
                             error!("{e}");
                             return Ok(());
                         }
-                    }
                 }
 
                 Ok(())

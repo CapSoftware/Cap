@@ -204,7 +204,10 @@ impl H264Encoder {
     }
 }
 
-fn get_codec_and_options(config: &VideoInfo, preset: H264Preset) -> Option<(Codec, Dictionary)> {
+fn get_codec_and_options(
+    config: &VideoInfo,
+    preset: H264Preset,
+) -> Option<(Codec, Dictionary<'_>)> {
     let encoder_name = {
         // if cfg!(target_os = "macos") {
         //     "libx264"

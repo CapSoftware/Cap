@@ -50,13 +50,12 @@ impl Renderer {
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.camera_path() {
-            if let Ok(camera_duration) =
+        if let Some(camera_path) = meta.camera_path()
+            && let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
             {
                 max_duration = max_duration.max(camera_duration);
             }
-        }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 

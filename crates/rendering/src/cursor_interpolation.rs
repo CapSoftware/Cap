@@ -37,8 +37,8 @@ pub fn interpolate_cursor(
         });
     }
 
-    if let Some(event) = cursor.moves.last() {
-        if event.time_ms < time_ms {
+    if let Some(event) = cursor.moves.last()
+        && event.time_ms < time_ms {
             return Some(InterpolatedCursorPosition {
                 position: Coord::new(XY {
                     x: event.x,
@@ -48,7 +48,6 @@ pub fn interpolate_cursor(
                 cursor_id: event.cursor_id.clone(),
             });
         }
-    }
 
     if let Some(smoothing_config) = smoothing {
         let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);

@@ -321,11 +321,10 @@ async fn run_actor_iteration(
                 result = &mut pipeline_done_rx => {
                     return match result {
                         Ok(Ok(())) => {
-                            if let Some(cursor) = &mut pipeline.cursor {
-                                if let Some(actor) = cursor.actor.take() {
+                            if let Some(cursor) = &mut pipeline.cursor
+                                && let Some(actor) = cursor.actor.take() {
                                     actor.stop().await;
                                 }
-                            }
 
                             Ok(None)
                         },

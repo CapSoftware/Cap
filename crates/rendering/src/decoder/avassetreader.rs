@@ -308,18 +308,16 @@ impl AVAssetReaderDecoder {
                         // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
                             cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
-                        {
-                            if let Some(sender) = sender.take() {
+                            && let Some(sender) = sender.take() {
                                 (sender)(most_recent_prev_frame.1.process());
                             }
-                        }
 
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
                         if !too_small_for_cache_bounds {
-                            if current_frame == requested_frame {
-                                if let Some(sender) = sender.take() {
+                            if current_frame == requested_frame
+                                && let Some(sender) = sender.take() {
                                     let data = cache_frame.process();
                                     // info!("sending frame {requested_frame}");
 
@@ -327,7 +325,6 @@ impl AVAssetReaderDecoder {
 
                                     break;
                                 }
-                            }
 
                             if cache.len() >= FRAME_CACHE_SIZE {
                                 if let Some(last_active_frame) = &last_active_frame {

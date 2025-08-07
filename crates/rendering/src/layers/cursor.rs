@@ -241,8 +241,7 @@ impl CursorLayer {
             // These are used instead of the OS provided cursor images when possible as the quality is better.
             if let Some(cursor_shape) = cursor_shape
                 && uniforms.project.cursor.use_svg
-            {
-                if let Some(info) = cursor_shape.resolve() {
+                && let Some(info) = cursor_shape.resolve() {
                     cursor = CursorTexture::prepare_svg(constants, info.raw, info.hotspot.into())
                         .map_err(|err| {
                             error!(
@@ -252,16 +251,13 @@ impl CursorLayer {
                         })
                         .ok();
                 }
-            }
 
             // If not we attempt to load the low-quality image cursor
             if let StudioRecordingMeta::MultipleSegments { inner, .. } = &constants.meta
                 && cursor.is_none()
-            {
-                if let Some(c) = inner
+                && let Some(c) = inner
                     .get_cursor_image(&constants.recording_meta, &interpolated_cursor.cursor_id)
-                {
-                    if let Ok(img) = image::open(&c.path).map_err(|err| {
+                    && let Ok(img) = image::open(&c.path).map_err(|err| {
                         error!("Failed to load cursor image from {:?}: {err}", c.path)
                     }) {
                         cursor = Some(CursorTexture::prepare(
@@ -271,8 +267,6 @@ impl CursorLayer {
                             c.hotspot,
                         ));
                     }
-                }
-            }
 
             if let Some(cursor) = cursor {
                 self.cursors
@@ -420,15 +414,14 @@ fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
         );
     }
 
-    if let Some(next) = clicks.get(prev_i + 1) {
-        if !prev.down && next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
+    if let Some(next) = clicks.get(prev_i + 1)
+        && !prev.down && next.down && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS {
             return smoothstep(
                 0.0,
                 CURSOR_CLICK_DURATION_MS as f32,
                 (time_ms - next.time_ms).abs() as f32,
             );
         }
-    }
 
     1.0
 }

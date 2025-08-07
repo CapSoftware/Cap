@@ -627,8 +627,8 @@ impl InstantMultipartUpload {
         //   - If recording stopped, do leftover final(s).
         // --------------------------------------------
         loop {
-            if !realtime_is_done.unwrap_or(true) {
-                if let Some(realtime_video_done) = &realtime_video_done {
+            if !realtime_is_done.unwrap_or(true)
+                && let Some(realtime_video_done) = &realtime_video_done {
                     match realtime_video_done.try_recv() {
                         Ok(_) => {
                             realtime_is_done = Some(true);
@@ -642,7 +642,6 @@ impl InstantMultipartUpload {
                         }
                     }
                 }
-            }
 
             // Check the file's current size
             if !file_path.exists() {

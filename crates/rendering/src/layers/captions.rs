@@ -139,8 +139,8 @@ impl CaptionsLayer {
         constants: &RenderVideoConstants,
     ) {
         // Render captions if there are any caption segments to display
-        if let Some(caption_data) = &uniforms.project.captions {
-            if caption_data.settings.enabled {
+        if let Some(caption_data) = &uniforms.project.captions
+            && caption_data.settings.enabled {
                 // Find the current caption for this time
                 let current_time = segment_frames.segment_time;
 
@@ -354,7 +354,6 @@ impl CaptionsLayer {
                     }
                 }
             }
-        }
     }
 
     /// Render the current caption to the frame

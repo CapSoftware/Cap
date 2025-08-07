@@ -55,8 +55,8 @@ impl From<BackgroundSource> for Background {
                 angle: angle as f32,
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path {
-                    if !path.is_empty() {
+                if let Some(path) = path
+                    && !path.is_empty() {
                         let clean_path = path
                             .replace("asset://localhost/", "/")
                             .replace("asset://", "")
@@ -66,7 +66,6 @@ impl From<BackgroundSource> for Background {
                             return Background::Image { path: clean_path };
                         }
                     }
-                }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
             }
         }
