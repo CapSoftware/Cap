@@ -82,9 +82,10 @@ struct MinNonNan(f64);
 
 impl Eq for MinNonNan {}
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for MinNonNan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        other.0.partial_cmp(&self.0)
     }
 }
 
