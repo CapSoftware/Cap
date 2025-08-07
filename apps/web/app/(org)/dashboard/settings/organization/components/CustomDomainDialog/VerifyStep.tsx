@@ -25,14 +25,19 @@ export const VerifyStep = ({
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
 
-  // Determine if domain is a subdomain on the frontend
-  const isSubdomain = domain.split('.').length > 2;
-
   // Get the recommended values from Vercel's response
   const recommendedCname = domainConfig?.recommendedCNAME?.[0]?.value;
   const recommendedARecord = domainConfig?.requiredAValue;
   const currentCnames = domainConfig?.cnames || [];
   const currentAValues = domainConfig?.currentAValues || [];
+
+  // Determine what records to show based on what Vercel actually provides
+  const hasVerificationRecord = domainConfig?.verification?.[0];
+  const hasRecommendedA = recommendedARecord;
+  const hasRecommendedCNAME = recommendedCname;
+
+  const showARecord = !hasVerificationRecord && hasRecommendedA;
+  const showCNAMERecord = !hasVerificationRecord && hasRecommendedCNAME;
 
   const handleCopy = async (text: string, field: "name" | "value") => {
     try {
@@ -43,10 +48,6 @@ export const VerifyStep = ({
     } catch (err) {
       toast.error("Failed to copy to clipboard");
     }
-  };
-
-  const handleVerifyClick = async () => {
-    await checkVerification(false);
   };
 
   return (
@@ -143,8 +144,8 @@ export const VerifyStep = ({
             </div>
           )}
 
-          {/* A Record Configuration - for full domains */}
-          {!domainConfig.verification?.[0] && recommendedARecord && !isSubdomain && (
+          {/* A Record Configuration */}
+          {showARecord && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
@@ -224,15 +225,15 @@ export const VerifyStep = ({
             </div>
           )}
 
-          {/* CNAME Record Configuration - for subdomains */}
-          {!domainConfig.verification?.[0] && recommendedCname && isSubdomain && (
+          {/* CNAME Record Configuration */}
+          {showCNAMERecord && (
             <div className="overflow-hidden rounded-lg border border-gray-4">
               <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
                 <p className="font-medium text-md text-gray-12">
                   DNS Configuration Required
                 </p>
                 <p className="mt-1 text-sm text-gray-10">
-                  To verify your subdomain ownership, add the following CNAME record to your DNS configuration:
+                  To point your domain to Vercel, add the following CNAME record to your DNS configuration:
                 </p>
               </div>
               <div className="px-4 py-3">
@@ -276,7 +277,7 @@ export const VerifyStep = ({
                     <dt className="text-sm font-medium text-gray-12">Name</dt>
                     <dd className="text-sm text-gray-10">
                       <code className="px-2 py-1 text-xs rounded bg-gray-4">
-                        {domain.split('.')[0]}
+                        {domain.split('.').length > 2 ? domain.split('.')[0] : '@'}
                       </code>
                     </dd>
                   </div>

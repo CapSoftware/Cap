@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "../../../Contexts";
 import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
-
+import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { toast } from "sonner";
 
 
 
@@ -13,37 +14,36 @@ export function CustomDomain() {
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCustomDomainDialog, setShowCustomDomainDialog] = useState(false);
+  const [isVerified, setIsVerified] = useState(
+    !!activeOrganization?.organization.domainVerified
+  );
+  const [loading, setLoading] = useState(false);
 
 
+  const handleRemoveDomain = async () => {
+    if (!isSubscribed) {
+      setShowUpgradeModal(true);
+      return;
+    }
 
-  // const handleRemoveDomain = async () => {
-  //   if (!isSubscribed) {
-  //     setShowUpgradeModal(true);
-  //     return;
-  //   }
+    if (!confirm("Are you sure you want to remove this custom domain?")) return;
+    setLoading(true);
+    try {
+      await removeOrganizationDomain(
+        activeOrganization?.organization.id as string
+      );
 
-  //   if (!confirm("Are you sure you want to remove this custom domain?")) return;
+      setIsVerified(false);
+      toast.success("Custom domain removed");
+      router.refresh();
+    } catch (error) {
+      toast.error("Failed to remove domain");
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  //   setLoading(true);
-  //   try {
-  //     await removeOrganizationDomain(
-  //       activeOrganization?.organization.id as string
-  //     );
-
-  //     if (pollInterval.current) {
-  //       clearInterval(pollInterval.current);
-  //       pollInterval.current = undefined;
-  //     }
-
-  //     setIsVerified(false);
-  //     toast.success("Custom domain removed");
-  //     router.refresh();
-  //   } catch (error) {
-  //     toast.error("Failed to remove domain");
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
+  const domainVerifiedCheck = activeOrganization?.organization.customDomain
 
 
   return (
@@ -59,18 +59,27 @@ export function CustomDomain() {
             Set up a custom domain for your organization's shared caps and make
             it unique.
           </p>
+          <div>
+            <p className="text-sm text-gray-10">{activeOrganization?.organization.customDomain}</p>
+          </div>
         </div>
         <Button
           type="submit"
           size="sm"
           className="min-w-fit"
+          spinner={loading}
+          disabled={loading}
           variant="dark"
-          onClick={(e) => {
+          onClick={async (e) => {
             e.preventDefault();
-            setShowCustomDomainDialog(true);
+            if (isVerified) {
+              await handleRemoveDomain();
+            } else {
+              setShowCustomDomainDialog(true);
+            }
           }}
         >
-          Setup
+          {isVerified ? "Remove" : "Setup"}
         </Button>
       </div>
 

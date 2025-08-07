@@ -311,10 +311,6 @@ const CustomDomainDialog = ({
     onClose();
   };
 
-  const handleVerifyClick = async () => {
-    await checkVerification(false);
-  };
-
 
   console.log({
     domainConfig,
@@ -375,14 +371,14 @@ const CustomDomainDialog = ({
             <div className="flex justify-between items-center w-full">
               <div className="flex gap-3 items-center">
                 {isVerified ? (
-                  <div className="flex gap-2 items-center px-3 py-2 text-sm bg-green-900 rounded-full">
-                    <CheckCircle className="text-green-200 size-3" />
-                    <p className="text-xs font-medium text-white">Domain verified</p>
+                  <div className="flex gap-2 items-center px-3 h-10 text-sm bg-green-900 rounded-full">
+                    <CheckCircle className="text-green-200 size-4" />
+                    <p className="text-sm font-medium text-white">Domain verified</p>
                   </div>
                 ) : (
-                  <div className="flex gap-2 items-center px-3 py-2 text-sm bg-red-900 rounded-full">
-                    <XCircle className="text-red-200 size-3" />
-                    <p className="text-xs font-medium text-white">Domain not verified</p>
+                  <div className="flex gap-2 items-center px-3 h-10 text-sm bg-red-900 rounded-full">
+                    <XCircle className="text-red-200 size-4" />
+                    <p className="text-sm font-medium text-white">Domain not verified</p>
                   </div>
                 )}
               </div>
@@ -390,15 +386,15 @@ const CustomDomainDialog = ({
                 <Button
                   type="button"
                   variant="gray"
-                  size="xs"
-                  onClick={handleVerifyClick}
+                  size="sm"
+                  onClick={() => checkVerification(false)}
                   disabled={verifying}
                   className="min-w-[100px]"
                 >
                   {verifying ? (
-                    <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3" icon={faRefresh} />
+                    <FontAwesomeIcon className="mr-1 opacity-70 animate-spin size-3.5" icon={faRefresh} />
                   ) : (
-                    <FontAwesomeIcon className="mr-1 opacity-70 size-3" icon={faRefresh} />
+                    <FontAwesomeIcon className="mr-1 opacity-70 size-3.5" icon={faRefresh} />
                   )}
                   Check Status
                 </Button>
@@ -406,7 +402,7 @@ const CustomDomainDialog = ({
                 {isVerified && (
                   <Button
                     onClick={handleNext}
-                    size="xs"
+                    size="sm"
                     variant="dark"
                     className="min-w-[80px]"
                   >
@@ -424,7 +420,7 @@ const CustomDomainDialog = ({
               spinner={loading}
               disabled={loading || !domain.trim()}
               variant="dark"
-              className="min-w-[100px] mx-auto"
+              className="min-w-[100px]"
             >
               Next
             </Button>
