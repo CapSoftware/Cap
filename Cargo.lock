@@ -1066,9 +1066,11 @@ name = "cap-displays"
 version = "0.1.0"
 dependencies = [
  "cidre",
+ "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "foreign-types 0.5.0",
+ "objc",
  "serde",
  "specta",
  "windows 0.60.0",

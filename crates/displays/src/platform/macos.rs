@@ -121,57 +121,40 @@ impl DisplayImpl {
     }
 
     pub fn name(&self) -> String {
-        // Check if this is the main display
-        if self.0.id == CGDisplay::main().id {
-            return "Built-in Display".to_string();
+        use cocoa::appkit::NSScreen;
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSDictionary, NSString};
+        use objc::{msg_send, *};
+        use std::ffi::CStr;
+
+        unsafe {
+            let screens = NSScreen::screens(nil);
+            let screen_count = NSArray::count(screens);
+
+            for i in 0..screen_count {
+                let screen: *mut objc::runtime::Object = screens.objectAtIndex(i);
+
+                let device_description = NSScreen::deviceDescription(screen);
+                let num = NSDictionary::valueForKey_(
+                    device_description,
+                    NSString::alloc(nil).init_str("NSScreenNumber"),
+                ) as id;
+
+                // Use raw objc to get the u32 value
+                let num_value: u32 = msg_send![num, unsignedIntValue];
+
+                if num_value == self.0.id {
+                    let name: id = msg_send![screen, localizedName];
+                    let name = CStr::from_ptr(NSString::UTF8String(name))
+                        .to_string_lossy()
+                        .to_string();
+                    return name;
+                }
+            }
         }
 
-        // For external displays, provide a descriptive name based on resolution and characteristics
-        let bounds = unsafe { CGDisplayBounds(self.0.id) };
-        let width = bounds.size.width as u32;
-        let height = bounds.size.height as u32;
-
-        // Get refresh rate for additional context
-        let refresh_rate = self.refresh_rate();
-        let refresh_suffix = if refresh_rate > 0.0 && refresh_rate != 60.0 {
-            format!(" @ {}Hz", refresh_rate as u32)
-        } else {
-            String::new()
-        };
-
-        // Determine display type based on common resolutions
-        let display_type = match (width, height) {
-            // 4K displays
-            (3840, 2160) => "4K UHD External Display",
-            (4096, 2160) => "4K DCI External Display",
-
-            // 1440p displays
-            (2560, 1440) => "1440p External Display",
-            (3440, 1440) => "Ultrawide 1440p External Display",
-
-            // 1080p displays
-            (1920, 1080) => "1080p External Display",
-            (2560, 1080) => "Ultrawide 1080p External Display",
-
-            // Professional displays
-            (1920, 1200) => "WUXGA External Display",
-            (2560, 1600) => "WQXGA External Display",
-            (3008, 1692) => "Apple Studio Display",
-            (5120, 2880) => "Apple Studio Display 5K",
-            (6016, 3384) => "Apple Pro Display XDR",
-
-            // Legacy/other resolutions
-            (1680, 1050) => "WSXGA+ External Display",
-            (1366, 768) => "HD External Display",
-            (1280, 1024) => "SXGA External Display",
-            (1024, 768) => "XGA External Display",
-
-            // Portrait or unusual aspect ratios
-            (h, w) if h > w => "Portrait External Display",
-            _ => "External Display",
-        };
-
-        format!("{} ({}x{}){}", display_type, width, height, refresh_suffix)
+        // Fallback to generic name with display ID
+        format!("Display {}", self.0.id)
     }
 }
 
