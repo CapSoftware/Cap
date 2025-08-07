@@ -118,7 +118,6 @@ const CustomDomainDialog = ({
   );
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
-  const [initialConfigLoading, setInitialConfigLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -148,7 +147,6 @@ const CustomDomainDialog = ({
 
       setIsVerified(data.verified);
       setDomainConfig(data.config);
-      setInitialConfigLoading(false);
 
       if (showToasts) {
         if (data.verified) {
@@ -170,7 +168,6 @@ const CustomDomainDialog = ({
       }
     } finally {
       setVerifying(false);
-      setInitialConfigLoading(false);
     }
   };
 
@@ -375,7 +372,6 @@ const CustomDomainDialog = ({
           {currentStep.id === 'verify' && (
             <VerifyStep
               domain={domain}
-              initialConfigLoading={initialConfigLoading}
               domainConfig={domainConfig}
               isVerified={isVerified}
             />

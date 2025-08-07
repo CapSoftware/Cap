@@ -9,14 +9,12 @@ interface VerifyStepProps {
   domain: string;
   domainConfig?: DomainConfig | null;
   isVerified?: boolean;
-  initialConfigLoading: boolean;
 }
 
 export const VerifyStep = ({
   domain,
   domainConfig,
   isVerified,
-  initialConfigLoading
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -77,7 +75,7 @@ export const VerifyStep = ({
         </p>
       </div>
 
-      {initialConfigLoading ? (
+      {!domainConfig ? (
         <div className="flex justify-center items-center w-full h-20">
           <LoadingSpinner size={36} />
         </div>
