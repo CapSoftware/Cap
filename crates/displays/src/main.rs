@@ -80,13 +80,9 @@ fn main() {
             // Test icon functionality
             match window.app_icon() {
                 Some(icon_data) => {
-                    println!("  Icon (Standard): {} characters", icon_data.len());
-                    if icon_data.starts_with("data:image/png;base64,") {
-                        println!("    Format: PNG (Base64 encoded)");
-                        let base64_data = &icon_data[22..]; // Skip "data:image/png;base64,"
-                        let estimated_bytes = (base64_data.len() * 3) / 4;
-                        println!("    Estimated size: {} bytes", estimated_bytes);
-                    }
+                    println!("  Icon (Standard): {} bytes", icon_data.len());
+                    println!("    Format: PNG (Raw bytes)");
+                    println!("    Size: {} bytes", icon_data.len());
                 }
                 None => println!("  Icon (Standard): Not available"),
             }
@@ -100,13 +96,9 @@ fn main() {
 
             match topmost.app_icon() {
                 Some(icon_data) => {
-                    println!("  ✅ Icon found: {} characters", icon_data.len());
-                    if icon_data.starts_with("data:image/png;base64,") {
-                        println!("    Format: PNG (Base64 encoded)");
-                        let base64_data = &icon_data[22..]; // Skip "data:image/png;base64,"
-                        let estimated_bytes = (base64_data.len() * 3) / 4;
-                        println!("    Estimated size: {} bytes", estimated_bytes);
-                    }
+                    println!("  ✅ Icon found: {} bytes", icon_data.len());
+                    println!("    Format: PNG (Raw bytes)");
+                    println!("    Size: {} bytes", icon_data.len());
                 }
                 None => println!("  ❌ No icon found"),
             }

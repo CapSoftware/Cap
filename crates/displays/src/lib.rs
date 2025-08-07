@@ -118,12 +118,12 @@ impl Window {
         self.0.owner_name()
     }
 
-    pub fn raw_handle(&self) -> &WindowImpl {
-        &self.0
+    pub fn app_icon(&self) -> Option<Vec<u8>> {
+        self.0.app_icon()
     }
 
-    pub fn app_icon(&self) -> Option<String> {
-        self.0.app_icon()
+    pub fn raw_handle(&self) -> &WindowImpl {
+        &self.0
     }
 }
 

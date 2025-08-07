@@ -1,6 +1,5 @@
 use std::{mem, str::FromStr};
 
-use base64::prelude::*;
 use windows::{
     Win32::{
         Devices::Display::{
@@ -1095,7 +1094,7 @@ impl WindowImpl {
         }
     }
 
-    pub fn app_icon(&self) -> Option<String> {
+    pub fn app_icon(&self) -> Option<Vec<u8>> {
         unsafe {
             // Try multiple approaches to get the highest quality icon
             let mut best_result = None;
@@ -1255,7 +1254,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(String, i32)> {
+    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -1365,12 +1364,9 @@ impl WindowImpl {
                             if let Some(png_data) =
                                 self.create_png_data(width as u32, height as u32, &buffer)
                             {
-                                let base64_string = BASE64_STANDARD.encode(&png_data);
-                                let result = format!("data:image/png;base64,{}", base64_string);
-
                                 // Keep the result if it's our first success or if this size is larger
                                 if best_result.is_none() || size > best_size {
-                                    best_result = Some((result, size));
+                                    best_result = Some((png_data, size));
                                     best_size = size;
                                 }
                             }
@@ -1393,7 +1389,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes(&self, icon: HICON) -> Option<String> {
+    fn hicon_to_png_bytes(&self, icon: HICON) -> Option<Vec<u8>> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -1504,12 +1500,9 @@ impl WindowImpl {
                             if let Some(png_data) =
                                 self.create_png_data(width as u32, height as u32, &buffer)
                             {
-                                let base64_string = BASE64_STANDARD.encode(&png_data);
-                                let result = format!("data:image/png;base64,{}", base64_string);
-
                                 // Keep the result if it's our first success or if this size is larger
                                 if best_result.is_none() || size > best_size {
-                                    best_result = Some(result);
+                                    best_result = Some(png_data);
                                     best_size = size;
                                 }
                             }

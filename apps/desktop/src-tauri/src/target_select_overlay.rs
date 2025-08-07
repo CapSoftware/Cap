@@ -5,6 +5,8 @@ use std::{
     time::Duration,
 };
 
+use base64::prelude::*;
+
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
     DisplayId, WindowId,
@@ -70,7 +72,9 @@ pub async fn open_target_select_overlays(
                             id: w.id(),
                             bounds: w.bounds()?,
                             app_name: w.owner_name()?,
-                            icon: w.app_icon(),
+                            icon: w.app_icon().map(|bytes| {
+                                format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))
+                            }),
                         })
                     }),
                     screen: display.map(|d| ScreenUnderCursor {

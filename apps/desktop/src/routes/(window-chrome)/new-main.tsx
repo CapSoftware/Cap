@@ -21,7 +21,7 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 
 import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
@@ -191,22 +191,18 @@ function Page() {
     },
   };
 
-  // createEffect(() => {
-  //   console.log({ micName: options.micName() });
-  // });
-
   // if target is window and no windows are available, switch to screen capture
-  // createEffect(() => {
-  //   if (options.target().variant === "window" && windows.data?.length === 0) {
-  //     setOptions(
-  //       "captureTarget",
-  //       reconcile({
-  //         variant: "screen",
-  //         id: options.screen()?.id ?? -1,
-  //       })
-  //     );
-  //   }
-  // });
+  createEffect(() => {
+    if (options.target().variant === "window" && windows.data?.length === 0) {
+      setOptions(
+        "captureTarget",
+        reconcile({
+          variant: "screen",
+          id: options.screen()?.id ?? -1,
+        })
+      );
+    }
+  });
 
   const setMicInput = createMutation(() => ({
     mutationFn: async (name: string | null) => {
@@ -217,9 +213,13 @@ function Page() {
 
   const setCamera = createCameraMutation();
 
-  // onMount(() => {
-  //   if (rawOptions.cameraLabel) setCamera.mutate(rawOptions.cameraLabel);
-  // });
+  onMount(() => {
+    if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
+      setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+    else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
+      setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
+    else setCamera.mutate(null);
+  });
 
   return (
     <div class="flex justify-center flex-col p-[0.75rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
@@ -363,16 +363,12 @@ function useRequestPermission() {
 
 import { makePersisted } from "@solid-primitives/storage";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
-import { Transition } from "solid-transition-group";
 
-import { authStore, generalSettingsStore } from "~/store";
+import { generalSettingsStore } from "~/store";
 import { apiClient } from "~/utils/web-api";
 // import { useWindowChrome, WindowChromeHeader } from "./Context";
 import {
@@ -406,143 +402,6 @@ function createUpdateCheck() {
     if (!shouldUpdate) return;
     navigate("/update");
   });
-}
-
-function AreaSelectButton(props: {
-  targetVariant: "screen" | "area" | "other";
-  screen: CaptureScreen | undefined;
-  onChange(area?: number): void;
-}) {
-  const [areaSelection, setAreaSelection] = createStore({ pending: false });
-
-  async function closeAreaSelection() {
-    setAreaSelection({ pending: false });
-    (await WebviewWindow.getByLabel("capture-area"))?.close();
-  }
-
-  createEffect(() => {
-    if (props.targetVariant === "other") closeAreaSelection();
-  });
-
-  async function handleAreaSelectButtonClick() {
-    closeAreaSelection();
-    if (props.targetVariant === "area") {
-      trackEvent("crop_area_disabled");
-      props.onChange();
-      return;
-    }
-
-    const { screen } = props;
-    console.log({ screen });
-    if (!screen) return;
-
-    trackEvent("crop_area_enabled", {
-      screen_id: screen.id,
-      screen_name: screen.name,
-    });
-    setAreaSelection({ pending: false });
-    commands.showWindow({
-      CaptureArea: { screen_id: screen.id },
-    });
-  }
-
-  onMount(async () => {
-    const unlistenCaptureAreaWindow =
-      await getCurrentWebviewWindow().listen<boolean>(
-        "cap-window://capture-area/state/pending",
-        (event) => setAreaSelection("pending", event.payload)
-      );
-    onCleanup(unlistenCaptureAreaWindow);
-  });
-
-  return (
-    <Tooltip
-      openDelay={500}
-      content={
-        props.targetVariant === "area"
-          ? "Remove selection"
-          : areaSelection.pending
-          ? "Selecting area..."
-          : "Select area"
-      }
-      childClass="flex fixed flex-row items-center w-8 h-8"
-    >
-      <Transition
-        onEnter={(el, done) => {
-          el.animate(
-            [
-              {
-                transform: "scale(0.5)",
-                opacity: 0,
-                width: "0.2rem",
-                height: "0.2rem",
-              },
-              {
-                transform: "scale(1)",
-                opacity: 1,
-                width: "2rem",
-                height: "2rem",
-              },
-            ],
-            {
-              duration: 450,
-              easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-            }
-          ).finished.then(done);
-        }}
-        onExit={(el, done) =>
-          el
-            .animate(
-              [
-                {
-                  transform: "scale(1)",
-                  opacity: 1,
-                  width: "2rem",
-                  height: "2rem",
-                },
-                {
-                  transform: "scale(0)",
-                  opacity: 0,
-                  width: "0.2rem",
-                  height: "0.2rem",
-                },
-              ],
-              {
-                duration: 500,
-                easing: "ease-in-out",
-              }
-            )
-            .finished.then(done)
-        }
-      >
-        <Show when={props.targetVariant !== "other"}>
-          {(targetScreenOrArea) => (
-            <button
-              type="button"
-              disabled={!targetScreenOrArea}
-              onClick={handleAreaSelectButtonClick}
-              class={cx(
-                "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
-                "focus-visible:outline font-[200] text-[0.875rem]",
-                props.targetVariant === "area"
-                  ? "bg-gray-2 text-blue-9 border border-blue-200"
-                  : "bg-gray-2 text-gray-11"
-              )}
-            >
-              <IconCapCrop
-                class={cx(
-                  "w-[1rem] h-[1rem]",
-                  areaSelection.pending &&
-                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
-                )}
-              />
-            </button>
-          )}
-        </Show>
-      </Transition>
-    </Tooltip>
-  );
 }
 
 const NO_CAMERA = "No Camera";
@@ -768,66 +627,6 @@ function SystemAudio() {
       <InfoPill variant={rawOptions.captureSystemAudio ? "blue" : "red"}>
         {rawOptions.captureSystemAudio ? "On" : "Off"}
       </InfoPill>
-    </button>
-  );
-}
-
-function TargetSelect<T extends { id: number; name: string }>(props: {
-  options: Array<T>;
-  onChange: (value: T) => void;
-  value: T | null;
-  selected: boolean;
-  optionsEmptyText: string;
-  placeholder: string;
-  getName?: (value: T) => string;
-  disabled?: boolean;
-}) {
-  const value = () => {
-    const v = props.value;
-    if (!v) return null;
-
-    const o = props.options.find((o) => o.id === v.id);
-    if (o) return props.value;
-
-    props.onChange(props.options[0]);
-    return props.options[0];
-  };
-
-  const getName = (value?: T) =>
-    value ? props.getName?.(value) ?? value.name : props.placeholder;
-
-  return (
-    <button
-      class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-10 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-      data-selected={props.selected}
-      disabled={props.disabled}
-      onClick={() => {
-        if (props.options.length > 1) {
-          console.log({ options: props.options, value: props.value });
-          Promise.all(
-            props.options.map((o) =>
-              CheckMenuItem.new({
-                text: getName(o),
-                checked: o === props.value,
-                action: () => props.onChange(o),
-              })
-            )
-          )
-            .then((items) => Menu.new({ items }))
-            .then((m) => {
-              m.popup();
-            });
-        } else if (props.options.length === 1) props.onChange(props.options[0]);
-      }}
-    >
-      {props.options.length <= 1 ? (
-        <span class="truncate">{value()?.name ?? props.placeholder}</span>
-      ) : (
-        <>
-          <span class="truncate">{value()?.name ?? props.placeholder}</span>
-          <IconCapChevronDown class="shrink-0 size-4" />
-        </>
-      )}
     </button>
   );
 }

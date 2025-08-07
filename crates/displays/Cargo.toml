@@ -3,7 +3,6 @@ name = "cap-displays"
 version = "0.1.0"
 edition = "2024"
 
-
 [lints]
 workspace = true
 
@@ -14,11 +13,8 @@ specta.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
-foreign-types = "0.5.0"
-cidre = { workspace = true }
 cocoa = "0.26.0"
 objc = "0.2.7"
-base64 = "0.22.1"
 
 [target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -36,4 +32,3 @@ windows = { workspace = true, features = [
     "Win32_Devices_Display",
 ] }
 windows-sys = { workspace = true }
-base64 = "0.22.1"
