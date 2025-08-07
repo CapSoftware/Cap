@@ -6,10 +6,10 @@ use windows::{
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
             BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
-            DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject, ENUM_CURRENT_SETTINGS,
-            EnumDisplayMonitors, EnumDisplaySettingsW, GetDC, GetDIBits, GetMonitorInfoW, HDC,
-            HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW,
-            MonitorFromPoint, ReleaseDC, SelectObject,
+            CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
+            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
+            GetDIBits, GetMonitorInfoW, HBRUSH, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
+            MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint, ReleaseDC, SelectObject,
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
@@ -25,9 +25,10 @@ use windows::{
         UI::{
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GetClassLongPtrW,
-                GetCursorPos, GetIconInfo, GetWindowRect, GetWindowThreadProcessId, HICON,
-                ICONINFO, IsIconic, IsWindowVisible, SendMessageW, WM_GETICON,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GWL_EXSTYLE,
+                GetClassLongPtrW, GetCursorPos, GetIconInfo, GetWindowLongW, GetWindowRect,
+                GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
+                WM_GETICON, WS_EX_TOPMOST,
             },
         },
     },
@@ -445,6 +446,21 @@ impl WindowImpl {
         WindowIdImpl(self.0.0 as u64)
     }
 
+    pub fn level(&self) -> Option<i32> {
+        unsafe {
+            // Windows doesn't have the same level concept as macOS, but we can approximate
+            // using extended window styles and z-order information
+            let ex_style = GetWindowLongW(self.0, GWL_EXSTYLE);
+
+            // Check if window has topmost style
+            if (ex_style & WS_EX_TOPMOST.0 as i32) != 0 {
+                Some(3) // Higher level for topmost windows
+            } else {
+                Some(0) // Normal level for regular windows
+            }
+        }
+    }
+
     pub fn owner_name(&self) -> Option<String> {
         unsafe {
             let mut process_id = 0u32;
@@ -609,7 +625,7 @@ impl WindowImpl {
 
     fn hicon_to_png_bytes(&self, icon: HICON) -> Option<String> {
         unsafe {
-            // Get icon info
+            // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
             if !GetIconInfo(icon, &mut icon_info).is_ok() {
                 return None;
@@ -619,80 +635,238 @@ impl WindowImpl {
             let screen_dc = GetDC(Some(HWND::default()));
             let mem_dc = CreateCompatibleDC(Some(screen_dc));
 
-            // Assume 32x32 icon size (standard)
-            let width = 32i32;
-            let height = 32i32;
+            // Try multiple common icon sizes to find the best match
+            let sizes = [16, 24, 32, 48, 64, 128, 256];
+            let mut best_result = None;
 
-            // Create bitmap info
-            let mut bitmap_info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height, // Top-down DIB
-                    biPlanes: 1,
-                    biBitCount: 32, // 32 bits per pixel (RGBA)
-                    biCompression: BI_RGB.0,
-                    biSizeImage: 0,
-                    biXPelsPerMeter: 0,
-                    biYPelsPerMeter: 0,
-                    biClrUsed: 0,
-                    biClrImportant: 0,
-                },
-                bmiColors: [Default::default(); 1],
-            };
+            for &size in &sizes {
+                let width = size;
+                let height = size;
 
-            // Create a bitmap
-            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-            let old_bitmap = SelectObject(mem_dc, bitmap.into());
+                // Create bitmap info for this size
+                let mut bitmap_info = BITMAPINFO {
+                    bmiHeader: BITMAPINFOHEADER {
+                        biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
+                        biWidth: width,
+                        biHeight: -height, // Top-down DIB
+                        biPlanes: 1,
+                        biBitCount: 32, // 32 bits per pixel (BGRA)
+                        biCompression: BI_RGB.0,
+                        biSizeImage: 0,
+                        biXPelsPerMeter: 0,
+                        biYPelsPerMeter: 0,
+                        biClrUsed: 0,
+                        biClrImportant: 0,
+                    },
+                    bmiColors: [Default::default(); 1],
+                };
 
-            // Draw the icon onto the bitmap
-            let _ = DrawIconEx(
-                mem_dc,
-                0,
-                0,
-                icon,
-                width,
-                height,
-                0,
-                Default::default(),
-                DI_FLAGS(0x0003), // DI_NORMAL
-            );
+                // Create a bitmap
+                let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+                if bitmap.is_invalid() {
+                    continue;
+                }
 
-            // Get bitmap bits
-            let mut buffer = vec![0u8; (width * height * 4) as usize];
-            let result = GetDIBits(
-                mem_dc,
-                bitmap,
-                0,
-                height as u32,
-                Some(buffer.as_mut_ptr() as *mut _),
-                &mut bitmap_info,
-                DIB_RGB_COLORS,
-            );
+                let old_bitmap = SelectObject(mem_dc, bitmap.into());
+
+                // Fill with transparent background
+                let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
+                let rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: width,
+                    bottom: height,
+                };
+                let _ = FillRect(mem_dc, &rect, brush);
+                let _ = DeleteObject(brush.into());
+
+                // Draw the icon onto the bitmap with proper scaling
+                let draw_result = DrawIconEx(
+                    mem_dc,
+                    0,
+                    0,
+                    icon,
+                    width,
+                    height,
+                    0,
+                    Some(HBRUSH::default()),
+                    DI_FLAGS(0x0003), // DI_NORMAL
+                );
+
+                if draw_result.is_ok() {
+                    // Get bitmap bits
+                    let mut buffer = vec![0u8; (width * height * 4) as usize];
+                    let result = GetDIBits(
+                        mem_dc,
+                        bitmap,
+                        0,
+                        height as u32,
+                        Some(buffer.as_mut_ptr() as *mut _),
+                        &mut bitmap_info,
+                        DIB_RGB_COLORS,
+                    );
+
+                    if result > 0 {
+                        // Check if we have any non-transparent pixels
+                        let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
+
+                        if has_content {
+                            // Convert BGRA to RGBA
+                            for chunk in buffer.chunks_exact_mut(4) {
+                                chunk.swap(0, 2); // Swap B and R
+                            }
+
+                            // Create a simple PNG using a basic implementation
+                            if let Some(png_data) =
+                                self.create_png_data(width as u32, height as u32, &buffer)
+                            {
+                                let base64_string = BASE64_STANDARD.encode(&png_data);
+                                best_result =
+                                    Some(format!("data:image/png;base64,{}", base64_string));
+                            }
+                        }
+                    }
+                }
+
+                // Cleanup for this iteration
+                let _ = SelectObject(mem_dc, old_bitmap);
+                let _ = DeleteObject(bitmap.into());
+
+                // If we found a good result, use it
+                if best_result.is_some() {
+                    break;
+                }
+            }
 
             // Cleanup
-            let _ = SelectObject(mem_dc, old_bitmap);
-            let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(mem_dc);
             let _ = ReleaseDC(Some(HWND::default()), screen_dc);
             let _ = DeleteObject(icon_info.hbmColor.into());
             let _ = DeleteObject(icon_info.hbmMask.into());
 
-            if result == 0 {
-                return None;
-            }
-
-            // Convert BGRA to RGBA and create a simple PNG-like format
-            // This is a simplified conversion - in practice you'd want to use a proper PNG encoder
-            for chunk in buffer.chunks_exact_mut(4) {
-                // Windows DIB format is BGRA, swap to RGBA
-                chunk.swap(0, 2);
-            }
-
-            // Encode as base64 data URL string to match macOS interface
-            let base64_string = BASE64_STANDARD.encode(&buffer);
-            Some(format!("data:image/png;base64,{}", base64_string))
+            best_result
         }
+    }
+
+    fn create_png_data(&self, width: u32, height: u32, rgba_data: &[u8]) -> Option<Vec<u8>> {
+        // Simple PNG creation - this creates a minimal but valid PNG file
+        let mut png_data = Vec::new();
+
+        // PNG signature
+        png_data.extend_from_slice(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+        // IHDR chunk
+        let ihdr_data = {
+            let mut data = Vec::new();
+            data.extend_from_slice(&width.to_be_bytes());
+            data.extend_from_slice(&height.to_be_bytes());
+            data.push(8); // bit depth
+            data.push(6); // color type (RGBA)
+            data.push(0); // compression
+            data.push(0); // filter
+            data.push(0); // interlace
+            data
+        };
+        self.write_png_chunk(&mut png_data, b"IHDR", &ihdr_data);
+
+        // IDAT chunk with zlib compression
+        let mut idat_data = Vec::new();
+
+        // Add filter bytes (0 = None filter) for each row
+        for y in 0..height {
+            idat_data.push(0); // Filter type: None
+            let row_start = (y * width * 4) as usize;
+            let row_end = row_start + (width * 4) as usize;
+            if row_end <= rgba_data.len() {
+                idat_data.extend_from_slice(&rgba_data[row_start..row_end]);
+            }
+        }
+
+        // Simple zlib compression (deflate with no compression)
+        let compressed = self.simple_deflate(&idat_data)?;
+        self.write_png_chunk(&mut png_data, b"IDAT", &compressed);
+
+        // IEND chunk
+        self.write_png_chunk(&mut png_data, b"IEND", &[]);
+
+        Some(png_data)
+    }
+
+    fn write_png_chunk(&self, output: &mut Vec<u8>, chunk_type: &[u8; 4], data: &[u8]) {
+        // Length
+        output.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        // Type
+        output.extend_from_slice(chunk_type);
+        // Data
+        output.extend_from_slice(data);
+        // CRC
+        let crc = self.crc32(chunk_type, data);
+        output.extend_from_slice(&crc.to_be_bytes());
+    }
+
+    fn simple_deflate(&self, data: &[u8]) -> Option<Vec<u8>> {
+        let mut result = Vec::new();
+
+        // Zlib header
+        result.push(0x78); // CMF
+        result.push(0x01); // FLG (no compression)
+
+        // Process data in blocks
+        let block_size = 65535;
+        let mut offset = 0;
+
+        while offset < data.len() {
+            let remaining = data.len() - offset;
+            let current_block_size = remaining.min(block_size);
+            let is_final = remaining <= block_size;
+
+            // Block header
+            result.push(if is_final { 0x01 } else { 0x00 }); // BFINAL and BTYPE
+
+            // Block length (little endian)
+            result.extend_from_slice(&(current_block_size as u16).to_le_bytes());
+            let negated_size = !(current_block_size as u16);
+            result.extend_from_slice(&negated_size.to_le_bytes());
+
+            // Block data
+            result.extend_from_slice(&data[offset..offset + current_block_size]);
+            offset += current_block_size;
+        }
+
+        // Adler32 checksum
+        let checksum = self.adler32(data);
+        result.extend_from_slice(&checksum.to_be_bytes());
+
+        Some(result)
+    }
+
+    fn crc32(&self, chunk_type: &[u8], data: &[u8]) -> u32 {
+        let mut crc = 0xFFFFFFFF_u32;
+
+        for &byte in chunk_type.iter().chain(data.iter()) {
+            crc ^= byte as u32;
+            for _ in 0..8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xEDB88320;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+
+        !crc
+    }
+
+    fn adler32(&self, data: &[u8]) -> u32 {
+        let mut a = 1_u32;
+        let mut b = 0_u32;
+
+        for &byte in data {
+            a = (a + byte as u32) % 65521;
+            b = (b + a) % 65521;
+        }
+
+        (b << 16) | a
     }
 
     pub fn bounds(&self) -> Option<LogicalBounds> {
