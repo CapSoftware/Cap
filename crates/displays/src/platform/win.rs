@@ -617,20 +617,26 @@ impl DisplayImpl {
                         {
                             // Parse EDID for monitor name (descriptor blocks start at offset 54)
                             for i in (54..126).step_by(18) {
+                                if i + 18 > edid_buffer.len() {
+                                    break;
+                                }
                                 if edid_buffer[i] == 0
                                     && edid_buffer[i + 1] == 0
                                     && edid_buffer[i + 2] == 0
                                     && edid_buffer[i + 3] == 0xFC
                                 {
                                     // Monitor name descriptor found
-                                    let name_bytes = &edid_buffer[i + 5..i + 18];
-                                    let name_str = String::from_utf8_lossy(name_bytes);
-                                    let name = name_str.trim_end_matches('\0').trim().to_string();
+                                    if i + 18 <= edid_buffer.len() {
+                                        let name_bytes = &edid_buffer[i + 5..i + 18];
+                                        let name_str = String::from_utf8_lossy(name_bytes);
+                                        let name =
+                                            name_str.trim_end_matches('\0').trim().to_string();
 
-                                    if !name.is_empty() {
-                                        let _ = RegCloseKey(params_key);
-                                        let _ = RegCloseKey(key);
-                                        return Some(name);
+                                        if !name.is_empty() {
+                                            let _ = RegCloseKey(params_key);
+                                            let _ = RegCloseKey(key);
+                                            return Some(name);
+                                        }
                                     }
                                 }
                             }

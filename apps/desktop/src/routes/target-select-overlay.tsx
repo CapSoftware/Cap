@@ -38,9 +38,10 @@ export default function () {
       screen: null,
     });
 
-  events.targetUnderCursor.listen((event) => {
+  const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
     setTargetUnderCursor(reconcile(event.payload));
   });
+  onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
   const [bounds, _setBounds] = createStore({
     position: { x: 0, y: 0 },
@@ -63,10 +64,10 @@ export default function () {
   };
 
   // We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
-  const unsub = events.onEscapePress.listen(() =>
+  const unsubOnEscapePress = events.onEscapePress.listen(() =>
     setOptions("targetMode", null)
   );
-  onCleanup(() => unsub.then((f) => f()));
+  onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
   createEffect(() => {
     if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
@@ -94,7 +95,10 @@ export default function () {
                 </span>
 
                 <RecordingControls
-                  target={{ variant: "screen", id: Number(params.displayId) }}
+                  target={{
+                    variant: "screen",
+                    id: getDisplayId(params.displayId),
+                  }}
                 />
               </div>
             )}
@@ -151,7 +155,7 @@ export default function () {
                   size="sm"
                   class="mt-4"
                   onClick={() => {
-                    _setBounds(windowUnderCursor.bounds);
+                    setBounds(windowUnderCursor.bounds);
                     setOptions({
                       targetMode: "area",
                     });
@@ -587,4 +591,10 @@ function ResizeHandle(
       style={{ ...props.style, transform: "translate(-50%, -50%)" }}
     />
   );
+}
+
+function getDisplayId(displayId: string | undefined) {
+  const id = Number(displayId);
+  if (Number.isNaN(id)) return 0;
+  return id;
 }

@@ -415,7 +415,7 @@ function CameraSelect(props: {
     props.onChange(cameraLabel);
 
     trackEvent("camera_selected", {
-      camera_name: cameraLabel,
+      camera_name: cameraLabel?.display_name ?? null,
       enabled: !!cameraLabel,
     });
   };
@@ -494,8 +494,6 @@ function MicrophoneSelect(props: {
 
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!props.options) return;
-
-    console.log({ item });
     props.onChange(item ? item.name : null);
     if (!item) setDbs();
 
@@ -505,23 +503,12 @@ function MicrophoneSelect(props: {
     });
   };
 
-  // Create a single event listener using onMount
-  onMount(() => {
-    const listener = (event: Event) => {
-      const dbs = (event as CustomEvent<number>).detail;
-      if (!props.value) setDbs();
-      else setDbs(dbs);
-    };
-
-    events.audioInputLevelChange.listen((dbs) => {
-      if (!props.value) setDbs();
-      else setDbs(dbs.payload);
-    });
-
-    return () => {
-      window.removeEventListener("audioLevelChange", listener);
-    };
+  const result = events.audioInputLevelChange.listen((dbs) => {
+    if (!props.value) setDbs();
+    else setDbs(dbs.payload);
   });
+
+  onCleanup(() => result.then((unsub) => unsub()));
 
   // visual audio level from 0 -> 1
   const audioLevel = () =>
