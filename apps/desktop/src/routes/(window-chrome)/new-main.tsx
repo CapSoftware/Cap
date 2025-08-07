@@ -63,8 +63,9 @@ const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 export default function () {
   const generalSettings = generalSettingsStore.createQuery();
 
-  createEffect(() => {
-    if (generalSettings.data?.enableNewRecordingFlow === true)
+  // We do this on focus so the window doesn't get revealed when toggling the setting
+  createEventListener(window, "focus", () => {
+    if (generalSettings.data?.enableNewRecordingFlow === false)
       location.pathname = "/";
   });
 
@@ -380,6 +381,7 @@ import {
 } from "./OptionsContext";
 import { Component } from "solid-js";
 import { WindowChromeHeader } from "./Context";
+import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;
 function createUpdateCheck() {

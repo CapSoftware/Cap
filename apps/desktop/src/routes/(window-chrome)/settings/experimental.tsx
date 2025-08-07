@@ -73,7 +73,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 label="Auto zoom on clicks"
                 description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
                 value={!!settings.autoZoomOnClicks}
-                onChange={(value) => handleChange("autoZoomOnClicks", value)}
+                onChange={(value) => {
+                  handleChange("autoZoomOnClicks", value);
+                  // This is bad code, but I just want the UI to not jank and can't seem to find the issue.
+                  setTimeout(
+                    () => window.scrollTo({ top: 0, behavior: "instant" }),
+                    5
+                  );
+                }}
               />
               <ToggleSetting
                 label="New recording flow"
@@ -81,6 +88,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 value={!!settings.enableNewRecordingFlow}
                 onChange={(value) => {
                   handleChange("enableNewRecordingFlow", value);
+                  // This is bad code, but I just want the UI to not jank and can't seem to find the issue.
+                  setTimeout(
+                    () => window.scrollTo({ top: 0, behavior: "instant" }),
+                    5
+                  );
                 }}
               />
             </div>

@@ -64,7 +64,8 @@ function Page() {
   const currentRecording = createCurrentRecordingQuery();
   const generalSettings = generalSettingsStore.createQuery();
 
-  createEffect(() => {
+  // We do this on focus so the window doesn't get revealed when toggling the setting
+  createEventListener(window, "focus", () => {
     if (generalSettings.data?.enableNewRecordingFlow === true)
       location.pathname = "/new-main";
   });
@@ -527,6 +528,7 @@ import {
   useRecordingOptions,
 } from "./OptionsContext";
 import { createTauriEventListener } from "~/utils/createEventListener";
+import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;
 function createUpdateCheck() {
