@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 
-
 [lints]
 workspace = true
 
@@ -31,6 +30,7 @@ windows = { workspace = true, features = [
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
+    "Win32_Devices_Display",
 ] }
 windows-sys = { workspace = true }
 base64 = "0.22.1"

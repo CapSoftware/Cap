@@ -3,22 +3,21 @@ use std::{mem, str::FromStr};
 use base64::prelude::*;
 use windows::{
     Win32::{
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
-        Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
-            CreateSolidBrush, DEVMODEW, DEVMODEW, DIB_RGB_COLORS, DIB_RGB_COLORS,
+        Devices::Display::{
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
             DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
             DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
             DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            DeleteDC, DeleteDC, DeleteObject, DeleteObject, DisplayConfigGetDeviceInfo,
-            ENUM_CURRENT_SETTINGS, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplayMonitors,
-            EnumDisplaySettingsW, EnumDisplaySettingsW, FillRect, GetDC, GetDC, GetDIBits,
-            GetDIBits, GetDisplayConfigBufferSizes, GetMonitorInfoW, GetMonitorInfoW, HBRUSH, HDC,
-            HDC, HMONITOR, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONEAREST,
-            MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTONULL, MONITORINFOEXW, MONITORINFOEXW,
-            MonitorFromPoint, MonitorFromPoint, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
-            ReleaseDC, ReleaseDC, SelectObject, SelectObject,
+            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
+            QueryDisplayConfig,
+        },
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
+        Graphics::Gdi::{
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap, CreateCompatibleDC,
+            CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
+            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
+            GetDIBits, GetMonitorInfoW, HBRUSH, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
+            MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint, ReleaseDC, SelectObject,
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
@@ -334,7 +333,7 @@ impl DisplayImpl {
             let mut num_modes = 0u32;
 
             if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut num_paths, &mut num_modes)
-                .is_err()
+                != WIN32_ERROR(0)
             {
                 return None;
             }
@@ -348,9 +347,8 @@ impl DisplayImpl {
                 paths.as_mut_ptr(),
                 &mut num_modes,
                 modes.as_mut_ptr(),
-                std::ptr::null_mut(),
-            )
-            .is_err()
+                None,
+            ) != WIN32_ERROR(0)
             {
                 return None;
             }
@@ -360,7 +358,7 @@ impl DisplayImpl {
                 // Get source device name to match with our monitor
                 let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
                     header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                        type_: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
+                        r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
                         size: mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
                         adapterId: path.sourceInfo.adapterId,
                         id: path.sourceInfo.id,
@@ -368,8 +366,7 @@ impl DisplayImpl {
                     viewGdiDeviceName: [0; 32],
                 };
 
-                if DisplayConfigGetDeviceInfo(&mut source_name.header as *mut _ as *mut _).is_err()
-                {
+                if DisplayConfigGetDeviceInfo(&mut source_name.header as *mut _ as *mut _) != 0 {
                     continue;
                 }
 
@@ -385,7 +382,7 @@ impl DisplayImpl {
                     // Get the target (monitor) friendly name
                     let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
                         header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                            type_: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
                             size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
                             adapterId: path.sourceInfo.adapterId,
                             id: path.targetInfo.id,
@@ -399,8 +396,7 @@ impl DisplayImpl {
                         monitorDevicePath: [0; 128],
                     };
 
-                    if DisplayConfigGetDeviceInfo(&mut target_name.header as *mut _ as *mut _)
-                        .is_ok()
+                    if DisplayConfigGetDeviceInfo(&mut target_name.header as *mut _ as *mut _) == 0
                     {
                         let friendly_name =
                             String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName);
@@ -539,13 +535,13 @@ mod tests {
     fn test_displayconfig_api_structures() {
         // Test that our structures can be created properly
         let header = DISPLAYCONFIG_DEVICE_INFO_HEADER {
-            type_: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
             size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
             adapterId: Default::default(),
             id: 0,
         };
 
-        assert_eq!(header.type_, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME);
+        assert_eq!(header.r#type, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME);
         assert!(header.size > 0);
     }
 }
