@@ -141,7 +141,7 @@ impl WindowFocusManager {
                 loop {
                     let Some(cap_main) = CapWindowId::Main.get(app) else {
                         window.close().ok();
-                        continue;
+                        break;
                     };
 
                     // If the main window is minimized or not visible, close the overlay
