@@ -3,7 +3,7 @@ pub mod platform;
 
 use std::str::FromStr;
 
-use bounds::LogicalBounds;
+use bounds::{LogicalBounds, PhysicalSize};
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -30,6 +30,14 @@ impl Display {
 
     pub fn get_containing_cursor() -> Option<Self> {
         DisplayImpl::get_containing_cursor().map(Self)
+    }
+
+    pub fn physical_size(&self) -> PhysicalSize {
+        self.0.physical_size()
+    }
+
+    pub fn refresh_rate(&self) -> f64 {
+        self.0.refresh_rate()
     }
 }
 
@@ -108,6 +116,10 @@ impl Window {
 
     pub fn raw_handle(&self) -> &WindowImpl {
         &self.0
+    }
+
+    pub fn app_icon(&self) -> Option<Vec<u8>> {
+        self.0.app_icon()
     }
 }
 

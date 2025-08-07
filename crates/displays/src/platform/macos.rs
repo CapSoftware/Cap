@@ -3,13 +3,13 @@ use std::{ffi::c_void, str::FromStr};
 use core_foundation::{base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
-        CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGRect,
-        kCGWindowListOptionIncludingWindow,
+        CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
+        CGRect, kCGWindowListOptionIncludingWindow,
     },
     window::{CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerName},
 };
 
-use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 // Some notes about macOS:
 // Coordinate system origin is top left of primary. Down and right are positive.
@@ -85,6 +85,39 @@ impl DisplayImpl {
         }
 
         None
+    }
+
+    pub fn physical_size(&self) -> PhysicalSize {
+        let mode = unsafe { CGDisplayCopyDisplayMode(self.0.id) };
+        if mode.is_null() {
+            return PhysicalSize {
+                width: 0.0,
+                height: 0.0,
+            };
+        }
+
+        let width = unsafe { core_graphics::display::CGDisplayModeGetWidth(mode) };
+        let height = unsafe { core_graphics::display::CGDisplayModeGetHeight(mode) };
+
+        unsafe { core_graphics::display::CGDisplayModeRelease(mode) };
+
+        PhysicalSize {
+            width: width as f64,
+            height: height as f64,
+        }
+    }
+
+    pub fn refresh_rate(&self) -> f64 {
+        let mode = unsafe { CGDisplayCopyDisplayMode(self.0.id) };
+        if mode.is_null() {
+            return 0.0;
+        }
+
+        let refresh_rate = unsafe { core_graphics::display::CGDisplayModeGetRefreshRate(mode) };
+
+        unsafe { core_graphics::display::CGDisplayModeRelease(mode) };
+
+        refresh_rate
     }
 }
 
@@ -239,6 +272,12 @@ impl WindowImpl {
                 height: rect.size.height,
             },
         })
+    }
+
+    pub fn app_icon(&self) -> Option<Vec<u8>> {
+        // Icon functionality not implemented for macOS yet
+        // This would require complex interaction with NSWorkspace and image conversion
+        None
     }
 }
 

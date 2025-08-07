@@ -37,13 +37,17 @@ impl LogicalSize {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Type, Serialize)]
 pub struct PhysicalSize {
     pub(crate) width: f64,
     pub(crate) height: f64,
 }
 
 impl PhysicalSize {
+    pub fn new(width: f64, height: f64) -> Self {
+        Self { width, height }
+    }
+
     pub fn width(&self) -> f64 {
         self.width
     }
@@ -69,13 +73,17 @@ impl LogicalPosition {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Type, Serialize)]
 pub struct PhysicalPosition {
     pub(crate) x: f64,
     pub(crate) y: f64,
 }
 
 impl PhysicalPosition {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
     pub fn x(&self) -> f64 {
         self.x
     }

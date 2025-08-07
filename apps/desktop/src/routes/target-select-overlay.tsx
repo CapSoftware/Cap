@@ -67,6 +67,8 @@ export default function () {
             data-over={targetUnderCursor.display_id === params.displayId}
             class="w-screen h-screen flex flex-col items-center justify-center bg-black/40 data-[over='true']:bg-blue-600/30 transition-colors"
           >
+            <span class="text-3xl font-semibold mb-2">{params.displayId}</span>
+
             <RecordingControls
               target={{ variant: "screen", id: Number(params.displayId) }}
             />

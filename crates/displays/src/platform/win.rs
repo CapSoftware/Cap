@@ -4,9 +4,11 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE},
         Graphics::Gdi::{
-            EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST,
-            MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
+            DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW,
+            GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+            MONITORINFOEXW, MonitorFromPoint,
         },
+        Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::Threading::{
             GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
             PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -16,10 +18,10 @@ use windows::{
             IsWindowVisible, WindowFromPoint,
         },
     },
-    core::{BOOL, PWSTR},
+    core::{BOOL, PCWSTR, PWSTR},
 };
 
-use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize};
+use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 // Windows coordinate system notes:
 // Origin is top-left of primary display. Right and down are positive.
@@ -142,6 +144,69 @@ impl DisplayImpl {
             Some(Self(monitor))
         } else {
             None
+        }
+    }
+
+    pub fn physical_size(&self) -> PhysicalSize {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+        unsafe {
+            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
+                let device_name = info.szDevice;
+                let mut devmode = DEVMODEW::default();
+                devmode.dmSize = mem::size_of::<DEVMODEW>() as u16;
+
+                if EnumDisplaySettingsW(
+                    PCWSTR(device_name.as_ptr()),
+                    ENUM_CURRENT_SETTINGS,
+                    &mut devmode,
+                )
+                .as_bool()
+                {
+                    PhysicalSize {
+                        width: devmode.dmPelsWidth as f64,
+                        height: devmode.dmPelsHeight as f64,
+                    }
+                } else {
+                    PhysicalSize {
+                        width: 0.0,
+                        height: 0.0,
+                    }
+                }
+            } else {
+                PhysicalSize {
+                    width: 0.0,
+                    height: 0.0,
+                }
+            }
+        }
+    }
+
+    pub fn refresh_rate(&self) -> f64 {
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+
+        unsafe {
+            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
+                let device_name = info.szDevice;
+                let mut devmode = DEVMODEW::default();
+                devmode.dmSize = mem::size_of::<DEVMODEW>() as u16;
+
+                if EnumDisplaySettingsW(
+                    PCWSTR(device_name.as_ptr()),
+                    ENUM_CURRENT_SETTINGS,
+                    &mut devmode,
+                )
+                .as_bool()
+                {
+                    devmode.dmDisplayFrequency as f64
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
         }
     }
 }
@@ -311,6 +376,13 @@ impl WindowImpl {
 
             if result.is_ok() && buffer_size > 0 {
                 let path_str = String::from_utf16_lossy(&buffer[..buffer_size as usize]);
+
+                // Try to get the friendly name from version info first
+                if let Some(friendly_name) = self.get_file_description(&path_str) {
+                    return Some(friendly_name);
+                }
+
+                // Fallback to file stem
                 std::path::Path::new(&path_str)
                     .file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
@@ -318,6 +390,58 @@ impl WindowImpl {
                 None
             }
         }
+    }
+
+    fn get_file_description(&self, file_path: &str) -> Option<String> {
+        unsafe {
+            let wide_path: Vec<u16> = file_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+            let size = GetFileVersionInfoSizeW(PCWSTR(wide_path.as_ptr()), None);
+            if size == 0 {
+                return None;
+            }
+
+            let mut buffer = vec![0u8; size as usize];
+            if !GetFileVersionInfoW(
+                PCWSTR(wide_path.as_ptr()),
+                0,
+                size,
+                buffer.as_mut_ptr() as *mut _,
+            )
+            .as_bool()
+            {
+                return None;
+            }
+
+            let mut len = 0u32;
+            let mut value_ptr: *mut u16 = std::ptr::null_mut();
+
+            let query = "\\StringFileInfo\\040904B0\\FileDescription\0"
+                .encode_utf16()
+                .collect::<Vec<u16>>();
+
+            if VerQueryValueW(
+                buffer.as_ptr() as *const _,
+                PCWSTR(query.as_ptr()),
+                &mut value_ptr as *mut _ as *mut *mut _,
+                &mut len,
+            )
+            .as_bool()
+                && !value_ptr.is_null()
+                && len > 0
+            {
+                let slice = std::slice::from_raw_parts(value_ptr, len as usize - 1);
+                Some(String::from_utf16_lossy(slice))
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn app_icon(&self) -> Option<Vec<u8>> {
+        // Icon functionality not implemented for Windows yet
+        // This would require complex HICON to PNG/ICO conversion
+        None
     }
 
     pub fn bounds(&self) -> Option<LogicalBounds> {
