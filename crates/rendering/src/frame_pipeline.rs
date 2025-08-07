@@ -119,7 +119,7 @@ pub async fn finish_encoder(
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).ok();
     });
-    device.poll(wgpu::PollType::Wait);
+    device.poll(wgpu::PollType::Wait)?;
 
     rx.receive()
         .await

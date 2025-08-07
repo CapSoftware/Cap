@@ -171,6 +171,6 @@ impl AudioData {
     }
 }
 
-pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
+pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] { unsafe {
     std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / 4)
-}
+}}

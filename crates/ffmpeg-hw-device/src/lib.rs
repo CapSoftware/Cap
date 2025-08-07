@@ -20,7 +20,7 @@ thread_local! {
 unsafe extern "C" fn get_format(
     _: *mut AVCodecContext,
     pix_fmts: *const AVPixelFormat,
-) -> AVPixelFormat {
+) -> AVPixelFormat { unsafe {
     let mut fmt = pix_fmts;
 
     loop {
@@ -36,7 +36,7 @@ unsafe extern "C" fn get_format(
     }
 
     AVPixelFormat::AV_PIX_FMT_NONE
-}
+}}
 
 pub struct HwDevice {
     pub device_type: AVHWDeviceType,

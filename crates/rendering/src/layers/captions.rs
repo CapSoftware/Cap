@@ -390,13 +390,3 @@ pub fn find_caption_at_time_project(
             text: segment.text.clone(),
         })
 }
-
-/// Convert from cap_project::CaptionSegment to our internal CaptionSegment
-pub fn convert_project_caption(segment: &cap_project::CaptionSegment) -> CaptionSegment {
-    CaptionSegment {
-        id: segment.id.clone(),
-        start: segment.start,
-        end: segment.end,
-        text: segment.text.clone(),
-    }
-}

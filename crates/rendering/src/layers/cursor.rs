@@ -384,24 +384,6 @@ pub struct CursorUniforms {
     _alignment: [f32; 3],
 }
 
-pub fn find_cursor_move(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
-    let time_ms = time * 1000.0;
-
-    if cursor.moves[0].time_ms > time_ms.into() {
-        return &cursor.moves[0];
-    }
-
-    (cursor
-        .moves
-        .iter()
-        .rev()
-        .find(|event| {
-            // println!("Checking event at time: {}ms", event.process_time_ms);
-            event.time_ms <= time_ms.into()
-        })
-        .unwrap_or(&cursor.moves[0])) as _
-}
-
 fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
     fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
         let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);

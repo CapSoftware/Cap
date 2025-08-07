@@ -174,6 +174,7 @@ pub struct RenderSegment {
     pub decoders: RecordingSegmentDecoders,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,

@@ -1,3 +1,5 @@
+#![cfg(windows)]
+
 use std::{ops::Deref, time::Duration};
 
 use cap_camera_windows::*;
