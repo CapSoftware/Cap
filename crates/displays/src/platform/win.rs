@@ -1073,7 +1073,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
+    fn hicon_to_png_bytes_internal(&self, icon: HICON, high_res: bool) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -1088,13 +1088,18 @@ impl WindowImpl {
             // Get the native icon size to prioritize it
             let native_size = self.get_icon_size(icon);
 
-            // Extended size array for high resolution, prioritizing larger sizes
-            let mut sizes = vec![2048, 1024, 512, 256, 128, 96, 64, 48, 32, 24, 16];
+            // Choose size array based on resolution preference
+            let mut sizes = if high_res {
+                vec![512, 256, 128, 96, 64, 48, 32, 24, 16]
+            } else {
+                vec![256, 128, 64, 48, 32, 24, 16]
+            };
 
             // If we have native size info, prioritize it
             if let Some((width, height)) = native_size {
                 let native_dim = width.max(height);
-                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= 4096 {
+                let max_size = if high_res { 512 } else { 256 };
+                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= max_size {
                     sizes.insert(0, native_dim);
                 }
             }
@@ -1217,149 +1222,13 @@ impl WindowImpl {
         }
     }
 
+    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
+        self.hicon_to_png_bytes_internal(icon, true)
+    }
+
     fn hicon_to_png_bytes(&self, icon: HICON) -> Option<Vec<u8>> {
-        unsafe {
-            // Get icon info to determine actual size
-            let mut icon_info = ICONINFO::default();
-            if !GetIconInfo(icon, &mut icon_info).is_ok() {
-                return None;
-            }
-
-            // Get device context
-            let screen_dc = GetDC(Some(HWND::default()));
-            let mem_dc = CreateCompatibleDC(Some(screen_dc));
-
-            // Get the native icon size to prioritize it
-            let native_size = self.get_icon_size(icon);
-
-            // Try multiple icon sizes starting with the largest for best quality
-            // If we know the native size, prioritize it and larger sizes
-            let mut sizes = vec![1024, 512, 256, 128, 64, 48, 32, 24, 16];
-
-            // If we have native size info, insert it at the beginning if it's not already there
-            if let Some((width, height)) = native_size {
-                let native_dim = width.max(height);
-                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= 2048 {
-                    sizes.insert(0, native_dim);
-                }
-            }
-
-            let mut best_result = None;
-            let mut best_size = 0;
-
-            for &size in &sizes {
-                let width = size;
-                let height = size;
-
-                // Create bitmap info for this size
-                let mut bitmap_info = BITMAPINFO {
-                    bmiHeader: BITMAPINFOHEADER {
-                        biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                        biWidth: width,
-                        biHeight: -height, // Top-down DIB
-                        biPlanes: 1,
-                        biBitCount: 32, // 32 bits per pixel (BGRA)
-                        biCompression: BI_RGB.0,
-                        biSizeImage: 0,
-                        biXPelsPerMeter: 0,
-                        biYPelsPerMeter: 0,
-                        biClrUsed: 0,
-                        biClrImportant: 0,
-                    },
-                    bmiColors: [Default::default(); 1],
-                };
-
-                // Create a bitmap
-                let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-                if bitmap.is_invalid() {
-                    continue;
-                }
-
-                let old_bitmap = SelectObject(mem_dc, bitmap.into());
-
-                // Fill with transparent background
-                let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
-                let rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: width,
-                    bottom: height,
-                };
-                let _ = FillRect(mem_dc, &rect, brush);
-                let _ = DeleteObject(brush.into());
-
-                // Draw the icon onto the bitmap with proper scaling
-                let draw_result = DrawIconEx(
-                    mem_dc,
-                    0,
-                    0,
-                    icon,
-                    width,
-                    height,
-                    0,
-                    Some(HBRUSH::default()),
-                    DI_FLAGS(0x0003), // DI_NORMAL
-                );
-
-                if draw_result.is_ok() {
-                    // Get bitmap bits
-                    let mut buffer = vec![0u8; (width * height * 4) as usize];
-                    let result = GetDIBits(
-                        mem_dc,
-                        bitmap,
-                        0,
-                        height as u32,
-                        Some(buffer.as_mut_ptr() as *mut _),
-                        &mut bitmap_info,
-                        DIB_RGB_COLORS,
-                    );
-
-                    if result > 0 {
-                        // Check if we have any non-transparent pixels
-                        let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
-
-                        if has_content {
-                            // Convert BGRA to RGBA
-                            for chunk in buffer.chunks_exact_mut(4) {
-                                chunk.swap(0, 2); // Swap B and R
-                            }
-
-                            // Create PNG using the image crate
-                            if let Some(img) =
-                                image::RgbaImage::from_raw(width as u32, height as u32, buffer)
-                            {
-                                let mut png_data = Vec::new();
-                                if img
-                                    .write_to(
-                                        &mut std::io::Cursor::new(&mut png_data),
-                                        image::ImageFormat::Png,
-                                    )
-                                    .is_ok()
-                                {
-                                    // Keep the result if it's our first success or if this size is larger
-                                    if best_result.is_none() || size > best_size {
-                                        best_result = Some(png_data);
-                                        best_size = size;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Cleanup for this iteration
-                let _ = SelectObject(mem_dc, old_bitmap);
-                let _ = DeleteObject(bitmap.into());
-            }
-
-            // Cleanup
-            let _ = DeleteDC(mem_dc);
-            let _ = ReleaseDC(Some(HWND::default()), screen_dc);
-            let _ = DeleteObject(icon_info.hbmColor.into());
-            let _ = DeleteObject(icon_info.hbmMask.into());
-
-            best_result
-        }
+        self.hicon_to_png_bytes_internal(icon, false)
+            .map(|(data, _)| data)
     }
 
     pub fn bounds(&self) -> Option<LogicalBounds> {
