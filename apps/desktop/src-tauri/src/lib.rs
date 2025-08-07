@@ -1678,7 +1678,7 @@ fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> 
 
 #[tauri::command]
 #[specta::specta]
-async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
+async fn reset_camera_permissions(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         #[cfg(debug_assertions)]
@@ -1692,7 +1692,7 @@ async fn reset_camera_permissions(_app: AppHandle) -> Result<(), ()> {
             .arg("Camera")
             .arg(bundle_id)
             .output()
-            .expect("Failed to reset camera permissions");
+            .map_err(|_| "Failed to reset camera permissions".to_string())?;
     }
 
     Ok(())

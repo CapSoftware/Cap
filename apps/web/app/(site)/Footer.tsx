@@ -25,6 +25,10 @@ const footerLinks = {
       href: "https://discord.gg/y8gdQ3WRN3",
       isExternal: true,
     },
+    {
+      label: "OSS Friends",
+      href: "/oss-friends",
+    },
   ] as FooterLink[],
   help: [
     { label: "About", href: "/about" },

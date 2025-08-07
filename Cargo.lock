@@ -895,6 +895,7 @@ dependencies = [
  "cidre",
  "clap",
  "inquire",
+ "tracing",
 ]
 
 [[package]]
@@ -972,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.62"
+version = "0.3.63"
 dependencies = [
  "anyhow",
  "axum",
