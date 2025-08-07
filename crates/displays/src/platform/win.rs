@@ -792,10 +792,11 @@ impl WindowImpl {
 
     pub fn app_icon(&self) -> Option<String> {
         unsafe {
+            // Try multiple approaches to get the highest quality icon
             let mut best_result = None;
             let mut best_size = 0;
 
-            // Try to get the window's large icon first
+            // Method 1: Try to get the window's large icon first
             let large_icon = SendMessageW(
                 self.0,
                 WM_GETICON,
@@ -805,115 +806,6 @@ impl WindowImpl {
 
             if large_icon.0 != 0 {
                 if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(large_icon.0 as _)) {
-                    best_result = Some(result.0);
-                    best_size = result.1;
-                }
-            }
-
-            // Try small icon if we don't have a good result yet
-            if best_size < 64 {
-                let small_icon = SendMessageW(
-                    self.0,
-                    WM_GETICON,
-                    Some(WPARAM(0usize)),
-                    Some(LPARAM(0isize)),
-                ); // ICON_SMALL = 0
-
-                if small_icon.0 != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(small_icon.0 as _))
-                    {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                            best_size = result.1;
-                        }
-                    }
-                }
-            }
-
-            // Try class icon if still no good result
-            if best_size < 32 {
-                let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
-                if class_icon != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(class_icon as _)) {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                            best_size = result.1;
-                        }
-                    }
-                }
-            }
-
-            // Try executable file extraction as fallback
-            if best_result.is_none() {
-                if let Some(exe_path) = self.get_executable_path() {
-                    let wide_path: Vec<u16> =
-                        exe_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-                    // Try extracting icons from multiple indices (0-3 for performance)
-                    for icon_index in 0..4 {
-                        let mut large_icon: HICON = HICON::default();
-                        let mut small_icon: HICON = HICON::default();
-
-                        let extracted = ExtractIconExW(
-                            PCWSTR(wide_path.as_ptr()),
-                            icon_index,
-                            Some(&mut large_icon),
-                            Some(&mut small_icon),
-                            1,
-                        );
-
-                        if extracted > 0 {
-                            // Try large icon first
-                            if !large_icon.is_invalid() {
-                                if let Some(result) = self.hicon_to_png_bytes_high_res(large_icon) {
-                                    if result.1 > best_size {
-                                        best_result = Some(result.0);
-                                        best_size = result.1;
-                                    }
-                                }
-                                let _ = DestroyIcon(large_icon);
-                            }
-
-                            // Try small icon if we still need a better result
-                            if !small_icon.is_invalid() && best_size < 32 {
-                                if let Some(result) = self.hicon_to_png_bytes_high_res(small_icon) {
-                                    if result.1 > best_size {
-                                        best_result = Some(result.0);
-                                        best_size = result.1;
-                                    }
-                                }
-                                let _ = DestroyIcon(small_icon);
-                            }
-
-                            // If we found a decent sized icon, use it
-                            if best_size >= 32 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            best_result
-        }
-    }
-
-    pub fn app_icon_high_res(&self) -> Option<String> {
-        unsafe {
-            // Try multiple approaches to get the highest quality icon
-            let mut best_result = None;
-            let mut best_size = 0;
-
-            // Method 1: Try to get the window's large icon first
-            let mut icon = SendMessageW(
-                self.0,
-                WM_GETICON,
-                Some(WPARAM(1usize)),
-                Some(LPARAM(0isize)),
-            ); // ICON_BIG = 1
-
-            if icon.0 != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(icon.0 as _)) {
                     best_result = Some(result.0);
                     best_size = result.1;
                 }

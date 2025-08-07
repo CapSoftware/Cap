@@ -125,10 +125,6 @@ impl Window {
     pub fn app_icon(&self) -> Option<String> {
         self.0.app_icon()
     }
-
-    pub fn app_icon_high_res(&self) -> Option<String> {
-        self.0.app_icon_high_res()
-    }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, PartialEq)]

@@ -46,7 +46,6 @@ pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
-    let global_shortcut = app.global_shortcut();
     let displays = cap_displays::Display::list()
         .into_iter()
         .map(|d| d.id())
@@ -57,30 +56,33 @@ pub async fn open_target_select_overlays(
             .await;
     }
 
-    let handle = tokio::spawn(async move {
-        loop {
-            let display = cap_displays::Display::get_containing_cursor();
-            let window = cap_displays::Window::get_topmost_at_cursor();
+    let handle = tokio::spawn({
+        let app = app.clone();
+        async move {
+            loop {
+                let display = cap_displays::Display::get_containing_cursor();
+                let window = cap_displays::Window::get_topmost_at_cursor();
 
-            let _ = TargetUnderCursor {
-                display_id: display.map(|d| d.id()),
-                window: window.and_then(|w| {
-                    Some(WindowUnderCursor {
-                        id: w.id(),
-                        bounds: w.bounds()?,
-                        app_name: w.owner_name()?,
-                        icon: w.app_icon(),
-                    })
-                }),
-                screen: display.map(|d| ScreenUnderCursor {
-                    name: d.name(),
-                    physical_size: d.physical_size(),
-                    refresh_rate: d.refresh_rate().to_string(),
-                }),
+                let _ = TargetUnderCursor {
+                    display_id: display.map(|d| d.id()),
+                    window: window.and_then(|w| {
+                        Some(WindowUnderCursor {
+                            id: w.id(),
+                            bounds: w.bounds()?,
+                            app_name: w.owner_name()?,
+                            icon: w.app_icon(),
+                        })
+                    }),
+                    screen: display.map(|d| ScreenUnderCursor {
+                        name: d.name(),
+                        physical_size: d.physical_size(),
+                        refresh_rate: d.refresh_rate().to_string(),
+                    }),
+                }
+                .emit(&app);
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            .emit(&app);
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
     });
 
@@ -93,7 +95,7 @@ pub async fn open_target_select_overlays(
         task.abort();
     } else {
         // If task is already set we know we have already registered this.
-        global_shortcut
+        app.global_shortcut()
             .register("Escape")
             .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
             .ok();
