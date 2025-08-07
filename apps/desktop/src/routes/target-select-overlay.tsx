@@ -125,15 +125,25 @@ export default function () {
                   }px`,
                 }}
               >
-                {/*<span class="text-3xl font-semibold mb-2">
-                  {windowUnderCursor.app_name}
-                </span>*/}
-                <span class="text-3xl font-semibold mb-2">
-                  {windowUnderCursor.app_name}
-                </span>
-                <span class="text-xs mb-2">
-                  {`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
-                </span>
+                <div class="flex flex-col items-center justify-center">
+                  <Show when={windowUnderCursor.icon}>
+                    {(icon) => (
+                      <img
+                        src={`data:image/png;base64,${btoa(
+                          String.fromCharCode(...new Uint8Array(icon()))
+                        )}`}
+                        alt={`${windowUnderCursor.app_name} icon`}
+                        class="w-16 h-16 mb-3 rounded-lg"
+                      />
+                    )}
+                  </Show>
+                  <span class="text-3xl font-semibold mb-2">
+                    {windowUnderCursor.app_name}
+                  </span>
+                  <span class="text-xs mb-2">
+                    {`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
+                  </span>
+                </div>
                 <RecordingControls
                   target={{
                     variant: "window",

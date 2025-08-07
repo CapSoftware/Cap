@@ -312,9 +312,79 @@ impl WindowImpl {
     }
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
-        // Icon functionality not implemented for macOS yet
-        // This would require complex interaction with NSWorkspace and image conversion
-        None
+        use cocoa::base::{id, nil};
+        use cocoa::foundation::{NSArray, NSAutoreleasePool, NSString};
+        use objc::{class, msg_send, sel, sel_impl};
+
+        let owner_name = self.owner_name()?;
+
+        unsafe {
+            let pool = NSAutoreleasePool::new(nil);
+
+            // Get shared workspace
+            let workspace_class = class!(NSWorkspace);
+            let workspace: id = msg_send![workspace_class, sharedWorkspace];
+
+            // Get running applications
+            let running_apps: id = msg_send![workspace, runningApplications];
+            let app_count = NSArray::count(running_apps);
+
+            let mut app_icon_data = None;
+
+            // Find the application by name
+            for i in 0..app_count {
+                let app: id = running_apps.objectAtIndex(i);
+                let localized_name: id = msg_send![app, localizedName];
+
+                if !localized_name.is_null() {
+                    let name_str = NSString::UTF8String(localized_name);
+                    if !name_str.is_null() {
+                        let name = std::ffi::CStr::from_ptr(name_str)
+                            .to_string_lossy()
+                            .to_string();
+
+                        if name == owner_name {
+                            // Get the app icon
+                            let icon: id = msg_send![app, icon];
+                            if !icon.is_null() {
+                                // Convert NSImage to PNG data
+                                let tiff_data: id = msg_send![icon, TIFFRepresentation];
+                                if !tiff_data.is_null() {
+                                    let bitmap_rep_class = class!(NSBitmapImageRep);
+                                    let bitmap_rep: id = msg_send![
+                                        bitmap_rep_class,
+                                        imageRepWithData: tiff_data
+                                    ];
+
+                                    if !bitmap_rep.is_null() {
+                                        let png_data: id = msg_send![
+                                            bitmap_rep,
+                                            representationUsingType: 4u64 // NSBitmapImageFileTypePNG
+                                            properties: nil
+                                        ];
+
+                                        if !png_data.is_null() {
+                                            let length: usize = msg_send![png_data, length];
+                                            let bytes_ptr: *const u8 = msg_send![png_data, bytes];
+
+                                            if !bytes_ptr.is_null() && length > 0 {
+                                                let bytes =
+                                                    std::slice::from_raw_parts(bytes_ptr, length);
+                                                app_icon_data = Some(bytes.to_vec());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
+            pool.drain();
+            app_icon_data
+        }
     }
 }
 

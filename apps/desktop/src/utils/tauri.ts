@@ -439,7 +439,7 @@ start_time?: number | null }
 export type VideoRecordingMetadata = { duration: number; size: number }
 export type VideoUploadInfo = { id: string; link: string; config: S3UploadMeta }
 export type WindowId = string
-export type WindowUnderCursor = { id: WindowId; app_name: string; bounds: LogicalBounds }
+export type WindowUnderCursor = { id: WindowId; app_name: string; bounds: LogicalBounds; icon: number[] | null }
 export type XY<T> = { x: T; y: T }
 export type ZoomMode = "auto" | { manual: { x: number; y: number } }
 export type ZoomSegment = { start: number; end: number; amount: number; mode: ZoomMode }

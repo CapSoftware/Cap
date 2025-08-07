@@ -28,6 +28,7 @@ pub struct WindowUnderCursor {
     id: WindowId,
     app_name: String,
     bounds: LogicalBounds,
+    icon: Option<Vec<u8>>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -62,6 +63,7 @@ pub async fn open_target_select_overlays(app: AppHandle) -> Result<(), String> {
                         id: w.id(),
                         bounds: w.bounds()?,
                         app_name: w.owner_name()?,
+                        icon: w.app_icon(),
                     })
                 }),
                 screen: display.map(|d| ScreenUnderCursor {
