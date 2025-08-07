@@ -722,7 +722,8 @@ impl WindowImpl {
                     }
 
                     // Move to the next window in Z-order (towards background)
-                    current_hwnd = GetWindow(current_hwnd, GW_HWNDNEXT).unwrap_or(HWND(std::ptr::null_mut()));
+                    current_hwnd =
+                        GetWindow(current_hwnd, GW_HWNDNEXT).unwrap_or(HWND(std::ptr::null_mut()));
                     if current_hwnd == HWND(std::ptr::null_mut()) {
                         break;
                     }
