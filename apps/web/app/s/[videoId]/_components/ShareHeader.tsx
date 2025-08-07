@@ -18,6 +18,7 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 import clsx from "clsx";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDialog";
+import { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 
 export const ShareHeader = ({
   data,
@@ -26,6 +27,7 @@ export const ShareHeader = ({
   domainVerified,
   sharedOrganizations = [],
   sharedSpaces = [],
+  spacesData = null,
   NODE_ENV,
 }: {
   data: typeof videos.$inferSelect;
@@ -46,6 +48,7 @@ export const ShareHeader = ({
     iconUrl?: string;
     organizationId: string;
   }[];
+  spacesData?: Spaces[] | null;
   NODE_ENV: "production" | "development" | "test";
 }) => {
   const { push, refresh } = useRouter();
@@ -135,10 +138,10 @@ export const ShareHeader = ({
       "text-sm text-gray-10 transition-colors duration-200 flex items-center";
 
     if (isOwner) {
-      if (
-        (sharedOrganizations?.length === 0 || !sharedOrganizations) &&
-        (effectiveSharedSpaces?.length === 0 || !effectiveSharedSpaces)
-      ) {
+      const hasSpaceSharing = (sharedOrganizations?.length > 0) || (effectiveSharedSpaces?.length > 0);
+      const isPublic = data.public;
+
+      if (!hasSpaceSharing && !isPublic) {
         return (
           <p
             className={clsx(baseClassName, "cursor-pointer hover:text-gray-12")}
@@ -173,6 +176,8 @@ export const ShareHeader = ({
         capName={data.name}
         sharedSpaces={effectiveSharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
+        isPublic={data.public}
+        spacesData={spacesData}
       />
       <div>
         <div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
