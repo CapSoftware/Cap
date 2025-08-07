@@ -359,7 +359,7 @@ openEditorAfterRecording?: boolean;
 /**
  * @deprecated can be removed when native camera preview is ready
  */
-enableNativeCameraPreview?: boolean; autoZoomOnClicks?: boolean }
+enableNativeCameraPreview?: boolean; autoZoomOnClicks?: boolean; postDeletionBehaviour?: PostDeletionBehaviour }
 export type GifExportSettings = { fps: number; resolution_base: XY<number> }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
@@ -382,6 +382,7 @@ export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
+export type PostDeletionBehaviour = "closeWindow" | "keepWindowOpen"
 export type PostStudioRecordingBehaviour = "openEditor" | "showOverlay"
 export type Preset = { name: string; config: ProjectConfiguration }
 export type PresetsStore = { presets: Preset[]; default: number | null }

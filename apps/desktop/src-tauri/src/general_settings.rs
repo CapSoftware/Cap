@@ -21,6 +21,14 @@ pub enum MainWindowRecordingStartBehaviour {
     Minimise,
 }
 
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum PostDeletionBehaviour {
+    #[default]
+    CloseWindow,
+    KeepWindowOpen,
+}
+
 impl MainWindowRecordingStartBehaviour {
     pub fn perform(&self, window: &tauri::WebviewWindow) -> tauri::Result<()> {
         match self {
@@ -79,6 +87,8 @@ pub struct GeneralSettingsStore {
     pub enable_native_camera_preview: bool,
     #[serde(default)]
     pub auto_zoom_on_clicks: bool,
+    #[serde(default)]
+    pub post_deletion_behaviour: PostDeletionBehaviour,
 }
 
 fn yes(_: &bool) -> bool {
@@ -123,6 +133,7 @@ impl Default for GeneralSettingsStore {
             _open_editor_after_recording: false,
             enable_native_camera_preview: false,
             auto_zoom_on_clicks: false,
+            post_deletion_behaviour: PostDeletionBehaviour::CloseWindow,
         }
     }
 }

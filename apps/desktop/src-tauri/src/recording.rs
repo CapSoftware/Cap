@@ -6,7 +6,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{GeneralSettingsStore, PostStudioRecordingBehaviour},
+    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     upload::{
@@ -589,6 +589,24 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
                     |c, url| c.delete(url),
                 )
                 .await;
+        }
+
+        // Check user's post-deletion behavior setting
+        let settings = GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        match settings.post_deletion_behaviour {
+            PostDeletionBehaviour::CloseWindow => {
+                // Close the in-progress recording window (current behavior)
+                if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                    let _ = window.close();
+                }
+            }
+            PostDeletionBehaviour::KeepWindowOpen => {
+                // Keep window open - no action needed, just emit events to reset UI
+                // The frontend will handle resetting the recording state
+            }
         }
     }
 
