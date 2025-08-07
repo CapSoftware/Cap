@@ -80,26 +80,64 @@ fn main() {
             // Test icon functionality
             match window.app_icon() {
                 Some(icon_data) => {
-                    println!("  Icon: {} bytes available", icon_data.len());
-                    // On Windows, this returns raw RGBA data
-                    // On macOS, this would return PNG data (when implemented)
-                    if icon_data.len() > 0 {
+                    println!("  Icon (Standard): {} characters", icon_data.len());
+                    if icon_data.starts_with("data:image/png;base64,") {
+                        println!("    Format: PNG (Base64 encoded)");
+                        let base64_data = &icon_data[22..]; // Skip "data:image/png;base64,"
+                        let estimated_bytes = (base64_data.len() * 3) / 4;
+                        println!("    Estimated size: {} bytes", estimated_bytes);
+                    }
+                }
+                None => println!("  Icon (Standard): Not available"),
+            }
+
+            // Test high-resolution icon functionality
+            match window.app_icon_high_res() {
+                Some(icon_data) => {
+                    println!("  Icon (High-Res): {} characters", icon_data.len());
+                    if icon_data.starts_with("data:image/png;base64,") {
+                        println!("    Format: PNG (Base64 encoded)");
+                        let base64_data = &icon_data[22..]; // Skip "data:image/png;base64,"
+                        let estimated_bytes = (base64_data.len() * 3) / 4;
+                        println!("    Estimated size: {} bytes", estimated_bytes);
+
+                        // Try to estimate resolution based on data size
+                        let estimated_pixels = estimated_bytes / 4; // Assuming 4 bytes per pixel
+                        let estimated_dimension = (estimated_pixels as f64).sqrt() as i32;
                         println!(
-                            "    Format: Raw image data ({}x{} estimated)",
-                            if icon_data.len() == 4096 {
-                                "32"
-                            } else {
-                                "unknown"
-                            },
-                            if icon_data.len() == 4096 {
-                                "32"
-                            } else {
-                                "unknown"
-                            }
+                            "    Estimated dimensions: ~{}x{}",
+                            estimated_dimension, estimated_dimension
                         );
                     }
                 }
-                None => println!("  Icon: Not available or not implemented"),
+                None => println!("  Icon (High-Res): Not available"),
+            }
+        }
+    }
+
+    println!("\n=== Icon Resolution Comparison ===");
+    if let Some(topmost) = cap_displays::Window::get_topmost_at_cursor() {
+        if let Some(owner) = topmost.owner_name() {
+            println!("Testing icon resolution for: {}", owner);
+
+            let standard_icon = topmost.app_icon();
+            let high_res_icon = topmost.app_icon_high_res();
+
+            match (standard_icon, high_res_icon) {
+                (Some(std), Some(hr)) => {
+                    println!("  Standard method: {} chars", std.len());
+                    println!("  High-res method: {} chars", hr.len());
+                    if hr.len() > std.len() {
+                        println!("  ✅ High-res method provided larger icon data");
+                    } else if hr.len() == std.len() {
+                        println!("  ℹ️  Both methods provided same size data");
+                    } else {
+                        println!("  ⚠️  Standard method had larger data");
+                    }
+                }
+                (Some(_), None) => println!("  ⚠️  Only standard method succeeded"),
+                (None, Some(_)) => println!("  ✅ Only high-res method succeeded"),
+                (None, None) => println!("  ❌ Neither method found an icon"),
             }
         }
     }
