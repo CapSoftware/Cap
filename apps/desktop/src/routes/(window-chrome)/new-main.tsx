@@ -61,6 +61,13 @@ const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
 };
 
 export default function () {
+  const generalSettings = generalSettingsStore.createQuery();
+
+  createEffect(() => {
+    if (generalSettings.data?.enableNewRecordingFlow === true)
+      location.pathname = "/";
+  });
+
   return (
     <RecordingOptionsProvider>
       <Page />

@@ -64,6 +64,11 @@ function Page() {
   const currentRecording = createCurrentRecordingQuery();
   const generalSettings = generalSettingsStore.createQuery();
 
+  createEffect(() => {
+    if (generalSettings.data?.enableNewRecordingFlow === true)
+      location.pathname = "/new-main";
+  });
+
   const isRecording = () => !!currentRecording.data;
 
   const license = createLicenseQuery();

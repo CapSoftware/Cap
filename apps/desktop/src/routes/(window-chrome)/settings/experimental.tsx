@@ -4,6 +4,7 @@ import { createStore } from "solid-js/store";
 import { generalSettingsStore } from "~/store";
 import { commands, type GeneralSettingsStore } from "~/utils/tauri";
 import { ToggleSetting } from "./Setting";
+import { getAllWindows } from "@tauri-apps/api/window";
 
 export default function ExperimentalSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -80,7 +81,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                 value={!!settings.enableNewRecordingFlow}
                 onChange={(value) => {
                   handleChange("enableNewRecordingFlow", value);
-                  commands.closeWindow("Main");
                 }}
               />
             </div>
