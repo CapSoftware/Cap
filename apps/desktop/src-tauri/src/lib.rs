@@ -27,7 +27,6 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
-use cap_flags::FLAGS;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
 use cap_media::platform::Bounds;
@@ -46,14 +45,13 @@ use general_settings::GeneralSettingsStore;
 use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
-use recording::{InProgressRecording, StartRecordingInputs};
+use recording::InProgressRecording;
 use relative_path::RelativePathBuf;
 
 use scap::capturer::Capturer;
 use scap::frame::Frame;
 use scap::frame::VideoFrame;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
@@ -71,10 +69,10 @@ use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
@@ -2233,25 +2231,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 return;
                             }
                             CapWindowId::TargetSelectOverlay { display_id } => {
-                                let focus_manager =
-                                    app.state::<target_select_overlay::WindowFocusManager>();
-
-                                focus_manager.destroy(&display_id);
-
-                                // We cleanup the task if this is the last overlay being closed
-                                if app
-                                    .webview_windows()
-                                    .into_iter()
-                                    .filter_map(|(label, _)| CapWindowId::from_str(&label).ok())
-                                    .filter(|id| {
-                                        matches!(id, CapWindowId::TargetSelectOverlay { .. })
-                                    })
-                                    .count()
-                                    == 0
-                                {
-                                    println!("It's the last one");
-                                    focus_manager.stop_task();
-                                }
+                                app.state::<target_select_overlay::WindowFocusManager>()
+                                    .destroy(&display_id, app.global_shortcut());
                             }
                             _ => {}
                         };

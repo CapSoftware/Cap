@@ -13,8 +13,10 @@ use cap_displays::{
 use serde::Serialize;
 use specta::Type;
 use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt};
 use tauri_specta::Event;
 use tokio::task::JoinHandle;
+use tracing::error;
 
 #[derive(tauri_specta::Event, Serialize, Type, Clone)]
 pub struct TargetUnderCursor {
@@ -53,6 +55,11 @@ pub async fn open_target_select_overlays(
             .show(&app)
             .await;
     }
+
+    app.global_shortcut()
+        .register("Escape")
+        .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
+        .ok();
 
     let handle = tokio::spawn(async move {
         loop {
@@ -104,8 +111,6 @@ pub async fn close_target_select_overlays(
             let _ = window.close();
         }
     }
-
-    state.stop_task();
 
     Ok(())
 }
@@ -161,22 +166,33 @@ impl WindowFocusManager {
         );
     }
 
-    /// Called when a window is destroyed to cleanup it's task
-    pub fn destroy(&self, id: &DisplayId) {
+    /// Called when a specific overlay window is destroyed to cleanup it's resources
+    pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.remove(&id.to_string()) {
             let _ = task.abort();
         }
-    }
 
-    pub fn stop_task(&self) {
-        if let Some(task) = self
-            .task
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
+        // When all overlay windows are closed cleanup shared resources.
+        if tasks.is_empty() {
+            // Unregister keyboard shortcut
+            // This messes with other applications if we don't remove it.
+            global_shortcut
+                .unregister("Escape")
+                .map_err(|err| {
+                    error!("Error unregistering global keyboard shortcut for Escape: {err}")
+                })
+                .ok();
+
+            // Shutdown the cursor tracking task
+            if let Some(task) = self
+                .task
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take()
+            {
+                task.abort();
+            }
         }
     }
 }

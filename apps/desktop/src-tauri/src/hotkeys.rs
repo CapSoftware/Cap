@@ -97,11 +97,6 @@ pub fn init(app: &AppHandle) {
     let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
 
     let global_shortcut = app.global_shortcut();
-    global_shortcut
-        .register("Escape")
-        .map_err(|err| error!("Error registering global keyboard shortcut for Escape: {err}"))
-        .ok();
-
     for hotkey in store.hotkeys.values() {
         global_shortcut.register(hotkey.to_shortcut()).ok();
     }
