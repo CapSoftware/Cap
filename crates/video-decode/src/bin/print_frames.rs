@@ -12,7 +12,7 @@ mod mac {
 
     use cap_video_decode::AVAssetReaderDecoder;
 
-    async fn run() {
+    pub(super) async fn run() {
         let handle = tokio::runtime::Handle::current();
 
         let path: PathBuf = std::env::args().collect::<Vec<_>>().swap_remove(1).into();
