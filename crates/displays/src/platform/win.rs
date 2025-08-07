@@ -705,7 +705,7 @@ impl WindowImpl {
         unsafe {
             // Use WindowFromPoint first as a quick check
             let hwnd_at_point = WindowFromPoint(point);
-            if hwnd_at_point != HWND(0) {
+            if hwnd_at_point != HWND(std::ptr::null_mut()) {
                 let current_process_id = GetCurrentProcessId();
 
                 // Walk up the Z-order chain to find the topmost valid window
@@ -722,8 +722,8 @@ impl WindowImpl {
                     }
 
                     // Move to the next window in Z-order (towards background)
-                    current_hwnd = GetWindow(current_hwnd, GW_HWNDNEXT);
-                    if current_hwnd == HWND(0) {
+                    current_hwnd = GetWindow(current_hwnd, GW_HWNDNEXT).unwrap_or(HWND(std::ptr::null_mut()));
+                    if current_hwnd == HWND(std::ptr::null_mut()) {
                         break;
                     }
 
@@ -1173,7 +1173,7 @@ impl WindowImpl {
                             }
 
                             // Create PNG using the image crate
-                            if let Ok(img) =
+                            if let Some(img) =
                                 image::RgbaImage::from_raw(width as u32, height as u32, buffer)
                             {
                                 let mut png_data = Vec::new();
@@ -1318,7 +1318,7 @@ impl WindowImpl {
                             }
 
                             // Create PNG using the image crate
-                            if let Ok(img) =
+                            if let Some(img) =
                                 image::RgbaImage::from_raw(width as u32, height as u32, buffer)
                             {
                                 let mut png_data = Vec::new();
@@ -1442,9 +1442,9 @@ fn is_window_valid_for_topmost_selection(
                 let mut flags = 0u32;
                 if GetLayeredWindowAttributes(
                     hwnd,
-                    Some(&mut color_key),
+                    Some(&mut color_key as *mut u32 as *mut _),
                     Some(&mut alpha),
-                    &mut flags,
+                    Some(&mut flags as *mut u32 as *mut _),
                 )
                 .is_ok()
                 {
