@@ -595,7 +595,7 @@ impl SinkFilter {
         }
         .into_object();
 
-        /// SAFETY: SinkFilter always implements IBaseFilter
+        // SAFETY: SinkFilter always implements IBaseFilter
         #[allow(clippy::unwrap_used)]
         *this.input_pin.owner.borrow_mut() = Some(this.cast::<IBaseFilter>().unwrap());
 
@@ -608,7 +608,7 @@ impl SinkFilter {
 
     pub fn get_pin(&self, i: u32) -> Option<IPin> {
         if i == 0 {
-            /// SAFETY: SinkInputPin always implements IPin
+            // SAFETY: SinkInputPin always implements IPin
             #[allow(clippy::unwrap_used)]
             Some(unsafe { self.input_pin.get().cast() }.unwrap())
         } else {

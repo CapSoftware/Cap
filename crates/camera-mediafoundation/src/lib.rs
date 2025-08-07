@@ -163,7 +163,8 @@ impl Device {
         let reader = unsafe {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 1)?;
-            let attributes = attributes.ok_or_else(|| S_FALSE);
+            let attributes =
+                attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE.0))?;
             // Media source shuts down on drop if this isn't specified
             attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1)?;
             MFCreateSourceReaderFromMediaSource(&self.media_source, &attributes)
@@ -209,8 +210,9 @@ impl Device {
 
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 1).map_err(StartCapturingError::ConfigureEngine)?;
-            let attributes =
-                attributes.ok_or_else(|| windows_core::Error::from_hresult(S_FALSE))?;
+            let attributes = attributes.ok_or_else(|| {
+                StartCapturingError::ConfigureEngine(windows_core::Error::from_hresult(S_FALSE))
+            })?;
             attributes
                 .SetUINT32(&MF_CAPTURE_ENGINE_USE_VIDEO_DEVICE_ONLY, 1)
                 .map_err(StartCapturingError::ConfigureEngine)?;
