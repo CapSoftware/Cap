@@ -17,19 +17,39 @@ export const VerifyStep = ({
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  // Get the recommended values from Vercel's response
   const recommendedCnames = domainConfig?.recommendedCNAME || [];
   const recommendedIPv4 = domainConfig?.recommendedIPv4 || [];
   const recommendedARecord = domainConfig?.requiredAValue;
   const currentCnames = domainConfig?.cnames || [];
   const currentAValues = domainConfig?.currentAValues || [];
 
-  // Determine what records to show based on what Vercel actually provides
   const hasRecommendedA = recommendedARecord || recommendedIPv4.length > 0;
   const hasRecommendedCNAME = recommendedCnames.length > 0;
 
+  const getRecommendedAValues = () => {
+    if (recommendedARecord) return [recommendedARecord];
+
+    if (recommendedIPv4.length > 0) {
+      const sortedIPv4 = recommendedIPv4.sort((a, b) => a.rank - b.rank);
+      const primaryRecommendation = sortedIPv4[0];
+
+      if (!primaryRecommendation) return [];
+
+      if (Array.isArray(primaryRecommendation.value)) {
+        return primaryRecommendation.value;
+      }
+      return [primaryRecommendation.value];
+    }
+
+    return [];
+  };
+
+  const recommendedAValues = getRecommendedAValues();
+  const primaryAValue = recommendedAValues[0] || null;
+
   // Check if DNS records are already correctly configured
-  const aRecordConfigured = recommendedARecord && currentAValues.includes(recommendedARecord);
+  const aRecordConfigured = recommendedAValues.length > 0 &&
+    recommendedAValues.some(ip => currentAValues.includes(ip));
   const cnameConfigured = recommendedCnames.length > 0 &&
     recommendedCnames.some(rec => currentCnames.includes(rec.value));
 
@@ -83,14 +103,14 @@ export const VerifyStep = ({
                           <div
                             key={`a-${index}`}
                             className={clsx(
-                              value === recommendedARecord
+                              recommendedAValues.includes(value)
                                 ? "flex items-center gap-2 text-green-300"
                                 : "flex items-center gap-2 text-red-200"
                             )}
                           >
                             <code
                               className={clsx(
-                                value === recommendedARecord
+                                recommendedAValues.includes(value)
                                   ? "px-2 py-1 rounded-lg bg-green-900"
                                   : "px-2 py-1 rounded-lg bg-red-900",
                                 "text-xs"
@@ -98,7 +118,7 @@ export const VerifyStep = ({
                             >
                               {value}
                             </code>
-                            {value === recommendedARecord && (
+                            {recommendedAValues.includes(value) && (
                               <span className="text-xs text-green-600">(Correct)</span>
                             )}
                           </div>
@@ -116,26 +136,31 @@ export const VerifyStep = ({
                   </div>
                   <div className="grid grid-cols-[100px,1fr] items-center">
                     <dt className="text-sm font-medium text-gray-12">Value</dt>
-                    <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
-                        <code className="text-xs text-gray-10">
-                          {recommendedARecord || "Loading..."}
-                        </code>
-                        {recommendedARecord && (
-                          <button
-                            type="button"
-                            onClick={() => handleCopy(recommendedARecord, "a-record-value")}
-                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                            title="Copy to clipboard"
-                          >
-                            {copiedField === "a-record-value" ? (
-                              <Check className="size-3.5 text-green-500" />
-                            ) : (
-                              <Copy className="size-3.5 text-gray-10" />
-                            )}
-                          </button>
-                        )}
-                      </div>
+                    <dd className="space-y-2 text-sm text-gray-10">
+                      {recommendedAValues.map((ipAddress, index) => (
+                        <div key={`ip-${index}`} className="flex gap-2 items-center">
+                          <div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
+                            <code className="text-xs text-gray-10">
+                              {ipAddress}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(ipAddress, `a-record-${index}`)}
+                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+                              title="Copy to clipboard"
+                            >
+                              {copiedField === `a-record-${index}` ? (
+                                <Check className="size-3.5 text-green-500" />
+                              ) : (
+                                <Copy className="size-3.5 text-gray-10" />
+                              )}
+                            </button>
+                          </div>
+                          {index === 0 && recommendedAValues.length > 1 && (
+                            <span className="text-xs text-gray-11">(Primary)</span>
+                          )}
+                        </div>
+                      ))}
                     </dd>
                   </div>
                 </dl>
