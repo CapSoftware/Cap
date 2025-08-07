@@ -87,6 +87,7 @@ impl RelativeCursorPosition {
             // )
         };
 
+        #[allow(unreachable_code)]
         NormalizedCursorPosition {
             x,
             y,

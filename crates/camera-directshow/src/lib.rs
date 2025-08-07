@@ -281,6 +281,8 @@ impl IAMVideoControlExt for IAMVideoControl {
 }
 
 pub trait IPropertyBagExt {
+    /// # Safety
+    /// Do it correctly
     unsafe fn read<P0>(&self, pszpropname: P0) -> windows_core::Result<VARIANT>
     where
         P0: windows_core::Param<windows_core::PCWSTR>;
@@ -663,6 +665,7 @@ impl IBaseFilter_Impl for SinkFilter_Impl {
         Err(E_NOTIMPL.into())
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // This is a public trait
     fn QueryFilterInfo(
         &self,
         pinfo: *mut windows::Win32::Media::DirectShow::FILTER_INFO,

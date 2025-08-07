@@ -22,7 +22,7 @@ use windows::Win32::{
     Media::MediaFoundation::*,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
 };
-use windows_core::{ComObjectInner, PWSTR, implement};
+use windows_core::{ComObjectInner, Interface, PWSTR, implement};
 
 pub fn initialize_mediafoundation() -> windows_core::Result<()> {
     unsafe { CoInitialize(None) }.ok()?;
@@ -66,6 +66,10 @@ impl DeviceSourcesIterator {
 
     pub fn len(&self) -> u32 {
         self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
     }
 }
 
@@ -266,13 +270,15 @@ impl Device {
 
                 loop {
                     let mut media_type = None;
-                    if let Err(_) = retry_on_invalid_request(|| {
+                    if retry_on_invalid_request(|| {
                         source.GetAvailableDeviceMediaType(
                             stream_index,
                             media_type_index,
                             Some(&mut media_type),
                         )
-                    }) {
+                    })
+                    .is_err()
+                    {
                         break;
                     }
 
@@ -518,7 +524,7 @@ impl DerefMut for SourceReader {
 }
 
 fn get_device_model_id(device_id: &str) -> Option<String> {
-    const VID_PID_SIZE: usize = 4;
+    // const VID_PID_SIZE: usize = 4;
 
     let vid_location = device_id.find("vid_")?;
     let pid_location = device_id.find("pid_")?;
