@@ -56,16 +56,17 @@ impl From<BackgroundSource> for Background {
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
                 if let Some(path) = path
-                    && !path.is_empty() {
-                        let clean_path = path
-                            .replace("asset://localhost/", "/")
-                            .replace("asset://", "")
-                            .replace("localhost//", "/");
+                    && !path.is_empty()
+                {
+                    let clean_path = path
+                        .replace("asset://localhost/", "/")
+                        .replace("asset://", "")
+                        .replace("localhost//", "/");
 
-                        if std::path::Path::new(&clean_path).exists() {
-                            return Background::Image { path: clean_path };
-                        }
+                    if std::path::Path::new(&clean_path).exists() {
+                        return Background::Image { path: clean_path };
                     }
+                }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
             }
         }

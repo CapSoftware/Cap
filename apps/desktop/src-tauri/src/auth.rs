@@ -58,9 +58,10 @@ impl AuthStore {
         };
 
         if let Some(plan) = &auth.plan
-            && plan.manual {
-                return Ok(());
-            }
+            && plan.manual
+        {
+            return Ok(());
+        }
 
         let mut auth = auth;
         println!(

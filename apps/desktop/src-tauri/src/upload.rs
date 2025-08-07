@@ -628,20 +628,19 @@ impl InstantMultipartUpload {
         // --------------------------------------------
         loop {
             if !realtime_is_done.unwrap_or(true)
-                && let Some(realtime_video_done) = &realtime_video_done {
-                    match realtime_video_done.try_recv() {
-                        Ok(_) => {
-                            realtime_is_done = Some(true);
-                        }
-                        Err(flume::TryRecvError::Empty) => {}
-                        _ => {
-                            warn!("cancelling upload as realtime generation failed");
-                            return Err(
-                                "cancelling upload as realtime generation failed".to_string()
-                            );
-                        }
+                && let Some(realtime_video_done) = &realtime_video_done
+            {
+                match realtime_video_done.try_recv() {
+                    Ok(_) => {
+                        realtime_is_done = Some(true);
+                    }
+                    Err(flume::TryRecvError::Empty) => {}
+                    _ => {
+                        warn!("cancelling upload as realtime generation failed");
+                        return Err("cancelling upload as realtime generation failed".to_string());
                     }
                 }
+            }
 
             // Check the file's current size
             if !file_path.exists() {

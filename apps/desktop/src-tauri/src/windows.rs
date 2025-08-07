@@ -398,9 +398,10 @@ impl ShowCapWindow {
                 if let Some(main_window) = CapWindowId::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                        && target_monitor.intersects(outer_pos, outer_size) {
-                            let _ = main_window.minimize();
-                        };
+                    && target_monitor.intersects(outer_pos, outer_size)
+                {
+                    let _ = main_window.minimize();
+                };
 
                 window
             }

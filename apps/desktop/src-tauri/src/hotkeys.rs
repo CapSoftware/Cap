@@ -127,9 +127,10 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
     }
 
     if let Some(prev) = prev
-        && !store.hotkeys.values().any(|h| h == &prev) {
-            global_shortcut.unregister(Shortcut::from(prev)).ok();
-        }
+        && !store.hotkeys.values().any(|h| h == &prev)
+    {
+        global_shortcut.unregister(Shortcut::from(prev)).ok();
+    }
 
     if let Some(hotkey) = hotkey {
         global_shortcut.register(Shortcut::from(hotkey)).ok();

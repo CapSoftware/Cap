@@ -999,9 +999,10 @@ fn close_recordings_overlay_window(app: AppHandle) {
     }
 
     if !cfg!(target_os = "macos")
-        && let Some(window) = CapWindowId::RecordingsOverlay.get(&app) {
-            let _ = window.close();
-        }
+        && let Some(window) = CapWindowId::RecordingsOverlay.get(&app)
+    {
+        let _ = window.close();
+    }
 }
 
 #[tauri::command(async)]
@@ -1584,9 +1585,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     println!("Checking upgraded status and updating...");
 
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app)
-        && settings.commercial_license.is_some() {
-            return Ok(true);
-        }
+        && settings.commercial_license.is_some()
+    {
+        return Ok(true);
+    }
 
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         println!("No auth found, clearing auth store");
@@ -1595,9 +1597,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
     };
 
     if let Some(ref plan) = auth.plan
-        && plan.manual {
-            return Ok(true);
-        }
+        && plan.manual
+    {
+        return Ok(true);
+    }
 
     println!(
         "Fetching plan for user {}",
@@ -1648,9 +1651,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
 #[specta::specta]
 fn open_external_link(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if let Ok(Some(settings)) = GeneralSettingsStore::get(&app)
-        && settings.disable_auto_open_links {
-            return Ok(());
-        }
+        && settings.disable_auto_open_links
+    {
+        return Ok(());
+    }
 
     app.shell()
         .open(&url, None)
@@ -2199,22 +2203,24 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                     if let Some(settings) = GeneralSettingsStore::get(app).unwrap_or(None)
                         && settings.hide_dock_icon
-                            && app.webview_windows().keys().all(|label| {
-                                !CapWindowId::from_str(label).unwrap().activates_dock()
-                            })
-                        {
-                            #[cfg(target_os = "macos")]
-                            app.set_activation_policy(tauri::ActivationPolicy::Accessory)
-                                .ok();
-                        }
+                        && app
+                            .webview_windows()
+                            .keys()
+                            .all(|label| !CapWindowId::from_str(label).unwrap().activates_dock())
+                    {
+                        #[cfg(target_os = "macos")]
+                        app.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                            .ok();
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 WindowEvent::Focused(focused) if *focused => {
                     if let Ok(window_id) = CapWindowId::from_str(label)
-                        && window_id.activates_dock() {
-                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                                .ok();
-                        }
+                        && window_id.activates_dock()
+                    {
+                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .ok();
+                    }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
                     for path in paths {

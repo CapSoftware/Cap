@@ -53,9 +53,9 @@ impl Renderer {
         if let Some(camera_path) = meta.camera_path()
             && let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
-            {
-                max_duration = max_duration.max(camera_duration);
-            }
+        {
+            max_duration = max_duration.max(camera_duration);
+        }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
 
