@@ -9,11 +9,14 @@ import {
   sharedVideos,
   organizationMembers,
   organizations,
+  spaces,
+  spaceVideos,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { transcribeVideo } from "@/actions/videos/transcribe";
@@ -25,10 +28,68 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
 export const revalidate = 30;
+
+// Helper function to fetch shared spaces data for a video
+async function getSharedSpacesForVideo(videoId: string) {
+  // Fetch space-level sharing
+  const spaceSharing = await db()
+    .select({
+      id: spaces.id,
+      name: spaces.name,
+      organizationId: spaces.organizationId,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(spaceVideos)
+    .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+    .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+    .where(eq(spaceVideos.videoId, videoId));
+
+  // Fetch organization-level sharing
+  const orgSharing = await db()
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      organizationId: organizations.id,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  const sharedSpaces: Array<{
+    id: string;
+    name: string;
+    organizationId: string;
+    iconUrl?: string;
+  }> = [];
+
+  // Add space-level sharing
+  spaceSharing.forEach(space => {
+    sharedSpaces.push({
+      id: space.id,
+      name: space.name,
+      organizationId: space.organizationId,
+      iconUrl: space.iconUrl || undefined,
+    });
+  });
+
+  // Add organization-level sharing
+  orgSharing.forEach(org => {
+    sharedSpaces.push({
+      id: org.id,
+      name: org.name,
+      organizationId: org.organizationId,
+      iconUrl: org.iconUrl || undefined,
+    });
+  });
+
+  return sharedSpaces;
+}
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
@@ -68,6 +129,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     return notFound();
   }
 
+  const userPromise = getCurrentUser();
+  const userAccess = await userHasAccessToVideo(userPromise, video);
+
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
 
@@ -89,7 +153,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     ? "index, follow"
     : "noindex, nofollow";
 
-  if (video.public === false) {
+  if (video.public === false && userAccess !== "has-access") {
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
@@ -120,7 +184,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     };
   }
 
-  if (video.password !== null) {
+  if (video.password !== null && userAccess !== "has-access") {
     return {
       title: "Cap: Password Protected Video",
       description: "This video is password protected.",
@@ -248,7 +312,16 @@ export default async function ShareVideoPage(props: Props) {
 
   const userAccess = await userHasAccessToVideo(userPromise, video);
 
-  if (userAccess === "private") return <p>This video is private</p>;
+  if (userAccess === "private") {
+    return (
+      <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+        <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+        <p className="text-gray-400">
+          If you own this video, please <Link href="/login">sign in</Link> to manage sharing.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
@@ -275,6 +348,21 @@ async function AuthorizedContent({
   const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
+
+  // Fetch spaces data for the sharing dialog
+  let spacesData = null;
+  if (user) {
+    try {
+      const dashboardData = await getDashboardData(user);
+      spacesData = dashboardData.spacesData;
+    } catch (error) {
+      console.error("Failed to fetch spaces data for sharing dialog:", error);
+      spacesData = [];
+    }
+  }
+
+  // Fetch shared spaces data for this video
+  const sharedSpaces = await getSharedSpacesForVideo(videoId);
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -547,7 +635,9 @@ async function AuthorizedContent({
           sharedOrganizations={
             videoWithOrganizationInfo.sharedOrganizations || []
           }
+          sharedSpaces={sharedSpaces}
           userOrganizations={userOrganizations}
+          spacesData={spacesData}
           NODE_ENV={process.env.NODE_ENV}
         />
 

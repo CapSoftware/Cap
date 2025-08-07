@@ -102,6 +102,7 @@ app.get(
               : undefined,
           isScreenshot,
           bucket: customBucket?.id,
+          public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
           metadata: {
             duration,
           },

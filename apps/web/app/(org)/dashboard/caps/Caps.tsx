@@ -26,6 +26,7 @@ export type VideoData = {
   ownerId: string;
   name: string;
   createdAt: Date;
+  public: boolean;
   totalComments: number;
   totalReactions: number;
   foldersData: FolderDataType[];
