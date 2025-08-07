@@ -68,20 +68,17 @@ pub async fn request_permission(permission: OSPermission) {
                 scap::request_permission();
             }
             OSPermission::Camera => {
-                println!("BRUH");
                 std::thread::spawn(|| {
-                    let res = block_on(av::CaptureDevice::request_access_for_media_type(
+                    let _ = block_on(av::CaptureDevice::request_access_for_media_type(
                         av::MediaType::video(),
                     ));
-
-                    dbg!(res);
                 });
             }
             OSPermission::Microphone => {
                 std::thread::spawn(|| {
-                    block_on(av::CaptureDevice::request_access_for_media_type(
+                    let _ = block_on(av::CaptureDevice::request_access_for_media_type(
                         av::MediaType::audio(),
-                    ))
+                    ));
                 });
             }
             OSPermission::Accessibility => request_accessibility_permission(),
