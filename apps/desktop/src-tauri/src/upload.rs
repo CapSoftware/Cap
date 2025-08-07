@@ -737,6 +737,7 @@ impl InstantMultipartUpload {
 
     /// Upload a single chunk from the file at `last_uploaded_position` for `chunk_size` bytes.
     /// Advances `last_uploaded_position` accordingly. Returns JSON { PartNumber, ETag, Size }.
+    #[warn(clippy::too_many_arguments)]
     async fn upload_chunk(
         app: &AppHandle,
         client: &reqwest::Client,

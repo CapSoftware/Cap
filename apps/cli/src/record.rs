@@ -44,7 +44,7 @@ impl RecordStart {
         }?;
 
         let camera = if let Some(model_id) = self.camera {
-            let model_id: ModelID = model_id
+            let _model_id: ModelID = model_id
                 .try_into()
                 .map_err(|_| "Invalid model ID".to_string())?;
 

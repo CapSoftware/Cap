@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -27,6 +27,7 @@ use crate::{
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
 };
 
+#[allow(clippy::large_enum_variant)]
 enum StudioRecordingActorState {
     Recording {
         pipeline: StudioRecordingPipeline,
@@ -563,6 +564,7 @@ struct SegmentPipelineFactory {
 }
 
 impl SegmentPipelineFactory {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         segments_dir: PathBuf,
         cursors_dir: PathBuf,
@@ -622,9 +624,10 @@ impl SegmentPipelineFactory {
 }
 
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
+#[allow(clippy::too_many_arguments)]
 async fn create_segment_pipeline(
     segments_dir: &PathBuf,
-    cursors_dir: &PathBuf,
+    cursors_dir: &Path,
     index: u32,
     capture_target: ScreenCaptureTarget,
     mic_feed: &Option<AudioInputFeed>,
@@ -868,7 +871,7 @@ async fn create_segment_pipeline(
                 .unwrap(),
             #[cfg(target_os = "macos")]
             screen_crop_ratio,
-            cursors_dir.clone(),
+            cursors_dir.to_path_buf(),
             prev_cursors,
             next_cursors_id,
             start_time,

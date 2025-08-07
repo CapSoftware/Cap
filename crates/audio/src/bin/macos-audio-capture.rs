@@ -1,13 +1,12 @@
-use std::{f64::consts::PI, sync::mpsc::Sender, time::Duration};
+use std::{sync::mpsc::Sender, time::Duration};
 
 use cidre::{
-    cat, cm, define_obj_type, ns, objc,
+    cm, define_obj_type, ns, objc,
     sc::{
         self,
         stream::{Output, OutputImpl},
     },
 };
-use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::ChannelLayout;
 use ffmpeg::frame as avframe;
 
@@ -34,7 +33,6 @@ impl OutputImpl for Delegate {
             sc::OutputType::Audio => {
                 let buf_list = sample_buf.audio_buf_list::<2>().unwrap();
                 let slice = buf_list.block().as_slice().unwrap();
-                dbg!(&buf_list);
 
                 let mut frame = ffmpeg::frame::Audio::new(
                     ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
@@ -45,7 +43,7 @@ impl OutputImpl for Delegate {
                 let asdb = sample_buf.format_desc().unwrap();
                 frame.set_rate(asdb.stream_basic_desc().unwrap().sample_rate as u32);
                 frame.data_mut(0).copy_from_slice(slice);
-                self.inner_mut().tx.send(frame);
+                self.inner_mut().tx.send(frame).unwrap();
             }
             sc::OutputType::Mic => {}
         }
@@ -86,5 +84,5 @@ pub async fn main() {
         .flat_map(|s| s.data(0).to_vec())
         .collect::<Vec<_>>();
 
-    std::fs::write("./bruh.raw", &bytes);
+    std::fs::write("./bruh.raw", &bytes).unwrap();
 }

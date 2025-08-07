@@ -12,6 +12,7 @@ struct Cli {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 enum ExportFormat {
     MP4,
     GIF,

@@ -29,7 +29,7 @@ fn main() {
 
     let _handle = selected_camera
         .start_capturing(selected_format.0, |frame| {
-            frame;
+            drop(frame);
         })
         .unwrap();
 

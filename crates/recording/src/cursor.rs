@@ -259,9 +259,7 @@ fn get_cursor_data() -> Option<CursorData> {
         let image = cursor.image();
         let size = image.size();
         let hotspot = cursor.hotSpot();
-        let Some(image_data) = image.TIFFRepresentation() else {
-            return None;
-        };
+        let image_data = image.TIFFRepresentation()?;
 
         let image = image_data.as_bytes_unchecked().to_vec();
 

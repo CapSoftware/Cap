@@ -11,6 +11,7 @@ use tokio::{
     task::JoinHandle,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
@@ -157,7 +158,12 @@ impl RendererHandle {
     pub async fn stop(&self) {
         // Send a stop message to the renderer
         let (tx, rx) = oneshot::channel();
-        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+        if self
+            .tx
+            .send(RendererMessage::Stop { finished: tx })
+            .await
+            .is_err()
+        {
             println!("Failed to send stop message to renderer");
         }
         // Wait for the renderer to acknowledge the stop

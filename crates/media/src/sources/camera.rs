@@ -57,10 +57,14 @@ impl CameraSource {
 
         let relative_timestamp = camera_frame.timestamp - first_frame_timestamp;
 
-        if let Err(_) = self.output.send((
-            camera_frame.frame,
-            (first_frame_instant + relative_timestamp - self.start_instant).as_secs_f64(),
-        )) {
+        if self
+            .output
+            .send((
+                camera_frame.frame,
+                (first_frame_instant + relative_timestamp - self.start_instant).as_secs_f64(),
+            ))
+            .is_err()
+        {
             return Err(MediaError::Any(
                 "Pipeline is unreachable! Stopping capture".into(),
             ));

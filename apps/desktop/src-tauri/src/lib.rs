@@ -54,6 +54,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::{
     fs::File,
     future::Future,
@@ -82,6 +83,7 @@ use windows::EditorWindowIds;
 use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
+#[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
     None,
     Pending,
@@ -317,7 +319,7 @@ async fn set_camera_input(
                     }
                 }
                 _ = shutdown_rx.recv() => {
-                    return Ok(false);
+                    Ok(false)
                 }
             }
         }
@@ -2220,11 +2222,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }
                     }
                 }
-                WindowEvent::DragDrop(event) => {
-                    if let tauri::DragDropEvent::Drop { paths, .. } = event {
-                        for path in paths {
-                            let _ = open_project_from_path(path, app.clone());
-                        }
+                WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
+                    for path in paths {
+                        let _ = open_project_from_path(path, app.clone());
                     }
                 }
                 _ => {}
@@ -2394,12 +2394,12 @@ impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
     }
 }
 
-fn open_project_from_path(path: &PathBuf, app: AppHandle) -> Result<(), String> {
+fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;
 
     match &meta.inner {
         RecordingMetaInner::Studio(_) => {
-            let project_path = path.clone();
+            let project_path = path.to_path_buf();
 
             tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
         }

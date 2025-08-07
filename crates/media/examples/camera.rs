@@ -22,7 +22,7 @@ async fn main() {
     let (tx, rx) = flume::bounded(1);
     feed.attach(tx);
     let frame = rx.recv_async().await.unwrap().frame;
-    (frame.format(), frame.width(), frame.height());
+    frame.format();frame.width();frame.height();
 
     let mut converter = ffmpeg::software::converter(
         (frame.width(), frame.height()),

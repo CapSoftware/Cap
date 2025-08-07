@@ -8,12 +8,10 @@ pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
     let devices = cap_camera_avfoundation::list_video_devices();
     devices
         .iter()
-        .filter_map(|d| {
-            Some(CameraInfo {
-                device_id: d.unique_id().to_string(),
-                model_id: ModelID::from_avfoundation(d),
-                display_name: d.localized_name().to_string(),
-            })
+        .map(|d| CameraInfo {
+            device_id: d.unique_id().to_string(),
+            model_id: ModelID::from_avfoundation(d),
+            display_name: d.localized_name().to_string(),
         })
         .collect::<Vec<_>>()
         .into_iter()

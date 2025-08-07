@@ -9,10 +9,14 @@ pub use ffmpeg::util::{
 };
 pub use ffmpeg::{Error as FFError, Packet as FFPacket, error::EAGAIN};
 
+/// # Safety
+/// The input slice must be aligned to the size of `f32`.
 pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
     unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE) }
 }
 
+/// # Safety
+/// The input slice must be aligned to the size of `f32`.
 pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
     unsafe {
         std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / f32::BYTE_SIZE)

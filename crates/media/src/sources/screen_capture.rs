@@ -197,6 +197,7 @@ pub struct CropRatio {
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,
         output_type: Option<FrameType>,
@@ -218,10 +219,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
-
-        if fps <= 0 {
-            return Err("FPS must be greater than 0".to_string());
-        }
 
         let captures_audio = audio_tx.is_some();
 
@@ -772,6 +769,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 Ok((sample_buffer, typ)) => {
                     use cidre::sc;
 
+                    #[allow(clippy::useless_transmute)]
                     let sample_buffer = unsafe {
                         std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
                     };
@@ -801,10 +799,11 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             };
 
                             if check_skip_send().is_ok()
-                                && video_tx.send((sample_buffer, relative_time)).is_err() {
-                                    error!("Pipeline is unreachable. Shutting down recording.");
-                                    return ControlFlow::Continue(());
-                                }
+                                && video_tx.send((sample_buffer, relative_time)).is_err()
+                            {
+                                error!("Pipeline is unreachable. Shutting down recording.");
+                                return ControlFlow::Continue(());
+                            }
                         }
                         sc::stream::OutputType::Audio => {
                             use ffmpeg::ChannelLayout;

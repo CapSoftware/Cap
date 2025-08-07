@@ -138,7 +138,7 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
-                crate::open_project_from_path(&project_path.into(), app.clone())
+                crate::open_project_from_path(&project_path, app.clone())
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await

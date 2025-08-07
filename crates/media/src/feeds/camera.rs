@@ -357,7 +357,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
 
         ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 
-        ready_signal.take().map(|signal| {
+        if let Some(signal) = ready_signal.take() {
             let video_info = VideoInfo::from_raw_ffmpeg(
                 ff_frame.format(),
                 ff_frame.width(),
@@ -366,7 +366,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
             );
 
             let _ = signal.send((video_info, frame.reference_time));
-        });
+        }
 
         let _ = frame_tx.send(RawCameraFrame {
             frame: ff_frame,

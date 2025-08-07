@@ -7,8 +7,8 @@ pub fn main() {
 
     let data = AudioData::from_file(&path).unwrap();
 
-    dbg!(data.channels());
-    dbg!(data.sample_count());
-    dbg!(data.samples().len());
-    dbg!(data.samples().len() as f32 / AudioData::SAMPLE_RATE as f32 / data.channels() as f32);
+    data.channels();
+    data.sample_count();
+    data.samples().len();
+    data.samples().len() as f32 / AudioData::SAMPLE_RATE as f32;data.channels() as f32;
 }

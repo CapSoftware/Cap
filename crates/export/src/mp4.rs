@@ -155,14 +155,17 @@ impl Mp4ExportSettings {
                             frame
                         });
 
-                    if let Err(_) = frame_tx.send(MP4Input {
-                        audio: audio_frame,
-                        video: video_info.wrap_frame(
-                            &frame.data,
-                            frame_number as i64,
-                            frame.padded_bytes_per_row as usize,
-                        ),
-                    }) {
+                    if frame_tx
+                        .send(MP4Input {
+                            audio: audio_frame,
+                            video: video_info.wrap_frame(
+                                &frame.data,
+                                frame_number as i64,
+                                frame.padded_bytes_per_row as usize,
+                            ),
+                        })
+                        .is_err()
+                    {
                         warn!("Renderer task sender dropped. Exiting");
                         return Ok(());
                     }
