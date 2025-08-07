@@ -135,7 +135,7 @@ impl DisplayImpl {
         }
     }
 
-    pub fn logical_position_raw(&self) -> LogicalPosition {
+    pub fn logical_position(&self) -> LogicalPosition {
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
 

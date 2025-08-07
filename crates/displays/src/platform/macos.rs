@@ -11,9 +11,6 @@ use core_graphics::{
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
-// Some notes about macOS:
-// Coordinate system origin is top left of primary. Down and right are positive.
-
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
 
@@ -52,11 +49,7 @@ impl DisplayImpl {
         }
     }
 
-    // Logical position relative to the CoreGraphics coordinate system
-    // - Origin: Top Left
-    // - Move Right: Positive
-    // - Move Down: Positive
-    pub fn logical_position_raw(&self) -> LogicalPosition {
+    pub fn logical_position(&self) -> LogicalPosition {
         let rect = unsafe { CGDisplayBounds(self.0.id) };
 
         LogicalPosition {
@@ -70,7 +63,7 @@ impl DisplayImpl {
 
         Self::list().into_iter().find(|display| {
             let bounds = LogicalBounds {
-                position: display.logical_position_raw(),
+                position: display.logical_position(),
                 size: display.logical_size(),
             };
             bounds.contains_point(cursor)

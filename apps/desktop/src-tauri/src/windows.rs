@@ -256,7 +256,7 @@ impl ShowCapWindow {
                 };
 
                 let size = display.raw_handle().logical_size();
-                let position = display.raw_handle().logical_position_raw();
+                let position = display.raw_handle().logical_position();
 
                 let mut window_builder = self
                     .window_builder(
