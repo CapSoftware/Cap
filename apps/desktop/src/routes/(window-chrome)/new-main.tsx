@@ -64,9 +64,9 @@ export default function () {
   const generalSettings = generalSettingsStore.createQuery();
 
   // We do this on focus so the window doesn't get revealed when toggling the setting
+  const navigate = useNavigate();
   createEventListener(window, "focus", () => {
-    if (generalSettings.data?.enableNewRecordingFlow === false)
-      location.pathname = "/";
+    if (generalSettings.data?.enableNewRecordingFlow === false) navigate("/");
   });
 
   return (
