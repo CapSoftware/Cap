@@ -1,15 +1,15 @@
 #![cfg(target_os = "macos")]
 
-use std::{
-    fmt::Display,
-    time::{Duration, Instant},
-};
-
 use cidre::{
     av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
     cv::{PixelBuf, pixel_buffer::LockFlags},
     *,
 };
+use std::{
+    fmt::Display,
+    time::{Duration, Instant},
+};
+use tracing::warn;
 
 pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
     let mut device_types = vec![
@@ -118,7 +118,11 @@ impl VideoDataOutputSampleBufDelegateImpl for CallbackOutputDelegate {
             .stream_start
             .get_or_insert_with(|| (Instant::now(), pres_timestamp));
 
-        let timestamp = pres_timestamp - stream_start.1;
+        let Some(timestamp) = pres_timestamp.checked_sub(stream_start.1) else {
+            warn!("PTS {pres_timestamp:?} less than stream start {stream_start:?}");
+
+            return;
+        };
 
         let capture_begin_time = stream_start.0 + capture_begin_time.unwrap_or(Duration::ZERO);
 
