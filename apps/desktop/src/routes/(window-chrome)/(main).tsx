@@ -422,7 +422,6 @@ function Page() {
         options={cameras}
         value={options.cameraID() ?? null}
         onChange={(v) => {
-          console.log({ v });
           if (!v) setCamera.mutate(null);
           else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
           else setCamera.mutate({ DeviceID: v.device_id });
@@ -493,7 +492,6 @@ function useRequestPermission() {
         console.log("wowzers");
         await commands.resetMicrophonePermissions();
       }
-      console.log({ type });
       await commands.requestPermission(type);
       await queryClient.refetchQueries(getPermissions);
     } catch (error) {
@@ -575,7 +573,6 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
-    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {
@@ -941,7 +938,6 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       disabled={props.disabled}
       onClick={() => {
         if (props.options.length > 1) {
-          console.log({ options: props.options, value: props.value });
           Promise.all(
             props.options.map((o) =>
               CheckMenuItem.new({
