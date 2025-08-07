@@ -1,3 +1,6 @@
+#![cfg(windows)]
+#![cfg_attr(not(windows), allow(clippy::missing_entry_point))]
+
 use std::{fmt::Display, time::Duration};
 
 use cap_camera_mediafoundation::DeviceSourcesIterator;

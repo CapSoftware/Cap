@@ -800,12 +800,11 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 Ok::<(), ()>(())
                             };
 
-                            if check_skip_send().is_ok() {
-                                if video_tx.send((sample_buffer, relative_time)).is_err() {
+                            if check_skip_send().is_ok()
+                                && video_tx.send((sample_buffer, relative_time)).is_err() {
                                     error!("Pipeline is unreachable. Shutting down recording.");
                                     return ControlFlow::Continue(());
                                 }
-                            }
                         }
                         sc::stream::OutputType::Audio => {
                             use ffmpeg::ChannelLayout;

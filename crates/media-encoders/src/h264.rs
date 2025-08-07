@@ -206,13 +206,15 @@ impl H264Encoder {
 
 fn get_codec_and_options(config: &VideoInfo, preset: H264Preset) -> Option<(Codec, Dictionary)> {
     let encoder_name = {
-        if cfg!(target_os = "macos") {
-            "libx264"
-            // looks terrible rn :(
-            // "h264_videotoolbox"
-        } else {
-            "libx264"
-        }
+        // if cfg!(target_os = "macos") {
+        //     "libx264"
+        //     // looks terrible rn :(
+        //     // "h264_videotoolbox"
+        // } else {
+        //     "libx264"
+        // }
+
+        "libx264"
     };
 
     if let Some(codec) = encoder::find_by_name(encoder_name) {

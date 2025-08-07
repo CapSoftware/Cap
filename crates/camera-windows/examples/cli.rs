@@ -1,4 +1,5 @@
 #![cfg(windows)]
+#![cfg_attr(not(windows), allow(clippy::missing_entry_point))]
 
 use std::{ops::Deref, time::Duration};
 

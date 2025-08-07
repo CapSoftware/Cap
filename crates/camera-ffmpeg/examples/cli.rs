@@ -28,7 +28,7 @@ fn main() {
                 return;
             };
 
-            (ff_frame.width(), ff_frame.height(), ff_frame.format());
+            ff_frame.width();ff_frame.height();ff_frame.format();
         })
         .unwrap();
 

@@ -486,16 +486,3 @@ pub fn logical_monitor_bounds(monitor_id: u32) -> Option<LogicalBounds> {
         None
     }
 }
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn bruh() {
-        MonitorHandle::list_all()
-            .into_iter()
-            .map(|v| logical_monitor_bounds(v.0))
-            .collect::<Vec<_>>();
-    }
-}
