@@ -61,21 +61,23 @@ export function CustomDomain() {
             Set up a custom domain for your organization's shared caps and make
             it unique.
           </p>
-          <div className="flex gap-3 items-center pt-3">
-            {isVerified && orgCustomDomain ? (
-              <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-green-900 rounded-full">
+          {isVerified && orgCustomDomain ? (
+            <div className="pt-4">
+              <div className="flex gap-2 items-center px-3 py-1 text-sm bg-green-900 rounded-full w-fit">
                 <CheckCircle className="text-green-200 size-3" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">verified</span></p>
               </div>
-            ) : orgCustomDomain ? (
-              <div className="flex gap-2 items-center px-3 py-1.5 text-sm bg-red-900 rounded-full">
+            </div>
+          ) : orgCustomDomain ? (
+            <div className="pt-4">
+              <div className="flex gap-2 items-center px-3 py-1 text-sm bg-red-900 rounded-full w-fit">
                 <XCircle className="text-red-200 size-3" />
                 <p className="text-xs italic font-medium text-white">{orgCustomDomain}
                   <span className="ml-1 not-italic text-white/60">not verified</span></p>
               </div>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
         <Button
           type="submit"

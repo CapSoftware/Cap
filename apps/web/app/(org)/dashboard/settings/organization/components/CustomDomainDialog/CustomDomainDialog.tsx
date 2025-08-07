@@ -148,6 +148,7 @@ const CustomDomainDialog = ({
 
       setIsVerified(data.verified);
       setDomainConfig(data.config);
+      setInitialConfigLoading(false);
 
       if (showToasts) {
         if (data.verified) {
@@ -169,6 +170,7 @@ const CustomDomainDialog = ({
       }
     } finally {
       setVerifying(false);
+      setInitialConfigLoading(false);
     }
   };
 
@@ -287,12 +289,14 @@ const CustomDomainDialog = ({
         );
       }
 
+
       const data = await updateDomain(
         cleanedDomain,
         activeOrganization?.organization.id as string
       )
 
       toast.success("Domain settings updated");
+      router.refresh();
 
       if (data) {
         setDomainConfig(data.status);
@@ -313,7 +317,6 @@ const CustomDomainDialog = ({
       );
     } finally {
       setLoading(false);
-      setInitialConfigLoading(false);
     }
   };
 
