@@ -239,10 +239,7 @@ impl ShowCapWindow {
                     let _ = main.close();
                 };
 
-                
-
-                self
-                    .window_builder(app, "/editor")
+                self.window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
@@ -588,10 +585,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             let c_win = target_window.clone();
             target_window.on_window_event(move |event| match event {
                 tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(
-                        &c_win.as_ref().window(),
-                        controls_inset,
-                    );
+                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
                 }
                 _ => {}
             });

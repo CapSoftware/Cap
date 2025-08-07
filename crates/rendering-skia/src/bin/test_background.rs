@@ -234,9 +234,7 @@ fn test_gradient_angles(
                 println!("   ✓ Saved gradient with angle {angle} to: {path}");
             }
             None => {
-                println!(
-                    "   ✗ Failed to encode gradient angle {angle} image to PNG"
-                );
+                println!("   ✗ Failed to encode gradient angle {angle} image to PNG");
             }
         }
     }

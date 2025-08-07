@@ -217,8 +217,7 @@ pub async fn upload_video(
         }
     });
 
-    let response =
-        video_upload.map_err(|e| format!("Failed to send upload file request: {e}"))?;
+    let response = video_upload.map_err(|e| format!("Failed to send upload file request: {e}"))?;
 
     if response.status().is_success() {
         println!("Video uploaded successfully");
@@ -348,9 +347,7 @@ pub async fn create_or_get_video(
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
-        format!(
-            "Failed to deserialize response: {e}. Response body: {response_text}"
-        )
+        format!("Failed to deserialize response: {e}. Response body: {response_text}")
     })?;
 
     Ok(config)
@@ -554,7 +551,7 @@ impl InstantMultipartUpload {
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
         use std::time::Duration;
-        
+
         use tokio::time::sleep;
 
         // --------------------------------------------
@@ -796,9 +793,7 @@ impl InstantMultipartUpload {
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     total_read += n;
-                    println!(
-                        "Read {n} bytes, total so far: {total_read}/{bytes_to_read}"
-                    );
+                    println!("Read {n} bytes, total so far: {total_read}/{bytes_to_read}");
                 }
                 Err(e) => return Err(format!("Failed to read chunk from file: {e}")),
             }

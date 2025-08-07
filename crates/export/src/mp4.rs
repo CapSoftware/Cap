@@ -68,7 +68,8 @@ impl Mp4ExportSettings {
 
         let audio_segments = get_audio_segments(&base.segments);
 
-        let mut audio_renderer = audio_segments.first()
+        let mut audio_renderer = audio_segments
+            .first()
             .filter(|_| !base.project_config.audio.mute)
             .map(|_| AudioRenderer::new(audio_segments.clone()));
         let has_audio = audio_renderer.is_some();

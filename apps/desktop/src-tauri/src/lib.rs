@@ -463,9 +463,7 @@ async fn create_screenshot(
     output: PathBuf,
     size: Option<(u32, u32)>,
 ) -> Result<(), String> {
-    println!(
-        "Creating screenshot: input={input:?}, output={output:?}, size={size:?}"
-    );
+    println!("Creating screenshot: input={input:?}, output={output:?}, size={size:?}");
 
     let result: Result<(), String> = tokio::task::spawn_blocking(move || -> Result<(), String> {
         ffmpeg::init().map_err(|e| {
@@ -569,9 +567,7 @@ async fn create_screenshot(
 }
 
 async fn create_thumbnail(input: PathBuf, output: PathBuf, size: (u32, u32)) -> Result<(), String> {
-    println!(
-        "Creating thumbnail: input={input:?}, output={output:?}, size={size:?}"
-    );
+    println!("Creating thumbnail: input={input:?}, output={output:?}, size={size:?}");
 
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let img = image::open(&input).map_err(|e| {
@@ -633,20 +629,19 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
         return Err(format!("Source file {src} does not exist"));
     }
 
-    if !is_screenshot && !is_gif
-        && !is_valid_mp4(src_path) {
-            let mut attempts = 0;
-            while attempts < 10 {
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                if is_valid_mp4(src_path) {
-                    break;
-                }
-                attempts += 1;
+    if !is_screenshot && !is_gif && !is_valid_mp4(src_path) {
+        let mut attempts = 0;
+        while attempts < 10 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if is_valid_mp4(src_path) {
+                break;
             }
-            if attempts == 10 {
-                return Err("Source video file is not a valid MP4".to_string());
-            }
+            attempts += 1;
         }
+        if attempts == 10 {
+            return Err("Source video file is not a valid MP4".to_string());
+        }
+    }
 
     if let Some(parent) = std::path::Path::new(&dst).parent() {
         tokio::fs::create_dir_all(parent)
@@ -689,9 +684,7 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                println!(
-                    "Successfully copied {bytes} bytes from {src} to {dst}"
-                );
+                println!("Successfully copied {bytes} bytes from {src} to {dst}");
 
                 notifications::send_notification(
                     &app,
@@ -936,9 +929,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         let current_duration = match Mp4Reader::read_header(reader, file_size) {
             Ok(mp4) => mp4.duration().as_secs_f64(),
             Err(e) => {
-                println!(
-                    "Failed to read MP4 header: {e}. Falling back to default duration."
-                );
+                println!("Failed to read MP4 header: {e}. Falling back to default duration.");
                 0.0_f64
             }
         };
@@ -1392,9 +1383,7 @@ async fn save_file_dialog(
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    println!(
-        "save_file_dialog called with file_name: {file_name}, file_type: {file_type}"
-    );
+    println!("save_file_dialog called with file_name: {file_name}, file_type: {file_type}");
 
     let file_name = file_name
         .strip_suffix(".cap")
@@ -1417,9 +1406,7 @@ async fn save_file_dialog(
         }
     };
 
-    println!(
-        "Showing save dialog with name: {name}, extension: {extension}"
-    );
+    println!("Showing save dialog with name: {name}, extension: {extension}");
 
     let (tx, rx) = std::sync::mpsc::channel();
     println!("Created channel for communication");
@@ -1851,7 +1838,6 @@ async fn set_camera_preview_state(
 ) -> Result<(), ()> {
     store.save(&state).map_err(|err| {
         error!("Error saving camera window state: {err}");
-        
     })?;
 
     Ok(())

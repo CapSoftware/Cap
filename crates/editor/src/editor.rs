@@ -3,8 +3,8 @@ use std::sync::Arc;
 use cap_media::frame_ws::WSFrame;
 use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta,
-    ProjectUniforms, RenderVideoConstants, RendererLayers,
+    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},

@@ -169,10 +169,7 @@ impl From<XY<f32>> for XY<f64> {
 
 impl<T> From<(T, T)> for XY<T> {
     fn from(val: (T, T)) -> Self {
-        XY {
-            x: val.0,
-            y: val.1,
-        }
+        XY { x: val.0, y: val.1 }
     }
 }
 
@@ -547,7 +544,6 @@ pub struct CaptionsData {
     pub settings: CaptionSettings,
 }
 
-
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -587,7 +583,6 @@ impl ProjectConfiguration {
             .unwrap_or(Some((frame_time, 0)))
     }
 }
-
 
 pub const SLOW_SMOOTHING_SAMPLES: usize = 24;
 pub const REGULAR_SMOOTHING_SAMPLES: usize = 16;

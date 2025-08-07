@@ -3,8 +3,8 @@ use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
 // use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
-use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_project::StudioRecordingMeta;
+use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_rendering::{
     get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders,
     RenderVideoConstants, SegmentVideoPaths,

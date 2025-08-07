@@ -476,8 +476,7 @@ async fn stop_recording(
     use cap_project::*;
 
     let make_relative = |path: &PathBuf| {
-        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap())
-            .unwrap()
+        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap()).unwrap()
     };
 
     let recv_timestamp = |pipeline: &PipelineOutput| pipeline.first_timestamp_rx.try_recv().ok();

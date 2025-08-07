@@ -391,8 +391,6 @@ pub fn find_cursor_move(cursor: &CursorEvents, time: f32) -> &CursorMoveEvent {
         return &cursor.moves[0];
     }
 
-    
-
     (cursor
         .moves
         .iter()

@@ -3,17 +3,11 @@ pub mod cursor;
 pub mod instant_recording;
 pub mod studio_recording;
 
-
 pub use studio_recording::{
     spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
 
-use cap_media::{
-    feeds::AudioInputFeed,
-    platform::Bounds,
-    sources::*,
-    MediaError,
-};
+use cap_media::{feeds::AudioInputFeed, platform::Bounds, sources::*, MediaError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

@@ -114,8 +114,6 @@ impl CompositeVideoFramePipeline {
             }),
         );
 
-        
-
         device.create_bind_group(
             &(wgpu::BindGroupDescriptor {
                 layout: &self.bind_group_layout,

@@ -75,8 +75,6 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
-            
-
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
@@ -89,8 +87,6 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
             }
 
             let result = loop {
-                
-
                 match source.1.recv() {
                     Ok(frame) => {
                         let _ = screen_encoder.queue_video_frame(frame.0.as_ref());

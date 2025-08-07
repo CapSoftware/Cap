@@ -2,7 +2,6 @@ use flume::{Receiver, Sender, TryRecvError};
 use indexmap::IndexMap;
 use tracing::debug;
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Control {
     Play,

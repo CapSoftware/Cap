@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
-    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingStopped, VideoUploadInfo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStarted,
+    RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -621,7 +621,9 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) { let _ = v.close(); }
+        if let Some(v) = CapWindowId::Camera.get(&handle) {
+            let _ = v.close();
+        }
         app.camera_feed.take();
         app.mic_feed.take();
     }

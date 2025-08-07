@@ -339,7 +339,9 @@ impl MP4AVAssetWriterEncoder {
         self.asset_writer
             .end_session_at_src_time(self.last_timestamp.unwrap_or(cm::Time::zero()));
         self.video_input.mark_as_finished();
-        if let Some(i) = self.audio_input.as_mut() { i.mark_as_finished() }
+        if let Some(i) = self.audio_input.as_mut() {
+            i.mark_as_finished()
+        }
 
         self.asset_writer.finish_writing();
 

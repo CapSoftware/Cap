@@ -350,9 +350,9 @@ impl CaptionsLayer {
                             Err(e) => warn!("Error preparing text: {e:?}"),
                         }
                     }
-                } 
-            } 
-        } 
+                }
+            }
+        }
     }
 
     /// Render the current caption to the frame

@@ -483,8 +483,6 @@ impl GradientOrColorPipeline {
     }
 
     pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
-        
-
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {

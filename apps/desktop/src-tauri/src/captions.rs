@@ -156,9 +156,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         // No matter what, ensure we have mono audio for Whisper
         if channel_count > 1 {
-            log::info!(
-                "Converting final mixed audio from {channel_count} channels to mono"
-            );
+            log::info!("Converting final mixed audio from {channel_count} channels to mono");
             mixed_samples = convert_to_mono(&mixed_samples, channel_count);
             channel_count = 1;
         }
@@ -326,8 +324,8 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         Ok(())
     } else {
         // Handle regular video file
-        let mut input = avformat::input(&video_path)
-            .map_err(|e| format!("Failed to open video file: {e}"))?;
+        let mut input =
+            avformat::input(&video_path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
         let stream = input
             .streams()
@@ -577,9 +575,7 @@ fn process_with_whisper(
         let min_sample = audio_data_f32.iter().fold(f32::MAX, |a, &b| a.min(b));
         let max_sample = audio_data_f32.iter().fold(f32::MIN, |a, &b| a.max(b));
         let avg_sample = audio_data_f32.iter().sum::<f32>() / audio_data_f32.len() as f32;
-        log::info!(
-            "Audio samples - min: {min_sample}, max: {max_sample}, avg: {avg_sample}"
-        );
+        log::info!("Audio samples - min: {min_sample}, max: {max_sample}, avg: {avg_sample}");
 
         // Sample a few values
         let sample_count = audio_data_f32.len().min(10);
