@@ -77,10 +77,29 @@ fn main() {
                 println!("  Application: Unknown");
             }
 
-            // Test icon functionality (currently returns None)
+            // Test icon functionality
             match window.app_icon() {
-                Some(icon_data) => println!("  Icon: {} bytes available", icon_data.len()),
-                None => println!("  Icon: Not implemented yet"),
+                Some(icon_data) => {
+                    println!("  Icon: {} bytes available", icon_data.len());
+                    // On Windows, this returns raw RGBA data
+                    // On macOS, this would return PNG data (when implemented)
+                    if icon_data.len() > 0 {
+                        println!(
+                            "    Format: Raw image data ({}x{} estimated)",
+                            if icon_data.len() == 4096 {
+                                "32"
+                            } else {
+                                "unknown"
+                            },
+                            if icon_data.len() == 4096 {
+                                "32"
+                            } else {
+                                "unknown"
+                            }
+                        );
+                    }
+                }
+                None => println!("  Icon: Not available or not implemented"),
             }
         }
     }

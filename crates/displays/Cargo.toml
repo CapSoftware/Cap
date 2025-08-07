@@ -25,6 +25,7 @@ windows = { workspace = true, features = [
 	"Win32_System_Threading",
 	"Win32_System_Registry",
 	"Win32_UI_WindowsAndMessaging",
+	"Win32_UI_Shell",
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 ] }

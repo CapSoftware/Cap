@@ -77,7 +77,7 @@ export default function () {
                   {screenUnderCursor.name}
                 </span>
                 <span class="text-xs mb-2">
-                  {`${screenUnderCursor.physical_size.height}x${screenUnderCursor.physical_size.width} · ${screenUnderCursor.refresh_rate}FPS`}
+                  {`${screenUnderCursor.physical_size.width}x${screenUnderCursor.physical_size.height} · ${screenUnderCursor.refresh_rate}FPS`}
                 </span>
 
                 <RecordingControls
@@ -125,8 +125,14 @@ export default function () {
                   }px`,
                 }}
               >
+                {/*<span class="text-3xl font-semibold mb-2">
+                  {windowUnderCursor.app_name}
+                </span>*/}
                 <span class="text-3xl font-semibold mb-2">
                   {windowUnderCursor.app_name}
+                </span>
+                <span class="text-xs mb-2">
+                  {`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
                 </span>
                 <RecordingControls
                   target={{
