@@ -4,17 +4,20 @@ import type { NextAuthOptions } from "next-auth";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import WorkOSProvider from "next-auth/providers/workos";
+import CredentialsProvider from "next-auth/providers/credentials";
 import { serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
 import { cookies } from "next/headers";
 import { dub } from "../dub";
+import crypto from "crypto";
 
 import { db } from "../";
 import { users, organizations, organizationMembers } from "../schema";
 import { nanoId } from "../helpers";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
+import { generateOTP } from "./otp";
 
 export const config = {
   maxDuration: 120,
@@ -43,6 +46,33 @@ export const authOptions = (): NextAuthOptions => {
     get providers() {
       if (_providers) return _providers;
       _providers = [
+        CredentialsProvider({
+          id: "otp",
+          name: "OTP",
+          credentials: {
+            email: { label: "Email", type: "email" },
+          },
+          async authorize(credentials) {
+            if (!credentials?.email) return null;
+
+            const [user] = await db()
+              .select()
+              .from(users)
+              .where(eq(users.email, credentials.email))
+              .limit(1);
+
+            if (user) {
+              return {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                image: user.image,
+              };
+            }
+
+            return null;
+          },
+        }),
         GoogleProvider({
           clientId: serverEnv().GOOGLE_CLIENT_ID!,
           clientSecret: serverEnv().GOOGLE_CLIENT_SECRET!,
@@ -71,17 +101,32 @@ export const authOptions = (): NextAuthOptions => {
           },
         }),
         EmailProvider({
-          async sendVerificationRequest({ identifier, url }) {
+          async generateVerificationToken() {
+            return crypto.randomUUID();
+          },
+          async sendVerificationRequest({ identifier, url, token }) {
             console.log("sendVerificationRequest");
+            
+            const otpCode = await generateOTP(identifier);
+            
             if (!serverEnv().RESEND_API_KEY) {
-              console.log(`Login link: ${url}`);
+              console.log("\n");
+              console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+              console.log("🔐 VERIFICATION CODE (Development Mode)");
+              console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+              console.log(`📧 Email: ${identifier}`);
+              console.log(`🔢 Code: ${otpCode}`);
+              console.log(`⏱️  Expires in: 10 minutes`);
+              console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+              console.log("\n");
             } else {
-              console.log({ identifier, url });
-              const email = LoginLink({ url, email: identifier });
+              console.log({ identifier, otpCode });
+              const { OTPEmail } = await import("../emails/otp-email");
+              const email = OTPEmail({ code: otpCode, email: identifier });
               console.log({ email });
               await sendEmail({
                 email: identifier,
-                subject: `Your Cap Login Link`,
+                subject: `Your Cap Verification Code`,
                 react: email,
               });
             }
@@ -104,7 +149,6 @@ export const authOptions = (): NextAuthOptions => {
     },
     events: {
       async signIn({ user, account, isNewUser }) {
-        // Check if user needs organization setup (new user or guest checkout user)
         const [dbUser] = await db()
           .select()
           .from(users)
@@ -131,10 +175,7 @@ export const authOptions = (): NextAuthOptions => {
 
               console.log("Dub tracking successful:", trackResult);
 
-              // Properly delete the dub_id cookie
               cookies().delete("dub_id");
-
-              // Also delete dub_partner_data if it exists
               if (dubPartnerData) {
                 cookies().delete("dub_partner_data");
               }
