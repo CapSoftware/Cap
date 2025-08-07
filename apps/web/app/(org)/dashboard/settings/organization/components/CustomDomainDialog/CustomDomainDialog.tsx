@@ -290,10 +290,9 @@ const CustomDomainDialog = ({
       const data = await updateDomain(
         cleanedDomain,
         activeOrganization?.organization.id as string
-      );
+      )
 
       toast.success("Domain settings updated");
-      router.refresh();
 
       if (data) {
         setDomainConfig(data.status);
