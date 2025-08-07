@@ -2,7 +2,7 @@ use crate::SkiaRenderingError;
 use skia_safe::{Color, Surface, gpu::DirectContext, surfaces};
 
 #[cfg(target_os = "macos")]
-use skia_safe::gpu::{SurfaceOrigin, mtl, mtl};
+use skia_safe::gpu::{SurfaceOrigin, mtl};
 
 pub struct SkiaRenderContext {
     #[cfg(target_os = "macos")]
@@ -52,6 +52,7 @@ impl SkiaRenderContext {
     #[cfg(target_os = "macos")]
     fn create_metal_context() -> Result<GpuContext, SkiaRenderingError> {
         use foreign_types_shared::ForeignType;
+        use skia_safe::gpu;
 
         let device =
             metal::Device::system_default().ok_or_else(|| SkiaRenderingError::NoGpuContext)?;
@@ -88,6 +89,8 @@ impl SkiaRenderContext {
 
         #[cfg(target_os = "macos")]
         {
+            use skia_safe::gpu;
+
             if let Some(ref mut gpu_context) = self.gpu_context {
                 tracing::debug!("Creating GPU surface with dimensions {}x{}", width, height);
 

@@ -1,4 +1,3 @@
-
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
@@ -53,9 +52,9 @@ pub fn open_permission_settings(_permission: OSPermission) {
 
         // https://doc.rust-lang.org/stable/std/process/struct.Child.html#warning
         tokio::spawn(async move {
-            let _ = process
-                .wait()
-                .map_err(|err| error!("Error waiting for accessibility child process: {err}"));
+            let _ = process.wait().map_err(|err| {
+                tracing::error!("Error waiting for accessibility child process: {err}")
+            });
         });
     }
 }
@@ -66,6 +65,7 @@ pub async fn request_permission(_permission: OSPermission) {
     #[cfg(target_os = "macos")]
     {
         use futures::executor::block_on;
+        use std::thread;
 
         match _permission {
             OSPermission::ScreenRecording => {
@@ -95,13 +95,15 @@ pub async fn request_permission(_permission: OSPermission) {
                 let prompt_key = CFString::new("AXTrustedCheckOptionPrompt");
                 let prompt_value = core_foundation::boolean::CFBoolean::true_value();
 
-                let options =
-                    CFDictionary::from_CFType_pairs(&[(prompt_key.as_CFType(), prompt_value.as_CFType())]);
+                let options = CFDictionary::from_CFType_pairs(&[(
+                    prompt_key.as_CFType(),
+                    prompt_value.as_CFType(),
+                )]);
 
                 unsafe {
                     AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef());
                 }
-            },
+            }
         }
     }
 }

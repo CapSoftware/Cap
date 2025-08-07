@@ -155,8 +155,9 @@ pub struct AVFoundationRecordingHandle {
 }
 
 impl AVFoundationRecordingHandle {
-    pub fn stop_capturing(mut self) {
+    pub fn stop_capturing(mut self) -> Result<(), String> {
         self.session.stop_running();
+        Ok(())
     }
 }
 

@@ -3,7 +3,6 @@ use specta::Type;
 #[cfg(target_os = "windows")]
 pub mod win;
 
-
 #[cfg(target_os = "macos")]
 pub mod macos;
 

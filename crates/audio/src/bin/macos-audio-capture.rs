@@ -61,7 +61,6 @@ mod macos {
         }
     }
 
-    #[tokio::main]
     pub async fn main() {
         let mut cfg = sc::StreamCfg::new();
         cfg.set_captures_audio(true);

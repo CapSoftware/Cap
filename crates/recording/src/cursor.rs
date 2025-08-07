@@ -1,20 +1,10 @@
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
-    pin::pin,
-    time::{Duration, SystemTime},
-};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
 use cap_cursor_info::CursorShape;
 use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
-use cap_utils::spawn_actor;
-use device_query::{DeviceQuery, DeviceState};
-use futures::future::Either;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
 
 pub struct Cursor {
     pub file_name: String,
@@ -48,13 +38,24 @@ impl CursorActor {
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     #[allow(unused)] screen_bounds: Bounds,
-    #[cfg(target_os = "macos")] display: Display,
-    #[cfg(target_os = "macos")] crop_ratio: cap_media::platform::sources::CropRatio,
+    #[cfg(target_os = "macos")] display: cap_displays::Display,
+    #[cfg(target_os = "macos")] crop_ratio: cap_media::sources::CropRatio,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
+    use std::{
+        hash::{DefaultHasher, Hash, Hasher},
+        pin::pin,
+        time::Duration,
+    };
+
+    use cap_utils::spawn_actor;
+    use device_query::{DeviceQuery, DeviceState};
+    use futures::future::Either;
+    use tracing::{error, info};
+
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
 

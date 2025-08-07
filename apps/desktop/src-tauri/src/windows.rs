@@ -615,7 +615,7 @@ pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(
         &_window,
         _controls_inset.map(LogicalPosition::from).or_else(|| {
             // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(window.label())
+            CapWindowId::from_str(_window.label())
                 .ok()
                 .and_then(|id| id.traffic_lights_position().flatten())
         }),

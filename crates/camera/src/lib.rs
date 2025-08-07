@@ -231,7 +231,7 @@ pub struct RecordingHandle {
 }
 
 impl RecordingHandle {
-    pub fn stop_capturing(self) -> Result<(), windows_core::Error> {
+    pub fn stop_capturing(self) -> Result<(), String> {
         self.native.stop_capturing()
     }
 }

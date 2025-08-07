@@ -87,8 +87,8 @@ pub struct WindowsCaptureHandle {
 }
 
 impl WindowsCaptureHandle {
-    pub fn stop_capturing(self) -> windows_core::Result<()> {
-        self.inner.stop_capturing()
+    pub fn stop_capturing(self) -> Result<(), String> {
+        self.inner.stop_capturing().map_err(|e| e.to_string())
     }
 }
 

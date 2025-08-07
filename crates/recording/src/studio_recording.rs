@@ -660,6 +660,8 @@ async fn create_segment_pipeline(
         start_time,
     )
     .await?;
+    #[cfg(target_os = "macos")]
+    let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
@@ -868,7 +870,7 @@ async fn create_segment_pipeline(
                 })
                 .unwrap(),
             #[cfg(target_os = "macos")]
-            screen_source.crop_ratio(),
+            screen_crop_ratio,
             cursors_dir.to_path_buf(),
             prev_cursors,
             next_cursors_id,
