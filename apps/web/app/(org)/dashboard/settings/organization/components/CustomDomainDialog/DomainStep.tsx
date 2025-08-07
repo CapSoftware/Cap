@@ -1,4 +1,5 @@
 
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Input } from "@cap/ui";
 import clsx from "clsx";
 
@@ -7,12 +8,13 @@ interface DomainStepProps {
   domain: string;
   setDomain: (domain: string) => void;
   onSubmit: () => void;
-  loading: boolean;
   error?: string;
+  submitLoading?: boolean;
   onClearError: () => void;
 }
 
-export const DomainStep = ({ domain, setDomain, onSubmit, loading, error, onClearError }: DomainStepProps) => {
+export const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, submitLoading }: DomainStepProps) => {
+  const { isSubscribed } = useDashboardContext();
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDomain(e.target.value);
     if (error) {
@@ -29,13 +31,13 @@ export const DomainStep = ({ domain, setDomain, onSubmit, loading, error, onClea
             Enter the custom domain you'd like to use
           </p>
         </div>
-
         <div className="space-y-3">
           <Input
             type="text"
             id="customDomain"
             placeholder="your-domain.com"
             value={domain}
+            disabled={!isSubscribed || submitLoading}
             className={clsx(
               "max-w-[400px] mx-auto",
               error && "border-red-500 focus:border-red-500"

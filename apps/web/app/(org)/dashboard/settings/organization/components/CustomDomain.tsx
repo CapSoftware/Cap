@@ -1,5 +1,5 @@
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { Button, Label } from "@cap/ui";
+import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "../../../Contexts";
@@ -52,11 +52,12 @@ export function CustomDomain() {
         isVerified={isVerified}
         setIsVerified={setIsVerified}
         open={showCustomDomainDialog}
+        setShowUpgradeModal={(arg) => setShowUpgradeModal(arg)}
         onClose={() => setShowCustomDomainDialog(false)}
       />
       <div className="flex gap-3 justify-between items-center w-full h-fit">
         <div className="space-y-1">
-          <Label htmlFor="customDomain">Custom Domain</Label>
+          <h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>
           <p className="text-sm w-full max-w-[375px] text-gray-10">
             Set up a custom domain for your organization's shared caps and make
             it unique.

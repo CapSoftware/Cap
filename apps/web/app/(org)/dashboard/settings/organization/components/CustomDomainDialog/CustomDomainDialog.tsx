@@ -16,13 +16,14 @@ import { useDashboardContext } from "../../../../Contexts";
 import { updateDomain } from "@/actions/organization/update-domain";
 import { useRouter } from "next/navigation";
 import { StepConfig, DomainConfig, StepAction, StepState, StepStatus } from "./types";
-import { VerifyStep } from "./VerifyStep";
-import { DomainStep } from "./DomainStep";
 import { Stepper } from "./Stepper";
 import { faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { CheckCircle, XCircle } from "lucide-react";
-import { SuccesStep } from "./SuccessStep";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { SubscribeContent } from "./SubscribeContent";
+import { SuccesStep } from "./SuccessStep";
+import { DomainStep } from "./DomainStep";
+import { VerifyStep } from "./VerifyStep";
 
 const STEP_CONFIGS: StepConfig[] = [
   {
@@ -104,6 +105,7 @@ interface CustomDomainDialogProps {
   onClose: () => void;
   isVerified: boolean;
   setIsVerified: (value: boolean) => void;
+  setShowUpgradeModal: (arg: boolean) => void;
 }
 
 const CustomDomainDialog = ({
@@ -111,6 +113,7 @@ const CustomDomainDialog = ({
   onClose,
   isVerified,
   setIsVerified,
+  setShowUpgradeModal
 }: CustomDomainDialogProps) => {
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [domain, setDomain] = useState(
@@ -333,7 +336,6 @@ const CustomDomainDialog = ({
     }
   }, [isVerified, stepState.currentIndex])
 
-
   console.log({
     domainConfig,
     domain
@@ -355,14 +357,19 @@ const CustomDomainDialog = ({
           steps={steps}
           onStepClick={handleStepClick}
         />
+
+        <div className="relative w-full h-full">
+
+        {!isSubscribed && <SubscribeContent/>}
+
         <div className="p-5">
           {/* Domain Step */}
           {currentStep.id === 'domain' && (
             <DomainStep
               domain={domain}
               setDomain={setDomain}
+              submitLoading={loading} 
               onSubmit={handleDomainSubmit}
-              loading={loading}
               error={stepState.errors.domain}
               onClearError={() => dispatch({ type: 'CLEAR_ERROR', payload: 'domain' })}
             />
@@ -381,6 +388,8 @@ const CustomDomainDialog = ({
           {currentStep.id === 'success' && (
             <SuccesStep />
           )}
+        </div>  
+          
         </div>
 
         {currentStep.id !== 'success' && (
@@ -433,6 +442,8 @@ const CustomDomainDialog = ({
             )}
 
             {currentStep.id === 'domain' && (
+              <>
+               {isSubscribed ?       
               <Button
                 onClick={handleDomainSubmit}
                 size="sm"
@@ -443,6 +454,20 @@ const CustomDomainDialog = ({
               >
                 Next
               </Button>
+              : (
+                <Button
+                variant="blue"
+                size="sm"
+                onClick={() => {
+                  setShowUpgradeModal(true)
+                  handleClose();
+                }}
+                >
+                  Upgrade To Cap Pro
+                 </Button> 
+              )
+              }
+              </>
             )}
           </DialogFooter>
         )}

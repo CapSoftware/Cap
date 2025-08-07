@@ -77,10 +77,6 @@ html {
   color: #ffffff;
 }
 
-input:-webkit-autofill {
-  transition: all 5000s ease-in-out 0s;
-}
-
 .wrapper {
   @apply mx-auto w-[92%] max-w-screen-2xl;
 }
