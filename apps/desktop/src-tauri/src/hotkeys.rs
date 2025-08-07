@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
+use tracing::error;
 
 #[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy)]
 pub struct Hotkey {
@@ -64,6 +65,9 @@ impl HotkeysStore {
     }
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct OnEscapePress;
+
 pub type HotkeysState = Mutex<HotkeysStore>;
 pub fn init(app: &AppHandle) {
     app.plugin(
@@ -71,6 +75,10 @@ pub fn init(app: &AppHandle) {
             .with_handler(|app, shortcut, event| {
                 if !matches!(event.state(), HotKeyState::Pressed) {
                     return;
+                }
+
+                if shortcut.key == Code::Escape {
+                    OnEscapePress.emit(app).ok();
                 }
 
                 let state = app.state::<HotkeysState>();
@@ -89,7 +97,6 @@ pub fn init(app: &AppHandle) {
     let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
 
     let global_shortcut = app.global_shortcut();
-
     for hotkey in store.hotkeys.values() {
         global_shortcut.register(hotkey.to_shortcut()).ok();
     }

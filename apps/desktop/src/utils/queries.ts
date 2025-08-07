@@ -51,7 +51,7 @@ const getCurrentRecording = queryOptions({
   queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
 });
 
-const listVideoDevices = queryOptions({
+export const listVideoDevices = queryOptions({
   queryKey: ["videoDevices"] as const,
   queryFn: () => commands.listCameras(),
   refetchInterval: 1000,
@@ -87,23 +87,29 @@ export const getPermissions = queryOptions({
 
 export function createOptionsQuery() {
   const PERSIST_KEY = "recording-options-query";
-  const [state, setState] = makePersisted(
-    createStore<{
-      captureTarget: ScreenCaptureTarget;
-      micName: string | null;
-      mode: RecordingMode;
-      captureSystemAudio?: boolean;
-      cameraID?: DeviceOrModelID | null;
-      /** @deprecated */
-      cameraLabel: string | null;
-    }>({
-      captureTarget: { variant: "screen", id: 0 },
-      micName: null,
-      cameraLabel: null,
-      mode: "studio",
-    }),
-    { name: PERSIST_KEY }
-  );
+  const [_state, _setState] = createStore<{
+    captureTarget: ScreenCaptureTarget;
+    micName: string | null;
+    mode: RecordingMode;
+    captureSystemAudio?: boolean;
+    targetMode?: "screen" | "window" | "area" | null;
+    cameraID?: DeviceOrModelID | null;
+    /** @deprecated */
+    cameraLabel: string | null;
+  }>({
+    captureTarget: { variant: "screen", id: 0 },
+    micName: null,
+    cameraLabel: null,
+    mode: "studio",
+  });
+
+  createEventListener(window, "storage", (e) => {
+    if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
+  });
+
+  const [state, setState] = makePersisted([_state, _setState], {
+    name: PERSIST_KEY,
+  });
 
   createEventListener(window, "storage", (e) => {
     if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
@@ -122,7 +128,7 @@ export function createCurrentRecordingQuery() {
 
 export function createLicenseQuery() {
   const query = createQuery(() => ({
-    queryKey: ["bruh"],
+    queryKey: ["licenseQuery"],
     queryFn: async () => {
       const settings = await generalSettingsStore.get();
       const auth = await authStore.get();

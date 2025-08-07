@@ -1,4 +1,3 @@
-import { Button } from "@cap/ui-solid";
 import { useNavigate } from "@solidjs/router";
 import {
   createMutation,
@@ -6,51 +5,70 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { getVersion } from "@tauri-apps/api/app";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import {
+  getCurrentWindow,
+  LogicalSize,
+  primaryMonitor,
+  Window,
+} from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
   ComponentProps,
   createEffect,
   createResource,
   createSignal,
-  ErrorBoundary,
   onCleanup,
   onMount,
   Show,
-  Suspense,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 
-import Mode from "~/components/Mode";
 import Tooltip from "~/components/Tooltip";
-import { identifyUser, trackEvent } from "~/utils/analytics";
+import { trackEvent } from "~/utils/analytics";
 import {
   createCameraMutation,
   createCurrentRecordingQuery,
   createLicenseQuery,
-  createVideoDevicesQuery,
   getPermissions,
   listAudioDevices,
   listScreens,
+  listVideoDevices,
   listWindows,
 } from "~/utils/queries";
 import {
   CameraInfo,
   type CaptureScreen,
-  type CaptureWindow,
   commands,
+  DeviceOrModelID,
   events,
   ScreenCaptureTarget,
 } from "~/utils/tauri";
 
 function getWindowSize() {
   return {
-    width: 300,
-    height: 340,
+    width: 270,
+    height: 255,
   };
 }
 
+const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
+  return cameras.find((c) => {
+    if (!id) return false;
+    return "DeviceID" in id
+      ? id.DeviceID === c.device_id
+      : id.ModelID === c.model_id;
+  });
+};
+
 export default function () {
+  const generalSettings = generalSettingsStore.createQuery();
+
+  // We do this on focus so the window doesn't get revealed when toggling the setting
+  const navigate = useNavigate();
+  createEventListener(window, "focus", () => {
+    if (generalSettings.data?.enableNewRecordingFlow === false) navigate("/");
+  });
+
   return (
     <RecordingOptionsProvider>
       <Page />
@@ -61,44 +79,18 @@ export default function () {
 function Page() {
   const { rawOptions, setOptions } = useRecordingOptions();
 
-  const currentRecording = createCurrentRecordingQuery();
-  const generalSettings = generalSettingsStore.createQuery();
-
-  // We do this on focus so the window doesn't get revealed when toggling the setting
-  const navigate = useNavigate();
-  createEventListener(window, "focus", () => {
-    if (generalSettings.data?.enableNewRecordingFlow === true)
-      navigate("/new-main");
-  });
-
-  const isRecording = () => !!currentRecording.data;
-
   const license = createLicenseQuery();
 
   createUpdateCheck();
 
-  const auth = authStore.createQuery();
-
   onMount(async () => {
-    const auth = await authStore.get();
-    const userId = auth?.user_id;
-    if (!userId) return;
-
-    const trackedSession = localStorage.getItem("tracked_signin_session");
-
-    if (trackedSession !== userId) {
-      console.log("New auth session detected, tracking sign in event");
-      identifyUser(userId);
-      trackEvent("user_signed_in", { platform: "desktop" });
-      localStorage.setItem("tracked_signin_session", userId);
-    } else {
-      console.log("Auth session already tracked, skipping sign in event");
-    }
-  });
-
-  onMount(() => {
     // Enforce window size with multiple safeguards
     const currentWindow = getCurrentWindow();
+
+    // We resize the window on mount as the user could be switching to the new recording flow
+    // which has a differently sized window.
+    const size = getWindowSize();
+    currentWindow.setSize(new LogicalSize(size.width, size.height));
 
     // Check size when app regains focus
     const unlistenFocus = currentWindow.onFocusChanged(
@@ -122,22 +114,32 @@ function Page() {
       (await unlistenFocus)?.();
       (await unlistenResize)?.();
     });
+
+    const monitor = await primaryMonitor();
+    if (!monitor) return;
   });
 
   createEffect(() => {
-    const size = getWindowSize();
-    getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
+    if (rawOptions.targetMode) commands.openTargetSelectOverlays();
+    else commands.closeTargetSelectOverlays();
   });
 
   const screens = createQuery(() => listScreens);
   const windows = createQuery(() => listWindows);
-  const cameras = createVideoDevicesQuery();
+  const cameras = createQuery(() => listVideoDevices);
   const mics = createQuery(() => listAudioDevices);
 
-  // these all avoid suspending
-  const _screens = () => (screens.isPending ? [] : screens.data);
-  const _windows = () => (windows.isPending ? [] : windows.data);
-  const _mics = () => (mics.isPending ? [] : mics.data);
+  cameras.promise.then((cameras) => {
+    if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
+      setOptions("cameraLabel", null);
+    }
+  });
+
+  mics.promise.then((mics) => {
+    if (rawOptions.micName && !mics.includes(rawOptions.micName)) {
+      setOptions("micName", null);
+    }
+  });
 
   // these options take the raw config values and combine them with the available options,
   // allowing us to define fallbacks if the selected options aren't actually available
@@ -147,10 +149,12 @@ function Page() {
 
       if (rawOptions.captureTarget.variant === "screen") {
         const screenId = rawOptions.captureTarget.id;
-        screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+        screen =
+          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
       } else if (rawOptions.captureTarget.variant === "area") {
         const screenId = rawOptions.captureTarget.screen;
-        screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+        screen =
+          screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
       }
 
       return screen;
@@ -160,19 +164,16 @@ function Page() {
 
       if (rawOptions.captureTarget.variant === "window") {
         const windowId = rawOptions.captureTarget.id;
-        win = _windows()?.find((s) => s.id === windowId) ?? _windows()?.[0];
+        win = windows.data?.find((s) => s.id === windowId) ?? windows.data?.[0];
       }
 
       return win;
     },
-    cameraID: () =>
-      cameras.find((c) => {
-        const { cameraID } = rawOptions;
-        if (!cameraID) return;
-        if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
-        if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
-          return c;
-      }),
+    camera: () => {
+      if (!rawOptions.cameraID) return undefined;
+      return findCamera(cameras.data || [], rawOptions.cameraID);
+    },
+
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
       switch (rawOptions.captureTarget.variant) {
@@ -192,7 +193,7 @@ function Page() {
 
   // if target is window and no windows are available, switch to screen capture
   createEffect(() => {
-    if (options.target().variant === "window" && _windows()?.length === 0) {
+    if (options.target().variant === "window" && windows.data?.length === 0) {
       setOptions(
         "captureTarget",
         reconcile({
@@ -202,18 +203,6 @@ function Page() {
       );
     }
   });
-
-  const toggleRecording = createMutation(() => ({
-    mutationFn: async () => {
-      if (!isRecording()) {
-        await commands.startRecording({
-          capture_target: options.target(),
-          mode: rawOptions.mode,
-          capture_system_audio: rawOptions.captureSystemAudio,
-        });
-      } else await commands.stopRecording();
-    },
-  }));
 
   const setMicInput = createMutation(() => ({
     mutationFn: async (name: string | null) => {
@@ -225,11 +214,15 @@ function Page() {
   const setCamera = createCameraMutation();
 
   onMount(() => {
-    if (rawOptions.cameraID) setCamera.mutate(rawOptions.cameraID);
+    if (rawOptions.cameraID && "ModelID" in rawOptions.cameraID)
+      setCamera.mutate({ ModelID: rawOptions.cameraID.ModelID });
+    else if (rawOptions.cameraID && "DeviceID" in rawOptions.cameraID)
+      setCamera.mutate({ DeviceID: rawOptions.cameraID.DeviceID });
+    else setCamera.mutate(null);
   });
 
   return (
-    <div class="flex justify-center flex-col p-[1rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
+    <div class="flex justify-center flex-col p-[0.75rem] gap-[0.75rem] text-[0.875rem] font-[400] h-full text-[--text-primary]">
       <WindowChromeHeader hideMaximize>
         <div
           dir={ostype() === "windows" ? "rtl" : "rtl"}
@@ -289,201 +282,50 @@ function Page() {
           )}
         </div>
       </WindowChromeHeader>
-      <div class="flex items-center justify-between pb-[0.25rem]">
-        <div class="flex items-center space-x-1">
-          <a
-            class="*:w-[92px] *:h-auto text-[--text-primary]"
-            target="_blank"
-            href={
-              auth.data
-                ? `${import.meta.env.VITE_SERVER_URL}/dashboard`
-                : import.meta.env.VITE_SERVER_URL
-            }
-          >
-            <IconCapLogoFullDark class="hidden dark:block" />
-            <IconCapLogoFull class="block dark:hidden" />
-          </a>
-          <ErrorBoundary fallback={<></>}>
-            <Suspense>
-              <span
-                onClick={async () => {
-                  if (license.data?.type !== "pro") {
-                    await commands.showWindow("Upgrade");
-                  }
-                }}
-                class={cx(
-                  "text-[0.6rem] rounded-lg px-1 py-0.5",
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
-                    : "bg-gray-3 cursor-pointer hover:bg-gray-5"
-                )}
-              >
-                {license.data?.type === "commercial"
-                  ? "Commercial"
-                  : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal"}
-              </span>
-            </Suspense>
-          </ErrorBoundary>
-        </div>
-        <Mode />
-      </div>
-      <div>
-        <AreaSelectButton
-          screen={options.screen()}
-          targetVariant={
-            rawOptions.captureTarget.variant === "window"
-              ? "other"
-              : rawOptions.captureTarget.variant
+      <div class="flex flex-row items-stretch gap-1.5 w-full text-xs text-gray-11">
+        <TargetTypeButton
+          selected={rawOptions.targetMode === "screen"}
+          Component={IconMdiMonitor}
+          onClick={() =>
+            setOptions("targetMode", (v) => (v === "screen" ? null : "screen"))
           }
-          onChange={(area) => {
-            if (!area)
-              setOptions(
-                "captureTarget",
-                reconcile({
-                  variant: "screen",
-                  id: options.screen()?.id ?? -1,
-                })
-              );
-          }}
+          name="Screen"
         />
-        <div
-          class={cx(
-            "flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
-            (rawOptions.captureTarget.variant === "screen" ||
-              rawOptions.captureTarget.variant === "area") &&
-              "ml-[2.4rem]"
-          )}
-          style={{
-            "transition-timing-function":
-              "cubic-bezier(0.785, 0.135, 0.15, 0.86)",
-          }}
-        >
-          <div
-            class="w-1/2 absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-300 outline-offset-2 rounded-[0.6rem] overflow-hidden"
-            style={{
-              transform:
-                rawOptions.captureTarget.variant === "window"
-                  ? "translateX(100%)"
-                  : undefined,
-            }}
-          >
-            <div class="flex-1 bg-gray-2" />
-          </div>
-          <TargetSelect<CaptureScreen>
-            options={_screens() ?? []}
-            onChange={(value) => {
-              if (!value) return;
-
-              trackEvent("display_selected", {
-                display_id: value.id,
-                display_name: value.name,
-                refresh_rate: value.refresh_rate,
-              });
-
-              setOptions(
-                "captureTarget",
-                reconcile({ variant: "screen", id: value.id })
-              );
-            }}
-            value={options.screen() ?? null}
-            placeholder="Screen"
-            optionsEmptyText="No screens found"
-            selected={
-              rawOptions.captureTarget.variant === "screen" ||
-              rawOptions.captureTarget.variant === "area"
-            }
-          />
-          <TargetSelect<CaptureWindow>
-            options={_windows() ?? []}
-            onChange={(value) => {
-              if (!value) return;
-
-              trackEvent("window_selected", {
-                window_id: value.id,
-                window_name: value.name,
-                owner_name: value.owner_name,
-                refresh_rate: value.refresh_rate,
-              });
-
-              setOptions(
-                "captureTarget",
-                reconcile({ variant: "window", id: value.id })
-              );
-            }}
-            value={options.window() ?? null}
-            placeholder="Window"
-            optionsEmptyText="No windows found"
-            selected={rawOptions.captureTarget.variant === "window"}
-            getName={(value) =>
-              platform() === "windows"
-                ? value.name
-                : `${value.owner_name} | ${value.name}`
-            }
-            disabled={_windows()?.length === 0}
-          />
-        </div>
+        <TargetTypeButton
+          selected={rawOptions.targetMode === "window"}
+          Component={IconLucideAppWindowMac}
+          onClick={() =>
+            setOptions("targetMode", (v) => (v === "window" ? null : "window"))
+          }
+          name="Window"
+        />
+        <TargetTypeButton
+          selected={rawOptions.targetMode === "area"}
+          Component={IconMaterialSymbolsScreenshotFrame2Rounded}
+          onClick={() =>
+            setOptions("targetMode", (v) => (v === "area" ? null : "area"))
+          }
+          name="Area"
+        />
       </div>
       <CameraSelect
-        options={cameras}
-        value={options.cameraID() ?? null}
-        onChange={(v) => {
-          if (!v) setCamera.mutate(null);
-          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
-          else setCamera.mutate({ DeviceID: v.device_id });
+        disabled={cameras.isPending}
+        options={cameras.data ?? []}
+        value={options.camera() ?? null}
+        onChange={(c) => {
+          if (!c) setCamera.mutate(null);
+          else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+          else setCamera.mutate({ DeviceID: c.device_id });
         }}
       />
       <MicrophoneSelect
         disabled={mics.isPending}
-        options={_mics() ?? []}
+        options={mics.isPending ? [] : mics.data ?? []}
         // this prevents options.micName() from suspending on initial load
         value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
         onChange={(v) => setMicInput.mutate(v)}
       />
       <SystemAudio />
-      <div class="flex items-center space-x-1 w-full">
-        {rawOptions.mode === "instant" && !auth.data ? (
-          <>
-            <SignInButton>
-              Sign In for{" "}
-              <IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
-              Instant Mode
-            </SignInButton>
-          </>
-        ) : (
-          <Button
-            disabled={toggleRecording.isPending}
-            variant="blue"
-            size="md"
-            onClick={() => toggleRecording.mutate()}
-            class="flex flex-grow justify-center items-center"
-          >
-            {isRecording() ? (
-              "Stop Recording"
-            ) : (
-              <>
-                {rawOptions.mode === "instant" ? (
-                  <IconCapInstant
-                    class={cx(
-                      "size-[0.8rem] mr-1.5",
-                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
-                    )}
-                  />
-                ) : (
-                  <IconCapFilmCut
-                    class={cx(
-                      "size-[0.8rem] mr-2 -mt-[1.5px]",
-                      toggleRecording.isPending ? "opacity-50" : "opacity-100"
-                    )}
-                  />
-                )}
-                Start Recording
-              </>
-            )}
-          </Button>
-        )}
-      </div>
     </div>
   );
 }
@@ -510,24 +352,19 @@ function useRequestPermission() {
 
 import { makePersisted } from "@solid-primitives/storage";
 import { CheckMenuItem, Menu, PredefinedMenuItem } from "@tauri-apps/api/menu";
-import {
-  getCurrentWebviewWindow,
-  WebviewWindow,
-} from "@tauri-apps/api/webviewWindow";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import * as dialog from "@tauri-apps/plugin-dialog";
-import { type as ostype, platform } from "@tauri-apps/plugin-os";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
-import { Transition } from "solid-transition-group";
 
-import { SignInButton } from "~/components/SignInButton";
-import { authStore, generalSettingsStore } from "~/store";
+import { generalSettingsStore } from "~/store";
 import { apiClient } from "~/utils/web-api";
-import { WindowChromeHeader } from "./Context";
 import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
-import { createTauriEventListener } from "~/utils/createEventListener";
+import type { Component } from "solid-js";
+import { WindowChromeHeader } from "./Context";
 import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;
@@ -555,149 +392,13 @@ function createUpdateCheck() {
   });
 }
 
-function AreaSelectButton(props: {
-  targetVariant: "screen" | "area" | "other";
-  screen: CaptureScreen | undefined;
-  onChange(area?: number): void;
-}) {
-  const [areaSelection, setAreaSelection] = createStore({ pending: false });
-
-  async function closeAreaSelection() {
-    setAreaSelection({ pending: false });
-    (await WebviewWindow.getByLabel("capture-area"))?.close();
-  }
-
-  createEffect(() => {
-    if (props.targetVariant === "other") closeAreaSelection();
-  });
-
-  async function handleAreaSelectButtonClick() {
-    closeAreaSelection();
-    if (props.targetVariant === "area") {
-      trackEvent("crop_area_disabled");
-      props.onChange();
-      return;
-    }
-
-    const { screen } = props;
-    if (!screen) return;
-
-    trackEvent("crop_area_enabled", {
-      screen_id: screen.id,
-      screen_name: screen.name,
-    });
-    setAreaSelection({ pending: false });
-    commands.showWindow({
-      CaptureArea: { screen_id: screen.id },
-    });
-  }
-
-  onMount(async () => {
-    const unlistenCaptureAreaWindow =
-      await getCurrentWebviewWindow().listen<boolean>(
-        "cap-window://capture-area/state/pending",
-        (event) => setAreaSelection("pending", event.payload)
-      );
-    onCleanup(unlistenCaptureAreaWindow);
-  });
-
-  return (
-    <Tooltip
-      openDelay={500}
-      content={
-        props.targetVariant === "area"
-          ? "Remove selection"
-          : areaSelection.pending
-          ? "Selecting area..."
-          : "Select area"
-      }
-      childClass="flex fixed flex-row items-center w-8 h-8"
-    >
-      <Transition
-        onEnter={(el, done) => {
-          el.animate(
-            [
-              {
-                transform: "scale(0.5)",
-                opacity: 0,
-                width: "0.2rem",
-                height: "0.2rem",
-              },
-              {
-                transform: "scale(1)",
-                opacity: 1,
-                width: "2rem",
-                height: "2rem",
-              },
-            ],
-            {
-              duration: 450,
-              easing: "cubic-bezier(0.65, 0, 0.35, 1)",
-            }
-          ).finished.then(done);
-        }}
-        onExit={(el, done) =>
-          el
-            .animate(
-              [
-                {
-                  transform: "scale(1)",
-                  opacity: 1,
-                  width: "2rem",
-                  height: "2rem",
-                },
-                {
-                  transform: "scale(0)",
-                  opacity: 0,
-                  width: "0.2rem",
-                  height: "0.2rem",
-                },
-              ],
-              {
-                duration: 500,
-                easing: "ease-in-out",
-              }
-            )
-            .finished.then(done)
-        }
-      >
-        <Show when={props.targetVariant !== "other"}>
-          {(targetScreenOrArea) => (
-            <button
-              type="button"
-              disabled={!targetScreenOrArea}
-              onClick={handleAreaSelectButtonClick}
-              class={cx(
-                "flex items-center justify-center flex-shrink-0 w-full h-full rounded-[0.5rem] transition-all duration-200",
-                "hover:bg-gray-3 disabled:bg-gray-2 disabled:text-gray-11",
-                "focus-visible:outline font-[200] text-[0.875rem]",
-                props.targetVariant === "area"
-                  ? "bg-gray-2 text-blue-9 border border-blue-200"
-                  : "bg-gray-2 text-gray-11"
-              )}
-            >
-              <IconCapCrop
-                class={cx(
-                  "w-[1rem] h-[1rem]",
-                  areaSelection.pending &&
-                    "animate-gentle-bounce duration-1000 text-gray-12 mt-1"
-                )}
-              />
-            </button>
-          )}
-        </Show>
-      </Transition>
-    </Tooltip>
-  );
-}
-
 const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   disabled?: boolean;
   options: CameraInfo[];
   value: CameraInfo | null;
-  onChange: (cameraInfo: CameraInfo | null) => void;
+  onChange: (camera: CameraInfo | null) => void;
 }) {
   const currentRecording = createCurrentRecordingQuery();
   const permissions = createQuery(() => getPermissions);
@@ -707,14 +408,15 @@ function CameraSelect(props: {
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  const onChange = (cameraInfo: CameraInfo | null) => {
-    if (!cameraInfo && !permissionGranted()) return requestPermission("camera");
+  const onChange = (cameraLabel: CameraInfo | null) => {
+    if (!cameraLabel && permissions?.data?.camera !== "granted")
+      return requestPermission("camera");
 
-    props.onChange(cameraInfo);
+    props.onChange(cameraLabel);
 
     trackEvent("camera_selected", {
-      camera_name: cameraInfo,
-      enabled: !!cameraInfo,
+      camera_name: cameraLabel?.display_name ?? null,
+      enabled: !!cameraLabel,
     });
   };
 
@@ -724,11 +426,6 @@ function CameraSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
-          if (!permissionGranted()) {
-            requestPermission("camera");
-            return;
-          }
-
           Promise.all([
             CheckMenuItem.new({
               text: NO_CAMERA,
@@ -797,7 +494,6 @@ function MicrophoneSelect(props: {
 
   const handleMicrophoneChange = async (item: Option | null) => {
     if (!props.options) return;
-
     props.onChange(item ? item.name : null);
     if (!item) setDbs();
 
@@ -807,10 +503,12 @@ function MicrophoneSelect(props: {
     });
   };
 
-  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
+  const result = events.audioInputLevelChange.listen((dbs) => {
     if (!props.value) setDbs();
-    else setDbs(dbs);
+    else setDbs(dbs.payload);
   });
+
+  onCleanup(() => result.then((unsub) => unsub()));
 
   // visual audio level from 0 -> 1
   const audioLevel = () =>
@@ -821,7 +519,6 @@ function MicrophoneSelect(props: {
     if (!props.value || !permissionGranted() || isInitialized()) return;
 
     setIsInitialized(true);
-    handleMicrophoneChange({ name: props.value });
   });
 
   return (
@@ -830,11 +527,6 @@ function MicrophoneSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
-          if (!permissionGranted()) {
-            requestPermission("microphone");
-            return;
-          }
-
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
@@ -914,65 +606,6 @@ function SystemAudio() {
   );
 }
 
-function TargetSelect<T extends { id: number; name: string }>(props: {
-  options: Array<T>;
-  onChange: (value: T) => void;
-  value: T | null;
-  selected: boolean;
-  optionsEmptyText: string;
-  placeholder: string;
-  getName?: (value: T) => string;
-  disabled?: boolean;
-}) {
-  const value = () => {
-    const v = props.value;
-    if (!v) return null;
-
-    const o = props.options.find((o) => o.id === v.id);
-    if (o) return props.value;
-
-    props.onChange(props.options[0]);
-    return props.options[0];
-  };
-
-  const getName = (value?: T) =>
-    value ? props.getName?.(value) ?? value.name : props.placeholder;
-
-  return (
-    <button
-      class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-10 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
-      data-selected={props.selected}
-      disabled={props.disabled}
-      onClick={() => {
-        if (props.options.length > 1) {
-          Promise.all(
-            props.options.map((o) =>
-              CheckMenuItem.new({
-                text: getName(o),
-                checked: o === props.value,
-                action: () => props.onChange(o),
-              })
-            )
-          )
-            .then((items) => Menu.new({ items }))
-            .then((m) => {
-              m.popup();
-            });
-        } else if (props.options.length === 1) props.onChange(props.options[0]);
-      }}
-    >
-      {props.options.length <= 1 ? (
-        <span class="truncate">{value()?.name ?? props.placeholder}</span>
-      ) : (
-        <>
-          <span class="truncate">{value()?.name ?? props.placeholder}</span>
-          <IconCapChevronDown class="shrink-0 size-4" />
-        </>
-      )}
-    </button>
-  );
-}
-
 function TargetSelectInfoPill<T>(props: {
   value: T | null;
   permissionGranted: boolean;
@@ -990,7 +623,6 @@ function TargetSelectInfoPill<T>(props: {
       onClick={(e) => {
         if (!props.permissionGranted) {
           props.requestPermission();
-          e.stopPropagation();
           return;
         }
 
@@ -1094,5 +726,26 @@ function ChangelogButton() {
         )}
       </button>
     </Tooltip>
+  );
+}
+
+function TargetTypeButton(
+  props: {
+    selected: boolean;
+    Component: Component<ComponentProps<"svg">>;
+    name: string;
+  } & ComponentProps<"div">
+) {
+  return (
+    <div
+      {...props}
+      class={cx(
+        "flex-1 text-center flex flex-col items-center justify-end gap-1 py-1.5 rounded-lg transition-colors duration-100",
+        props.selected && "bg-gray-3 text-white"
+      )}
+    >
+      <props.Component class="size-6" />
+      <span>{props.name}</span>
+    </div>
   );
 }

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
-    App, CurrentRecordingChanged, DynLoggingLayer, MutableState, NewStudioRecordingAdded,
-    RecordingStarted, RecordingStopped, VideoUploadInfo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStarted,
+    RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
