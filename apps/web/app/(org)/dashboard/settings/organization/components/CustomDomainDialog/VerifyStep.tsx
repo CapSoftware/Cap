@@ -78,11 +78,12 @@ export const VerifyStep = ({
       </div>
 
       {initialConfigLoading ? (
-        <LoadingSpinner size={36} />
+        <div className="flex justify-center items-center w-full h-20">
+          <LoadingSpinner size={36} />
+        </div>
       ) : (
         !isVerified && domainConfig && (
           <div className="space-y-4">
-            {/* Show both A and CNAME options if available */}
 
             {/* A Record Configuration */}
             {showARecord && (

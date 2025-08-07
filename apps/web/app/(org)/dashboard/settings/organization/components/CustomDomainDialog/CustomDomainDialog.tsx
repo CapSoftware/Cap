@@ -118,7 +118,7 @@ const CustomDomainDialog = ({
   );
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
-  const [initialConfigLoading, setInitialConfigLoading] = useState(false);
+  const [initialConfigLoading, setInitialConfigLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -295,8 +295,6 @@ const CustomDomainDialog = ({
       toast.success("Domain settings updated");
       router.refresh();
 
-      setInitialConfigLoading(true);
-
       if (data) {
         setDomainConfig(data.status);
         setIsVerified(data.verified);
@@ -387,7 +385,7 @@ const CustomDomainDialog = ({
           )}
         </div>
 
-        {currentStep.id !== 'succses' && (
+        {currentStep.id !== 'success' && (
           <DialogFooter>
 
             {currentStep.id === "verify" && (
