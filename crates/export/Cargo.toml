@@ -29,3 +29,6 @@ tracing.workspace = true
 clap = { version = "4.5.41", features = ["derive"] }
 inquire = "0.7.5"
 tokio.workspace = true
+
+[lints]
+workspace = true

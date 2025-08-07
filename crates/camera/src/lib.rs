@@ -122,6 +122,7 @@ pub struct ModelID {
 
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "specta", specta(remote = ModelID))]
+#[allow(dead_code)] // It's never constructed but it's a remote impl
 struct ModelIDType(String);
 
 #[cfg(feature = "serde")]

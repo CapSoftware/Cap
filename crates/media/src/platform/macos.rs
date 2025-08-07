@@ -23,7 +23,7 @@ use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
 use super::LogicalBounds;
 
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(
         dict: CFDictionaryRef,
         rect: *mut CGRect,
@@ -100,7 +100,7 @@ unsafe fn get_nullable_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<*const c_void> {
-    let value_ref = CFDictionaryGetValue(cf_dictionary_ref, key as *const c_void);
+    let value_ref = unsafe { CFDictionaryGetValue(cf_dictionary_ref, key as *const c_void) };
     if value_ref.is_null() {
         return None;
     }

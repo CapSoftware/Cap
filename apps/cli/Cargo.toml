@@ -23,3 +23,6 @@ ffmpeg = { workspace = true }
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
 flume.workspace = true
+
+[lints]
+workspace = true

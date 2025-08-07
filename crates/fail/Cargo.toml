@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 inventory = "0.3.19"
+
+[lints]
+workspace = true
