@@ -167,6 +167,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Error polling wgpu: {0}")]
+    PollError(#[from] wgpu::PollError),
 }
 
 pub struct RenderSegment {

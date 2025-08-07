@@ -59,6 +59,9 @@ windows-sys = "0.59.0"
 windows-capture = "1.5.0"
 percent-encoding = "2.3.1"
 
+[workspace.lints.rust]
+deprecated = "allow" # TODO: Fix this in a follow up PR
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"

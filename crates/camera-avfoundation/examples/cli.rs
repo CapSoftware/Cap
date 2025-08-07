@@ -33,7 +33,7 @@ pub fn main() {
 
     println!(
         "Info for device '{}'",
-        selected_device.localized_name().to_string()
+        selected_device.localized_name()
     );
 
     let formats = selected_device.formats();
@@ -180,15 +180,15 @@ impl<'a> Display for CaptureDeviceSelectOption<'a> {
         write!(
             f,
             "{} ({})",
-            self.0.localized_name().to_string(),
-            self.0.unique_id().to_string()
+            self.0.localized_name(),
+            self.0.unique_id()
         )
     }
 }
 
 impl AsRef<av::CaptureDevice> for CaptureDeviceSelectOption<'_> {
     fn as_ref(&self) -> &av::CaptureDevice {
-        &self.0
+        self.0
     }
 }
 
@@ -196,6 +196,6 @@ impl Deref for CaptureDeviceSelectOption<'_> {
     type Target = av::CaptureDevice;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }

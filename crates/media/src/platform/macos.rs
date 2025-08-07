@@ -112,10 +112,10 @@ unsafe fn get_number_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<u32> {
-    get_nullable_value_from_dict(cf_dictionary_ref, key).and_then(|value_ref| {
+    unsafe { get_nullable_value_from_dict(cf_dictionary_ref, key) }.and_then(|value_ref| {
         let mut value: u32 = 0;
         let value_ptr = &mut value as *mut _ as *mut c_void;
-        match CFNumberGetValue(value_ref as CFNumberRef, kCFNumberIntType, value_ptr) {
+        match unsafe { CFNumberGetValue(value_ref as CFNumberRef, kCFNumberIntType, value_ptr) } {
             true => Some(value),
             false => None,
         }
@@ -126,8 +126,8 @@ unsafe fn get_string_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<String> {
-    get_nullable_value_from_dict(cf_dictionary_ref, key)
-        .map(|value_ref| CFString::from_void(value_ref).to_string())
+    unsafe { get_nullable_value_from_dict(cf_dictionary_ref, key) }
+        .map(|value_ref| unsafe { CFString::from_void(value_ref).to_string() })
 }
 
 fn get_window_bounds(window_cf_dictionary_ref: CFDictionaryRef) -> Option<Bounds> {

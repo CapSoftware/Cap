@@ -359,7 +359,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
                 let (screen_info, target) = screens
                     .into_iter()
-                    .find(|(i, t)| i.id == *id)
+                    .find(|(i, _t)| i.id == *id)
                     .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
                 let bounds = platform::monitor_bounds(screen_info.id);
