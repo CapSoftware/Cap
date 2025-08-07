@@ -45,13 +45,11 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        uniforms: Option<CompositeVideoFrameUniforms>,
-        frame_size: XY<u32>,
-        camera_frame: &DecodedFrame,
+        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame)>,
     ) {
-        self.hidden = uniforms.is_none();
+        self.hidden = data.is_none();
 
-        let Some(uniforms) = uniforms else {
+        let Some((uniforms, frame_size, camera_frame)) = data else {
             return;
         };
 
