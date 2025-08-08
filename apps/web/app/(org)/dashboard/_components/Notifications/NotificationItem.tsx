@@ -4,6 +4,7 @@ import clsx from "clsx";
 import Link from "next/link";
 import moment from "moment";
 import { NotificationType } from "@/lib/Notification";
+import { markAsRead } from "@/actions/notifications/mark-as-read";
 import { Notification as APINotification } from "@cap/web-api-contract";
 
 type NotificationItemProps = {
@@ -25,9 +26,18 @@ export const NotificationItem = ({
 }: NotificationItemProps) => {
   const link = getLink(notification);
 
+  const markAsReadHandler = async () => {
+    try {
+      await markAsRead(notification.id);
+    } catch (error) {
+      console.error("Error marking notification as read:", error);
+    }
+  };
+
   return (
     <Link
       href={link}
+      onClick={markAsReadHandler}
       className={clsx(
         "flex gap-3 p-4 transition-colors cursor-pointer min-h-fit border-gray-3 hover:bg-gray-2",
         className
