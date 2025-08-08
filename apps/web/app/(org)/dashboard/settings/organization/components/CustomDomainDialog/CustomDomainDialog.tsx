@@ -122,6 +122,7 @@ const CustomDomainDialog = ({
   );
   const [verifying, setVerifying] = useState(false);
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
+  const [initialConfigLoading, setInitialConfigLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -256,9 +257,14 @@ const CustomDomainDialog = ({
           !activeOrganization?.organization.customDomain
         )
           return;
+
         setVerifying(true);
     
         try {
+
+          if (domainConfig === null) {
+            setInitialConfigLoading(true);
+          }
           
           const data = await checkOrganizationDomain(
             activeOrganization.organization.id
@@ -291,6 +297,7 @@ const CustomDomainDialog = ({
           }
         } finally {
           setVerifying(false);
+          setInitialConfigLoading(false);
         }
       };
   
@@ -361,6 +368,7 @@ const CustomDomainDialog = ({
           {currentStep.id === 'verify' && (
             <VerifyStep
               domain={domain}
+              initialConfigLoading={initialConfigLoading}
               domainConfig={domainConfig}
               checkVerification={checkVerification}
               isVerified={isVerified}

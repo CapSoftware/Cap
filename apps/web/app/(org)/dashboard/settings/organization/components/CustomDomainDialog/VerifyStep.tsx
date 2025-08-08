@@ -12,6 +12,7 @@ interface VerifyStepProps {
   domainConfig?: DomainConfig | null;
   isVerified?: boolean;
   checkVerification: (showToasts?: boolean) => void;
+  initialConfigLoading: boolean;
 }
 
 const POLL_INTERVAL = 5000;
@@ -21,6 +22,7 @@ export const VerifyStep = ({
   domainConfig,
   isVerified,
   checkVerification,
+  initialConfigLoading,
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const {activeOrganization} = useDashboardContext();
@@ -98,7 +100,7 @@ export const VerifyStep = ({
         </p>
       </div>
 
-      {!domainConfig ? (
+      {initialConfigLoading ? (
         <div className="flex justify-center items-center w-full h-20">
           <LoadingSpinner size={36} />
         </div>
