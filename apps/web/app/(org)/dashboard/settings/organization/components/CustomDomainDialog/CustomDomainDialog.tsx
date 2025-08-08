@@ -326,11 +326,11 @@ const CustomDomainDialog = ({
   };
 
   useEffect(() => {
-    //if current step is success, close dialog in 1.5 seconds
+    //if current step is success, close dialog in 8 seconds
     if (stepState.currentIndex === 2) {
       setTimeout(() => {
         handleClose();
-      }, 1500);
+      }, 8000);
     } else if (isVerified) {
       handleNext();
     }
