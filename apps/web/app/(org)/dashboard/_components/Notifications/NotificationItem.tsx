@@ -29,7 +29,7 @@ export const NotificationItem = ({
     <Link
       href={link}
       className={clsx(
-        "flex gap-3 p-4 transition-colors cursor-pointer border-gray-3 hover:bg-gray-2",
+        "flex gap-3 p-4 transition-colors cursor-pointer min-h-fit border-gray-3 hover:bg-gray-2",
         className
       )}
     >
@@ -64,7 +64,7 @@ export const NotificationItem = ({
 
         {(notification.type === "comment" ||
           notification.type === "reply") && (
-            <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">
+            <p className="mb-2 text-[13px] h-fit italic leading-4 text-gray-11 line-clamp-2">
               {notification.comment.content}
             </p>
           )}
