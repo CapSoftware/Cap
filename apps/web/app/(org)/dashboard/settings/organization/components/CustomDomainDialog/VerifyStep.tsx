@@ -100,7 +100,7 @@ export const VerifyStep = ({
         </p>
       </div>
 
-      {initialConfigLoading ? (
+      {initialConfigLoading && !domainConfig ? (
         <div className="flex justify-center items-center w-full h-20">
           <LoadingSpinner size={36} />
         </div>
