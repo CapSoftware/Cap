@@ -1,5 +1,4 @@
-"use server";
-
+import { z } from "zod";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, videos, users } from "@cap/database/schema";
 import { db } from "@cap/database";
@@ -8,17 +7,48 @@ import { nanoId } from "@cap/database/helpers";
 import { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { revalidatePath } from "next/cache";
 
-type NotificationData = (typeof notifications.$inferSelect)["data"];
+const buildNotification = <TType extends string, TFields extends z.ZodRawShape>(
+  type: TType,
+  fields: TFields
+) => z.object({ ...fields, type: z.literal(type) });
 
-export const createNotification = async (
-  notificationData: NotificationData,
-  type: "reaction" | "view" | "comment" | "mention" | "reply"
-) => {
-  const currentUser = await getCurrentUser();
-  if (!currentUser) {
-    throw new Error("User not found");
-  }
+export const Notification = z.union([
+  buildNotification("view", { videoId: z.string(), authorId: z.string() }),
+  buildNotification("comment", {
+    videoId: z.string(),
+    authorId: z.string(),
+    comment: z.object({
+      id: z.string(),
+      content: z.string(),
+    }),
+  }),
+  buildNotification("reaction", { videoId: z.string(), authorId: z.string() }),
+  // buildNotification("mention", {
+  //   videoId: z.string(),
+  //   authorId: z.string(),
+  //   comment: z.object({
+  //     id: z.string(),
+  //     content: z.string(),
+  //   }),
+  // }),
+  buildNotification("reply", {
+    videoId: z.string(),
+    authorId: z.string(),
+    comment: z.object({
+      id: z.string(),
+      content: z.string(),
+    }),
+  }),
+]);
 
+export type RawNotification = z.infer<typeof Notification>;
+export type NotificationType = z.infer<typeof Notification>["type"];
+
+export type HydratedNotification =
+  | Extract<RawNotification, { type: "view" }>
+  | (Extract<RawNotification, { type: "comment" }> & { content: string });
+
+export async function createNotification(notification: RawNotification) {
   try {
     // First, get the video and owner data
     const [videoResult] = await db()
@@ -30,7 +60,7 @@ export const createNotification = async (
       })
       .from(videos)
       .innerJoin(users, eq(users.id, videos.ownerId))
-      .where(eq(videos.id, notificationData.videoId))
+      .where(eq(videos.id, notification.videoId))
       .limit(1);
 
     if (!videoResult) {
@@ -38,7 +68,7 @@ export const createNotification = async (
     }
 
     // Skip notification if the video owner is the current user
-    if (videoResult.ownerId === currentUser.id) {
+    if (videoResult.ownerId === notification.authorId) {
       return;
     }
 
@@ -48,10 +78,11 @@ export const createNotification = async (
       const notificationPrefs = preferences.notifications;
 
       const shouldSkipNotification =
-        (type === "comment" && notificationPrefs.pauseComments) ||
-        (type === "reply" && notificationPrefs.pauseReplies) ||
-        (type === "view" && notificationPrefs.pauseViews) ||
-        (type === "reaction" && notificationPrefs.pauseReactions);
+        (notification.type === "comment" && notificationPrefs.pauseComments) ||
+        (notification.type === "view" && notificationPrefs.pauseViews);
+      // ||
+      // (variant === "reply" && notificationPrefs.pauseReplies) ||
+      // (variant === "reaction" && notificationPrefs.pauseReactions);
 
       if (shouldSkipNotification) {
         return;
@@ -60,7 +91,7 @@ export const createNotification = async (
 
     // Check for existing notification to prevent duplicates
     let hasExistingNotification = false;
-    if (type === "view") {
+    if (notification.type === "view") {
       const [existingNotification] = await db()
         .select({ id: notifications.id })
         .from(notifications)
@@ -68,14 +99,14 @@ export const createNotification = async (
           and(
             eq(notifications.type, "view"),
             eq(notifications.recipientId, videoResult.ownerId),
-            sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${notificationData.videoId}`,
-            sql`JSON_EXTRACT(${notifications.data}, '$.authorId') = ${currentUser.id}`
+            sql`JSON_EXTRACT(${notifications.data}, '$.videoId') = ${notification.videoId}`,
+            sql`JSON_EXTRACT(${notifications.data}, '$.authorId') = ${notification.authorId}`
           )
         )
         .limit(1);
 
       hasExistingNotification = !!existingNotification;
-    } else if (type === "comment" && notificationData.comment?.id) {
+    } else if (notification.type === "comment") {
       // Check for existing comment notification
       const [existingNotification] = await db()
         .select({ id: notifications.id })
@@ -84,7 +115,7 @@ export const createNotification = async (
           and(
             eq(notifications.type, "comment"),
             eq(notifications.recipientId, videoResult.ownerId),
-            sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notificationData.comment?.id}`
+            sql`JSON_EXTRACT(${notifications.data}, '$.commentId') = ${notification.comment.id}`
           )
         )
         .limit(1);
@@ -99,31 +130,21 @@ export const createNotification = async (
     const notificationId = nanoId();
     const now = new Date();
 
-    const data: NotificationData = {
-      videoId: notificationData.videoId,
-      authorId: currentUser.id,
-    };
-
-    if (notificationData.comment?.id) {
-      data.comment = notificationData.comment;
-    }
-    if (notificationData.content) {
-      data.content = notificationData.content;
-    }
-
     if (!videoResult.activeOrganizationId) {
-      console.warn(`User ${videoResult.ownerId} has no active organization, skipping notification`);
+      console.warn(
+        `User ${videoResult.ownerId} has no active organization, skipping notification`
+      );
       return;
     }
+
+    const { type, ...data } = notification;
 
     await db().insert(notifications).values({
       id: notificationId,
       orgId: videoResult.activeOrganizationId,
       recipientId: videoResult.ownerId,
-      type: type,
-      data: data,
-      createdAt: now,
-      readAt: null,
+      type,
+      data,
     });
 
     revalidatePath("/dashboard");
@@ -133,4 +154,4 @@ export const createNotification = async (
     console.error("Error creating notification:", error);
     throw error;
   }
-};
+}

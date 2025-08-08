@@ -27,7 +27,8 @@
     "next": "14.2.9",
     "next-auth": "^4.24.5",
     "react-email": "^4.0.16",
-    "resend": "4.6.0"
+    "resend": "4.6.0",
+    "zod": "^3"
   },
   "devDependencies": {
     "@cap/ui": "workspace:*",

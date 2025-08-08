@@ -1,8 +1,8 @@
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useRef, useEffect, useMemo } from "react";
-import { Filters, FilterType } from "./types";
-import { NotificationType } from "./types";
+import { NotificationType } from "@/lib/Notification";
+import { FilterType } from "../Filter";
 
 type FilterTabsProps = {
   activeFilter: FilterType;
@@ -11,7 +11,12 @@ type FilterTabsProps = {
   count?: Record<NotificationType, number>;
 };
 
-export const FilterTabs = ({ activeFilter, setActiveFilter, loading, count }: FilterTabsProps) => {
+export const FilterTabs = ({
+  activeFilter,
+  setActiveFilter,
+  loading,
+  count,
+}: FilterTabsProps) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const totalCount = useMemo(() => {
     return Object.values(count ?? {}).reduce((acc, val) => acc + val, 0);
@@ -30,10 +35,10 @@ export const FilterTabs = ({ activeFilter, setActiveFilter, loading, count }: Fi
       container.scrollLeft += e.deltaY;
     };
 
-    container.addEventListener('wheel', handleWheel, { passive: false });
+    container.addEventListener("wheel", handleWheel, { passive: false });
 
     return () => {
-      container.removeEventListener('wheel', handleWheel);
+      container.removeEventListener("wheel", handleWheel);
     };
   }, []);
 
@@ -48,25 +53,33 @@ export const FilterTabs = ({ activeFilter, setActiveFilter, loading, count }: Fi
             onClick={() => setActiveFilter(filter)}
             className="flex relative gap-2 items-center py-4 cursor-pointer group"
           >
-            <p className={clsx(
-              "text-[13px] transition-colors",
-              activeFilter === filter
-                ? "text-gray-12"
-                : "text-gray-10 group-hover:text-gray-11"
-            )}>
-              {filter}
-            </p>
-            <div className="flex justify-center items-center rounded-md size-4 bg-gray-4">
-              {loading ? <span className="size-1.5 rounded-full bg-gray-10" /> : <p className={clsx(
-                "text-[10px] transition-colors",
+            <p
+              className={clsx(
+                "text-[13px] transition-colors",
                 activeFilter === filter
                   ? "text-gray-12"
                   : "text-gray-10 group-hover:text-gray-11"
-              )}>
-                {filter === FilterType.ALL
-                  ? totalCount
-                  : count?.[filter.toLowerCase() as NotificationType] ?? 0}
-              </p>}
+              )}
+            >
+              {FilterLabels[filter]}
+            </p>
+            <div className="flex justify-center items-center rounded-md size-4 bg-gray-4">
+              {loading ? (
+                <span className="size-1.5 rounded-full bg-gray-10" />
+              ) : (
+                <p
+                  className={clsx(
+                    "text-[10px] transition-colors",
+                    activeFilter === filter
+                      ? "text-gray-12"
+                      : "text-gray-10 group-hover:text-gray-11"
+                  )}
+                >
+                  {filter === "all"
+                    ? totalCount
+                    : count?.[filter.toLowerCase() as NotificationType] ?? 0}
+                </p>
+              )}
             </div>
           </div>
 

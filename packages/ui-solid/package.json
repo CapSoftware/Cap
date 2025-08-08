@@ -14,7 +14,8 @@
     "@kobalte/core": "^0.13.7",
     "cva": "npm:class-variance-authority@^0.7.0",
     "solid-js": "^1.9.3",
-    "tailwindcss": "^3.4.10"
+    "tailwindcss": "^3.4.10",
+    "zod": "^3"
   },
   "devDependencies": {
     "@fontsource/geist-sans": "^5.0.3",

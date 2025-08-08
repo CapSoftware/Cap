@@ -4,6 +4,9 @@ import { db } from "@cap/database";
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { NextResponse } from "next/server";
+import { Notification as APINotification } from "@cap/web-api-contract";
+import { AvcProfileInfo } from "node_modules/@remotion/media-parser/dist/containers/avc/parse-avc";
+import { NotificationType } from "@/lib/Notification";
 
 const notificationDataSchema = z.object({
   authorId: z.string(),
@@ -72,41 +75,39 @@ export async function GET() {
       )
       .groupBy(notifications.type);
 
-    const formattedCountResults: Record<NotificationsKeysWithReplies, number> =
-      {
-        views: 0,
-        comments: 0,
-        replies: 0,
-        reactions: 0,
-        recordings: 0,
-        mentions: 0,
-      };
+    const formattedCountResults: Record<NotificationType, number> = {
+      view: 0,
+      comment: 0,
+      reply: 0,
+      reaction: 0,
+      // recordings: 0,
+      // mentions: 0,
+    };
 
     countResults.forEach(({ type, count }) => {
-      formattedCountResults[
-        `${
-          type === "reply" ? "replies" : `${type}s`
-        }` as NotificationsKeysWithReplies
-      ] = Number(count);
+      formattedCountResults[type] = Number(count);
     });
 
     const formattedNotifications = notificationsWithAuthors
       .map(({ notification, author }) => {
         try {
-          const parsedData = notificationDataSchema.parse(notification.data);
-          return {
+          // all notifications currently require an author
+          if (!author) return;
+
+          return APINotification.parse({
             id: notification.id,
-            content: parsedData.content,
             type: notification.type,
             readAt: notification.readAt,
-            videoId: parsedData.videoId,
+            videoId: notification.data.videoId,
             createdAt: notification.createdAt,
             data: notification.data,
+            comment: notification.data.comment,
             author: {
-              name: author?.name ?? "Unknown",
-              avatar: author?.avatar ?? null,
+              id: author.id,
+              name: author.name ?? "Unknown",
+              avatar: author.avatar,
             },
-          };
+          });
         } catch (error) {
           console.error("Invalid notification data:", error);
           return null;

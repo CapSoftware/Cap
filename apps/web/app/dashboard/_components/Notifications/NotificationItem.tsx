@@ -3,31 +3,28 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import Link from "next/link";
 import moment from "moment";
-import { Notification, NotificationType } from "./types";
+import { NotificationType } from "@/lib/Notification";
+import { Notification as APINotification } from "@cap/web-api-contract";
+import z from "zod";
 
 type NotificationItemProps = {
-  notification: Notification;
+  notification: APINotification;
   className?: string;
 };
 
-const descriptionMap: Record<Notification["type"], string> = {
-  [NotificationType.COMMENT]: `commented on your video`,
-  [NotificationType.REPLY]: `replied to your comment`,
-  [NotificationType.VIEW]: `viewed your video`,
-  [NotificationType.REACTION]: `reacted to your video`,
-  [NotificationType.MENTION]: `mentioned you in a comment`,
+const descriptionMap: Record<NotificationType, string> = {
+  comment: `commented on your video`,
+  reply: `replied to your comment`,
+  view: `viewed your video`,
+  reaction: `reacted to your video`,
+  mention: `mentioned you in a comment`,
 };
 
-export const NotificationItem = ({ notification, className }: NotificationItemProps) => {
-  const commentTypes = [
-    NotificationType.REPLY,
-    NotificationType.COMMENT,
-    NotificationType.REACTION
-  ];
-  const commentId = notification.data?.comment?.id;
-  const link = commentTypes.includes(notification.type) && commentId
-    ? `/s/${notification.videoId}/?comment=${commentId}`
-    : `/s/${notification.videoId}`;
+export const NotificationItem = ({
+  notification,
+  className,
+}: NotificationItemProps) => {
+  const link = getLink(notification);
 
   return (
     <Link href={link}>
@@ -58,32 +55,52 @@ export const NotificationItem = ({ notification, className }: NotificationItemPr
         {/* Content */}
         <div className="flex flex-col flex-1 justify-center">
           <div className="flex gap-1 items-center">
-            <span className="font-medium text-gray-12 text-[13px]">{notification.author.name}</span>
-            <span className="text-gray-10 text-[13px]">{descriptionMap[notification.type]}</span>
+            <span className="font-medium text-gray-12 text-[13px]">
+              {notification.author.name}
+            </span>
+            <span className="text-gray-10 text-[13px]">
+              {descriptionMap[notification.type]}
+            </span>
           </div>
 
-          {notification.type === NotificationType.COMMENT || notification.type === NotificationType.REPLY && (
-            <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">{notification.content}</p>
-          )}
-          <p className="text-xs text-gray-10">{moment(notification.createdAt).fromNow()}</p>
+          {notification.type === "comment" ||
+            (notification.type === "reply" && (
+              <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">
+                {notification.comment.content}
+              </p>
+            ))}
+          <p className="text-xs text-gray-10">
+            {moment(notification.createdAt).fromNow()}
+          </p>
         </div>
 
         {/* Icon */}
         <div className="flex flex-shrink-0 items-center mt-1">
-          {notification.type === NotificationType.COMMENT && (
+          {notification.type === "comment" && (
             <FontAwesomeIcon icon={faComment} className="text-gray-10 size-4" />
           )}
-          {notification.type === NotificationType.REPLY && (
+          {notification.type === "reply" && (
             <FontAwesomeIcon icon={faReply} className="text-gray-10 size-4" />
           )}
-          {notification.type === NotificationType.VIEW && (
+          {notification.type === "view" && (
             <FontAwesomeIcon icon={faEye} className="text-gray-10 size-4" />
           )}
-          {notification.type === NotificationType.REACTION && (
-            <span className="text-xl">{notification.content}</span>
+          {notification.type === "reaction" && (
+            <span className="text-xl">{notification.comment.content}</span>
           )}
         </div>
       </div>
     </Link>
   );
 };
+
+function getLink(notification: APINotification) {
+  switch (notification.type) {
+    case "comment":
+    case "reply":
+      // case "reaction":
+      return `/s/${notification.videoId}/?comment=${notification.comment.id}`;
+    default:
+      return `/s/${notification.videoId}`;
+  }
+}

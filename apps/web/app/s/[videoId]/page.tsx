@@ -25,7 +25,7 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
-import { createNotification } from "@/actions/notifications/create-notification";
+import { createNotification } from "@/lib/Notification";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -212,8 +212,7 @@ export default async function ShareVideoPage(props: Props) {
   const searchParams = props.searchParams;
   const videoId = params.videoId as string;
 
-
-  const userPromise = await getCurrentUser();
+  const user = await getCurrentUser();
 
   const [video] = await db()
     .select({
@@ -245,10 +244,9 @@ export default async function ShareVideoPage(props: Props) {
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .where(eq(videos.id, videoId));
 
-
-  if (userPromise && video && userPromise.id !== video.ownerId) {
+  if (user && video && user.id !== video.ownerId) {
     try {
-      await createNotification({ videoId }, "view");
+      await createNotification({ type: "view", videoId, authorId: user.id });
     } catch (error) {
       console.error("Failed to create view notification:", error);
     }
@@ -259,7 +257,7 @@ export default async function ShareVideoPage(props: Props) {
     return <p>No video found</p>;
   }
 
-  const userAccess = await userHasAccessToVideo(userPromise, video);
+  const userAccess = await userHasAccessToVideo(user, video);
 
   if (userAccess === "private") return <p>This video is private</p>;
 
@@ -270,7 +268,11 @@ export default async function ShareVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <AuthorizedContent video={video} user={userPromise} searchParams={searchParams} />
+        <AuthorizedContent
+          video={video}
+          user={user}
+          searchParams={searchParams}
+        />
       )}
     </div>
   );
@@ -495,14 +497,14 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-      .select({ userId: organizationMembers.userId })
-      .from(organizationMembers)
-      .where(
-        eq(
-          organizationMembers.organizationId,
-          video.sharedOrganization.organizationId
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
         )
-      )
     : Promise.resolve([]);
 
   const commentsPromise = (async () => {
@@ -554,7 +556,6 @@ async function AuthorizedContent({
     hasPassword: video.password !== null,
     folderId: null,
   };
-
 
   return (
     <>

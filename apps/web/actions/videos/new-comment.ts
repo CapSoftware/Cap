@@ -5,7 +5,7 @@ import { comments } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { revalidatePath } from "next/cache";
 import { nanoId } from "@cap/database/helpers";
-import { createNotification } from "../notifications/create-notification";
+import { createNotification } from "@/lib/Notification";
 
 export async function newComment(data: {
   content: string;
@@ -49,17 +49,12 @@ export async function newComment(data: {
   await db().insert(comments).values(newComment);
 
   try {
-    await createNotification(
-      {
-        videoId,
-        comment: {
-          id,
-          parentCommentId,
-        },
-        content,
-      },
-      conditionalType
-    );
+    await createNotification({
+      type: conditionalType,
+      videoId,
+      authorId: user.id,
+      comment: { id, content },
+    });
   } catch (error) {
     console.error("Failed to create notification:", error);
   }

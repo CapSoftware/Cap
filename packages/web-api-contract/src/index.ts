@@ -2,6 +2,65 @@ import { z } from "zod";
 import desktop from "./desktop";
 import { c } from "./util";
 
+export const NotificationAuthor = z.object({
+  id: z.string(),
+  name: z.string(),
+  avatar: z.string().nullable(),
+});
+
+export const Notification = z
+  .union([
+    z.object({
+      type: z.literal("view"),
+      videoId: z.string(),
+      author: NotificationAuthor,
+    }),
+    z.object({
+      type: z.literal("comment"),
+      videoId: z.string(),
+      author: NotificationAuthor,
+      comment: z.object({
+        id: z.string(),
+        content: z.string(),
+      }),
+    }),
+    z.object({
+      type: z.literal("reaction"),
+      videoId: z.string(),
+      author: NotificationAuthor,
+      comment: z.object({
+        id: z.string(),
+        content: z.string(),
+      }),
+    }),
+    z.object({
+      type: z.literal("reply"),
+      videoId: z.string(),
+      author: NotificationAuthor,
+      comment: z.object({
+        id: z.string(),
+        content: z.string(),
+      }),
+    }),
+    // z.object({
+    //   type: z.literal("mention"),
+    //   videoId: z.string(),
+    //   author: NotificationAuthor,
+    //   comment: z.object({
+    //     id: z.string(),
+    //     content: z.string(),
+    //   }),
+    // }),
+  ])
+  .and(
+    z.object({
+      id: z.string(),
+      readAt: z.coerce.date().nullable(),
+      createdAt: z.coerce.date(),
+    })
+  );
+export type Notification = z.infer<typeof Notification>;
+
 export const contract = c.router({
   desktop,
   video: c.router({
@@ -29,6 +88,18 @@ export const contract = c.router({
       query: z.object({ videoId: z.string() }),
       responses: {
         200: z.object({ count: z.number() }),
+      },
+    },
+  }),
+  notifications: c.router({
+    get: {
+      method: "GET",
+      path: "/notifications",
+      responses: {
+        200: z.object({
+          notifications: z.array(Notification),
+          count: z.record(z.string(), z.number()),
+        }),
       },
     },
   }),
