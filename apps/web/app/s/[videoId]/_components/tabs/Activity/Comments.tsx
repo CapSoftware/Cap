@@ -29,6 +29,7 @@ export const Comments = Object.assign(
 
       const { optimisticComments, setOptimisticComments, setComments, handleCommentSuccess } = props;
       const commentParams = useSearchParams().get("comment");
+      const replyParams = useSearchParams().get("reply");
 
       const { user } = props;
       const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -36,7 +37,7 @@ export const Comments = Object.assign(
       const commentsContainerRef = useRef<HTMLDivElement>(null);
 
       useEffect(() => {
-        if (commentParams) return;
+        if (commentParams || replyParams) return;
         if (commentsContainerRef.current) {
           commentsContainerRef.current.scrollTop =
             commentsContainerRef.current.scrollHeight;

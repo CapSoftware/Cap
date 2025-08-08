@@ -38,6 +38,7 @@ const Comment: React.FC<{
     const isReplying = replyingToId === comment.id;
     const isOwnComment = user?.id === comment.authorId;
     const commentParams = useSearchParams().get("comment");
+    const replyParams = useSearchParams().get("reply");
     const nestedReplies =
       level === 0
         ? replies.filter((reply) => {
@@ -71,9 +72,9 @@ const Comment: React.FC<{
               once: true,
             }}
             whileInView={{
-              scale: commentParams === comment.id ? [1, 1.08, 1] : 1,
-              borderColor: commentParams === comment.id ? ["#EEEEEE", "#1696e0"] : "#EEEEEE",
-              backgroundColor: commentParams === comment.id ? ["#F9F9F9", "#EDF6FF"] : " #F9F9F9",
+              scale: (commentParams || replyParams) === comment.id ? [1, 1.08, 1] : 1,
+              borderColor: (commentParams || replyParams) === comment.id ? ["#EEEEEE", "#1696e0"] : "#EEEEEE",
+              backgroundColor: (commentParams || replyParams) === comment.id ? ["#F9F9F9", "#EDF6FF"] : " #F9F9F9",
             }}
             transition={{ duration: 0.75, ease: "easeInOut", delay: 0.15 }}
             className={"flex-1 p-3 rounded-xl border border-gray-3 bg-gray-2"}>

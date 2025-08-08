@@ -1,7 +1,7 @@
 // Ideally all the Notification-related types would be in @cap/web-domain
 // but @cap/web-api-contract is the closest we have right now
 
-import { notifications, videos, users } from "@cap/database/schema";
+import { notifications, videos, users, comments } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { and, eq, sql } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
@@ -24,7 +24,7 @@ type CreateNotificationInput<D = NotificationSpecificData> =
   D extends NotificationSpecificData
     ? D["author"] extends never
       ? D
-      : Omit<D, "author"> & { authorId: string }
+      : Omit<D, "author"> & { authorId: string } & { parentCommentId?: string }
     : never;
 
 export async function createNotification(
@@ -48,7 +48,69 @@ export async function createNotification(
       throw new Error("Video or owner not found");
     }
 
+    const { type, ...data } = notification;
+
+    // Handle replies: notify the parent comment's author
+    if (type === "reply" && notification.parentCommentId) {
+      const [parentComment] = await db()
+        .select({ authorId: comments.authorId })
+        .from(comments)
+        .where(eq(comments.id, notification.parentCommentId))
+        .limit(1);
+
+      const recipientId = parentComment?.authorId;
+      if (!recipientId) return;
+      if (recipientId === videoResult.ownerId) return;
+
+      const [recipientUser] = await db()
+        .select({
+          preferences: users.preferences,
+          activeOrganizationId: users.activeOrganizationId,
+        })
+        .from(users)
+        .where(eq(users.id, recipientId))
+        .limit(1);
+
+      if (!recipientUser) {
+        console.warn(`Reply recipient user ${recipientId} not found`);
+        return;
+      }
+
+      const recipientPrefs = recipientUser.preferences as
+        | UserPreferences
+        | undefined;
+      if (recipientPrefs?.notifications?.pauseReplies) return;
+
+      const [existingReply] = await db()
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.type, "reply"),
+            eq(notifications.recipientId, recipientId),
+            sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`
+          )
+        )
+        .limit(1);
+
+      if (existingReply) return;
+
+      const notificationId = nanoId();
+
+      await db().insert(notifications).values({
+        id: notificationId,
+        orgId: recipientUser.activeOrganizationId,
+        recipientId,
+        type,
+        data,
+      });
+
+      revalidatePath("/dashboard");
+      return { success: true, notificationId };
+    }
+
     // Skip notification if the video owner is the current user
+    // (this only applies to non-reply types)
     if (videoResult.ownerId === notification.authorId) {
       return;
     }
@@ -59,10 +121,9 @@ export async function createNotification(
       const notificationPrefs = preferences.notifications;
 
       const shouldSkipNotification =
-        (notification.type === "comment" && notificationPrefs.pauseComments) ||
-        (notification.type === "view" && notificationPrefs.pauseViews) ||
-        (notification.type === "reply" && notificationPrefs.pauseReplies) ||
-        (notification.type === "reaction" && notificationPrefs.pauseReactions);
+        (type === "comment" && notificationPrefs.pauseComments) ||
+        (type === "view" && notificationPrefs.pauseViews) ||
+        (type === "reaction" && notificationPrefs.pauseReactions);
 
       if (shouldSkipNotification) {
         return;
@@ -71,7 +132,7 @@ export async function createNotification(
 
     // Check for existing notification to prevent duplicates
     let hasExistingNotification = false;
-    if (notification.type === "view") {
+    if (type === "view") {
       const [existingNotification] = await db()
         .select({ id: notifications.id })
         .from(notifications)
@@ -86,18 +147,13 @@ export async function createNotification(
         .limit(1);
 
       hasExistingNotification = !!existingNotification;
-    } else if (
-      notification.type === "comment" ||
-      notification.type === "reaction" ||
-      notification.type === "reply"
-    ) {
-      // Check for existing comment notification
+    } else if (type === "comment" || type === "reaction") {
       const [existingNotification] = await db()
         .select({ id: notifications.id })
         .from(notifications)
         .where(
           and(
-            eq(notifications.type, notification.type),
+            eq(notifications.type, type),
             eq(notifications.recipientId, videoResult.ownerId),
             sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`
           )
@@ -112,7 +168,6 @@ export async function createNotification(
     }
 
     const notificationId = nanoId();
-    const now = new Date();
 
     if (!videoResult.activeOrganizationId) {
       console.warn(
@@ -120,8 +175,6 @@ export async function createNotification(
       );
       return;
     }
-
-    const { type, ...data } = notification;
 
     await db().insert(notifications).values({
       id: notificationId,

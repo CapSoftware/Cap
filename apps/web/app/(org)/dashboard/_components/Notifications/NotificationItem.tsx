@@ -29,7 +29,7 @@ export const NotificationItem = ({
     <Link
       href={link}
       className={clsx(
-        "flex gap-3 p-4 transition-colors cursor-pointer border-gray-3 hover:bg-gray-2",
+        "flex gap-3 p-4 transition-colors cursor-pointer min-h-fit border-gray-3 hover:bg-gray-2",
         className
       )}
     >
@@ -62,12 +62,12 @@ export const NotificationItem = ({
           </span>
         </div>
 
-        {notification.type === "comment" ||
-          (notification.type === "reply" && (
-            <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">
+        {(notification.type === "comment" ||
+          notification.type === "reply") && (
+            <p className="mb-2 text-[13px] h-fit italic leading-4 text-gray-11 line-clamp-2">
               {notification.comment.content}
             </p>
-          ))}
+          )}
         <p className="text-xs text-gray-10">
           {moment(notification.createdAt).fromNow()}
         </p>
@@ -94,8 +94,9 @@ export const NotificationItem = ({
 
 function getLink(notification: APINotification) {
   switch (notification.type) {
-    case "comment":
     case "reply":
+        return `/s/${notification.videoId}/?reply=${notification.comment.id}`
+    case "comment":
     case "reaction":
       // case "mention":
       return `/s/${notification.videoId}/?comment=${notification.comment.id}`;
