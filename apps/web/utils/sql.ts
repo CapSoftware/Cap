@@ -9,5 +9,5 @@ export function jsonExtractString<
   const jsonParam = `$.${field as string}`;
   return sql<
     string | undefined
-  >`JSON_UNQUOTE(JSON_EXTRACT(${column}, '${jsonParam}'))`;
+  >`JSON_UNQUOTE(JSON_EXTRACT(${column}, ${jsonParam}))`;
 }
