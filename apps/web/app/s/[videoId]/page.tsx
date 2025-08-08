@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, InferSelectModel, sql, desc } from "drizzle-orm";
+import { eq, InferSelectModel, sql } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 
 import {
@@ -615,8 +615,8 @@ async function AuthorizedContent({
       .where(eq(comments.videoId, videoId))
       .orderBy(
         commentId
-          ? sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt} DESC`
-          : desc(comments.createdAt)
+          ? sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`
+          : comments.createdAt
       );
 
     return allComments;
