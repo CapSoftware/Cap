@@ -3,16 +3,15 @@ use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
 // use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
+use cap_project::StudioRecordingMeta;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
-use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
-    RenderVideoConstants, SegmentVideoPaths,
+    ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
+    SegmentVideoPaths, get_duration,
 };
 use std::ops::Deref;
-use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
@@ -249,7 +248,7 @@ impl EditorInstance {
 
     fn get_studio_meta(&self) -> &StudioRecordingMeta {
         match &self.meta.inner {
-            RecordingMetaInner::Studio(meta) => &meta,
+            RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
         }
     }
@@ -310,7 +309,7 @@ pub async fn create_segments(
                 .map(Arc::new);
 
             let decoders = RecordingSegmentDecoders::new(
-                &recording_meta,
+                recording_meta,
                 meta,
                 SegmentVideoPaths {
                     display: recording_meta.path(&s.display.path),
@@ -352,10 +351,10 @@ pub async fn create_segments(
                     .transpose()?
                     .map(Arc::new);
 
-                let cursor = Arc::new(s.cursor_events(&recording_meta));
+                let cursor = Arc::new(s.cursor_events(recording_meta));
 
                 let decoders = RecordingSegmentDecoders::new(
-                    &recording_meta,
+                    recording_meta,
                     meta,
                     SegmentVideoPaths {
                         display: recording_meta.path(&s.display.path),

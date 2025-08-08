@@ -1,5 +1,6 @@
 "use client";
 
+import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -11,15 +12,24 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import { faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
+import { faBell, faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
+import { AnimatePresence } from "framer-motion";
 import { MoreVertical } from "lucide-react";
 import { signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import React, { cloneElement, memo, useMemo, useRef, useState } from "react";
+import React, {
+  cloneElement,
+  memo,
+  MutableRefObject,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import {
@@ -43,7 +53,8 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeOrganization, activeSpace } = useDashboardContext();
+  const { activeOrganization, activeSpace, anyNewNotifications } =
+    useDashboardContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
 
   const titles: Record<string, string> = {
@@ -57,6 +68,15 @@ export default function DashboardInner({
 
   const title = activeSpace ? activeSpace.name : titles[pathname] || "";
   const { theme, setThemeHandler } = useTheme();
+  const [toggleNotifications, setToggleNotifications] = useState(false);
+  const bellRef = useRef<HTMLDivElement>(null);
+  const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
+    (e) => {
+      if (bellRef.current && !bellRef.current.contains(e.target as Node)) {
+        setToggleNotifications(false);
+      }
+    }
+  );
   const isSharedCapsPage = pathname === "/dashboard/shared-caps";
   return (
     <div className="flex flex-col min-h-screen">
@@ -92,6 +112,43 @@ export default function DashboardInner({
         </div>
         <div className="flex gap-4 items-center">
           {buildEnv.NEXT_PUBLIC_IS_CAP && <ReferButton />}
+          <div
+            data-state={toggleNotifications ? "open" : "closed"}
+            ref={bellRef}
+            onClick={() => {
+              setToggleNotifications(!toggleNotifications);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setToggleNotifications(!toggleNotifications);
+              }
+            }}
+            tabIndex={0}
+            role="button"
+            aria-label={`Notifications${
+              anyNewNotifications ? " (new notifications available)" : ""
+            }`}
+            aria-expanded={toggleNotifications}
+            className="hidden relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
+            rounded-full transition-colors cursor-pointer lg:flex
+            hover:bg-gray-5 data-[state=open]:bg-gray-5
+            focus:outline-none
+            size-9"
+          >
+            {anyNewNotifications && (
+              <div className="absolute right-0 top-1 z-10">
+                <div className="relative">
+                  <div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+                  <div className="relative w-2 h-2 bg-red-400 rounded-full" />
+                </div>
+              </div>
+            )}
+            <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
+            <AnimatePresence>
+              {toggleNotifications && <Notifications ref={notificationsRef} />}
+            </AnimatePresence>
+          </div>
           <div
             onClick={() => {
               if (document.startViewTransition) {
@@ -306,8 +363,8 @@ const ReferButton = () => {
       {/* Red notification dot with pulse animation */}
       <div className="absolute right-0 top-1 z-10">
         <div className="relative">
-          <div className="absolute inset-0 w-2 h-2 bg-red-500 rounded-full opacity-75 animate-ping" />
-          <div className="relative w-2 h-2 bg-red-500 rounded-full" />
+          <div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+          <div className="relative w-2 h-2 bg-red-400 rounded-full" />
         </div>
       </div>
 

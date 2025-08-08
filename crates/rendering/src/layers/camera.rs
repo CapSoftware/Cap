@@ -29,7 +29,7 @@ impl CameraLayer {
             }),
         );
 
-        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
 
         Self {
             frame_texture,
@@ -63,7 +63,7 @@ impl CameraLayer {
             self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
             self.bind_group = Some(self.pipeline.bind_group(
-                &device,
+                device,
                 &self.uniforms_buffer,
                 &self.frame_texture_view,
             ));

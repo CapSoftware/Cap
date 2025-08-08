@@ -1,4 +1,4 @@
-module.exports = function (app, options) {
+module.exports = function (__app, _options) {
   // Function to generate color scales for Radix colors
   function getColorScale(name, alpha = false) {
     let scale = {};
@@ -73,6 +73,7 @@ module.exports = function (app, options) {
         },
         colors: {
           gray: getColorScale("gray"),
+          "gray-a": getColorScale("gray-a", true),
           blue: getColorScale("blue"),
           red: getColorScale("red"),
           border: "hsl(var(--border))",

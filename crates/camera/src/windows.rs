@@ -3,12 +3,10 @@ use crate::*;
 pub(super) fn list_cameras_impl() -> impl Iterator<Item = CameraInfo> {
     let devices = cap_camera_windows::get_devices().unwrap_or_default();
 
-    devices.into_iter().filter_map(|d| {
-        Some(CameraInfo {
-            device_id: d.id().to_string_lossy().to_string(),
-            model_id: ModelID::from_windows(&d),
-            display_name: d.name().to_string_lossy().to_string(),
-        })
+    devices.into_iter().map(|d| CameraInfo {
+        device_id: d.id().to_string_lossy().to_string(),
+        model_id: ModelID::from_windows(&d),
+        display_name: d.name().to_string_lossy().to_string(),
     })
 }
 
@@ -60,8 +58,6 @@ impl ModelID {
     }
 }
 
-pub type NativeFormat = cap_camera_windows::VideoFormat;
-
 #[derive(Debug)]
 pub struct NativeCapturedFrame(cap_camera_windows::Frame);
 
@@ -91,8 +87,8 @@ pub struct WindowsCaptureHandle {
 }
 
 impl WindowsCaptureHandle {
-    pub fn stop_capturing(self) -> windows_core::Result<()> {
-        self.inner.stop_capturing()
+    pub fn stop_capturing(self) -> Result<(), String> {
+        self.inner.stop_capturing().map_err(|e| e.to_string())
     }
 }
 

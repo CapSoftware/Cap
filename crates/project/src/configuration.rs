@@ -158,21 +158,18 @@ where
     }
 }
 
-impl Into<XY<f64>> for XY<f32> {
-    fn into(self) -> XY<f64> {
+impl From<XY<f32>> for XY<f64> {
+    fn from(val: XY<f32>) -> Self {
         XY {
-            x: self.x as f64,
-            y: self.y as f64,
+            x: val.x as f64,
+            y: val.y as f64,
         }
     }
 }
 
-impl<T> Into<XY<T>> for (T, T) {
-    fn into(self) -> XY<T> {
-        XY {
-            x: self.0,
-            y: self.1,
-        }
+impl<T> From<(T, T)> for XY<T> {
+    fn from(val: (T, T)) -> Self {
+        XY { x: val.0, y: val.1 }
     }
 }
 
@@ -541,22 +538,15 @@ impl Default for CaptionSettings {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct CaptionsData {
     pub segments: Vec<CaptionSegment>,
     pub settings: CaptionSettings,
 }
 
-impl Default for CaptionsData {
-    fn default() -> Self {
-        Self {
-            segments: Vec::new(),
-            settings: CaptionSettings::default(),
-        }
-    }
-}
-
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
@@ -589,23 +579,8 @@ impl ProjectConfiguration {
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         self.timeline
             .as_ref()
-            .map(|t| t.get_segment_time(frame_time as f64))
-            .unwrap_or(Some((frame_time as f64, 0)))
-    }
-}
-
-impl Default for ProjectConfiguration {
-    fn default() -> Self {
-        ProjectConfiguration {
-            aspect_ratio: None,
-            background: BackgroundConfiguration::default(),
-            camera: Camera::default(),
-            audio: AudioConfiguration::default(),
-            cursor: CursorConfiguration::default(),
-            hotkeys: HotkeysConfiguration::default(),
-            timeline: None,
-            captions: None,
-        }
+            .map(|t| t.get_segment_time(frame_time))
+            .unwrap_or(Some((frame_time, 0)))
     }
 }
 

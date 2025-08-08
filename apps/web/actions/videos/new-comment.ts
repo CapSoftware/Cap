@@ -5,6 +5,7 @@ import { comments } from "@cap/database/schema";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { revalidatePath } from "next/cache";
 import { nanoId } from "@cap/database/helpers";
+import { createNotification } from "@/lib/Notification";
 
 export async function newComment(data: {
   content: string;
@@ -22,6 +23,11 @@ export async function newComment(data: {
   const videoId = data.videoId;
   const type = data.type;
   const parentCommentId = data.parentCommentId;
+  const conditionalType = parentCommentId
+    ? "reply"
+    : type === "emoji"
+    ? "reaction"
+    : "comment";
 
   if (!content || !videoId) {
     throw new Error("Content and videoId are required");
@@ -41,6 +47,18 @@ export async function newComment(data: {
   };
 
   await db().insert(comments).values(newComment);
+
+  try {
+    await createNotification({
+      type: conditionalType,
+      videoId,
+      authorId: user.id,
+      comment: { id, content },
+      parentCommentId,
+    });
+  } catch (error) {
+    console.error("Failed to create notification:", error);
+  }
 
   // Add author name to the returned data
   const commentWithAuthor = {

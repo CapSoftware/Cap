@@ -42,9 +42,8 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
         if (response.ok) {
           const data = await response.json();
           // Add cache busting to the thumbnail URL as well
-          return `${data.screen}${
-            data.screen.includes("?") ? "&" : "?"
-          }t=${cacheBuster}`;
+          return `${data.screen}${data.screen.includes("?") ? "&" : "?"
+            }t=${cacheBuster}`;
         } else {
           throw new Error("Failed to fetch pre-signed URLs");
         }

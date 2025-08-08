@@ -6,8 +6,8 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use ffmpeg::{Codec, codec, format, frame, software};
-use ffmpeg_sys_next::{AVHWDeviceType, avcodec_find_decoder};
+use ffmpeg::{format, frame, software};
+use ffmpeg_sys_next::AVHWDeviceType;
 use log::debug;
 use tokio::sync::oneshot;
 
@@ -30,7 +30,7 @@ impl CachedFrame {
                             .unwrap();
 
                     let mut rgb_frame = frame::Video::empty();
-                    scaler.run(&frame, &mut rgb_frame).unwrap();
+                    scaler.run(frame, &mut rgb_frame).unwrap();
                     rgb_frame
                 } else {
                     std::mem::replace(frame, frame::Video::empty())
@@ -74,7 +74,7 @@ pub struct FfmpegDecoder;
 
 impl FfmpegDecoder {
     pub fn spawn(
-        name: &'static str,
+        _name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -98,17 +98,16 @@ impl FfmpegDecoder {
             let mut cache = BTreeMap::<u32, CachedFrame>::new();
             // active frame is a frame that triggered decode.
             // frames that are within render_more_margin of this frame won't trigger decode.
+            #[allow(unused)]
             let mut last_active_frame = None::<u32>;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
-
-            let mut peekable_requests = PeekableReceiver { rx, peeked: None };
 
             let mut frames = this.frames();
 
             let _ = ready_tx.send(Ok(()));
 
-            while let Ok(r) = peekable_requests.recv() {
+            while let Ok(r) = rx.recv() {
                 match r {
                     VideoDecoderMessage::GetFrame(requested_time, sender) => {
                         let requested_frame = (requested_time * fps as f32).floor() as u32;
@@ -143,7 +142,7 @@ impl FfmpegDecoder {
                                 })
                                 .unwrap_or(true)
                         {
-                            debug!("seeking to {}", requested_frame);
+                            debug!("seeking to {requested_frame}");
 
                             let _ = this.reset(requested_time);
                             frames = this.frames();
@@ -170,25 +169,24 @@ impl FfmpegDecoder {
                             // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                             if let Some(most_recent_prev_frame) =
                                 cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                                && let Some(sender) = sender.take()
                             {
-                                if let Some(sender) = sender.take() {
-                                    (sender)(most_recent_prev_frame.1.process(width, height));
-                                }
+                                (sender)(most_recent_prev_frame.1.process(width, height));
                             }
 
                             let exceeds_cache_bounds = current_frame > cache_max;
                             let too_small_for_cache_bounds = current_frame < cache_min;
 
                             let cache_frame = if !too_small_for_cache_bounds {
-                                if current_frame == requested_frame {
-                                    if let Some(sender) = sender.take() {
-                                        let data = cache_frame.process(width, height);
-                                        // info!("sending frame {requested_frame}");
+                                if current_frame == requested_frame
+                                    && let Some(sender) = sender.take()
+                                {
+                                    let data = cache_frame.process(width, height);
+                                    // info!("sending frame {requested_frame}");
 
-                                        (sender)(data);
+                                    (sender)(data);
 
-                                        break;
-                                    }
+                                    break;
                                 }
 
                                 if cache.len() >= FRAME_CACHE_SIZE {
@@ -265,60 +263,60 @@ impl FfmpegDecoder {
     }
 }
 
-pub fn find_decoder(
-    s: &format::context::Input,
-    st: &format::stream::Stream,
-    codec_id: codec::Id,
-) -> Option<Codec> {
-    unsafe {
-        use ffmpeg::media::Type;
-        let codec = match st.parameters().medium() {
-            Type::Video => Some((*s.as_ptr()).video_codec),
-            Type::Audio => Some((*s.as_ptr()).audio_codec),
-            Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
-            _ => None,
-        };
+// pub fn find_decoder(
+//     s: &format::context::Input,
+//     st: &format::stream::Stream,
+//     codec_id: codec::Id,
+// ) -> Option<Codec> {
+//     unsafe {
+//         use ffmpeg::media::Type;
+//         let codec = match st.parameters().medium() {
+//             Type::Video => Some((*s.as_ptr()).video_codec),
+//             Type::Audio => Some((*s.as_ptr()).audio_codec),
+//             Type::Subtitle => Some((*s.as_ptr()).subtitle_codec),
+//             _ => None,
+//         };
 
-        if let Some(codec) = codec {
-            if !codec.is_null() {
-                return Some(Codec::wrap(codec));
-            }
-        }
+//         if let Some(codec) = codec {
+//             if !codec.is_null() {
+//                 return Some(Codec::wrap(codec));
+//             }
+//         }
 
-        let found = avcodec_find_decoder(codec_id.into());
+//         let found = avcodec_find_decoder(codec_id.into());
 
-        if found.is_null() {
-            return None;
-        }
-        Some(Codec::wrap(found))
-    }
-}
+//         if found.is_null() {
+//             return None;
+//         }
+//         Some(Codec::wrap(found))
+//     }
+// }
 
-struct PeekableReceiver<T> {
-    rx: mpsc::Receiver<T>,
-    peeked: Option<T>,
-}
+// struct PeekableReceiver<T> {
+//     rx: mpsc::Receiver<T>,
+//     peeked: Option<T>,
+// }
 
-impl<T> PeekableReceiver<T> {
-    fn peek(&mut self) -> Option<&T> {
-        if self.peeked.is_some() {
-            self.peeked.as_ref()
-        } else {
-            match self.rx.try_recv() {
-                Ok(value) => {
-                    self.peeked = Some(value);
-                    self.peeked.as_ref()
-                }
-                Err(_) => None,
-            }
-        }
-    }
+// impl<T> PeekableReceiver<T> {
+//     fn peek(&mut self) -> Option<&T> {
+//         if self.peeked.is_some() {
+//             self.peeked.as_ref()
+//         } else {
+//             match self.rx.try_recv() {
+//                 Ok(value) => {
+//                     self.peeked = Some(value);
+//                     self.peeked.as_ref()
+//                 }
+//                 Err(_) => None,
+//             }
+//         }
+//     }
 
-    fn recv(&mut self) -> Result<T, mpsc::RecvError> {
-        if let Some(value) = self.peeked.take() {
-            Ok(value)
-        } else {
-            self.rx.recv()
-        }
-    }
-}
+//     fn recv(&mut self) -> Result<T, mpsc::RecvError> {
+//         if let Some(value) = self.peeked.take() {
+//             Ok(value)
+//         } else {
+//             self.rx.recv()
+//         }
+//     }
+// }

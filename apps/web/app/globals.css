@@ -545,9 +545,13 @@ slot:not(.dashboard-layout slot) {
   @apply bg-gray-50;
 }
 
+.hide-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar */
 .custom-scroll {
-  overflow-y: scroll;
+  overflow-y: auto;
 }
 
 .custom-scroll::-webkit-scrollbar {
