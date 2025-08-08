@@ -60,7 +60,7 @@ export const NotificationsSkeleton = ({ count = 5 }: { count?: number }) => {
       {Array.from({ length: count }).map((_, i) => (
         <NotificationItemSkeleton
           key={i}
-          className={clsx(i !== count - 1 && "border-b")}
+          className={clsx(i !== count - 1 && "border-b border-gray-3")}
         />
       ))}
     </div>

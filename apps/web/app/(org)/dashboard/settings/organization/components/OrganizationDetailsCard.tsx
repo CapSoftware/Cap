@@ -18,7 +18,9 @@ export const OrganizationDetailsCard = () => {
       </CardHeader>
       <OrgName />
       <AccessEmailDomain />
+      <div className="mt-2 w-full h-px border-t border-dashed border-gray-3" />
       <CustomDomain />
+      <div className="w-full h-px border-t border-dashed border-gray-3" />
       <OrganizationIcon />
     </Card>
   );
