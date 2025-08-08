@@ -6,7 +6,8 @@ export function jsonExtractString<
   T extends Record<string, any>,
   F extends keyof T
 >(column: MySqlColumn<C>, field: F) {
+  const jsonParam = `$.${field as string}`;
   return sql<
     string | undefined
-  >`JSON_UNQUOTE(JSON_EXTRACT(${column}, $.${field}))`;
+  >`JSON_UNQUOTE(JSON_EXTRACT(${column}, '${jsonParam}'))`;
 }
