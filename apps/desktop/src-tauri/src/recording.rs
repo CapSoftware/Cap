@@ -485,6 +485,7 @@ pub async fn start_recording(
                     // this clears the current recording for us
                     handle_recording_end(app, None, &mut state).await.ok();
                 }
+                // Actor hasn't errored, it's just finished
                 _ => {}
             }
         }
@@ -595,16 +596,19 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
             .ok()
             .flatten()
             .unwrap_or_default();
+
+        if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+            let _ = window.close();
+        }
+
         match settings.post_deletion_behaviour {
-            PostDeletionBehaviour::CloseWindow => {
-                // Close the in-progress recording window (current behavior)
-                if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+            PostDeletionBehaviour::Exit => {
+                if let Some(window) = CapWindowId::Main.get(&app) {
                     let _ = window.close();
                 }
             }
-            PostDeletionBehaviour::KeepWindowOpen => {
-                // Keep window open - no action needed, just emit events to reset UI
-                // The frontend will handle resetting the recording state
+            PostDeletionBehaviour::ReopenRecordingWindow => {
+                let _ = ShowCapWindow::Main.show(&app).await;
             }
         }
     }

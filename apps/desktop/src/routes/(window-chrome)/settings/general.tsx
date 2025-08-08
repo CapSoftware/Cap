@@ -152,7 +152,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       | PostDeletionBehaviour
       | number;
     onChange: (
-      value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour | PostDeletionBehaviour
+      value:
+        | MainWindowRecordingStartBehaviour
+        | PostStudioRecordingBehaviour
+        | PostDeletionBehaviour
     ) => void | Promise<void>;
   };
 
@@ -449,8 +452,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                             () => item.value,
                             item.onChange,
                             [
-                              { text: "Close window", value: "closeWindow" },
-                              { text: "Keep window open", value: "keepWindowOpen" },
+                              { text: "Hide Cap", value: "exit" },
+                              {
+                                text: "Open Cap",
+                                value: "reopenRecordingWindow",
+                              },
                             ]
                           );
                         }
