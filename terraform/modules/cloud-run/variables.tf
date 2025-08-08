@@ -37,3 +37,8 @@ variable "vpc_connector_id" {
     description = "The ID of the VPC connector"
     type = string
 }
+
+variable "image_url" {
+  description = "The URL of the Docker image to deploy."
+  type        = string
+}

@@ -8,3 +8,8 @@ variable "region" {
   type        = string
   default     = "us-central1"
 }
+
+variable "image_url" {
+  description = "The URL of the Docker image to deploy."
+  type        = string
+}

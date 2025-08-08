@@ -1,0 +1,54 @@
+steps:
+  # Create the Artifact Registry repository
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud artifacts repositories create ${_REPOSITORY} \
+          --repository-format=docker \
+          --location=${_REGION} \
+          --description="Docker repository for Cloud Run" || true
+
+  # Install dependencies
+  - name: 'gcr.io/cloud-builders/npm'
+    args: ['install', '-g', 'pnpm']
+  - name: 'gcr.io/cloud-builders/npm'
+    args: ['install']
+    entrypoint: 'pnpm'
+
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t',
+      '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA',
+      '.',
+      '-f',
+      'apps/web/Dockerfile'
+    ]
+    id: 'Build'
+
+  # Push the Docker image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA']
+    id: 'Push'
+
+  # Run Terraform
+  - name: 'hashicorp/terraform:1.0.0'
+    args:
+      - '-c'
+      - |
+        terraform init
+        terraform apply -auto-approve -var="project_id=$PROJECT_ID" -var="region=${_REGION}" -var="image_url=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA"
+    entrypoint: 'sh'
+    id: 'Terraform-Apply'
+    dir: 'terraform'
+
+substitutions:
+  _REGION: 'us-central1'
+  _REPOSITORY: 'cloud-run-repo'
+  _IMAGE_NAME: 'cap-web'
+
+images:
+- '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA'

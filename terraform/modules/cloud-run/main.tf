@@ -5,7 +5,7 @@ resource "google_cloud_run_v2_service" "main" {
 
   template {
     containers {
-      image = "gcr.io/cloudrun/hello"
+      image = var.image_url
       env {
         name  = "DB_USER"
         value_source {

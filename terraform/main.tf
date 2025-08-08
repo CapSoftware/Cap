@@ -45,6 +45,7 @@ module "cloud_run" {
   project_id       = var.project_id
   region           = var.region
   service_name     = "cloud-run-service"
+  image_url        = var.image_url
   db_connection_name = module.cloud_sql.db_instance_connection_name
   db_name          = module.cloud_sql.db_name
   db_user_secret_id = module.cloud_sql.db_user_secret_id
