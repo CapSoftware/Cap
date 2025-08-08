@@ -121,7 +121,6 @@ type CreateNotificationInput<D = NotificationSpecificData> =
           const shouldSkipNotification =
             (type === "comment" && notificationPrefs.pauseComments) ||
             (type === "view" && notificationPrefs.pauseViews) ||
-            (type === "reply" && notificationPrefs.pauseReplies) ||
             (type === "reaction" && notificationPrefs.pauseReactions);
     
           if (shouldSkipNotification) {
