@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { motion } from "framer-motion";
 import { useRef, useEffect, useMemo } from "react";
 import { NotificationType } from "@/lib/Notification";
-import { Filters, FilterType } from "./Filter";
+import { FilterLabels, Filters, FilterType } from "./Filter";
 
 type FilterTabsProps = {
   activeFilter: FilterType;
