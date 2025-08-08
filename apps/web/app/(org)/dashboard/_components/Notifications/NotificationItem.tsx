@@ -5,7 +5,6 @@ import Link from "next/link";
 import moment from "moment";
 import { NotificationType } from "@/lib/Notification";
 import { Notification as APINotification } from "@cap/web-api-contract";
-import z from "zod";
 
 type NotificationItemProps = {
   notification: APINotification;
@@ -17,7 +16,7 @@ const descriptionMap: Record<NotificationType, string> = {
   reply: `replied to your comment`,
   view: `viewed your video`,
   reaction: `reacted to your video`,
-  mention: `mentioned you in a comment`,
+  // mention: `mentioned you in a comment`,
 };
 
 export const NotificationItem = ({
@@ -98,7 +97,8 @@ function getLink(notification: APINotification) {
   switch (notification.type) {
     case "comment":
     case "reply":
-      // case "reaction":
+    case "reaction":
+      // case "mention":
       return `/s/${notification.videoId}/?comment=${notification.comment.id}`;
     default:
       return `/s/${notification.videoId}`;

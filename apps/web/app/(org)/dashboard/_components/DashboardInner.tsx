@@ -1,6 +1,6 @@
 "use client";
 
-import Notifications from "@/app/dashboard/_components/Notifications";
+import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { buildEnv } from "@cap/env";
 import {
@@ -12,11 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@cap/ui";
-import {
-  faBell,
-  faMoon,
-  faSun
-} from "@fortawesome/free-solid-svg-icons";
+import { faBell, faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
@@ -26,7 +22,14 @@ import { signOut } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import React, { cloneElement, memo, MutableRefObject, useMemo, useRef, useState } from "react";
+import React, {
+  cloneElement,
+  memo,
+  MutableRefObject,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useDashboardContext, useTheme } from "../Contexts";
 import { MembersDialog } from "../spaces/[spaceId]/components/MembersDialog";
 import {
@@ -50,7 +53,8 @@ export default function DashboardInner({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const { activeOrganization, activeSpace, anyNewNotifications } = useDashboardContext();
+  const { activeOrganization, activeSpace, anyNewNotifications } =
+    useDashboardContext();
   const [membersDialogOpen, setMembersDialogOpen] = useState(false);
 
   const titles: Record<string, string> = {
@@ -115,14 +119,16 @@ export default function DashboardInner({
               setToggleNotifications(!toggleNotifications);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
+              if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 setToggleNotifications(!toggleNotifications);
               }
             }}
             tabIndex={0}
             role="button"
-            aria-label={`Notifications${anyNewNotifications ? ' (new notifications available)' : ''}`}
+            aria-label={`Notifications${
+              anyNewNotifications ? " (new notifications available)" : ""
+            }`}
             aria-expanded={toggleNotifications}
             className="hidden relative justify-center data-[state=open]:hover:bg-gray-5 items-center bg-gray-3
             rounded-full transition-colors cursor-pointer lg:flex
@@ -136,7 +142,8 @@ export default function DashboardInner({
                   <div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
                   <div className="relative w-2 h-2 bg-red-400 rounded-full" />
                 </div>
-              </div>)}
+              </div>
+            )}
             <FontAwesomeIcon className="text-gray-12 size-3.5" icon={faBell} />
             <AnimatePresence>
               {toggleNotifications && <Notifications ref={notificationsRef} />}

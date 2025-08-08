@@ -3,7 +3,7 @@
 import clsx from "clsx";
 import { motion, MotionProps } from "framer-motion";
 import { forwardRef, useEffect, useRef, useMemo, useState } from "react";
-import { FilterTabs, FilterType, FilterLabels } from "./FilterTabs";
+import { FilterTabs } from "./FilterTabs";
 import { NotificationFooter } from "./NotificationFooter";
 import { NotificationHeader } from "./NotificationHeader";
 import { NotificationItem } from "./NotificationItem";
@@ -14,7 +14,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBellSlash } from "@fortawesome/free-solid-svg-icons";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useApiClient } from "@/utils/web-api";
-import { matchNotificationFilter } from "../Filter";
+import { FilterType, matchNotificationFilter } from "./Filter";
 
 type NotificationsProps = MotionProps & React.HTMLAttributes<HTMLDivElement>;
 
