@@ -31,10 +31,7 @@ pub fn main() {
     let selected = Select::new("Select a device", devices).prompt().unwrap();
     let mut selected_device = _devices.get(selected.1).unwrap();
 
-    println!(
-        "Info for device '{}'",
-        selected_device.localized_name().to_string()
-    );
+    println!("Info for device '{}'", selected_device.localized_name());
 
     let formats = selected_device.formats();
 
@@ -154,6 +151,7 @@ struct Format {
     width: i32,
     height: i32,
     fourcc: FourCharCode,
+    #[allow(unused)]
     color_space: Option<YCbCrMatrix>,
     max_frame_rate: (i64, i32),
 }
@@ -177,18 +175,13 @@ struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice, usize);
 
 impl<'a> Display for CaptureDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} ({})",
-            self.0.localized_name().to_string(),
-            self.0.unique_id().to_string()
-        )
+        write!(f, "{} ({})", self.0.localized_name(), self.0.unique_id())
     }
 }
 
 impl AsRef<av::CaptureDevice> for CaptureDeviceSelectOption<'_> {
     fn as_ref(&self) -> &av::CaptureDevice {
-        &self.0
+        self.0
     }
 }
 
@@ -196,6 +189,6 @@ impl Deref for CaptureDeviceSelectOption<'_> {
     type Target = av::CaptureDevice;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }

@@ -1,5 +1,5 @@
-use crate::layers::{FrameData, RecordableLayer, SkiaProjectUniforms};
 use crate::SkiaRenderingError;
+use crate::layers::{FrameData, RecordableLayer, SkiaProjectUniforms};
 use cap_project::BackgroundSource;
 use skia_safe::{
     Canvas, Color, Image, Paint, Picture, PictureRecorder, Point, Rect, Shader, TileMode,
@@ -229,7 +229,7 @@ impl RecordableLayer for BackgroundLayer {
 
         // Handle image loading if needed
         match &new_background {
-            Background::Image { ref path } | Background::Wallpaper { ref path } => {
+            Background::Image { path } | Background::Wallpaper { path } => {
                 if self.image_path.as_ref() != Some(path) || self.loaded_image.is_none() {
                     // For now, we'll do synchronous loading. In a real implementation,
                     // this should be async or cached at a higher level

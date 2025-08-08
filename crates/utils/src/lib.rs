@@ -10,8 +10,8 @@ pub fn get_last_win32_error_formatted() -> String {
 #[cfg(windows)]
 pub fn format_error_message(error_code: u32) -> String {
     use windows::{
+        Win32::System::Diagnostics::Debug::{FORMAT_MESSAGE_FROM_SYSTEM, FormatMessageW},
         core::PWSTR,
-        Win32::System::Diagnostics::Debug::{FormatMessageW, FORMAT_MESSAGE_FROM_SYSTEM},
     };
 
     let mut buffer = vec![0u16; 1024];
@@ -44,6 +44,6 @@ where
 }
 
 pub fn ensure_dir(path: &PathBuf) -> Result<PathBuf, std::io::Error> {
-    std::fs::create_dir_all(&path)?;
+    std::fs::create_dir_all(path)?;
     Ok(path.clone())
 }

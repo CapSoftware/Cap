@@ -81,10 +81,6 @@ pub struct GeneralSettingsStore {
     pub auto_zoom_on_clicks: bool,
 }
 
-fn yes(_: &bool) -> bool {
-    true
-}
-
 fn default_server_url() -> String {
     std::option_env!("VITE_SERVER_URL")
         .unwrap_or("https://cap.so")

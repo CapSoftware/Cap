@@ -1,122 +1,114 @@
 use cap_audio::{AudioData, StereoMode};
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
-use ffmpeg::{
-    codec::decoder,
-    format::{
-        self, self as avformat,
-        sample::{Sample, Type},
-    },
-    software::resampling,
-    ChannelLayout,
-};
+use ffmpeg::{ChannelLayout, format as avformat, software::resampling};
 use ringbuf::{
-    traits::{Consumer, Observer, Producer},
     HeapRb,
+    traits::{Consumer, Observer, Producer},
 };
 use std::sync::Arc;
 
 use crate::{
-    data::{cast_bytes_to_f32_slice, cast_f32_slice_to_bytes, FFAudio, FromSampleBytes},
     MediaError,
+    data::{FFAudio, FromSampleBytes, cast_f32_slice_to_bytes},
 };
 
-fn decode_audio_to_f32(
-    decoder: &mut decoder::Audio,
-    input_ctx: &mut format::context::Input,
-    stream_index: usize,
-) -> Vec<f32> {
-    let mut decoded_frame = ffmpeg::frame::Audio::empty();
-    let mut resampled_frame = ffmpeg::frame::Audio::empty();
+// fn decode_audio_to_f32(
+//     decoder: &mut decoder::Audio,
+//     input_ctx: &mut format::context::Input,
+//     stream_index: usize,
+// ) -> Vec<f32> {
+//     let mut decoded_frame = ffmpeg::frame::Audio::empty();
+//     let mut resampled_frame = ffmpeg::frame::Audio::empty();
 
-    let mut resampler = ffmpeg::software::resampler(
-        (decoder.format(), decoder.channel_layout(), decoder.rate()),
-        (
-            Sample::F32(Type::Packed),
-            decoder.channel_layout(),
-            AudioData::SAMPLE_RATE,
-        ),
-    )
-    .unwrap();
+//     let mut resampler = ffmpeg::software::resampler(
+//         (decoder.format(), decoder.channel_layout(), decoder.rate()),
+//         (
+//             Sample::F32(Type::Packed),
+//             decoder.channel_layout(),
+//             AudioData::SAMPLE_RATE,
+//         ),
+//     )
+//     .unwrap();
 
-    // let mut resampled_frames = 0;
-    let mut samples: Vec<f32> = vec![];
+//     // let mut resampled_frames = 0;
+//     let mut samples: Vec<f32> = vec![];
 
-    fn process_resampler(
-        resampler: &mut resampling::Context,
-        samples: &mut Vec<f32>,
-        resampled_frame: &mut FFAudio,
-    ) {
-        loop {
-            let resample_delay = resampler.flush(resampled_frame).unwrap();
-            if resampled_frame.samples() == 0 {
-                break;
-            }
+//     fn process_resampler(
+//         resampler: &mut resampling::Context,
+//         samples: &mut Vec<f32>,
+//         resampled_frame: &mut FFAudio,
+//     ) {
+//         loop {
+//             let resample_delay = resampler.flush(resampled_frame).unwrap();
+//             if resampled_frame.samples() == 0 {
+//                 break;
+//             }
 
-            let slice = &resampled_frame.data(0)
-                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+//             let slice = &resampled_frame.data(0)
+//                 [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+//             samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
 
-            if resample_delay.is_none() {
-                break;
-            }
-        }
-    }
+//             if resample_delay.is_none() {
+//                 break;
+//             }
+//         }
+//     }
 
-    fn process_decoder(
-        decoder: &mut ffmpeg::decoder::Audio,
-        decoded_frame: &mut FFAudio,
-        resampler: &mut resampling::Context,
-        resampled_frame: &mut FFAudio,
-        samples: &mut Vec<f32>,
-    ) {
-        while let Ok(_) = decoder.receive_frame(decoded_frame) {
-            let resample_delay = resampler.run(&decoded_frame, resampled_frame).unwrap();
+//     fn process_decoder(
+//         decoder: &mut ffmpeg::decoder::Audio,
+//         decoded_frame: &mut FFAudio,
+//         resampler: &mut resampling::Context,
+//         resampled_frame: &mut FFAudio,
+//         samples: &mut Vec<f32>,
+//     ) {
+//         while decoder.receive_frame(decoded_frame).is_ok() {
+//             let resample_delay = resampler.run(decoded_frame, resampled_frame).unwrap();
 
-            let slice = &resampled_frame.data(0)
-                [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
-            samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
+//             let slice = &resampled_frame.data(0)
+//                 [0..resampled_frame.samples() * 4 * resampled_frame.channels() as usize];
+//             samples.extend(unsafe { cast_bytes_to_f32_slice(slice) });
 
-            if resample_delay.is_some() {
-                process_resampler(resampler, samples, resampled_frame);
-            }
-        }
-    }
+//             if resample_delay.is_some() {
+//                 process_resampler(resampler, samples, resampled_frame);
+//             }
+//         }
+//     }
 
-    for (stream, packet) in input_ctx.packets() {
-        if stream.index() != stream_index {
-            continue;
-        }
+//     for (stream, packet) in input_ctx.packets() {
+//         if stream.index() != stream_index {
+//             continue;
+//         }
 
-        decoder.send_packet(&packet).unwrap();
+//         decoder.send_packet(&packet).unwrap();
 
-        process_decoder(
-            decoder,
-            &mut decoded_frame,
-            &mut resampler,
-            &mut resampled_frame,
-            &mut samples,
-        );
+//         process_decoder(
+//             decoder,
+//             &mut decoded_frame,
+//             &mut resampler,
+//             &mut resampled_frame,
+//             &mut samples,
+//         );
 
-        if resampler.delay().is_some() {
-            process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
-        }
-    }
+//         if resampler.delay().is_some() {
+//             process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
+//         }
+//     }
 
-    decoder.send_eof().unwrap();
+//     decoder.send_eof().unwrap();
 
-    process_decoder(
-        decoder,
-        &mut decoded_frame,
-        &mut resampler,
-        &mut resampled_frame,
-        &mut samples,
-    );
+//     process_decoder(
+//         decoder,
+//         &mut decoded_frame,
+//         &mut resampler,
+//         &mut resampled_frame,
+//         &mut samples,
+//     );
 
-    process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
+//     process_resampler(&mut resampler, &mut samples, &mut resampled_frame);
 
-    samples
-}
+//     samples
+// }
 
 pub struct AudioRenderer {
     data: Vec<AudioSegment>,
@@ -245,8 +237,7 @@ impl AudioRenderer {
         requested_samples: usize,
         project: &ProjectConfiguration,
     ) -> Option<FFAudio> {
-        let res = self
-            .render_frame_raw(requested_samples, project)
+        self.render_frame_raw(requested_samples, project)
             .map(move |(samples, data)| {
                 let mut raw_frame =
                     FFAudio::new(AudioData::SAMPLE_FORMAT, samples, ChannelLayout::STEREO);
@@ -255,13 +246,11 @@ impl AudioRenderer {
                     .copy_from_slice(unsafe { cast_f32_slice_to_bytes(&data) });
 
                 raw_frame
-            });
-
-        res
+            })
     }
 
-    pub fn render_frame_raw<'a>(
-        &'a mut self,
+    pub fn render_frame_raw(
+        &mut self,
         samples: usize,
         project: &ProjectConfiguration,
     ) -> Option<(usize, Vec<f32>)> {
@@ -302,11 +291,7 @@ impl AudioRenderer {
                         f32::NEG_INFINITY
                     } else {
                         let g = t.gain(&project.audio);
-                        if g < -30.0 {
-                            f32::NEG_INFINITY
-                        } else {
-                            g
-                        }
+                        if g < -30.0 { f32::NEG_INFINITY } else { g }
                     },
                     t.stereo_mode(&project.audio),
                 )
@@ -339,7 +324,7 @@ impl<T: FromSampleBytes> AudioPlaybackBuffer<T> {
 
     pub fn new(data: Vec<AudioSegment>, output_info: AudioInfo) -> Self {
         // println!("Input info: {:?}", data[0][0].info);
-        println!("Output info: {:?}", output_info);
+        println!("Output info: {output_info:?}");
 
         let resampler = AudioResampler::new(output_info).unwrap();
 

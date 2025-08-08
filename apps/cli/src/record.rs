@@ -1,7 +1,7 @@
 use std::{env::current_dir, path::PathBuf, sync::Arc};
 
 use cap_camera::ModelID;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_media::sources::ScreenCaptureTarget;
 use clap::Args;
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
 use uuid::Uuid;
@@ -44,7 +44,7 @@ impl RecordStart {
         }?;
 
         let camera = if let Some(model_id) = self.camera {
-            let model_id: ModelID = model_id
+            let _model_id: ModelID = model_id
                 .try_into()
                 .map_err(|_| "Invalid model ID".to_string())?;
 

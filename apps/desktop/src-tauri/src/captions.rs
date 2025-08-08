@@ -1,6 +1,5 @@
 use anyhow::Result;
 use cap_audio::AudioData;
-use cap_project;
 use ffmpeg::{
     ChannelLayout, codec as avcodec,
     format::{self as avformat},
@@ -50,19 +49,19 @@ const WHISPER_SAMPLE_RATE: u32 = 16000;
 #[tauri::command]
 #[specta::specta]
 pub async fn create_dir(path: String, _recursive: bool) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {}", e))
+    std::fs::create_dir_all(path).map_err(|e| format!("Failed to create directory: {e}"))
 }
 
 /// Function to save the model file
 #[tauri::command]
 #[specta::specta]
 pub async fn save_model_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {}", e))
+    std::fs::write(&path, &data).map_err(|e| format!("Failed to write model file: {e}"))
 }
 
 /// Extract audio from a video file and save it as a temporary WAV file
 async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Result<(), String> {
-    log::info!("Attempting to extract audio from: {}", video_path);
+    log::info!("Attempting to extract audio from: {video_path}");
 
     // Check if this is a .cap directory
     if video_path.ends_with(".cap") {
@@ -71,10 +70,10 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         // Read the recording metadata
         let meta_path = std::path::Path::new(video_path).join("recording-meta.json");
         let meta_content = std::fs::read_to_string(&meta_path)
-            .map_err(|e| format!("Failed to read recording metadata: {}", e))?;
+            .map_err(|e| format!("Failed to read recording metadata: {e}"))?;
 
         let meta: serde_json::Value = serde_json::from_str(&meta_content)
-            .map_err(|e| format!("Failed to parse recording metadata: {}", e))?;
+            .map_err(|e| format!("Failed to parse recording metadata: {e}"))?;
 
         // Get paths for both audio sources
         let base_path = std::path::Path::new(video_path);
@@ -149,7 +148,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to process audio source {:?}: {}", source, e);
+                    log::warn!("Failed to process audio source {source:?}: {e}");
                     continue;
                 }
             }
@@ -157,10 +156,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         // No matter what, ensure we have mono audio for Whisper
         if channel_count > 1 {
-            log::info!(
-                "Converting final mixed audio from {} channels to mono",
-                channel_count
-            );
+            log::info!("Converting final mixed audio from {channel_count} channels to mono");
             mixed_samples = convert_to_mono(&mixed_samples, channel_count);
             channel_count = 1;
         }
@@ -171,7 +167,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         // Convert to WAV format with desired sample rate
         let mut output = avformat::output(&output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
+            .map_err(|e| format!("Failed to create output file: {e}"))?;
 
         let codec = avcodec::encoder::find_by_name("pcm_s16le")
             .ok_or_else(|| "PCM encoder not found".to_string())?;
@@ -179,7 +175,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         let mut encoder = avcodec::Context::new()
             .encoder()
             .audio()
-            .map_err(|e| format!("Failed to create encoder: {}", e))?;
+            .map_err(|e| format!("Failed to create encoder: {e}"))?;
 
         encoder.set_rate(WHISPER_SAMPLE_RATE as i32);
         let channel_layout = ChannelLayout::MONO;
@@ -188,16 +184,16 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         let mut encoder = encoder
             .open_as(codec)
-            .map_err(|e| format!("Failed to open encoder: {}", e))?;
+            .map_err(|e| format!("Failed to open encoder: {e}"))?;
 
         let mut stream = output
             .add_stream(codec)
-            .map_err(|e| format!("Failed to add stream: {}", e))?;
+            .map_err(|e| format!("Failed to add stream: {e}"))?;
         stream.set_parameters(&encoder);
 
         output
             .write_header()
-            .map_err(|e| format!("Failed to write header: {}", e))?;
+            .map_err(|e| format!("Failed to write header: {e}"))?;
 
         // Create resampler for sample rate conversion
         let mut resampler = resampling::Context::get(
@@ -208,7 +204,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             channel_layout,
             WHISPER_SAMPLE_RATE,
         )
-        .map_err(|e| format!("Failed to create resampler: {}", e))?;
+        .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
         // Process audio in chunks
         let frame_size = encoder.frame_size() as usize;
@@ -249,7 +245,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                 let bytes = unsafe {
                     std::slice::from_raw_parts(
                         chunk.as_ptr() as *const u8,
-                        chunk.len() * std::mem::size_of::<f32>(),
+                        std::mem::size_of_val(chunk),
                     )
                 };
                 input_frame.data_mut(0)[0..bytes.len()].copy_from_slice(bytes);
@@ -274,13 +270,13 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to resample chunk {}: {}", chunk_idx, e);
+                        log::error!("Failed to resample chunk {chunk_idx}: {e}");
                         continue;
                     }
                 }
 
                 if let Err(e) = encoder.send_frame(&output_frame) {
-                    log::error!("Failed to send frame to encoder: {}", e);
+                    log::error!("Failed to send frame to encoder: {e}");
                     continue;
                 }
 
@@ -290,7 +286,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                     match encoder.receive_packet(&mut packet) {
                         Ok(_) => {
                             if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {}", e);
+                                log::error!("Failed to write packet: {e}");
                             }
                         }
                         Err(_) => break,
@@ -302,7 +298,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         // Flush the encoder
         encoder
             .send_eof()
-            .map_err(|e| format!("Failed to send EOF: {}", e))?;
+            .map_err(|e| format!("Failed to send EOF: {e}"))?;
 
         // Process final packets in a loop with limited borrow scope
         loop {
@@ -316,20 +312,20 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             // Use a block to limit the scope of the output borrow
             {
                 if let Err(e) = packet.write_interleaved(&mut output) {
-                    return Err(format!("Failed to write final packet: {}", e));
+                    return Err(format!("Failed to write final packet: {e}"));
                 }
             }
         }
 
         output
             .write_trailer()
-            .map_err(|e| format!("Failed to write trailer: {}", e))?;
+            .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
         Ok(())
     } else {
         // Handle regular video file
-        let mut input = avformat::input(&video_path)
-            .map_err(|e| format!("Failed to open video file: {}", e))?;
+        let mut input =
+            avformat::input(&video_path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
         let stream = input
             .streams()
@@ -340,13 +336,13 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         // Get decoder parameters first
         let decoder_ctx = avcodec::Context::from_parameters(codec_params.clone())
-            .map_err(|e| format!("Failed to create decoder context: {}", e))?;
+            .map_err(|e| format!("Failed to create decoder context: {e}"))?;
 
         // Create and open the decoder
         let mut decoder = decoder_ctx
             .decoder()
             .audio()
-            .map_err(|e| format!("Failed to create decoder: {}", e))?;
+            .map_err(|e| format!("Failed to create decoder: {e}"))?;
 
         // Now we can access audio-specific methods
         let decoder_format = decoder.format();
@@ -360,7 +356,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         let mut encoder_ctx = avcodec::Context::new()
             .encoder()
             .audio()
-            .map_err(|e| format!("Failed to create encoder: {}", e))?;
+            .map_err(|e| format!("Failed to create encoder: {e}"))?;
 
         encoder_ctx.set_rate(WHISPER_SAMPLE_RATE as i32);
         encoder_ctx.set_channel_layout(channel_layout);
@@ -371,17 +367,17 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
         let mut encoder = encoder_ctx
             .open_as(codec)
-            .map_err(|e| format!("Failed to open encoder: {}", e))?;
+            .map_err(|e| format!("Failed to open encoder: {e}"))?;
 
         // Create output context separately
         let mut output = avformat::output(&output_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
+            .map_err(|e| format!("Failed to create output file: {e}"))?;
 
         // Add stream and get parameters in a block to limit the borrow
         let stream_params = {
             let mut output_stream = output
                 .add_stream(codec)
-                .map_err(|e| format!("Failed to add stream: {}", e))?;
+                .map_err(|e| format!("Failed to add stream: {e}"))?;
 
             output_stream.set_parameters(&encoder);
 
@@ -392,7 +388,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         // Write header
         output
             .write_header()
-            .map_err(|e| format!("Failed to write header: {}", e))?;
+            .map_err(|e| format!("Failed to write header: {e}"))?;
 
         // Create resampler
         let mut resampler = resampling::Context::get(
@@ -403,7 +399,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
             channel_layout,
             WHISPER_SAMPLE_RATE,
         )
-        .map_err(|e| format!("Failed to create resampler: {}", e))?;
+        .map_err(|e| format!("Failed to create resampler: {e}"))?;
 
         // Create frames
         let mut decoded_frame = ffmpeg::frame::Audio::empty();
@@ -444,19 +440,19 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         // Then process each cloned packet
         for packet_res in packet_queue {
             if let Err(e) = decoder.send_packet(&packet_res) {
-                log::warn!("Failed to send packet to decoder: {}", e);
+                log::warn!("Failed to send packet to decoder: {e}");
                 continue;
             }
 
             // Process decoded frames
-            while let Ok(_) = decoder.receive_frame(&mut decoded_frame) {
+            while decoder.receive_frame(&mut decoded_frame).is_ok() {
                 if let Err(e) = resampler.run(&decoded_frame, &mut resampled_frame) {
-                    log::warn!("Failed to resample audio: {}", e);
+                    log::warn!("Failed to resample audio: {e}");
                     continue;
                 }
 
                 if let Err(e) = encoder.send_frame(&resampled_frame) {
-                    log::warn!("Failed to send frame to encoder: {}", e);
+                    log::warn!("Failed to send frame to encoder: {e}");
                     continue;
                 }
 
@@ -469,7 +465,7 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
                             packet.set_stream(stream_params.0);
 
                             if let Err(e) = packet.write_interleaved(&mut output) {
-                                log::error!("Failed to write packet: {}", e);
+                                log::error!("Failed to write packet: {e}");
                             }
                         }
                         Err(_) => break,
@@ -481,16 +477,16 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
         // Flush the decoder
         decoder
             .send_eof()
-            .map_err(|e| format!("Failed to send EOF to decoder: {}", e))?;
+            .map_err(|e| format!("Failed to send EOF to decoder: {e}"))?;
 
         while decoder.receive_frame(&mut decoded_frame).is_ok() {
             resampler
                 .run(&decoded_frame, &mut resampled_frame)
-                .map_err(|e| format!("Failed to resample final audio: {}", e))?;
+                .map_err(|e| format!("Failed to resample final audio: {e}"))?;
 
             encoder
                 .send_frame(&resampled_frame)
-                .map_err(|e| format!("Failed to send final frame: {}", e))?;
+                .map_err(|e| format!("Failed to send final frame: {e}"))?;
 
             // Process final encoded packets
             loop {
@@ -503,14 +499,14 @@ async fn extract_audio_from_video(video_path: &str, output_path: &PathBuf) -> Re
 
                 packet
                     .write_interleaved(&mut output)
-                    .map_err(|e| format!("Failed to write final packet: {}", e))?;
+                    .map_err(|e| format!("Failed to write final packet: {e}"))?;
             }
         }
 
         // Close the output file with trailer
         output
             .write_trailer()
-            .map_err(|e| format!("Failed to write trailer: {}", e))?;
+            .map_err(|e| format!("Failed to write trailer: {e}"))?;
 
         Ok(())
     }
@@ -521,9 +517,9 @@ async fn get_whisper_context(model_path: &str) -> Result<Arc<WhisperContext>, St
     let mut context_guard = WHISPER_CONTEXT.lock().await;
 
     // Always create a new context to avoid issues with multiple uses
-    log::info!("Initializing Whisper context with model: {}", model_path);
+    log::info!("Initializing Whisper context with model: {model_path}");
     let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
-        .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
+        .map_err(|e| format!("Failed to load Whisper model: {e}"))?;
 
     *context_guard = Some(ctx);
 
@@ -539,7 +535,7 @@ fn process_with_whisper(
     context: Arc<WhisperContext>,
     language: &str,
 ) -> Result<CaptionData, String> {
-    log::info!("Processing audio file: {:?}", audio_path);
+    log::info!("Processing audio file: {audio_path:?}");
 
     // Set up parameters for Whisper
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -555,11 +551,11 @@ fn process_with_whisper(
 
     // Load audio file
     let mut audio_file = File::open(audio_path)
-        .map_err(|e| format!("Failed to open audio file: {} at path: {:?}", e, audio_path))?;
+        .map_err(|e| format!("Failed to open audio file: {e} at path: {audio_path:?}"))?;
     let mut audio_data = Vec::new();
     audio_file
         .read_to_end(&mut audio_data)
-        .map_err(|e| format!("Failed to read audio file: {}", e))?;
+        .map_err(|e| format!("Failed to read audio file: {e}"))?;
 
     log::info!("Processing audio file of size: {} bytes", audio_data.len());
 
@@ -579,12 +575,7 @@ fn process_with_whisper(
         let min_sample = audio_data_f32.iter().fold(f32::MAX, |a, &b| a.min(b));
         let max_sample = audio_data_f32.iter().fold(f32::MIN, |a, &b| a.max(b));
         let avg_sample = audio_data_f32.iter().sum::<f32>() / audio_data_f32.len() as f32;
-        log::info!(
-            "Audio samples - min: {}, max: {}, avg: {}",
-            min_sample,
-            max_sample,
-            avg_sample
-        );
+        log::info!("Audio samples - min: {min_sample}, max: {max_sample}, avg: {avg_sample}");
 
         // Sample a few values
         let sample_count = audio_data_f32.len().min(10);
@@ -597,33 +588,33 @@ fn process_with_whisper(
     // Run the transcription
     let mut state = context
         .create_state()
-        .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
+        .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
 
     state
         .full(params, &audio_data_f32[..])
-        .map_err(|e| format!("Failed to run Whisper transcription: {}", e))?;
+        .map_err(|e| format!("Failed to run Whisper transcription: {e}"))?;
 
     // Process results: convert Whisper segments to CaptionSegment
     let num_segments = state
         .full_n_segments()
-        .map_err(|e| format!("Failed to get number of segments: {}", e))?;
+        .map_err(|e| format!("Failed to get number of segments: {e}"))?;
 
-    log::info!("Found {} segments", num_segments);
+    log::info!("Found {num_segments} segments");
 
     let mut segments = Vec::new();
 
     for i in 0..num_segments {
         let text = state
             .full_get_segment_text(i)
-            .map_err(|e| format!("Failed to get segment text: {}", e))?;
+            .map_err(|e| format!("Failed to get segment text: {e}"))?;
 
         // Properly unwrap the Result first, then convert i64 to f64
         let start_i64 = state
             .full_get_segment_t0(i)
-            .map_err(|e| format!("Failed to get segment start time: {}", e))?;
+            .map_err(|e| format!("Failed to get segment start time: {e}"))?;
         let end_i64 = state
             .full_get_segment_t1(i)
-            .map_err(|e| format!("Failed to get segment end time: {}", e))?;
+            .map_err(|e| format!("Failed to get segment end time: {e}"))?;
 
         // Convert timestamps from centiseconds to seconds (as f32 for CaptionSegment)
         let start_time = (start_i64 as f32) / 100.0;
@@ -640,7 +631,7 @@ fn process_with_whisper(
 
         if !text.trim().is_empty() {
             segments.push(CaptionSegment {
-                id: format!("segment-{}", i),
+                id: format!("segment-{i}"),
                 start: start_time,
                 end: end_time,
                 text: text.trim().to_string(),
@@ -666,23 +657,23 @@ pub async fn transcribe_audio(
 ) -> Result<CaptionData, String> {
     // Check if files exist with detailed error messages
     if !std::path::Path::new(&video_path).exists() {
-        return Err(format!("Video file not found at path: {}", video_path));
+        return Err(format!("Video file not found at path: {video_path}"));
     }
 
     if !std::path::Path::new(&model_path).exists() {
-        return Err(format!("Model file not found at path: {}", model_path));
+        return Err(format!("Model file not found at path: {model_path}"));
     }
 
     // Create temp dir with better error handling
-    let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {}", e))?;
+    let temp_dir = tempdir().map_err(|e| format!("Failed to create temporary directory: {e}"))?;
     let audio_path = temp_dir.path().join("audio.wav");
 
     // First try the ffmpeg implementation
     match extract_audio_from_video(&video_path, &audio_path).await {
-        Ok(_) => log::info!("Successfully extracted audio to {:?}", audio_path),
+        Ok(_) => log::info!("Successfully extracted audio to {audio_path:?}"),
         Err(e) => {
-            log::error!("Failed to extract audio: {}", e);
-            return Err(format!("Failed to extract audio from video: {}", e));
+            log::error!("Failed to extract audio: {e}");
+            return Err(format!("Failed to extract audio from video: {e}"));
         }
     }
 
@@ -691,14 +682,14 @@ pub async fn transcribe_audio(
         return Err("Failed to create audio file for transcription".to_string());
     }
 
-    log::info!("Audio file created at: {:?}", audio_path);
+    log::info!("Audio file created at: {audio_path:?}");
 
     // Get or initialize Whisper context with detailed error handling
     let context = match get_whisper_context(&model_path).await {
         Ok(ctx) => ctx,
         Err(e) => {
-            log::error!("Failed to initialize Whisper context: {}", e);
-            return Err(format!("Failed to initialize transcription model: {}", e));
+            log::error!("Failed to initialize Whisper context: {e}");
+            return Err(format!("Failed to initialize transcription model: {e}"));
         }
     };
 
@@ -712,8 +703,8 @@ pub async fn transcribe_audio(
             Ok(captions)
         }
         Err(e) => {
-            log::error!("Failed to process audio with Whisper: {}", e);
-            Err(format!("Failed to transcribe audio: {}", e))
+            log::error!("Failed to process audio with Whisper: {e}");
+            Err(format!("Failed to transcribe audio: {e}"))
         }
     }
 }
@@ -734,7 +725,7 @@ pub async fn save_captions(
         tracing::info!("Creating captions directory: {:?}", captions_dir);
         std::fs::create_dir_all(&captions_dir).map_err(|e| {
             tracing::error!("Failed to create captions directory: {}", e);
-            format!("Failed to create captions directory: {}", e)
+            format!("Failed to create captions directory: {e}")
         })?;
     }
 
@@ -778,7 +769,7 @@ pub async fn save_captions(
     )
     .map_err(|e| {
         tracing::error!("Failed to serialize captions segments: {}", e);
-        format!("Failed to serialize captions: {}", e)
+        format!("Failed to serialize captions: {e}")
     })?;
 
     json_obj.insert("segments".to_string(), segments_array);
@@ -839,12 +830,12 @@ pub async fn save_captions(
     // Convert to pretty JSON string
     let json = serde_json::to_string_pretty(&json_obj).map_err(|e| {
         tracing::error!("Failed to serialize captions: {}", e);
-        format!("Failed to serialize captions: {}", e)
+        format!("Failed to serialize captions: {e}")
     })?;
 
     std::fs::write(captions_path, json).map_err(|e| {
         tracing::error!("Failed to write captions file: {}", e);
-        format!("Failed to write captions file: {}", e)
+        format!("Failed to write captions file: {e}")
     })?;
 
     tracing::info!("Successfully saved captions");
@@ -968,7 +959,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                 Err("Missing or invalid segments array in captions file".to_string())
             }
         }
-        Err(e) => Err(format!("Failed to parse captions JSON: {}", e)),
+        Err(e) => Err(format!("Failed to parse captions JSON: {e}")),
     }
 }
 
@@ -992,7 +983,7 @@ pub async fn load_captions(
         Ok(j) => j,
         Err(e) => {
             tracing::error!("Failed to read captions file: {}", e);
-            return Err(format!("Failed to read captions file: {}", e));
+            return Err(format!("Failed to read captions file: {e}"));
         }
     };
 
@@ -1014,7 +1005,7 @@ pub async fn load_captions(
         }
         Err(e) => {
             tracing::error!("Failed to parse captions: {}", e);
-            Err(format!("Failed to parse captions: {}", e))
+            Err(format!("Failed to parse captions: {e}"))
         }
     }
 }
@@ -1074,7 +1065,7 @@ pub async fn download_whisper_model(
         .get(model_url)
         .send()
         .await
-        .map_err(|e| format!("Failed to download model: {}", e))?;
+        .map_err(|e| format!("Failed to download model: {e}"))?;
 
     if !response.status().is_success() {
         return Err(format!(
@@ -1089,18 +1080,18 @@ pub async fn download_whisper_model(
     // Create a file to write to
     if let Some(parent) = std::path::Path::new(&output_path).parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create parent directories: {}", e))?;
+            .map_err(|e| format!("Failed to create parent directories: {e}"))?;
     }
     let mut file = tokio::fs::File::create(&output_path)
         .await
-        .map_err(|e| format!("Failed to create file: {}", e))?;
+        .map_err(|e| format!("Failed to create file: {e}"))?;
 
     // Download and write in chunks
     let mut downloaded = 0;
     let mut bytes = response
         .bytes()
         .await
-        .map_err(|e| format!("Failed to get response bytes: {}", e))?;
+        .map_err(|e| format!("Failed to get response bytes: {e}"))?;
 
     // Write the bytes in chunks to show progress
     const CHUNK_SIZE: usize = 1024 * 1024; // 1MB chunks
@@ -1110,7 +1101,7 @@ pub async fn download_whisper_model(
 
         file.write_all(&chunk)
             .await
-            .map_err(|e| format!("Error while writing to file: {}", e))?;
+            .map_err(|e| format!("Error while writing to file: {e}"))?;
 
         downloaded += chunk_size as u64;
 
@@ -1125,17 +1116,17 @@ pub async fn download_whisper_model(
             .emit(
                 DownloadProgress::EVENT_NAME,
                 DownloadProgress {
-                    message: format!("Downloading model: {:.1}%", progress),
+                    message: format!("Downloading model: {progress:.1}%"),
                     progress,
                 },
             )
-            .map_err(|e| format!("Failed to emit progress: {}", e))?;
+            .map_err(|e| format!("Failed to emit progress: {e}"))?;
     }
 
     // Ensure file is properly written
     file.flush()
         .await
-        .map_err(|e| format!("Failed to flush file: {}", e))?;
+        .map_err(|e| format!("Failed to flush file: {e}"))?;
 
     Ok(())
 }
@@ -1152,12 +1143,12 @@ pub async fn check_model_exists(model_path: String) -> Result<bool, String> {
 #[specta::specta]
 pub async fn delete_whisper_model(model_path: String) -> Result<(), String> {
     if !std::path::Path::new(&model_path).exists() {
-        return Err(format!("Model file not found: {}", model_path));
+        return Err(format!("Model file not found: {model_path}"));
     }
 
     tokio::fs::remove_file(&model_path)
         .await
-        .map_err(|e| format!("Failed to delete model file: {}", e))?;
+        .map_err(|e| format!("Failed to delete model file: {e}"))?;
 
     Ok(())
 }
@@ -1188,7 +1179,7 @@ fn format_srt_time(seconds: f64) -> String {
     let minutes = ((seconds % 3600.0) / 60.0) as i32;
     let secs = (seconds % 60.0) as i32;
     let millis = ((seconds % 1.0) * 1000.0) as i32;
-    format!("{:02}:{:02}:{:02},{:03}", hours, minutes, secs, millis)
+    format!("{hours:02}:{minutes:02}:{secs:02},{millis:03}")
 }
 
 /// Export captions to an SRT file
@@ -1238,7 +1229,7 @@ pub async fn export_captions_srt(
         }
         Err(e) => {
             tracing::error!("Failed to write SRT file: {}", e);
-            Err(format!("Failed to write SRT file: {}", e))
+            Err(format!("Failed to write SRT file: {e}"))
         }
     }
 }
@@ -1264,7 +1255,7 @@ fn convert_to_mono(samples: &[f32], channels: usize) -> Vec<f32> {
 }
 
 // Helper function to mix two sample arrays together
-fn mix_samples(dest: &mut Vec<f32>, source: &[f32]) -> usize {
+fn mix_samples(dest: &mut [f32], source: &[f32]) -> usize {
     let length = dest.len().min(source.len());
     for i in 0..length {
         // Simple mix with equal weight (0.5) to prevent clipping

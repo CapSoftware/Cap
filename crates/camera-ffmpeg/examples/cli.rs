@@ -4,10 +4,7 @@ use cap_camera::{CameraInfo, Format};
 use cap_camera_ffmpeg::CapturedFrameExt;
 
 fn main() {
-    let cameras = cap_camera::list_cameras()
-        .into_iter()
-        .map(CameraSelectOption)
-        .collect();
+    let cameras = cap_camera::list_cameras().map(CameraSelectOption).collect();
 
     let selected_camera = inquire::Select::new("Select a device", cameras)
         .prompt()
@@ -31,7 +28,9 @@ fn main() {
                 return;
             };
 
-            dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
+            ff_frame.width();
+            ff_frame.height();
+            ff_frame.format();
         })
         .unwrap();
 

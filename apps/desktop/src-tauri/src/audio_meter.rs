@@ -53,19 +53,15 @@ impl VolumeMeter {
         self.maxes.push(time, value);
         self.times.push_back(time);
 
-        loop {
-            if let Some(time) = self
-                .times
-                .back()
-                .unwrap()
-                .duration_since(self.times.front().unwrap())
-            {
-                if time > self.keep_duration {
-                    self.maxes.remove(self.times.front().unwrap());
-                    self.times.pop_front();
-                } else {
-                    break;
-                }
+        while let Some(time) = self
+            .times
+            .back()
+            .unwrap()
+            .duration_since(self.times.front().unwrap())
+        {
+            if time > self.keep_duration {
+                self.maxes.remove(self.times.front().unwrap());
+                self.times.pop_front();
             } else {
                 break;
             }
@@ -86,6 +82,7 @@ struct MinNonNan(f64);
 
 impl Eq for MinNonNan {}
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for MinNonNan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         other.0.partial_cmp(&self.0)

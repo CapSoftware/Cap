@@ -59,6 +59,11 @@ windows-sys = "0.59.0"
 windows-capture = "1.5.0"
 percent-encoding = "2.3.1"
 
+# TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859
+[workspace.lints.rust]
+deprecated = "allow"
+unexpected_cfgs = "allow"
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"

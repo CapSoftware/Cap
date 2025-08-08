@@ -10,13 +10,13 @@ use tracing::{error, info};
 
 use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
+    MediaError,
     data::FFAudio,
     pipeline::{
         clock::{LocalTimestamp, RealTimeClock},
         control::Control,
         task::PipelineSourceTask,
     },
-    MediaError,
 };
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
@@ -81,7 +81,7 @@ impl AudioInputSource {
             &samples.data,
             (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
         );
-        if let Err(_) = self.tx.send((frame, timestamp)) {
+        if self.tx.send((frame, timestamp)).is_err() {
             return Err(MediaError::Any(
                 "Pipeline is unreachable! Stopping capture".into(),
             ));

@@ -81,7 +81,7 @@ impl FFmpegDecoder {
         self.input.seek(position, ..position)
     }
 
-    pub fn frames(&mut self) -> FramesIter {
+    pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
             packets: self.input.packets(),
             decoder: &mut self.decoder,
@@ -126,16 +126,14 @@ impl<'a> Iterator for FramesIter<'a> {
                     return match &self.hw_device {
                         Some(hw_device) => Some(Ok(hw_device.get_hwframe(&frame).unwrap_or(frame))),
                         None => Some(Ok(frame)),
-                    }
+                    };
                 }
                 Err(ffmpeg::Error::Eof) => return None,
                 Err(ffmpeg::Error::Other { errno }) if errno == EAGAIN => {}
                 Err(e) => return Some(Err(e)),
             }
 
-            let Some((stream, packet)) = self.packets.next() else {
-                return None;
-            };
+            let (stream, packet) = self.packets.next()?;
 
             if stream.index() != self.stream_index {
                 continue;

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use flume::Receiver;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub struct WSFrame {
@@ -14,8 +13,8 @@ pub struct WSFrame {
 pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, CancellationToken) {
     use axum::{
         extract::{
-            ws::{Message, WebSocket, WebSocketUpgrade},
             State,
+            ws::{Message, WebSocket, WebSocketUpgrade},
         },
         response::IntoResponse,
         routing::get,

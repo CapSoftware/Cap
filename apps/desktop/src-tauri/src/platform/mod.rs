@@ -3,9 +3,6 @@ use specta::Type;
 #[cfg(target_os = "windows")]
 pub mod win;
 
-#[cfg(target_os = "windows")]
-pub use win::*;
-
 #[cfg(target_os = "macos")]
 pub mod macos;
 
@@ -33,8 +30,8 @@ pub enum HapticPerformanceTime {
 #[tauri::command]
 #[specta::specta]
 pub fn perform_haptic_feedback(
-    pattern: Option<HapticPattern>,
-    time: Option<HapticPerformanceTime>,
+    _pattern: Option<HapticPattern>,
+    _time: Option<HapticPerformanceTime>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     unsafe {
@@ -44,8 +41,8 @@ pub fn perform_haptic_feedback(
         };
 
         NSHapticFeedbackManager::defaultPerformer().performFeedbackPattern_performanceTime(
-            NSHapticFeedbackPattern(pattern.unwrap_or_default() as isize),
-            NSHapticFeedbackPerformanceTime(time.unwrap_or_default() as usize),
+            NSHapticFeedbackPattern(_pattern.unwrap_or_default() as isize),
+            NSHapticFeedbackPerformanceTime(_time.unwrap_or_default() as usize),
         );
         Ok(())
     }

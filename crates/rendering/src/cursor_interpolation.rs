@@ -8,6 +8,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct InterpolatedCursorPosition {
     pub position: Coord<RawDisplayUVSpace>,
+    #[allow(unused)]
     pub velocity: XY<f32>,
     pub cursor_id: String,
 }
@@ -23,7 +24,7 @@ pub fn interpolate_cursor(
         return None;
     }
 
-    if cursor.moves[0].time_ms > time_ms.into() {
+    if cursor.moves[0].time_ms > time_ms {
         let event = &cursor.moves[0];
 
         return Some(InterpolatedCursorPosition {
@@ -36,35 +37,31 @@ pub fn interpolate_cursor(
         });
     }
 
-    if let Some(event) = cursor.moves.last() {
-        if event.time_ms < time_ms.into() {
-            return Some(InterpolatedCursorPosition {
-                position: Coord::new(XY {
-                    x: event.x,
-                    y: event.y,
-                }),
-                velocity: XY::new(0.0, 0.0),
-                cursor_id: event.cursor_id.clone(),
-            });
-        }
+    if let Some(event) = cursor.moves.last()
+        && event.time_ms < time_ms
+    {
+        return Some(InterpolatedCursorPosition {
+            position: Coord::new(XY {
+                x: event.x,
+                y: event.y,
+            }),
+            velocity: XY::new(0.0, 0.0),
+            cursor_id: event.cursor_id.clone(),
+        });
     }
 
     if let Some(smoothing_config) = smoothing {
         let events = get_smoothed_cursor_events(&cursor.moves, smoothing_config);
         interpolate_smoothed_position(&events, time_secs as f64, smoothing_config)
     } else {
-        let (pos, cursor_id) = cursor
-            .moves
-            .windows(2)
-            .enumerate()
-            .find_map(|(_i, chunk)| {
-                if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
-                    let c = &chunk[0];
-                    Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))
-                } else {
-                    None
-                }
-            })?;
+        let (pos, cursor_id) = cursor.moves.windows(2).find_map(|chunk| {
+            if time_ms >= chunk[0].time_ms && time_ms < chunk[1].time_ms {
+                let c = &chunk[0];
+                Some((XY::new(c.x as f32, c.y as f32), c.cursor_id.clone()))
+            } else {
+                None
+            }
+        })?;
 
         Some(InterpolatedCursorPosition {
             position: Coord::new(XY {

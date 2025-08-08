@@ -61,12 +61,9 @@ impl BlurLayer {
         pass.set_pipeline(&self.pipeline.render_pipeline);
         pass.set_bind_group(
             0,
-            &self.pipeline.bind_group(
-                &device,
-                &self.uniforms_buffer,
-                &source_texture,
-                &self.sampler,
-            ),
+            &self
+                .pipeline
+                .bind_group(device, &self.uniforms_buffer, source_texture, &self.sampler),
             &[],
         );
         pass.draw(0..4, 0..1);

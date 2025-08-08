@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 tracing.workspace = true
 thiserror.workspace = true
+windows-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-core = { workspace = true }

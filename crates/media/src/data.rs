@@ -1,4 +1,3 @@
-use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 pub use ffmpeg::format::{
     pixel::Pixel,
     sample::{Sample, Type},
@@ -8,14 +7,20 @@ pub use ffmpeg::util::{
     frame::{Audio as FFAudio, Frame as FFFrame, Video as FFVideo},
     rational::Rational as FFRational,
 };
-pub use ffmpeg::{error::EAGAIN, Error as FFError, Packet as FFPacket};
+pub use ffmpeg::{Error as FFError, Packet as FFPacket, error::EAGAIN};
 
+/// # Safety
+/// The input slice must be aligned to the size of `f32`.
 pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
-    std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE)
+    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * f32::BYTE_SIZE) }
 }
 
+/// # Safety
+/// The input slice must be aligned to the size of `f32`.
 pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
-    std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / f32::BYTE_SIZE)
+    unsafe {
+        std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / f32::BYTE_SIZE)
+    }
 }
 
 pub trait FromSampleBytes: cpal::SizedSample + std::fmt::Debug + Send + 'static {

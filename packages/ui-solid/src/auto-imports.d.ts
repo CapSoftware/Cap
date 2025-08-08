@@ -75,6 +75,7 @@ declare global {
   const IconHugeiconsEaseCurveControlPoints: typeof import('~icons/hugeicons/ease-curve-control-points.jsx')['default']
   const IconIcBaselineMonitor: typeof import("~icons/ic/baseline-monitor.jsx")["default"]
   const IconIcRoundSearch: typeof import("~icons/ic/round-search.jsx")["default"]
+  const IconLucideAppWindowMac: typeof import('~icons/lucide/app-window-mac.jsx')['default']
   const IconLucideBell: typeof import('~icons/lucide/bell.jsx')['default']
   const IconLucideBug: typeof import('~icons/lucide/bug.jsx')['default']
   const IconLucideCamera: typeof import("~icons/lucide/camera.jsx")["default"]
@@ -106,6 +107,7 @@ declare global {
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']
   const IconLucideVolumeX: typeof import('~icons/lucide/volume-x.jsx')['default']
   const IconLucideX: typeof import("~icons/lucide/x.jsx")["default"]
-  const IconMdiMonitor: typeof import("~icons/mdi/monitor.jsx")["default"]
+  const IconMaterialSymbolsScreenshotFrame2Rounded: typeof import('~icons/material-symbols/screenshot-frame2-rounded.jsx')['default']
+  const IconMdiMonitor: typeof import('~icons/mdi/monitor.jsx')['default']
   const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
 }
