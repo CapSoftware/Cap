@@ -77,13 +77,13 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
     return (
       <motion.div
         ref={ref}
-        initial={{ opacity: 0, y: 4, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 4, scale: 0.98 }}
+        initial={{ opacity: 0, y: 4, scale: 0.98, display: "hidden" }}
+        animate={{ opacity: 1, y: 0, scale: 1, display: "flex" }}
+        exit={{ opacity: 0, y: 4, scale: 0.98, display: "hidden" }}
         transition={{ ease: "easeOut", duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
         className={clsx(
-          "flex absolute right-0 top-12 flex-col rounded-xl cursor-default w-[400px] h-[450px] bg-gray-1 origin-top-right",
+          "flex absolute right-0 top-12 flex-col rounded-xl origin-top-right cursor-default w-[400px] h-[450px] bg-gray-1",
           className
         )}
         {...props}
@@ -97,7 +97,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
         />
         <div
           ref={scrollRef}
-          className="isolate flex-1 h-full custom-scroll border-x border-gray-3 divide-y divide-gray-3 flex flex-col"
+          className="flex isolate flex-col flex-1 h-full divide-y custom-scroll border-x border-gray-3 divide-gray-3"
         >
           {notifications.isPending ? (
             <NotificationsSkeleton />
