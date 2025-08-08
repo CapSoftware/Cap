@@ -55,16 +55,17 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
     useEffect(() => {
       if (!scrollRef.current) return;
       const handleKeyDown = (e: KeyboardEvent) => {
+        const target = e.target as HTMLElement;
+        // Ignore typing/navigation inside inputs/editable fields
+        if (target.closest("input, textarea, [contenteditable='true']")) return;
+        // Only handle when event originates within the panel's scroll area
+        if (!scrollRef.current?.contains(target)) return;
         if (e.key === "ArrowUp") {
-          scrollRef.current?.scrollBy({
-            top: -100,
-            behavior: "smooth",
-          });
+          e.preventDefault();
+          scrollRef.current?.scrollBy({ top: -100, behavior: "smooth" });
         } else if (e.key === "ArrowDown") {
-          scrollRef.current?.scrollBy({
-            top: 100,
-            behavior: "smooth",
-          });
+          e.preventDefault();
+          scrollRef.current?.scrollBy({ top: 100, behavior: "smooth" });
         }
       };
       document.addEventListener("keydown", handleKeyDown);
