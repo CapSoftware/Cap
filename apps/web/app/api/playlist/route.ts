@@ -1,4 +1,3 @@
-import { db } from "@cap/database";
 import {
   generateM3U8Playlist,
   generateMasterPlaylist,
@@ -6,77 +5,97 @@ import {
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { serverEnv } from "@cap/env";
 import { Effect, Layer, Option, Schema } from "effect";
-import { allowedOrigins } from "../utils";
 import {
   HttpApi,
   HttpApiBuilder,
   HttpApiEndpoint,
   HttpApiError,
   HttpApiGroup,
-  HttpServer,
-  HttpServerRequest,
   HttpServerResponse,
 } from "@effect/platform";
 import { Videos } from "@/services";
-import { Database, DatabaseError, Video } from "@cap/web-domain";
+import { Video } from "@cap/web-domain";
 import { S3Buckets } from "services/S3Buckets";
 import { S3BucketAccess } from "services/S3Buckets/S3BucketAccess";
-import { NodeSdk } from "@effect/opentelemetry";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import {
-  AuthMiddlewareLive,
-  provideOptionalAuth,
-} from "services/Authentication";
+import { provideOptionalAuth } from "services/Authentication";
+import { apiToHandler } from "services/Http";
 
 export const revalidate = "force-dynamic";
 
-const NodeSdkLive = NodeSdk.layer(() => ({
-  resource: { serviceName: "cap-web" },
-  spanProcessor: [new BatchSpanProcessor(new OTLPTraceExporter())],
-}));
+const GetPlaylistParams = Schema.Struct({
+  videoId: Video.VideoId,
+  videoType: Schema.Literal("video", "audio", "master", "mp4"),
+  thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
+  fileType: Schema.OptionFromUndefinedOr(Schema.String),
+});
 
-const DatabaseLive = Layer.sync(Database, () => ({
-  execute: (cb) =>
-    Effect.tryPromise({
-      try: () => cb(db()),
-      catch: (error) => new DatabaseError({ message: String(error) }),
-    }),
-}));
+class Api extends HttpApi.make("CapWebApi").add(
+  HttpApiGroup.make("root").add(
+    HttpApiEndpoint.get("getVideoSrc")`/api/playlist`
+      .setUrlParams(GetPlaylistParams)
+      .addError(HttpApiError.Forbidden)
+      .addError(HttpApiError.BadRequest)
+      .addError(HttpApiError.Unauthorized)
+      .addError(HttpApiError.InternalServerError)
+      .addError(HttpApiError.NotFound)
+  )
+) {}
 
-const Dependencies = Layer.mergeAll(S3Buckets.Default, Videos.Default).pipe(
-  Layer.provideMerge(DatabaseLive),
-  Layer.provide(NodeSdkLive)
+const ApiLive = HttpApiBuilder.api(Api).pipe(
+  Layer.provide(
+    HttpApiBuilder.group(Api, "root", (handlers) =>
+      Effect.gen(function* () {
+        const s3Buckets = yield* S3Buckets;
+
+        return handlers.handle("getVideoSrc", ({ urlParams }) =>
+          Effect.gen(function* () {
+            const video = yield* Videos.getById(urlParams.videoId).pipe(
+              Effect.andThen(
+                Effect.catchTag(
+                  "NoSuchElementException",
+                  () => new HttpApiError.NotFound()
+                )
+              )
+            );
+
+            const [S3ProviderLayer, customBucket] =
+              yield* s3Buckets.getProviderLayerForVideo(video.id);
+
+            return yield* getPlaylistResponse(
+              video,
+              Option.isSome(customBucket),
+              urlParams
+            ).pipe(Effect.provide(S3ProviderLayer));
+          }).pipe(
+            provideOptionalAuth,
+            Effect.catchTags({
+              VerifyVideoPasswordError: (e) => new HttpApiError.Forbidden(),
+              PolicyDenied: () => new HttpApiError.Unauthorized(),
+              DatabaseError: (e) =>
+                Effect.logError(e).pipe(
+                  Effect.andThen(() => new HttpApiError.InternalServerError())
+                ),
+              S3Error: (e) =>
+                Effect.logError(e).pipe(
+                  Effect.andThen(() => new HttpApiError.InternalServerError())
+                ),
+            })
+          )
+        );
+      })
+    )
+  )
 );
 
-const run = Effect.gen(function* () {
-  const s3Buckets = yield* S3Buckets;
-
-  const body = yield* HttpServerRequest.schemaSearchParams(
-    Schema.Struct({
-      videoId: Video.VideoId,
-      videoType: Schema.Literal("video", "audio", "master", "mp4"),
-      thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
-      fileType: Schema.OptionFromUndefinedOr(Schema.String),
-    })
-  );
-
-  const video = yield* Videos.getById(body.videoId).pipe(
-    Effect.andThen(
-      Effect.catchTag(
-        "NoSuchElementException",
-        () => new HttpApiError.NotFound()
-      )
-    )
-  );
-
-  const [S3ProviderLayer, customBucket] =
-    yield* s3Buckets.getProviderLayerForVideo(video.id);
-
-  return yield* Effect.gen(function* () {
+const getPlaylistResponse = (
+  video: Video.Video,
+  isCustomBucket: boolean,
+  urlParams: (typeof GetPlaylistParams)["Type"]
+) =>
+  Effect.gen(function* () {
     const s3 = yield* S3BucketAccess;
 
-    if (Option.isNone(customBucket)) {
+    if (!isCustomBucket) {
       let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
       if (video.source.type === "desktopMP4")
@@ -84,16 +103,14 @@ const run = Effect.gen(function* () {
       else if (video.source.type === "MediaConvert")
         redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
 
-      // yield* Effect.log(`Redirecting to: ${redirect}`);
-
       return HttpServerResponse.redirect(
         yield* s3.getSignedObjectUrl(redirect)
       );
     }
 
     if (
-      Option.isSome(body.fileType) &&
-      body.fileType.value === "transcription"
+      Option.isSome(urlParams.fileType) &&
+      urlParams.fileType.value === "transcription"
     ) {
       return yield* s3
         .getObject(`${video.ownerId}/${video.id}/transcription.vtt`)
@@ -148,7 +165,7 @@ const run = Effect.gen(function* () {
       }
 
       let prefix;
-      switch (body.videoType) {
+      switch (urlParams.videoType) {
         case "video":
           prefix = videoPrefix;
           break;
@@ -196,7 +213,7 @@ const run = Effect.gen(function* () {
 
       const objects = yield* s3.listObjects({
         prefix,
-        maxKeys: body.thumbnail ? 1 : undefined,
+        maxKeys: urlParams.thumbnail ? 1 : undefined,
       });
 
       const chunksUrls = yield* Effect.all(
@@ -223,56 +240,9 @@ const run = Effect.gen(function* () {
         headers: CACHE_CONTROL_HEADERS,
       });
     }).pipe(Effect.withSpan("generateUrls"));
-  }).pipe(Effect.provide(S3ProviderLayer));
-}).pipe(
-  provideOptionalAuth,
-  Effect.catchTags({
-    VerifyVideoPasswordError: (e) => new HttpApiError.Forbidden(),
-    ParseError: () => new HttpApiError.BadRequest(),
-    PolicyDenied: () => new HttpApiError.Unauthorized(),
-    DatabaseError: (e) =>
-      Effect.logError(e).pipe(
-        Effect.andThen(() => new HttpApiError.InternalServerError())
-      ),
-    S3Error: (e) =>
-      Effect.logError(e).pipe(
-        Effect.andThen(() => new HttpApiError.InternalServerError())
-      ),
-  })
-);
+  });
 
-const Api = HttpApi.make("").add(
-  HttpApiGroup.make("").add(
-    HttpApiEndpoint.get("")`/api/playlist`
-      .addError(HttpApiError.Forbidden)
-      .addError(HttpApiError.BadRequest)
-      .addError(HttpApiError.Unauthorized)
-      .addError(HttpApiError.InternalServerError)
-      .addError(HttpApiError.NotFound)
-  )
-);
-
-const ApiLive = HttpApiBuilder.api(Api).pipe(
-  Layer.provide(
-    HttpApiBuilder.group(Api, "", (handlers) => handlers.handle("", () => run))
-  )
-);
-
-const cors = HttpApiBuilder.middlewareCors({
-  allowedOrigins,
-  credentials: true,
-  allowedMethods: ["GET", "HEAD", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "sentry-trace", "baggage"],
-});
-
-const { handler } = Layer.empty.pipe(
-  Layer.merge(ApiLive),
-  Layer.merge(AuthMiddlewareLive),
-  Layer.provideMerge(Dependencies),
-  Layer.merge(HttpServer.layerContext),
-  Layer.provide(cors),
-  HttpApiBuilder.toWebHandler
-);
+const { handler } = apiToHandler(ApiLive);
 
 export const GET = handler;
 export const HEAD = handler;
