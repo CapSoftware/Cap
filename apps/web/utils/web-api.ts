@@ -8,7 +8,7 @@ export function useApiClient() {
   const { webUrl } = usePublicEnv();
   const [client] = useState(() =>
     initClient(contract, {
-      baseUrl: typeof window !== "undefined" ? `${webUrl}/api` : "/api",
+      baseUrl: typeof window === "undefined" ? `${webUrl}/api` : "/api",
     })
   );
 
