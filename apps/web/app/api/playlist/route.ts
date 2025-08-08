@@ -3,8 +3,6 @@ import {
   generateM3U8Playlist,
   generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
-import * as Db from "@cap/database/schema";
-import * as Dz from "drizzle-orm";
 import { CACHE_CONTROL_HEADERS } from "@/utils/helpers";
 import { serverEnv } from "@cap/env";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -15,27 +13,21 @@ import {
   HttpApiEndpoint,
   HttpApiError,
   HttpApiGroup,
-  HttpApp,
   HttpServer,
   HttpServerRequest,
   HttpServerResponse,
 } from "@effect/platform";
 import { Videos } from "@/services";
-import {
-  AuthMiddleware,
-  CurrentUser,
-  Database,
-  DatabaseError,
-  Video,
-} from "@cap/web-domain";
+import { Database, DatabaseError, Video } from "@cap/web-domain";
 import { S3Buckets } from "services/S3Buckets";
 import { S3BucketAccess } from "services/S3Buckets/S3BucketAccess";
-import { getCurrentUser as getCurrentUserPromise } from "@cap/database/auth/session";
 import { NodeSdk } from "@effect/opentelemetry";
 import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@cap/database/auth/auth-options";
+import {
+  AuthMiddlewareLive,
+  provideOptionalAuth,
+} from "services/Authentication";
 
 export const revalidate = "force-dynamic";
 
@@ -56,76 +48,6 @@ const Dependencies = Layer.mergeAll(S3Buckets.Default, Videos.Default).pipe(
   Layer.provideMerge(DatabaseLive),
   Layer.provide(NodeSdkLive)
 );
-
-const getCurrentUser = Effect.gen(function* () {
-  const db = yield* Database;
-
-  return yield* Option.fromNullable(
-    yield* Effect.tryPromise(() => getServerSession(authOptions()))
-  ).pipe(
-    Option.map((session) =>
-      Effect.gen(function* () {
-        const [currentUser] = yield* db.execute((db) =>
-          db
-            .select()
-            .from(Db.users)
-            .where(Dz.eq(Db.users.id, (session.user as any).id))
-        );
-
-        return Option.fromNullable(currentUser);
-      })
-    ),
-    Effect.transposeOption,
-    Effect.map(Option.flatten)
-  );
-}).pipe(
-  Effect.catchTags({
-    UnknownException: () => new HttpApiError.InternalServerError(),
-    DatabaseError: () => new HttpApiError.InternalServerError(),
-  }),
-  Effect.withSpan("getCurrentUser")
-);
-
-const AuthMiddlewareLive = Layer.effect(
-  AuthMiddleware,
-  Effect.gen(function* () {
-    const database = yield* Database;
-
-    return AuthMiddleware.of(
-      Effect.gen(function* () {
-        const user = yield* getCurrentUser.pipe(
-          Effect.andThen(
-            Effect.catchTag(
-              "NoSuchElementException",
-              () => new HttpApiError.Unauthorized()
-            )
-          )
-        );
-
-        return { id: user.id, email: user.email };
-      }).pipe(Effect.provideService(Database, database))
-    );
-  })
-);
-
-const provideOptionalAuth = <E, R>(
-  app: HttpApp.Default<E, R>
-): HttpApp.Default<E | HttpApiError.Unauthorized, R> =>
-  Effect.gen(function* () {
-    const user = yield* getCurrentUser;
-    return yield* user.pipe(
-      Option.map((user) =>
-        CurrentUser.context({
-          id: user.id,
-          email: user.email,
-        })
-      ),
-      Option.match({
-        onNone: () => app,
-        onSome: (ctx) => app.pipe(Effect.provide(ctx)),
-      })
-    );
-  });
 
 const run = Effect.gen(function* () {
   const s3Buckets = yield* S3Buckets;
