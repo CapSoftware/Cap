@@ -75,9 +75,7 @@ export const FilterTabs = ({
                       : "text-gray-10 group-hover:text-gray-11"
                   )}
                 >
-                  {filter === "all"
-                    ? totalCount
-                    : count?.[filter.toLowerCase() as NotificationType] ?? 0}
+                  {filter === "all" ? totalCount : count?.[filter] ?? 0}
                 </p>
               )}
             </div>
