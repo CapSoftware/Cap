@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use cap_recording::RecordingMode;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
@@ -18,7 +20,7 @@ pub enum CaptureMode {
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
-        camera_label: Option<String>,
+        camera: Option<cap_media::feeds::DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,
@@ -63,7 +65,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {}", e);
+                eprintln!("Failed to handle deep link action: {e}");
             }
         }
     });
@@ -101,7 +103,7 @@ impl DeepLinkAction {
         match self {
             DeepLinkAction::StartRecording {
                 capture_mode,
-                camera_label,
+                camera,
                 mic_label,
                 capture_system_audio,
                 mode,
@@ -109,8 +111,7 @@ impl DeepLinkAction {
                 let state = app.state::<ArcLock<App>>();
                 let camera_preview = app.state::<CameraPreview>();
 
-                crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera_label)
-                    .await?;
+                crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 use cap_media::sources::ScreenCaptureTarget;
@@ -139,7 +140,7 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
-                crate::open_project_from_path(&project_path.into(), app.clone())
+                crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await

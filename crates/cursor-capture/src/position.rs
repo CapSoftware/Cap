@@ -38,15 +38,16 @@ impl RelativeCursorPosition {
             let raw_display = display.raw_handle().inner();
             let display_bounds = raw_display.bounds();
 
-            return Self {
+            Self {
                 x: raw.x - display_bounds.origin.x as i32,
                 y: raw.y - display_bounds.origin.y as i32,
                 display,
-            };
+            }
         }
 
         #[cfg(windows)]
         {
+            let _ = (raw, display);
             todo!()
         }
     }
@@ -75,6 +76,7 @@ impl RelativeCursorPosition {
         };
 
         #[cfg(windows)]
+        #[allow(unused_variables)]
         let (x, y) = {
             todo!();
             // let display_bounds = self.display().raw_handle().bounds();
@@ -85,6 +87,7 @@ impl RelativeCursorPosition {
             // )
         };
 
+        #[allow(unreachable_code)]
         NormalizedCursorPosition {
             x,
             y,
@@ -165,7 +168,7 @@ mod tests {
 
     // Helper function to create a mock Display for testing
     fn mock_display() -> Display {
-        Display::list()[0].clone()
+        Display::list()[0]
     }
 
     #[test]

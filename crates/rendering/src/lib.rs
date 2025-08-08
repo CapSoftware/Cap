@@ -5,12 +5,11 @@ use cap_project::{
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
-use cursor_interpolation::{interpolate_cursor, InterpolatedCursorPosition};
-use decoder::{spawn_decoder, AsyncVideoDecoderHandle};
+use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
+use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
-use futures::future::OptionFuture;
 use futures::FutureExt;
-use image::GenericImageView;
+use futures::future::OptionFuture;
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
 };
@@ -19,6 +18,7 @@ use spring_mass_damper::SpringMassDamperSimulationConfig;
 use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
+use tracing::error;
 
 mod composite_frame;
 mod coord;
@@ -167,6 +167,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Error polling wgpu: {0}")]
+    PollError(#[from] wgpu::PollError),
 }
 
 pub struct RenderSegment {
@@ -174,6 +176,7 @@ pub struct RenderSegment {
     pub decoders: RecordingSegmentDecoders,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
@@ -190,13 +193,13 @@ pub async fn render_video_to_channel(
     let start_time = Instant::now();
 
     // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(recordings, recording_meta, meta, &project);
+    let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
     let mut frame_number = 0;
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(constants);
 
     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
@@ -225,8 +228,8 @@ pub async fn render_video_to_channel(
             .await
         {
             let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
+                constants,
+                project,
                 frame_number,
                 fps,
                 resolution_base,
@@ -264,14 +267,13 @@ pub fn get_duration(
     let mut max_duration = recordings.duration();
 
     // Check camera duration if it exists
-    if let Some(camera_path) = meta.camera_path() {
-        if let Ok(camera_duration) =
+    if let Some(camera_path) = meta.camera_path()
+        && let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
-            println!("Camera recording duration: {}", camera_duration);
-            max_duration = max_duration.max(camera_duration);
-            println!("New max duration after camera check: {}", max_duration);
-        }
+    {
+        println!("Camera recording duration: {camera_duration}");
+        max_duration = max_duration.max(camera_duration);
+        println!("New max duration after camera check: {max_duration}");
     }
 
     // If there's a timeline, ensure all segments extend to the max duration
@@ -288,14 +290,9 @@ pub fn get_duration(
         // }
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {}", max_duration);
+        println!("No timeline found, using max_duration: {max_duration}");
         max_duration
     }
-}
-
-pub struct CursorTexture {
-    inner: wgpu::Texture,
-    hotspot: XY<f32>,
 }
 
 pub struct RenderVideoConstants {
@@ -304,15 +301,16 @@ pub struct RenderVideoConstants {
     pub queue: wgpu::Queue,
     pub device: wgpu::Device,
     pub options: RenderOptions,
-    pub cursor_textures: HashMap<String, CursorTexture>,
-    background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
+    pub meta: StudioRecordingMeta,
+    pub recording_meta: RecordingMeta,
+    pub background_textures: std::sync::Arc<tokio::sync::RwLock<HashMap<String, wgpu::Texture>>>,
 }
 
 impl RenderVideoConstants {
     pub async fn new(
         segments: &[SegmentRecordings],
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
+        recording_meta: RecordingMeta,
+        meta: StudioRecordingMeta,
     ) -> Result<Self, RenderingError> {
         let options = RenderOptions {
             screen_size: XY::new(segments[0].display.width, segments[0].display.height),
@@ -334,7 +332,6 @@ impl RenderVideoConstants {
             })
             .await?;
 
-        let cursor_textures = Self::load_cursor_textures(&device, &queue, recording_meta, meta);
         let background_textures = Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
         Ok(Self {
@@ -343,94 +340,10 @@ impl RenderVideoConstants {
             device,
             queue,
             options,
-            cursor_textures,
             background_textures,
+            meta,
+            recording_meta,
         })
-    }
-
-    fn load_cursor_textures(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        recording_meta: &RecordingMeta,
-        meta: &StudioRecordingMeta,
-    ) -> HashMap<String, CursorTexture> {
-        let mut textures = HashMap::new();
-
-        let cursor_images = match &meta {
-            StudioRecordingMeta::SingleSegment { .. } => Default::default(),
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
-                inner.cursor_images(recording_meta).unwrap_or_default()
-            }
-        };
-
-        for (cursor_id, cursor) in &cursor_images.0 {
-            if !cursor.path.exists() {
-                continue;
-            }
-
-            match image::open(&cursor.path) {
-                Ok(img) => {
-                    let dimensions = img.dimensions();
-
-                    let rgba = img.into_rgba8();
-
-                    // Create the texture
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: Some(&format!("Cursor Texture {}", cursor_id)),
-                        size: wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                        view_formats: &[],
-                    });
-
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        &rgba,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(4 * dimensions.0),
-                            rows_per_image: None,
-                        },
-                        wgpu::Extent3d {
-                            width: dimensions.0,
-                            height: dimensions.1,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-
-                    textures.insert(
-                        cursor_id.clone(),
-                        CursorTexture {
-                            inner: texture,
-                            hotspot: cursor.hotspot.map(|v| v as f32),
-                        },
-                    );
-                }
-                Err(e) => {
-                    println!(
-                        "Failed to load cursor image {}: {}",
-                        cursor.path.display(),
-                        e
-                    );
-                    // Don't return error, just skip this cursor image
-                    continue;
-                }
-            }
-        }
-
-        textures
     }
 }
 
@@ -473,6 +386,7 @@ impl ProjectUniforms {
         })
     }
 
+    #[allow(unused)]
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);
 
@@ -543,7 +457,7 @@ impl ProjectUniforms {
 
         let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        return (scaled_width, scaled_height);
+        (scaled_width, scaled_height)
 
         // ((base_width + 1) & !1, (base_height + 1) & !1)
     }
@@ -634,7 +548,7 @@ impl ProjectUniforms {
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
             segment_frames.recording_time,
-            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+            (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                 tension: project.cursor.tension,
                 mass: project.cursor.mass,
                 friction: project.cursor.friction,
@@ -653,7 +567,7 @@ impl ProjectUniforms {
             interpolate_cursor(
                 cursor_events,
                 (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                     tension: project.cursor.tension,
                     mass: project.cursor.mass,
                     friction: project.cursor.friction,
@@ -907,6 +821,7 @@ pub struct RendererLayers {
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
+    #[allow(unused)]
     captions: CaptionsLayer,
 }
 
@@ -931,7 +846,7 @@ impl RendererLayers {
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
-                &constants,
+                constants,
                 uniforms,
                 Background::from(uniforms.project.background.source.clone()),
             )
@@ -958,19 +873,17 @@ impl RendererLayers {
             constants,
         );
 
-        if let (Some(camera_size), Some(camera_frame), Some(uniforms)) = (
-            constants.options.camera_size,
-            &segment_frames.camera_frame,
-            &uniforms.camera,
-        ) {
-            self.camera.prepare(
-                &constants.device,
-                &constants.queue,
-                *uniforms,
-                camera_size,
-                camera_frame,
-            );
-        }
+        self.camera.prepare(
+            &constants.device,
+            &constants.queue,
+            (|| {
+                Some((
+                    uniforms.camera?,
+                    constants.options.camera_size?,
+                    segment_frames.camera_frame.as_ref()?,
+                ))
+            })(),
+        );
 
         // if let Some(captions) = &uniforms.project.captions {
         //     self.captions.prepare(
@@ -996,6 +909,7 @@ impl RendererLayers {
                     label: Some("Render Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: $view,
+                        // depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: $load,
@@ -1164,14 +1078,14 @@ async fn produce_frame(
 
     layers.render(&constants.device, &mut encoder, session);
 
-    Ok(finish_encoder(
+    finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await?)
+    .await
 }
 
 // Helper function to parse color components from hex strings
@@ -1264,10 +1178,6 @@ fn srgb_to_linear(c: u16) -> f32 {
     }
 }
 
-fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left {
-        a
-    } else {
-        b
-    }
-}
+// fn get_either<T>((a, b): (T, T), left: bool) -> T {
+//     if left { a } else { b }
+// }

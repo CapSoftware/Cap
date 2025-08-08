@@ -2,7 +2,7 @@ pub mod gif;
 pub mod mp4;
 
 use cap_editor::Segment;
-use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY};
+use cap_project::{ProjectConfiguration, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{ProjectRecordingsMeta, RenderVideoConstants};
 use std::{path::PathBuf, sync::Arc};
 use tracing::error;
@@ -70,8 +70,8 @@ impl ExporterBuilder {
         )
         .map_err(|v| Error::ConfigLoad(v.into()))?;
 
-        let recording_meta = RecordingMeta::load_for_project(&self.project_path)
-            .map_err(|v| Error::MetaLoad(v.into()))?;
+        let recording_meta =
+            RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
         let studio_meta = recording_meta
             .studio_meta()
             .ok_or(Error::NotStudioRecording)?;
@@ -82,9 +82,13 @@ impl ExporterBuilder {
         );
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, &recording_meta, studio_meta)
-                .await
-                .unwrap(),
+            RenderVideoConstants::new(
+                &recordings.segments,
+                recording_meta.clone(),
+                studio_meta.clone(),
+            )
+            .await
+            .unwrap(),
         );
 
         let segments = cap_editor::create_segments(&recording_meta, studio_meta)

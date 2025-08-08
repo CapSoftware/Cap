@@ -1,7 +1,7 @@
 [package]
 name = "cap-audio"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 
 [dependencies]
@@ -11,3 +11,6 @@ tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
+
+[lints]
+workspace = true

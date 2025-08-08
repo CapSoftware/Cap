@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { organizations, users } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
-import { isUserOnProPlan, stripe } from "@cap/utils";
+import { stripe, userIsPro } from "@cap/utils";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -95,9 +95,7 @@ app.get("/org-custom-domain", async (c) => {
 app.get("/plan", async (c) => {
   const user = c.get("user");
 
-  let isSubscribed = isUserOnProPlan({
-    subscriptionStatus: user.stripeSubscriptionStatus,
-  });
+  let isSubscribed = userIsPro(user);
 
   if (user.thirdPartyStripeSubscriptionId) {
     isSubscribed = true;
@@ -149,9 +147,7 @@ app.post(
     const { priceId } = c.req.valid("json");
     const user = c.get("user");
 
-    if (
-      isUserOnProPlan({ subscriptionStatus: user.stripeSubscriptionStatus })
-    ) {
+    if (userIsPro(user)) {
       console.log("[POST] Error: User already on Pro plan");
       return c.json({ error: true, subscription: true }, { status: 400 });
     }

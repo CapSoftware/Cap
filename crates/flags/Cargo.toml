@@ -1,8 +1,11 @@
 [package]
 name = "cap-flags"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-serde = "1.0.214"
+serde = { workspace = true }
 specta.workspace = true
+
+[lints]
+workspace = true

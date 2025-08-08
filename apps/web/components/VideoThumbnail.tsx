@@ -3,7 +3,7 @@ import { LogoSpinner } from "@cap/ui";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import Image from "next/image";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 interface VideoThumbnailProps {
   userId: string;
@@ -49,6 +49,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
         }
       },
     });
+    const imageRef = useRef<HTMLImageElement>(null);
 
     const { uploadingCapId } = useUploadingContext();
 
@@ -61,6 +62,12 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
     const [imageStatus, setImageStatus] = useState<
       "loading" | "error" | "success"
     >("loading");
+
+    useEffect(() => {
+      if (imageRef.current?.complete && imageRef.current.naturalWidth != 0) {
+        setImageStatus("success");
+      }
+    }, []);
 
     return (
       <div
@@ -76,20 +83,25 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
               style={{ backgroundImage: randomGradient }}
             />
           ) : (
-            imageUrl.isPending && (
+            (imageUrl.isPending || imageStatus === "loading") && (
               <LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
             )
           )}
         </div>
         {imageUrl.data && (
           <Image
+            ref={imageRef}
             src={imageUrl.data}
             fill={true}
             sizes="(max-width: 768px) 100vw, 33vw"
             alt={alt}
             key={videoId}
             style={{ objectFit: objectFit as any }}
-            className={clsx("w-full h-full", imageClass)}
+            className={clsx(
+              "w-full h-full",
+              imageClass,
+              imageStatus === "loading" && "opacity-0"
+            )}
             onLoad={() => setImageStatus("success")}
             onError={() => setImageStatus("error")}
           />

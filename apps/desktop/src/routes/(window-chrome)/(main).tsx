@@ -35,6 +35,7 @@ import {
   listWindows,
 } from "~/utils/queries";
 import {
+  CameraInfo,
   type CaptureScreen,
   type CaptureWindow,
   commands,
@@ -157,7 +158,14 @@ function Page() {
 
       return win;
     },
-    cameraLabel: () => cameras.find((c) => c === rawOptions.cameraLabel),
+    cameraID: () =>
+      cameras.find((c) => {
+        const { cameraID } = rawOptions;
+        if (!cameraID) return;
+        if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
+        if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
+          return c;
+      }),
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
     target: (): ScreenCaptureTarget => {
       switch (rawOptions.captureTarget.variant) {
@@ -192,7 +200,7 @@ function Page() {
     mutationFn: async () => {
       if (!isRecording()) {
         await commands.startRecording({
-          capture_target: rawOptions.captureTarget,
+          capture_target: options.target(),
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
@@ -210,7 +218,7 @@ function Page() {
   const setCamera = createCameraMutation();
 
   onMount(() => {
-    if (rawOptions.cameraLabel) setCamera.mutate(rawOptions.cameraLabel);
+    if (rawOptions.cameraID) setCamera.mutate(rawOptions.cameraID);
   });
 
   return (
@@ -412,8 +420,12 @@ function Page() {
       </div>
       <CameraSelect
         options={cameras}
-        value={options.cameraLabel() ?? null}
-        onChange={(v) => setCamera.mutate(v)}
+        value={options.cameraID() ?? null}
+        onChange={(v) => {
+          if (!v) setCamera.mutate(null);
+          else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
+          else setCamera.mutate({ DeviceID: v.device_id });
+        }}
       />
       <MicrophoneSelect
         disabled={mics.isPending}
@@ -425,11 +437,13 @@ function Page() {
       <SystemAudio />
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
-          <SignInButton>
-            Sign In for{" "}
-            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
-            Instant Mode
-          </SignInButton>
+          <>
+            <SignInButton>
+              Sign In for{" "}
+              <IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+              Instant Mode
+            </SignInButton>
+          </>
         ) : (
           <Button
             disabled={toggleRecording.isPending}
@@ -507,6 +521,7 @@ import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -558,7 +573,6 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
-    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {
@@ -674,9 +688,9 @@ const NO_CAMERA = "No Camera";
 
 function CameraSelect(props: {
   disabled?: boolean;
-  options: string[];
-  value: string | null;
-  onChange: (cameraLabel: string | null) => void;
+  options: CameraInfo[];
+  value: CameraInfo | null;
+  onChange: (cameraInfo: CameraInfo | null) => void;
 }) {
   const currentRecording = createCurrentRecordingQuery();
   const permissions = createQuery(() => getPermissions);
@@ -686,15 +700,14 @@ function CameraSelect(props: {
     permissions?.data?.camera === "granted" ||
     permissions?.data?.camera === "notNeeded";
 
-  const onChange = (cameraLabel: string | null) => {
-    if (!cameraLabel && permissions?.data?.camera !== "granted")
-      return requestPermission("camera");
+  const onChange = (cameraInfo: CameraInfo | null) => {
+    if (!cameraInfo && !permissionGranted()) return requestPermission("camera");
 
-    props.onChange(cameraLabel);
+    props.onChange(cameraInfo);
 
     trackEvent("camera_selected", {
-      camera_name: cameraLabel,
-      enabled: !!cameraLabel,
+      camera_name: cameraInfo,
+      enabled: !!cameraInfo,
     });
   };
 
@@ -704,6 +717,11 @@ function CameraSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("camera");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_CAMERA,
@@ -713,7 +731,7 @@ function CameraSelect(props: {
             PredefinedMenuItem.new({ item: "Separator" }),
             ...props.options.map((o) =>
               CheckMenuItem.new({
-                text: o,
+                text: o.display_name,
                 checked: o === props.value,
                 action: () => onChange(o),
               })
@@ -727,7 +745,7 @@ function CameraSelect(props: {
       >
         <IconCapCamera class="text-gray-11 size-[1.25rem]" />
         <span class="flex-1 text-left truncate">
-          {props.value ?? NO_CAMERA}
+          {props.value?.display_name ?? NO_CAMERA}
         </span>
         <TargetSelectInfoPill
           value={props.value}
@@ -782,22 +800,9 @@ function MicrophoneSelect(props: {
     });
   };
 
-  // Create a single event listener using onMount
-  onMount(() => {
-    const listener = (event: Event) => {
-      const dbs = (event as CustomEvent<number>).detail;
-      if (!props.value) setDbs();
-      else setDbs(dbs);
-    };
-
-    events.audioInputLevelChange.listen((dbs) => {
-      if (!props.value) setDbs();
-      else setDbs(dbs.payload);
-    });
-
-    return () => {
-      window.removeEventListener("audioLevelChange", listener);
-    };
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
+    if (!props.value) setDbs();
+    else setDbs(dbs);
   });
 
   // visual audio level from 0 -> 1
@@ -818,6 +823,11 @@ function MicrophoneSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("microphone");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
@@ -928,7 +938,6 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       disabled={props.disabled}
       onClick={() => {
         if (props.options.length > 1) {
-          console.log({ options: props.options, value: props.value });
           Promise.all(
             props.options.map((o) =>
               CheckMenuItem.new({
@@ -974,6 +983,7 @@ function TargetSelectInfoPill<T>(props: {
       onClick={(e) => {
         if (!props.permissionGranted) {
           props.requestPermission();
+          e.stopPropagation();
           return;
         }
 

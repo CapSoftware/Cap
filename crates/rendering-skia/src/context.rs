@@ -1,8 +1,8 @@
 use crate::SkiaRenderingError;
-use skia_safe::{gpu, surfaces, Color, Surface};
+use skia_safe::{Color, Surface, gpu::DirectContext, surfaces};
 
 #[cfg(target_os = "macos")]
-use skia_safe::gpu::{mtl, DirectContext, SurfaceOrigin};
+use skia_safe::gpu::{SurfaceOrigin, mtl};
 
 pub struct SkiaRenderContext {
     #[cfg(target_os = "macos")]
@@ -52,6 +52,7 @@ impl SkiaRenderContext {
     #[cfg(target_os = "macos")]
     fn create_metal_context() -> Result<GpuContext, SkiaRenderingError> {
         use foreign_types_shared::ForeignType;
+        use skia_safe::gpu;
 
         let device =
             metal::Device::system_default().ok_or_else(|| SkiaRenderingError::NoGpuContext)?;
@@ -82,13 +83,14 @@ impl SkiaRenderContext {
     ) -> Result<Surface, SkiaRenderingError> {
         if width == 0 || height == 0 {
             return Err(SkiaRenderingError::InvalidDimensions(format!(
-                "Invalid surface dimensions: {}x{}",
-                width, height
+                "Invalid surface dimensions: {width}x{height}"
             )));
         }
 
         #[cfg(target_os = "macos")]
         {
+            use skia_safe::gpu;
+
             if let Some(ref mut gpu_context) = self.gpu_context {
                 tracing::debug!("Creating GPU surface with dimensions {}x{}", width, height);
 
@@ -109,8 +111,7 @@ impl SkiaRenderContext {
                 )
                 .ok_or_else(|| {
                     SkiaRenderingError::SurfaceCreationFailed(format!(
-                        "Failed to create {}x{} GPU surface",
-                        width, height
+                        "Failed to create {width}x{height} GPU surface"
                     ))
                 });
             }
@@ -120,8 +121,7 @@ impl SkiaRenderContext {
         tracing::debug!("Creating CPU surface with dimensions {}x{}", width, height);
         surfaces::raster_n32_premul((width as i32, height as i32)).ok_or_else(|| {
             SkiaRenderingError::SurfaceCreationFailed(format!(
-                "Failed to create {}x{} surface",
-                width, height
+                "Failed to create {width}x{height} surface"
             ))
         })
     }

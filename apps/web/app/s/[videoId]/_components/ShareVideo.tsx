@@ -4,9 +4,19 @@ import { userSelectProps } from "@cap/database/auth/session";
 import { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { isUserOnProPlan } from "@cap/utils";
-import { forwardRef, useImperativeHandle, useRef, useState, useEffect } from "react";
-import { formatChaptersAsVTT, formatTranscriptAsVTT, TranscriptEntry } from "./utils/transcript-utils";
+import { userIsPro } from "@cap/utils";
+import {
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+  useState,
+  useEffect,
+} from "react";
+import {
+  formatChaptersAsVTT,
+  formatTranscriptAsVTT,
+  TranscriptEntry,
+} from "./utils/transcript-utils";
 import { useTranscript } from "hooks/use-transcript";
 import { parseVTT } from "./utils/transcript-utils";
 import { CapVideoPlayer } from "./CapVideoPlayer";
@@ -32,7 +42,6 @@ export const ShareVideo = forwardRef<
     aiProcessing?: boolean;
   }
 >(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
-
   const videoRef = useRef<HTMLVideoElement | null>(null);
   useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
@@ -60,7 +69,11 @@ export const ShareVideo = forwardRef<
 
   // Handle subtitle URL creation
   useEffect(() => {
-    if (data.transcriptionStatus === "COMPLETE" && transcriptData && transcriptData.length > 0) {
+    if (
+      data.transcriptionStatus === "COMPLETE" &&
+      transcriptData &&
+      transcriptData.length > 0
+    ) {
       const vttContent = formatTranscriptAsVTT(transcriptData);
       const blob = new Blob([vttContent], { type: "text/vtt" });
       const newUrl = URL.createObjectURL(blob);
@@ -133,7 +146,6 @@ export const ShareVideo = forwardRef<
 
   return (
     <>
-
       <div className="relative h-full">
         {data.source.type === "desktopMP4" ? (
           <CapVideoPlayer
@@ -155,32 +167,29 @@ export const ShareVideo = forwardRef<
         )}
       </div>
 
-      {user &&
-        !isUserOnProPlan({
-          subscriptionStatus: user.stripeSubscriptionStatus,
-        }) && (
-          <div className="absolute top-4 left-4 z-30">
-            <div
-              className="block cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                setUpgradeModalOpen(true);
-              }}
-            >
-              <div className="relative">
-                <div className="opacity-50 transition-opacity hover:opacity-100 peer">
-                  <Logo className="w-auto h-4 sm:h-8" white={true} />
-                </div>
+      {!userIsPro(user) && (
+        <div className="absolute top-4 left-4 z-30">
+          <div
+            className="block cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              setUpgradeModalOpen(true);
+            }}
+          >
+            <div className="relative">
+              <div className="opacity-50 transition-opacity hover:opacity-100 peer">
+                <Logo className="w-auto h-4 sm:h-8" white={true} />
+              </div>
 
-                <div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
-                  <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
-                    Remove watermark
-                  </p>
-                </div>
+              <div className="absolute left-0 top-8 transition-transform duration-300 ease-in-out origin-top scale-y-0 peer-hover:scale-y-100">
+                <p className="text-white text-xs font-medium whitespace-nowrap bg-black bg-opacity-50 px-2 py-0.5 rounded">
+                  Remove watermark
+                </p>
               </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
       <UpgradeModal
         open={upgradeModalOpen}
         onOpenChange={setUpgradeModalOpen}

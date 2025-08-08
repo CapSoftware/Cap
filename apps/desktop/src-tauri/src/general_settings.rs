@@ -74,6 +74,11 @@ pub struct GeneralSettingsStore {
     #[serde(default, alias = "open_editor_after_recording")]
     #[deprecated]
     _open_editor_after_recording: bool,
+    #[deprecated = "can be removed when native camera preview is ready"]
+    #[serde(default)]
+    pub enable_native_camera_preview: bool,
+    #[serde(default)]
+    pub auto_zoom_on_clicks: bool,
 }
 
 fn default_server_url() -> String {
@@ -112,6 +117,8 @@ impl Default for GeneralSettingsStore {
             server_url: default_server_url(),
             recording_countdown: Some(3),
             _open_editor_after_recording: false,
+            enable_native_camera_preview: false,
+            auto_zoom_on_clicks: false,
         }
     }
 }

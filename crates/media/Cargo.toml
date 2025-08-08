@@ -2,8 +2,7 @@
 name = "cap-media"
 version = "0.1.0"
 description = "A modular multimedia processing library"
-edition = "2021"
-rust-version = "1.80"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -15,18 +14,21 @@ debug-logging = [] # Feature flag to control debug logging
 [dependencies]
 cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
-cap-gpu-converters = { path = "../gpu-converters" }
 cap-audio = { path = "../audio" }
+cap-camera = { path = "../camera", features = ["specta", "serde"] }
+cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+cap-fail = { path = "../fail" }
+cap-media-encoders = { path = "../media-encoders" }
+cap-media-info = { path = "../media-info" }
 cpal.workspace = true
 ffmpeg.workspace = true
 ffmpeg-sys-next.workspace = true
 flume.workspace = true
 indexmap = "2.5.0"
-nokhwa = { workspace = true, features = ["input-native", "serialize"] }
 num-traits = "0.2.19"
 ringbuf = "0.4.7"
 scap.workspace = true
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
@@ -34,10 +36,10 @@ tracing = { workspace = true }
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
-cap-fail = { version = "0.1.0", path = "../fail" }
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
 tokio-util = "0.7.15"
+kameo = "0.17.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
@@ -47,7 +49,6 @@ core-foundation = "0.10.0"
 objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
-nokhwa-bindings-macos.workspace = true
 screencapturekit = "0.3.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -62,3 +63,9 @@ windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 ] }
 windows-capture = { workspace = true }
+cap-camera-windows = { path = "../camera-windows" }
+
+[dev-dependencies]
+inquire = "0.7.5"
+tokio = { workspace = true, features = ["macros"] }
+tracing-subscriber = "0.3.19"

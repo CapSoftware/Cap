@@ -1,233 +1,163 @@
-use cap_camera_directshow::*;
-use std::{fmt::Display, ptr::null_mut, time::Duration};
-use tracing::{error, trace};
-use windows::{
-    Win32::{
-        Foundation::SIZE,
-        Media::{DirectShow::*, MediaFoundation::*},
-        System::Com::{StructuredStorage::IPropertyBag, *},
-    },
-    core::Interface,
-};
-use windows_core::GUID;
-
 fn main() {
-    tracing_subscriber::fmt::init();
+    #[cfg(windows)]
+    windows::run();
+    #[cfg(not(windows))]
+    panic!("This example is only available on Windows");
+}
 
-    unsafe {
-        CoInitialize(None).unwrap();
+#[cfg(windows)]
+mod windows {
 
-        let devices = VideoInputDeviceIterator::new().unwrap().collect::<Vec<_>>();
+    use cap_camera_directshow::*;
+    use std::{fmt::Display, time::Duration};
+    use tracing::error;
+    use windows::{
+        Win32::{
+            Foundation::SIZE,
+            Media::{DirectShow::*, MediaFoundation::*},
+            System::Com::*,
+        },
+        core::Interface,
+    };
 
-        let mut devices = devices
-            .iter()
-            .map(VideoDeviceSelectOption)
-            .collect::<Vec<_>>();
+    fn main() {
+        tracing_subscriber::fmt::init();
 
-        let selected = if devices.len() > 1 {
-            inquire::Select::new("Select a device", devices)
-                .prompt()
+        unsafe {
+            CoInitialize(None).unwrap();
+
+            let devices = VideoInputDeviceIterator::new().unwrap().collect::<Vec<_>>();
+
+            let mut devices = devices
+                .into_iter()
+                .map(VideoDeviceSelectOption)
+                .collect::<Vec<_>>();
+
+            let selected = if devices.len() > 1 {
+                inquire::Select::new("Select a device", devices)
+                    .prompt()
+                    .unwrap()
+            } else {
+                devices.remove(0)
+            };
+
+            let device = selected.0;
+
+            let video_control = device.output_pin().cast::<IAMVideoControl>().ok();
+
+            let formats = device
+                .media_types()
                 .unwrap()
-        } else {
-            devices.remove(0)
-        };
+                .enumerate()
+                .filter_map(|(i, media_type)| {
+                    let is_video = media_type.majortype == MEDIATYPE_Video
+                        && media_type.formattype == FORMAT_VideoInfo;
 
-        let moniker = selected.0;
+                    if !is_video {
+                        return None;
+                    }
 
-        let property_data: IPropertyBag = moniker.BindToStorage(None, None).unwrap();
-        let device_name = property_data
-            .read(windows_core::w!("FriendlyName"))
-            .unwrap();
+                    let video_info = &*media_type.video_info();
 
-        let device_path = property_data
-            .read(windows_core::w!("DevicePath"))
-            .unwrap_or_default();
+                    let width = video_info.bmiHeader.biWidth;
+                    let height = video_info.bmiHeader.biHeight;
 
-        let device_name = device_name.to_os_string().unwrap();
-        println!("Info for device '{:?}'", device_name);
+                    let mut frame_rates = vec![];
 
-        let device_path = device_path.to_os_string();
-        println!("Path: '{:?}'", device_path);
+                    if let Some(video_control) = &video_control {
+                        let time_per_frame_list = video_control.time_per_frame_list(
+                            device.output_pin(),
+                            i as i32,
+                            SIZE {
+                                cx: width,
+                                cy: height,
+                            },
+                        );
 
-        let filter: IBaseFilter = moniker.BindToObject(None, None).unwrap();
+                        for time_per_frame in time_per_frame_list {
+                            if *time_per_frame <= 0 {
+                                return None;
+                            }
+                            frame_rates.push(10_000_000.0 / *time_per_frame as f64)
+                        }
+                    }
 
-        chromium_main(filter);
+                    if frame_rates.is_empty() {
+                        let frame_rate = 10_000_000.0 / video_info.AvgTimePerFrame as f64;
+                        frame_rates.push(frame_rate);
+                    }
 
-        return;
-    }
-}
+                    frame_rates
+                        .iter_mut()
+                        .for_each(|v| *v = (*v * 100.0).round() / 100.0);
 
-#[derive(Debug)]
-struct Format {
-    width: i32,
-    height: i32,
-    media_type: AM_MEDIA_TYPE,
-    frame_rates: Vec<f64>,
-}
+                    // println!("  Frame Rates: {:?}", frame_rates);
 
-impl Display for Format {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}x{} {} ({:?})",
-            self.width,
-            self.height,
-            unsafe { self.media_type.subtype_str().unwrap_or("unknown") },
-            &self.frame_rates
-        )
-    }
-}
+                    Some(Format {
+                        width,
+                        height,
+                        media_type,
+                        frame_rates,
+                    })
+                })
+                .collect::<Vec<_>>();
 
-struct VideoDeviceSelectOption<'a>(&'a VideoInputDevice);
-
-impl<'a> Display for VideoDeviceSelectOption<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0.name().unwrap())
-    }
-}
-
-// chromium
-
-unsafe fn chromium_main(capture_filter: IBaseFilter) {
-    let output_capture_pin = capture_filter
-        .get_pin(PINDIR_OUTPUT, PIN_CATEGORY_CAPTURE, GUID::zeroed())
-        .unwrap();
-
-    let stream_config = output_capture_pin.cast::<IAMStreamConfig>().unwrap();
-    let video_control = output_capture_pin.cast::<IAMVideoControl>().ok();
-
-    let mut media_types_iter = stream_config.media_types().unwrap();
-
-    // println!("Formats: {}", media_types_iter.count());
-
-    let mut formats = Vec::with_capacity(media_types_iter.count() as usize);
-
-    while let Some((media_type, i)) = media_types_iter.next() {
-        let is_video =
-            media_type.majortype == MEDIATYPE_Video && media_type.formattype == FORMAT_VideoInfo;
-
-        if !is_video {
-            continue;
-        }
-
-        // println!("Format {i}:");
-
-        let video_info = &*media_type.video_info();
-
-        let width = video_info.bmiHeader.biWidth;
-        let height = video_info.bmiHeader.biHeight;
-
-        // println!("  Dimensions: {width}x{height}");
-
-        let subtype_str = media_type.subtype_str().unwrap_or("unknown subtype");
-
-        // println!("  Pixel Format: {subtype_str}");
-
-        let mut frame_rates = vec![];
-
-        if let Some(video_control) = &video_control {
-            let time_per_frame_list = video_control.time_per_frame_list(
-                &output_capture_pin,
-                i,
-                SIZE {
-                    cx: width,
-                    cy: height,
-                },
-            );
-
-            for time_per_frame in time_per_frame_list {
-                if *time_per_frame <= 0 {
-                    continue;
-                }
-                frame_rates.push(10_000_000.0 / *time_per_frame as f64)
+            if formats.is_empty() {
+                error!("No formats found");
+                return;
             }
+
+            let selected_format = inquire::Select::new("Select a format", formats)
+                .prompt()
+                .unwrap();
+
+            device
+                .start_capturing(
+                    &selected_format.media_type,
+                    Box::new(|frame| {
+                        unsafe { dbg!(frame.sample.GetActualDataLength()) };
+                        dbg!(frame.media_type.subtype_str());
+                        dbg!(frame.reference_time);
+                        dbg!(frame.timestamp);
+                    }),
+                )
+                .unwrap();
+
+            std::thread::sleep(Duration::from_secs(10));
         }
-
-        if frame_rates.is_empty() {
-            let frame_rate = 10_000_000.0 / video_info.AvgTimePerFrame as f64;
-            frame_rates.push(frame_rate);
-        }
-
-        frame_rates
-            .iter_mut()
-            .for_each(|v| *v = (*v * 100.0).round() / 100.0);
-
-        // println!("  Frame Rates: {:?}", frame_rates);
-
-        formats.push(Format {
-            width,
-            height,
-            media_type: media_type.clone(),
-            frame_rates,
-        })
     }
 
-    if formats.is_empty() {
-        error!("No formats found");
-        return;
+    #[derive(Debug)]
+    struct Format {
+        width: i32,
+        height: i32,
+        media_type: AMMediaType,
+        frame_rates: Vec<f64>,
     }
 
-    let selected_format = inquire::Select::new("Select a format", formats)
-        .prompt()
-        .unwrap();
+    impl Display for Format {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                f,
+                "{}x{} {} ({:?})",
+                self.width,
+                self.height,
+                unsafe {
+                    self.media_type
+                        .subtype_str()
+                        .map(|v| v.to_string())
+                        .unwrap_or(format!("unknown ({:?})", self.media_type.subtype))
+                },
+                &self.frame_rates
+            )
+        }
+    }
 
-    stream_config
-        .SetFormat(&selected_format.media_type)
-        .unwrap();
+    struct VideoDeviceSelectOption(VideoInputDevice);
 
-    trace!("creating sink filter");
-    let sink_filter = SinkFilter::new(Box::new(|buffer, media_type, time_delta| {
-        dbg!(buffer.len());
-        dbg!(media_type.subtype_str());
-        dbg!(time_delta);
-    }));
-    trace!("created sink filter");
-
-    let input_sink_pin = sink_filter.get_pin(0).unwrap();
-
-    trace!("creating graph builder");
-    let graph_builder: IGraphBuilder =
-        CoCreateInstance(&CLSID_FilterGraph, None, CLSCTX_INPROC_SERVER).unwrap();
-    trace!("created graph builder");
-    trace!("creating capture graph builder");
-    let capture_graph_builder: ICaptureGraphBuilder2 =
-        CoCreateInstance(&CLSID_CaptureGraphBuilder2, None, CLSCTX_INPROC_SERVER).unwrap();
-    trace!("created capture graph builder");
-    trace!("creating media control");
-    let media_control = graph_builder.cast::<IMediaControl>().unwrap();
-    trace!("created media control");
-    trace!("setting capture graph");
-    capture_graph_builder
-        .SetFiltergraph(&graph_builder)
-        .unwrap();
-    trace!("set capture graph");
-    trace!("adding capture filter");
-    graph_builder.AddFilter(&capture_filter, None).unwrap();
-    trace!("added capture filter");
-    trace!("creating sink filter");
-    let sink_filter: IBaseFilter = sink_filter.cast().unwrap();
-    trace!("adding sink filter");
-    graph_builder.AddFilter(&sink_filter, None).unwrap();
-    trace!("added sink filter");
-
-    trace!("finding stream config");
-    let mut stream_config = null_mut();
-    capture_graph_builder
-        .FindInterface(
-            Some(&PIN_CATEGORY_CAPTURE),
-            Some(&MEDIATYPE_Video),
-            &capture_filter,
-            &IAMStreamConfig::IID,
-            &mut stream_config,
-        )
-        .unwrap();
-    trace!("found stream config");
-
-    graph_builder
-        .ConnectDirect(&output_capture_pin, &input_sink_pin, None)
-        .unwrap();
-
-    media_control.Run().unwrap();
-
-    std::thread::sleep(Duration::from_secs(10));
+    impl Display for VideoDeviceSelectOption {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:?}", self.0.name().unwrap())
+        }
+    }
 }

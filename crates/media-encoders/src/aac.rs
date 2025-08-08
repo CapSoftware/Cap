@@ -1,26 +1,31 @@
-use std::{collections::VecDeque, path::PathBuf};
+use std::collections::VecDeque;
 
-use cap_fail::fail;
+use crate::AudioEncoder;
+use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
     codec::{context, encoder},
-    format::{self, sample::Type, Sample},
+    format::{self, Sample, sample::Type},
+    frame,
     threading::Config,
 };
 
-use crate::{
-    data::{cast_bytes_to_f32_slice, AudioInfo, FFAudio, FFRational},
-    pipeline::task::PipelineSinkTask,
-    MediaError,
-};
-
-use super::audio::AudioEncoder;
+#[derive(thiserror::Error, Debug)]
+pub enum AACEncoderError {
+    #[error("FFmpeg/{0}")]
+    FFmpeg(#[from] ffmpeg::Error),
+    #[error("AAC codec not found")]
+    CodecNotFound,
+    #[error("Sample rate not supported: {0}")]
+    RateNotSupported(i32),
+}
 
 pub struct AACEncoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
     resampler: Option<ffmpeg::software::resampling::Context>,
-    resampled_frame: FFAudio,
+    resampled_frame: frame::Audio,
     buffer: Vec<VecDeque<u8>>,
     stream_index: usize,
 }
@@ -32,7 +37,7 @@ impl AACEncoder {
     pub fn factory(
         tag: &'static str,
         input_config: AudioInfo,
-    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, MediaError> {
+    ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, AACEncoderError> {
         move |o| Self::init(tag, input_config, o)
     }
 
@@ -40,9 +45,8 @@ impl AACEncoder {
         tag: &'static str,
         input_config: AudioInfo,
         output: &mut format::context::Output,
-    ) -> Result<Self, MediaError> {
-        let codec = encoder::find_by_name("aac")
-            .ok_or(MediaError::TaskLaunch("Could not find AAC codec".into()))?;
+    ) -> Result<Self, AACEncoderError> {
+        let codec = encoder::find_by_name("aac").ok_or(AACEncoderError::CodecNotFound)?;
         let mut encoder_ctx = context::Context::new_with_codec(codec);
         encoder_ctx.set_threading(Config::count(4));
         let mut encoder = encoder_ctx.encoder().audio()?;
@@ -62,15 +66,12 @@ impl AACEncoder {
                 .find(|r| **r >= input_config.rate())
                 .or(rates.first())
             else {
-                return Err(MediaError::TaskLaunch(format!(
-                    "Opus Codec does not support sample rate {}",
-                    input_config.rate()
-                )));
+                return Err(AACEncoderError::RateNotSupported(input_config.rate()));
             };
             rate
         };
 
-        let mut output_config = input_config.clone();
+        let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
@@ -121,12 +122,12 @@ impl AACEncoder {
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
-            resampled_frame: FFAudio::empty(),
+            resampled_frame: frame::Audio::empty(),
             resampler,
         })
     }
 
-    pub fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+    pub fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         let frame = if let Some(resampler) = &mut self.resampler {
             resampler.run(&frame, &mut self.resampled_frame).unwrap();
             &self.resampled_frame
@@ -136,7 +137,7 @@ impl AACEncoder {
 
         for i in 0..frame.planes() {
             self.buffer[i]
-                .extend(&frame.data(i)[0..frame_size_bytes(&frame) / frame.channels() as usize]);
+                .extend(&frame.data(i)[0..frame_size_bytes(frame) / frame.channels() as usize]);
         }
 
         let channel_size_bytes = self.encoder.frame_size() as usize * self.encoder.format().bytes();
@@ -146,7 +147,7 @@ impl AACEncoder {
                 break;
             }
 
-            let mut frame = FFAudio::new(
+            let mut frame = frame::Audio::new(
                 self.encoder.format(),
                 self.encoder.frame_size() as usize,
                 self.encoder.channel_layout(),
@@ -198,7 +199,7 @@ impl AACEncoder {
                 }
 
                 while self.buffer.len() >= frame_size_bytes {
-                    let mut frame = FFAudio::new(
+                    let mut frame = frame::Audio::new(
                         self.encoder.format(),
                         self.encoder.frame_size() as usize,
                         self.encoder.channel_layout(),
@@ -218,12 +219,12 @@ impl AACEncoder {
                 }
             }
 
-            while self.buffer[0].len() > 0 {
+            while !self.buffer[0].is_empty() {
                 let channel_size_bytes =
                     (frame_size_bytes / self.encoder.channels() as usize).min(self.buffer[0].len());
                 let frame_size = channel_size_bytes / self.encoder.format().bytes();
 
-                let mut frame = FFAudio::new(
+                let mut frame = frame::Audio::new(
                     self.encoder.format(),
                     frame_size,
                     self.encoder.channel_layout(),
@@ -251,7 +252,7 @@ impl AACEncoder {
 }
 
 impl AudioEncoder for AACEncoder {
-    fn queue_frame(&mut self, frame: FFAudio, output: &mut format::context::Output) {
+    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         self.queue_frame(frame, output);
     }
 
@@ -260,6 +261,6 @@ impl AudioEncoder for AACEncoder {
     }
 }
 
-fn frame_size_bytes(frame: &FFAudio) -> usize {
+fn frame_size_bytes(frame: &frame::Audio) -> usize {
     frame.samples() * frame.format().bytes() * frame.channels() as usize
 }

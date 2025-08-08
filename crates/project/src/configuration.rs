@@ -1,5 +1,5 @@
 use std::{
-    ops::{Add, Div, Mul, Sub},
+    ops::{Add, Div, Mul, Sub, SubAssign},
     path::Path,
 };
 
@@ -59,7 +59,7 @@ pub struct XY<T> {
 }
 
 impl<T> XY<T> {
-    pub fn new(x: T, y: T) -> Self {
+    pub const fn new(x: T, y: T) -> Self {
         Self { x, y }
     }
 
@@ -145,6 +145,31 @@ impl<T: Div<Output = T>> Div<XY<T>> for XY<T> {
             x: self.x / other.x,
             y: self.y / other.y,
         }
+    }
+}
+
+impl<T> SubAssign for XY<T>
+where
+    T: SubAssign + Copy,
+{
+    fn sub_assign(&mut self, rhs: Self) {
+        self.x -= rhs.x;
+        self.y -= rhs.y;
+    }
+}
+
+impl From<XY<f32>> for XY<f64> {
+    fn from(val: XY<f32>) -> Self {
+        XY {
+            x: val.x as f64,
+            y: val.y as f64,
+        }
+    }
+}
+
+impl<T> From<(T, T)> for XY<T> {
+    fn from(val: (T, T)) -> Self {
+        XY { x: val.0, y: val.1 }
     }
 }
 
@@ -354,6 +379,12 @@ pub struct CursorConfiguration {
     pub raw: bool,
     #[serde(default)]
     pub motion_blur: f32,
+    #[serde(default = "yes")]
+    pub use_svg: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for CursorConfiguration {
@@ -369,6 +400,7 @@ impl Default for CursorConfiguration {
             friction: 20.0,
             raw: false,
             motion_blur: 0.5,
+            use_svg: true,
         }
     }
 }
@@ -506,22 +538,15 @@ impl Default for CaptionSettings {
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct CaptionsData {
     pub segments: Vec<CaptionSegment>,
     pub settings: CaptionSettings,
 }
 
-impl Default for CaptionsData {
-    fn default() -> Self {
-        Self {
-            segments: Vec::new(),
-            settings: CaptionSettings::default(),
-        }
-    }
-}
-
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct ProjectConfiguration {
     pub aspect_ratio: Option<AspectRatio>,
     pub background: BackgroundConfiguration,
@@ -539,7 +564,7 @@ impl ProjectConfiguration {
     pub fn load(project_path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let config_str =
             std::fs::read_to_string(project_path.as_ref().join("project-config.json"))?;
-        let mut config: Self = serde_json::from_str(&config_str).unwrap_or_default();
+        let config: Self = serde_json::from_str(&config_str).unwrap_or_default();
 
         Ok(config)
     }
@@ -554,23 +579,8 @@ impl ProjectConfiguration {
     pub fn get_segment_time(&self, frame_time: f64) -> Option<(f64, u32)> {
         self.timeline
             .as_ref()
-            .map(|t| t.get_segment_time(frame_time as f64))
-            .unwrap_or(Some((frame_time as f64, 0)))
-    }
-}
-
-impl Default for ProjectConfiguration {
-    fn default() -> Self {
-        ProjectConfiguration {
-            aspect_ratio: None,
-            background: BackgroundConfiguration::default(),
-            camera: Camera::default(),
-            audio: AudioConfiguration::default(),
-            cursor: CursorConfiguration::default(),
-            hotkeys: HotkeysConfiguration::default(),
-            timeline: None,
-            captions: None,
-        }
+            .map(|t| t.get_segment_time(frame_time))
+            .unwrap_or(Some((frame_time, 0)))
     }
 }
 

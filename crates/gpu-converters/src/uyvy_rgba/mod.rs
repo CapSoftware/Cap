@@ -87,7 +87,12 @@ impl UYVYToRGBA {
         }
     }
 
-    pub fn convert(&self, uyvy_data: &[u8], width: u32, height: u32) -> Vec<u8> {
+    pub fn convert(
+        &self,
+        uyvy_data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<Vec<u8>, wgpu::PollError> {
         let uyvy_texture =
             uyvy::create_input_texture(&self.device, &self.queue, uyvy_data, width, height);
 
@@ -141,7 +146,7 @@ impl UYVYToRGBA {
             });
             compute_pass.set_pipeline(&self.pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch_workgroups((width + 7) / 8, (height + 7) / 8, 1);
+            compute_pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
 
         let output_buffer =

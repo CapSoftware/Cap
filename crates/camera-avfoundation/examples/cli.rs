@@ -1,17 +1,12 @@
+#![cfg(target_os = "macos")]
+
 use cap_camera_avfoundation::{
     CallbackOutputDelegate, CallbackOutputDelegateInner, YCbCrMatrix, list_video_devices,
 };
-use cidre::{
-    av::capture::{VideoDataOutputSampleBufDelegate, VideoDataOutputSampleBufDelegateImpl},
-    cv::pixel_buffer::LockFlags,
-    *,
-};
-use clap::{Args, Parser, Subcommand};
+use cidre::*;
+use clap::{Parser, Subcommand};
 use inquire::Select;
-use std::{
-    fmt::Display,
-    ops::{Deref, DerefMut},
-};
+use std::{fmt::Display, ops::Deref};
 
 #[derive(Parser)]
 struct Cli {
@@ -36,10 +31,7 @@ pub fn main() {
     let selected = Select::new("Select a device", devices).prompt().unwrap();
     let mut selected_device = _devices.get(selected.1).unwrap();
 
-    println!(
-        "Info for device '{}'",
-        selected_device.localized_name().to_string()
-    );
+    println!("Info for device '{}'", selected_device.localized_name());
 
     let formats = selected_device.formats();
 
@@ -83,9 +75,9 @@ pub fn main() {
 
     let input = av::capture::DeviceInput::with_device(&selected_device).unwrap();
     let queue = dispatch::Queue::new();
-    let delegate = CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(
-        |_output, sample_buf, _connection| {
-            let Some(image_buf) = sample_buf.image_buf() else {
+    let delegate =
+        CallbackOutputDelegate::with(CallbackOutputDelegateInner::new(Box::new(|data| {
+            let Some(image_buf) = data.sample_buf.image_buf() else {
                 return;
             };
 
@@ -104,10 +96,9 @@ pub fn main() {
                 "New frame: {}x{}, {:.2}pts, {total_bytes} bytes, format={format_fourcc}",
                 image_buf.width(),
                 image_buf.height(),
-                sample_buf.pts().value as f64 / sample_buf.pts().scale as f64,
+                data.sample_buf.pts().value as f64 / data.sample_buf.pts().scale as f64,
             )
-        },
-    )));
+        })));
 
     let mut output = av::capture::VideoDataOutput::new();
 
@@ -121,6 +112,10 @@ pub fn main() {
         }
 
         s.add_output(&output);
+
+        let mut _lock = selected_device.config_lock().unwrap();
+
+        _lock.set_active_format(&formats[selected_format.index]);
     });
 
     output.set_sample_buf_delegate(Some(delegate.as_ref()), Some(&queue));
@@ -147,6 +142,8 @@ pub fn main() {
     std::thread::sleep(std::time::Duration::from_secs(10));
 
     session.stop_running();
+
+    std::thread::sleep(std::time::Duration::from_secs(10));
 }
 
 struct Format {
@@ -154,6 +151,7 @@ struct Format {
     width: i32,
     height: i32,
     fourcc: FourCharCode,
+    #[allow(unused)]
     color_space: Option<YCbCrMatrix>,
     max_frame_rate: (i64, i32),
 }
@@ -177,13 +175,13 @@ struct CaptureDeviceSelectOption<'a>(&'a av::CaptureDevice, usize);
 
 impl<'a> Display for CaptureDeviceSelectOption<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.localized_name().to_string())
+        write!(f, "{} ({})", self.0.localized_name(), self.0.unique_id())
     }
 }
 
 impl AsRef<av::CaptureDevice> for CaptureDeviceSelectOption<'_> {
     fn as_ref(&self) -> &av::CaptureDevice {
-        &self.0
+        self.0
     }
 }
 
@@ -191,6 +189,6 @@ impl Deref for CaptureDeviceSelectOption<'_> {
     type Target = av::CaptureDevice;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        self.0
     }
 }

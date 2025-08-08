@@ -8,10 +8,12 @@ import { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { serverEnv } from "@cap/env";
 import { createBucketProvider } from "@/utils/s3";
+import { getGroqClient, GROQ_MODEL } from "@/lib/groq-client";
 export async function generateAiMetadata(videoId: string, userId: string) {
-  if (!serverEnv().OPENAI_API_KEY) {
+  const groqClient = getGroqClient();
+  if (!groqClient && !serverEnv().OPENAI_API_KEY) {
     console.error(
-      "[generateAiMetadata] Missing OpenAI API key, skipping AI metadata generation"
+      "[generateAiMetadata] Missing Groq or OpenAI API key, skipping AI metadata generation"
     );
     return;
   }
@@ -156,27 +158,69 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 Return ONLY valid JSON without any markdown formatting or code blocks.
 Transcript:
 ${transcriptText}`;
-    const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!aiRes.ok) {
-      const errorText = await aiRes.text();
-      console.error(
-        `[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`
-      );
-      throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
-    }
 
-    const aiJson = await aiRes.json();
-    const content = aiJson.choices?.[0]?.message?.content || "{}";
+    let content = "{}";
+    
+    if (groqClient) {
+      try {
+        const completion = await groqClient.chat.completions.create({
+          messages: [{ role: "user", content: prompt }],
+          model: GROQ_MODEL,
+        });
+        content = completion.choices?.[0]?.message?.content || "{}";
+      } catch (groqError) {
+        console.error(
+          `[generateAiMetadata] Groq API error: ${groqError}, falling back to OpenAI`
+        );
+        // Fallback to OpenAI if Groq fails and OpenAI key exists
+        if (serverEnv().OPENAI_API_KEY) {
+          const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [{ role: "user", content: prompt }],
+            }),
+          });
+          if (!aiRes.ok) {
+            const errorText = await aiRes.text();
+            console.error(
+              `[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`
+            );
+            throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
+          }
+          const aiJson = await aiRes.json();
+          content = aiJson.choices?.[0]?.message?.content || "{}";
+        } else {
+          throw groqError;
+        }
+      }
+    } else if (serverEnv().OPENAI_API_KEY) {
+      // Use OpenAI if Groq client is not available
+      const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+      if (!aiRes.ok) {
+        const errorText = await aiRes.text();
+        console.error(
+          `[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`
+        );
+        throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
+      }
+      const aiJson = await aiRes.json();
+      content = aiJson.choices?.[0]?.message?.content || "{}";
+    }
 
     let data: {
       title?: string;
@@ -193,7 +237,7 @@ ${transcriptText}`;
       }
       data = JSON.parse(cleanContent.trim());
     } catch (e) {
-      console.error(`[generateAiMetadata] Error parsing OpenAI response: ${e}`);
+      console.error(`[generateAiMetadata] Error parsing AI response: ${e}`);
       data = {
         title: "Generated Title",
         summary:

@@ -1,14 +1,12 @@
-use cap_fail::{fail, fail_err};
+use cap_fail::fail_err;
+use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, InputCallbackInfo, SampleFormat, StreamConfig, SupportedStreamConfig};
 use flume::{Receiver, Sender, TrySendError};
 use indexmap::IndexMap;
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{
-    data::{ffmpeg_sample_format_for, AudioInfo},
-    MediaError,
-};
+use crate::MediaError;
 
 #[derive(Clone)]
 pub struct AudioInputSamples {

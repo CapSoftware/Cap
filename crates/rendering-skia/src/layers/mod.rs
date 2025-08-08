@@ -182,10 +182,10 @@ impl LayerStack {
                     }
                 }
                 LayerEntry::Surface(layer) => {
-                    if layer.is_enabled() {
-                        if let Some(picture) = layer.render_to_surface(uniforms) {
-                            layer.composite(canvas, &picture, uniforms);
-                        }
+                    if layer.is_enabled()
+                        && let Some(picture) = layer.render_to_surface(uniforms)
+                    {
+                        layer.composite(canvas, &picture, uniforms);
                     }
                 }
             }

@@ -67,7 +67,7 @@ impl FromStr for CapWindowId {
                     .parse::<u32>()
                     .map_err(|e| e.to_string())?,
             },
-            _ => return Err(format!("unknown window label: {}", s)),
+            _ => return Err(format!("unknown window label: {s}")),
         })
     }
 }
@@ -167,7 +167,7 @@ pub enum ShowCapWindow {
     WindowCaptureOccluder { screen_id: u32 },
     CaptureArea { screen_id: u32 },
     Camera,
-    InProgressRecording { position: Option<(f64, f64)> },
+    InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
 }
@@ -177,7 +177,7 @@ impl ShowCapWindow {
         if let Self::Editor { project_path } = self {
             let state = app.state::<EditorWindowIds>();
             let mut s = state.ids.lock().unwrap();
-            if s.iter().find(|(path, _)| path == project_path).is_none() {
+            if !s.iter().any(|(path, _)| path == project_path) {
                 s.push((
                     project_path.clone(),
                     state
@@ -192,7 +192,7 @@ impl ShowCapWindow {
             return Ok(window);
         }
 
-        let id = self.id(app);
+        let _id = self.id(app);
         let monitor = app.primary_monitor()?.unwrap();
 
         let window = match self {
@@ -239,14 +239,11 @@ impl ShowCapWindow {
                     let _ = main.close();
                 };
 
-                let window = self
-                    .window_builder(app, "/editor")
+                self.window_builder(app, "/editor")
                     .maximizable(true)
                     .inner_size(1240.0, 800.0)
                     .center()
-                    .build()?;
-
-                window
+                    .build()?
             }
             Self::Upgrade => {
                 // Hide main window when upgrade window opens
@@ -262,17 +259,6 @@ impl ShowCapWindow {
                     .maximized(false)
                     .shadow(true)
                     .center();
-
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
 
                 builder.build()?
             }
@@ -293,24 +279,12 @@ impl ShowCapWindow {
                     .focused(true)
                     .shadow(true);
 
-                #[cfg(target_os = "windows")]
-                {
-                    if !id.should_have_decorations() {
-                        builder = builder.transparent(true);
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    builder = builder.transparent(true);
-                }
-
                 builder.build()?
             }
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
                 let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-
                 let mut window_builder = self
                     .window_builder(app, "/camera")
                     .maximized(false)
@@ -326,13 +300,14 @@ impl ShowCapWindow {
                             - WINDOW_SIZE
                             - 100.0,
                     )
-                    .initialization_script(&format!(
+                    .initialization_script(format!(
                         "
 			                window.__CAP__ = window.__CAP__ ?? {{}};
 			                window.__CAP__.cameraWsPort = {port};
 		                ",
                     ))
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false); // We set this true in `CameraWindowState::init_window`
 
                 let window = window_builder.build()?;
 
@@ -420,21 +395,17 @@ impl ShowCapWindow {
                 );
 
                 // Hide the main window if the target monitor is the same
-                if let Some(main_window) = CapWindowId::Main.get(&app) {
-                    if let (Ok(outer_pos), Ok(outer_size)) =
+                if let Some(main_window) = CapWindowId::Main.get(app)
+                    && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                    {
-                        if target_monitor.intersects(outer_pos, outer_size) {
-                            let _ = main_window.minimize();
-                        }
-                    };
-                }
+                    && target_monitor.intersects(outer_pos, outer_size)
+                {
+                    let _ = main_window.minimize();
+                };
 
                 window
             }
-            Self::InProgressRecording {
-                position: _position,
-            } => {
+            Self::InProgressRecording { countdown } => {
                 let mut width = 180.0 + 32.0;
 
                 let height = 40.0;
@@ -455,6 +426,10 @@ impl ShowCapWindow {
                         (monitor.size().height as f64) / monitor.scale_factor() - height - 120.0,
                     )
                     .skip_taskbar(true)
+                    .initialization_script(format!(
+                        "window.COUNTDOWN = {};",
+                        countdown.unwrap_or_default()
+                    ))
                     .build()?;
 
                 #[cfg(target_os = "macos")]
@@ -522,7 +497,7 @@ impl ShowCapWindow {
         // window.hide().ok();
 
         #[cfg(target_os = "macos")]
-        if let Some(position) = id.traffic_lights_position() {
+        if let Some(position) = _id.traffic_lights_position() {
             add_traffic_lights(&window, position);
         }
 
@@ -559,7 +534,7 @@ impl ShowCapWindow {
             }
         }
 
-        #[cfg(target_os = "windows")]
+        #[cfg(windows)]
         {
             builder = builder.decorations(false);
         }
@@ -585,7 +560,7 @@ impl ShowCapWindow {
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
+            ShowCapWindow::Camera => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
@@ -608,10 +583,7 @@ fn add_traffic_lights(window: &WebviewWindow<Wry>, controls_inset: Option<Logica
             let c_win = target_window.clone();
             target_window.on_window_event(move |event| match event {
                 tauri::WindowEvent::ThemeChanged(..) | tauri::WindowEvent::Focused(..) => {
-                    position_traffic_lights_impl(
-                        &c_win.as_ref().window(),
-                        controls_inset.map(LogicalPosition::from),
-                    );
+                    position_traffic_lights_impl(&c_win.as_ref().window(), controls_inset);
                 }
                 _ => {}
             });
@@ -637,13 +609,13 @@ pub fn set_theme(window: tauri::Window, theme: AppTheme) {
 
 #[tauri::command]
 #[specta::specta]
-pub fn position_traffic_lights(window: tauri::Window, controls_inset: Option<(f64, f64)>) {
+pub fn position_traffic_lights(_window: tauri::Window, _controls_inset: Option<(f64, f64)>) {
     #[cfg(target_os = "macos")]
     position_traffic_lights_impl(
-        &window,
-        controls_inset.map(LogicalPosition::from).or_else(|| {
+        &_window,
+        _controls_inset.map(LogicalPosition::from).or_else(|| {
             // Attempt to get the default inset from the window's traffic lights position
-            CapWindowId::from_str(window.label())
+            CapWindowId::from_str(_window.label())
                 .ok()
                 .and_then(|id| id.traffic_lights_position().flatten())
         }),
@@ -702,16 +674,16 @@ impl MonitorExt for Monitor {
 
 #[specta::specta]
 #[tauri::command(async)]
-pub fn set_window_transparent(window: tauri::Window, value: bool) {
+pub fn set_window_transparent(_window: tauri::Window, _value: bool) {
     #[cfg(target_os = "macos")]
     {
-        let ns_win = window
+        let ns_win = _window
             .ns_window()
             .expect("Failed to get native window handle")
             as *const objc2_app_kit::NSWindow;
 
         unsafe {
-            (*ns_win).setOpaque(!value);
+            (*ns_win).setOpaque(!_value);
         }
     }
 }
