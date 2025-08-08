@@ -5,7 +5,6 @@ import { VideosPolicy } from "./VideosPolicy";
 import { VideosRepo } from "./VideosRepo";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
-  accessors: true,
   effect: Effect.gen(function* () {
     const [repo, policy] = yield* Effect.all([VideosRepo, VideosPolicy]);
 

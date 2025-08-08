@@ -46,17 +46,20 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
     HttpApiBuilder.group(Api, "root", (handlers) =>
       Effect.gen(function* () {
         const s3Buckets = yield* S3Buckets;
+        const videos = yield* Videos;
 
         return handlers.handle("getVideoSrc", ({ urlParams }) =>
           Effect.gen(function* () {
-            const video = yield* Videos.getById(urlParams.videoId).pipe(
-              Effect.andThen(
-                Effect.catchTag(
-                  "NoSuchElementException",
-                  () => new HttpApiError.NotFound()
+            const video = yield* videos
+              .getById(urlParams.videoId)
+              .pipe(
+                Effect.andThen(
+                  Effect.catchTag(
+                    "NoSuchElementException",
+                    () => new HttpApiError.NotFound()
+                  )
                 )
-              )
-            );
+              );
 
             const [S3ProviderLayer, customBucket] =
               yield* s3Buckets.getProviderLayerForVideo(video.id);
