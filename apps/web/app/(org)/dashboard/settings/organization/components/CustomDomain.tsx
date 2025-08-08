@@ -48,13 +48,17 @@ export function CustomDomain() {
 
   return (
     <>
-      <CustomDomainDialog
-        isVerified={isVerified}
-        setIsVerified={setIsVerified}
-        open={showCustomDomainDialog}
-        setShowUpgradeModal={(arg) => setShowUpgradeModal(arg)}
-        onClose={() => setShowCustomDomainDialog(false)}
-      />
+    {
+      showCustomDomainDialog && (
+        <CustomDomainDialog
+          isVerified={isVerified}
+          setIsVerified={setIsVerified}
+          open={showCustomDomainDialog}
+          setShowUpgradeModal={(arg) => setShowUpgradeModal(arg)}
+          onClose={() => setShowCustomDomainDialog(false)}
+        />
+      )
+    }
       <div className="flex gap-3 justify-between items-center w-full h-fit">
         <div className="space-y-1">
           <h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>

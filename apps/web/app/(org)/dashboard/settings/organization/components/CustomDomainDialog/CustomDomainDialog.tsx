@@ -10,7 +10,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons";
 import { useReducer, useState, useEffect, useRef } from "react";
 import { checkOrganizationDomain } from "@/actions/organization/check-domain";
-
+import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
+import type { ConfettiRef } from "@/app/(org)/dashboard/_components/Confetti";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../../../Contexts";
 import { updateDomain } from "@/actions/organization/update-domain";
@@ -50,7 +51,7 @@ const stepReducer = (state: StepState, action: StepAction): StepState => {
       return {
         ...state,
         currentIndex: Math.min(state.currentIndex + 1, state.totalSteps - 1),
-        errors: {} // Clear errors when moving forward
+        errors: {}
       };
 
     case 'PREV_STEP':
@@ -123,6 +124,8 @@ const CustomDomainDialog = ({
   const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const confettiRef = useRef<ConfettiRef>(null);
 
 
   const [stepState, dispatch] = useReducer(stepReducer, {
@@ -207,7 +210,6 @@ const CustomDomainDialog = ({
 
   const currentStep = steps[stepState.currentIndex];
   const canGoNext = stepState.currentIndex < STEP_CONFIGS.length - 1;
-  const canGoPrev = stepState.currentIndex > 0;
 
   if (!currentStep) {
     return null;
@@ -217,12 +219,6 @@ const CustomDomainDialog = ({
   const handleNext = () => {
     if (canGoNext) {
       dispatch({ type: 'NEXT_STEP' });
-    }
-  };
-
-  const handlePrev = () => {
-    if (canGoPrev) {
-      dispatch({ type: 'PREV_STEP' });
     }
   };
 
@@ -243,6 +239,10 @@ const CustomDomainDialog = ({
         payload: { stepId: 'domain', error: 'Domain is required' }
       });
       return;
+    }
+
+    if (domain === activeOrganization?.organization.customDomain) {
+      handleNext();
     }
 
     const cleanDomain = (input: string) => {
@@ -336,14 +336,21 @@ const CustomDomainDialog = ({
     }
   }, [isVerified, stepState.currentIndex])
 
-  console.log({
-    domainConfig,
-    domain
-  })
-
   return (
+    <>
+    {stepState.currentIndex === 2 && (
+     <Confetti
+     ref={confettiRef}
+     className="absolute inset-0 w-full h-full z-[600] pointer-events-none"
+     options={{
+       particleCount: 150,
+       spread: 120,
+       origin: { x: 0.5, y: 0.5 },
+     }}
+      />
+    )}
     <Dialog open={open} onOpenChange={(open) => !open && handleClose()}>
-      <DialogContent className="p-0 w-[calc(100%-20px)] focus:outline-none focus:ring-0 max-w-[600px] rounded-xl border bg-gray-2 border-gray-4">
+      <DialogContent ref={dialogRef} className="p-0 w-[calc(100%-20px)] focus:outline-none focus:ring-0 max-w-[600px] rounded-xl border bg-gray-2 border-gray-4">
         <DialogHeader
           icon={<FontAwesomeIcon icon={faGlobe} />}
           description="Let's get you setup with your custom domain for your caps."
@@ -386,7 +393,7 @@ const CustomDomainDialog = ({
 
           {/* Success Step */}
           {currentStep.id === 'success' && (
-            <SuccesStep />
+              <SuccesStep />
           )}
         </div>  
           
@@ -474,6 +481,7 @@ const CustomDomainDialog = ({
 
       </DialogContent>
     </Dialog>
+    </>
   );
 };
 

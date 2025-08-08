@@ -23,14 +23,13 @@ export const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, s
   };
 
   return (
-    <>
       <div className="space-y-6">
         <div className="text-center">
           <h3 className="text-lg font-semibold text-gray-12">Your domain</h3>
           <p className="text-sm text-gray-11">
             Enter the custom domain you'd like to use
           </p>
-        </div>
+        </div>  
         <div className="space-y-3">
           <Input
             type="text"
@@ -50,6 +49,5 @@ export const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, s
           )}
         </div>
       </div>
-    </>
   );
 };
