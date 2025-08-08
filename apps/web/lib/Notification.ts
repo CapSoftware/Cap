@@ -84,14 +84,18 @@ export async function createNotification(
         .limit(1);
 
       hasExistingNotification = !!existingNotification;
-    } else if (notification.type === "comment") {
+    } else if (
+      notification.type === "comment" ||
+      notification.type === "reaction" ||
+      notification.type === "reply"
+    ) {
       // Check for existing comment notification
       const [existingNotification] = await db()
         .select({ id: notifications.id })
         .from(notifications)
         .where(
           and(
-            eq(notifications.type, "comment"),
+            eq(notifications.type, notification.type),
             eq(notifications.recipientId, videoResult.ownerId),
             sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`
           )

@@ -15,6 +15,11 @@ export const NotificationBase = z.object({
 });
 export type NotificationBase = z.infer<typeof NotificationBase>;
 
+const CommentData = z.object({
+  id: z.string(),
+  content: z.string(),
+});
+
 export const Notification = z
   .union([
     z.object({
@@ -26,28 +31,19 @@ export const Notification = z
       type: z.literal("comment"),
       videoId: z.string(),
       author: NotificationAuthor,
-      comment: z.object({
-        id: z.string(),
-        content: z.string(),
-      }),
+      comment: CommentData,
     }),
     z.object({
       type: z.literal("reaction"),
       videoId: z.string(),
       author: NotificationAuthor,
-      comment: z.object({
-        id: z.string(),
-        content: z.string(),
-      }),
+      comment: CommentData,
     }),
     z.object({
       type: z.literal("reply"),
       videoId: z.string(),
       author: NotificationAuthor,
-      comment: z.object({
-        id: z.string(),
-        content: z.string(),
-      }),
+      comment: CommentData,
     }),
     // z.object({
     //   type: z.literal("mention"),

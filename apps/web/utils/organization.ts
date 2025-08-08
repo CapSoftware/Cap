@@ -1,5 +1,3 @@
-import { NODE_ENV } from "@cap/env";
-
 /**
  * Calculate organization seats information
  */
@@ -13,8 +11,8 @@ export function calculateSeats(organization: {
   const pendingInvitesCount = organization?.invites?.length ?? 0;
   const totalUsedSeats = memberCount + pendingInvitesCount;
   const remainingSeats =
-    NODE_ENV == "development"
-      ? Infinity
+    process.env.NODE_ENv === "development"
+      ? Number.MAX_SAFE_INTEGER
       : Math.max(0, inviteQuota - totalUsedSeats);
 
   return {

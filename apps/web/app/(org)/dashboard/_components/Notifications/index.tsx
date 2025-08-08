@@ -14,7 +14,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faBellSlash } from "@fortawesome/free-solid-svg-icons";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useApiClient } from "@/utils/web-api";
-import { FilterType, matchNotificationFilter } from "./Filter";
+import { FilterLabels, FilterType, matchNotificationFilter } from "./Filter";
 
 type NotificationsProps = MotionProps & React.HTMLAttributes<HTMLDivElement>;
 
