@@ -25,7 +25,7 @@ pub enum MainWindowRecordingStartBehaviour {
 #[serde(rename_all = "camelCase")]
 pub enum PostDeletionBehaviour {
     #[default]
-    Exit,
+    DoNothing,
     ReopenRecordingWindow,
 }
 
@@ -129,7 +129,7 @@ impl Default for GeneralSettingsStore {
             _open_editor_after_recording: false,
             enable_native_camera_preview: false,
             auto_zoom_on_clicks: false,
-            post_deletion_behaviour: PostDeletionBehaviour::Exit,
+            post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
         }
     }
 }
