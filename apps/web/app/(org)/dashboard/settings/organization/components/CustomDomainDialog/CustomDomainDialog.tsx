@@ -239,7 +239,6 @@ const CustomDomainDialog = ({
 
       if (data) {
         setIsVerified(data.verified);
-        handleNext();
       }
     } catch (error) {
       toast.error(
@@ -260,12 +259,17 @@ const CustomDomainDialog = ({
         setVerifying(true);
     
         try {
+          
           const data = await checkOrganizationDomain(
             activeOrganization.organization.id
           );
     
           setIsVerified(data.verified);
           setDomainConfig(data.config);
+
+          if (data.verified) {
+            handleNext();
+          }
     
           if (showToasts) {
             if (data.verified) {
