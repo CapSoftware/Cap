@@ -9,7 +9,6 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faGlobe } from "@fortawesome/free-solid-svg-icons";
 import { useReducer, useState, useEffect, useRef } from "react";
-import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 import { Confetti } from "@/app/(org)/dashboard/_components/Confetti";
 import type { ConfettiRef } from "@/app/(org)/dashboard/_components/Confetti";
 import { toast } from "sonner";
@@ -19,8 +18,9 @@ import { useRouter } from "next/navigation";
 import { StepConfig, DomainConfig, StepAction, StepState, StepStatus } from "./types";
 import { Stepper } from "./Stepper";
 import { faRefresh } from "@fortawesome/free-solid-svg-icons";
-import { CheckCircle, XCircle } from "lucide-react";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { checkOrganizationDomain } from "@/actions/organization/check-domain";
+
 import { SubscribeContent } from "./SubscribeContent";
 import { SuccesStep } from "./SuccessStep";
 import { DomainStep } from "./DomainStep";
@@ -127,6 +127,8 @@ const CustomDomainDialog = ({
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const confettiRef = useRef<ConfettiRef>(null);
 
+  const pollInterval = useRef<NodeJS.Timeout>();
+
 
   const [stepState, dispatch] = useReducer(stepReducer, {
     currentIndex: 0,
@@ -134,69 +136,6 @@ const CustomDomainDialog = ({
     canNavigateBack: true,
     errors: {}
   });
-
-  const pollInterval = useRef<NodeJS.Timeout>();
-  const POLL_INTERVAL = 5000;
-
-  const checkVerification = async (showToasts = true) => {
-    if (
-      !activeOrganization?.organization.id ||
-      !activeOrganization?.organization.customDomain
-    )
-      return;
-    setVerifying(true);
-
-    try {
-      const data = await checkOrganizationDomain(
-        activeOrganization.organization.id
-      );
-
-      setIsVerified(data.verified);
-      setDomainConfig(data.config);
-
-      if (showToasts) {
-        if (data.verified) {
-          toast.success("Domain is verified!");
-
-          if (pollInterval.current) {
-            clearInterval(pollInterval.current);
-            pollInterval.current = undefined;
-          }
-        } else {
-          toast.error(
-            "Domain is not verified. Please check your DNS settings."
-          );
-        }
-      }
-    } catch (error) {
-      if (showToasts) {
-        toast.error("Failed to check domain verification");
-      }
-    } finally {
-      setVerifying(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeOrganization?.organization.customDomain && !isVerified) {
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-      }
-
-      checkVerification(false);
-
-      pollInterval.current = setInterval(() => {
-        checkVerification(false);
-      }, POLL_INTERVAL);
-    }
-
-    return () => {
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-        pollInterval.current = undefined;
-      }
-    };
-  }, [activeOrganization?.organization.customDomain, isVerified]);
 
   const steps = STEP_CONFIGS.map((config, index) => ({
     ...config,
@@ -299,18 +238,9 @@ const CustomDomainDialog = ({
       router.refresh();
 
       if (data) {
-        setDomainConfig(data.status);
         setIsVerified(data.verified);
         handleNext();
       }
-
-      setTimeout(() => {
-        checkVerification(false);
-      }, 1000);
-
-      pollInterval.current = setInterval(() => {
-        checkVerification(false);
-      }, POLL_INTERVAL);
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Failed to update domain settings"
@@ -319,6 +249,47 @@ const CustomDomainDialog = ({
       setLoading(false);
     }
   };
+
+    
+      const checkVerification = async (showToasts = true) => {
+        if (
+          !activeOrganization?.organization.id ||
+          !activeOrganization?.organization.customDomain
+        )
+          return;
+        setVerifying(true);
+    
+        try {
+          const data = await checkOrganizationDomain(
+            activeOrganization.organization.id
+          );
+    
+          setIsVerified(data.verified);
+          setDomainConfig(data.config);
+    
+          if (showToasts) {
+            if (data.verified) {
+              toast.success("Domain is verified!");
+    
+              if (pollInterval.current) {
+                clearInterval(pollInterval.current);
+                pollInterval.current = undefined;
+              }
+            } else {
+              toast.error(
+                "Domain is not verified. Please check your DNS settings."
+              );
+            }
+          }
+        } catch (error) {
+          if (showToasts) {
+            toast.error("Failed to check domain verification");
+          }
+        } finally {
+          setVerifying(false);
+        }
+      };
+  
 
   const handleClose = () => {
     handleReset();
@@ -387,6 +358,7 @@ const CustomDomainDialog = ({
             <VerifyStep
               domain={domain}
               domainConfig={domainConfig}
+              checkVerification={checkVerification}
               isVerified={isVerified}
             />
           )}
@@ -404,19 +376,6 @@ const CustomDomainDialog = ({
 
             {currentStep.id === "verify" && (
               <div className="flex justify-between items-center w-full">
-                <div className="flex gap-3 items-center">
-                  {isVerified ? (
-                    <div className="flex gap-2 items-center px-3 h-10 bg-green-900 rounded-full">
-                      <CheckCircle className="text-green-200 size-4" />
-                      <p className="text-sm font-medium text-white">Domain verified</p>
-                    </div>
-                  ) : (
-                    <div className="flex gap-2 items-center px-3 h-10 bg-red-900 rounded-full">
-                      <XCircle className="text-red-200 size-4" />
-                      <p className="text-sm font-medium text-white">Domain not verified</p>
-                    </div>
-                  )}
-                </div>
                 <div className="flex gap-2 items-center">
                   <Button
                     type="button"

@@ -1,22 +1,29 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import clsx from "clsx";
 import { DomainConfig } from "./types";
 import { Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { LoadingSpinner } from "@cap/ui";
+import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+
 
 interface VerifyStepProps {
   domain: string;
   domainConfig?: DomainConfig | null;
   isVerified?: boolean;
+  checkVerification: (showToasts?: boolean) => void;
 }
+
+const POLL_INTERVAL = 5000;
 
 export const VerifyStep = ({
   domain,
   domainConfig,
   isVerified,
+  checkVerification,
 }: VerifyStepProps) => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const {activeOrganization} = useDashboardContext();
 
   const recommendedCnames = domainConfig?.recommendedCNAME || [];
   const recommendedIPv4 = domainConfig?.recommendedIPv4 || [];
@@ -65,6 +72,22 @@ export const VerifyStep = ({
       toast.error("Failed to copy to clipboard");
     }
   };
+
+   useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (activeOrganization?.organization.customDomain && !isVerified) {
+          checkVerification(false);
+    
+          interval = setInterval(() => {
+            checkVerification(false);
+          }, POLL_INTERVAL);
+        }
+    
+        return () => {
+          clearInterval(interval);
+        };
+      }, [activeOrganization?.organization.customDomain, isVerified]);
+  
 
   return (
     <div className="space-y-6">
