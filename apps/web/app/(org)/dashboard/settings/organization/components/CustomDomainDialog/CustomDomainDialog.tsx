@@ -221,18 +221,18 @@ const CustomDomainDialog = ({
     setDomain(cleanedDomain);
 
     try {
-      //if theres a domain already, remove it
       if (activeOrganization?.organization.customDomain) {
         await removeOrganizationDomain(
           activeOrganization?.organization.id as string
         );
       }
 
-
       const data = await updateDomain(
         cleanedDomain,
         activeOrganization?.organization.id as string
       )
+
+      handleNext();
 
       toast.success("Domain settings updated");
       router.refresh();
@@ -371,16 +371,13 @@ const CustomDomainDialog = ({
           {currentStep.id === 'success' && (
               <SuccesStep />
           )}
-        </div>  
-          
+        </div>           
         </div>
 
         {currentStep.id !== 'success' && (
           <DialogFooter>
 
             {currentStep.id === "verify" && (
-              <div className="flex justify-between items-center w-full">
-                <div className="flex gap-2 items-center">
                   <Button
                     type="button"
                     variant="gray"
@@ -396,19 +393,6 @@ const CustomDomainDialog = ({
                     )}
                     Check Status
                   </Button>
-
-                  {isVerified && (
-                    <Button
-                      onClick={handleNext}
-                      size="sm"
-                      variant="dark"
-                      className="min-w-[80px]"
-                    >
-                      Next
-                    </Button>
-                  )}
-                </div>
-              </div>
             )}
 
             {currentStep.id === 'domain' && (
