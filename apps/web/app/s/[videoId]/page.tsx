@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel, sql, desc } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 
 import {
@@ -28,6 +28,7 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { createNotification } from "@/lib/Notification";
 import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 
 export const dynamic = "auto";
@@ -69,7 +70,7 @@ async function getSharedSpacesForVideo(videoId: string) {
   }> = [];
 
   // Add space-level sharing
-  spaceSharing.forEach(space => {
+  spaceSharing.forEach((space) => {
     sharedSpaces.push({
       id: space.id,
       name: space.name,
@@ -79,7 +80,7 @@ async function getSharedSpacesForVideo(videoId: string) {
   });
 
   // Add organization-level sharing
-  orgSharing.forEach(org => {
+  orgSharing.forEach((org) => {
     sharedSpaces.push({
       id: org.id,
       name: org.name,
@@ -93,6 +94,7 @@ async function getSharedSpacesForVideo(videoId: string) {
 
 type Props = {
   params: { [key: string]: string | string[] | undefined };
+  searchParams: { [key: string]: string | string[] | undefined };
 };
 
 type CommentWithAuthor = typeof comments.$inferSelect & {
@@ -112,6 +114,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
+
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
@@ -270,10 +273,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ShareVideoPage(props: Props) {
   const params = props.params;
+  const searchParams = props.searchParams;
   const videoId = params.videoId as string;
-  console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const userPromise = getCurrentUser();
+  const user = await getCurrentUser();
 
   const [video] = await db()
     .select({
@@ -305,19 +308,28 @@ export default async function ShareVideoPage(props: Props) {
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .where(eq(videos.id, videoId));
 
+  if (user && video && user.id !== video.ownerId) {
+    try {
+      await createNotification({ type: "view", videoId, authorId: user.id });
+    } catch (error) {
+      console.error("Failed to create view notification:", error);
+    }
+  }
+
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
 
-  const userAccess = await userHasAccessToVideo(userPromise, video);
+  const userAccess = await userHasAccessToVideo(user, video);
 
   if (userAccess === "private") {
     return (
       <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
         <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
         <p className="text-gray-400">
-          If you own this video, please <Link href="/login">sign in</Link> to manage sharing.
+          If you own this video, please <Link href="/login">sign in</Link> to
+          manage sharing.
         </p>
       </div>
     );
@@ -330,7 +342,11 @@ export default async function ShareVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <AuthorizedContent video={video} user={userPromise} />
+        <AuthorizedContent
+          video={video}
+          user={user}
+          searchParams={searchParams}
+        />
       )}
     </div>
   );
@@ -339,15 +355,18 @@ export default async function ShareVideoPage(props: Props) {
 async function AuthorizedContent({
   video,
   user: _user,
+  searchParams,
 }: {
-  video: InferSelectModel<typeof videos> & {
+  video: Omit<InferSelectModel<typeof videos>, "folderId"> & {
     sharedOrganization: { organizationId: string } | null;
   };
   user: MaybePromise<InferSelectModel<typeof users> | null>;
+  searchParams: { [key: string]: string | string[] | undefined };
 }) {
   const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
+  const commentId = searchParams.comment as string | undefined;
 
   // Fetch spaces data for the sharing dialog
   let spacesData = null;
@@ -567,33 +586,41 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-      .select({ userId: organizationMembers.userId })
-      .from(organizationMembers)
-      .where(
-        eq(
-          organizationMembers.organizationId,
-          video.sharedOrganization.organizationId
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
         )
-      )
     : Promise.resolve([]);
 
-  const commentsPromise = db()
-    .select({
-      id: comments.id,
-      content: comments.content,
-      timestamp: comments.timestamp,
-      type: comments.type,
-      authorId: comments.authorId,
-      videoId: comments.videoId,
-      createdAt: comments.createdAt,
-      updatedAt: comments.updatedAt,
-      parentCommentId: comments.parentCommentId,
-      authorName: users.name,
-    })
-    .from(comments)
-    .leftJoin(users, eq(comments.authorId, users.id))
-    .where(eq(comments.videoId, videoId))
-    .execute();
+  const commentsPromise = (async () => {
+    const allComments = await db()
+      .select({
+        id: comments.id,
+        content: comments.content,
+        timestamp: comments.timestamp,
+        type: comments.type,
+        authorId: comments.authorId,
+        videoId: comments.videoId,
+        createdAt: comments.createdAt,
+        updatedAt: comments.updatedAt,
+        parentCommentId: comments.parentCommentId,
+        authorName: users.name,
+      })
+      .from(comments)
+      .leftJoin(users, eq(comments.authorId, users.id))
+      .where(eq(comments.videoId, videoId))
+      .orderBy(
+        commentId
+          ? sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt} DESC`
+          : desc(comments.createdAt)
+      );
+
+    return allComments;
+  })();
 
   const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -616,8 +643,8 @@ async function AuthorizedContent({
     sharedOrganizations: sharedOrganizations,
     password: null,
     hasPassword: video.password !== null,
+    folderId: null,
   };
-
 
   return (
     <>

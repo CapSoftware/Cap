@@ -50,6 +50,20 @@
       "when": 1751982995648,
       "tag": "0006_woozy_jamie_braddock",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1754318170128,
+      "tag": "0007_first_lilith",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1754326114877,
+      "tag": "0008_illegal_rogue",
+      "breakpoints": true
     }
   ]
 }
