@@ -610,7 +610,7 @@ async function AuthorizedContent({
       toplLevelCommentId = parentComment?.parentCommentId;
     }
 
-    const commentToHighlight = toplLevelCommentId ?? commentId;
+    const commentToBringToTheTop = toplLevelCommentId ?? commentId;
     
     
     const allComments = await db()
@@ -630,8 +630,8 @@ async function AuthorizedContent({
       .leftJoin(users, eq(comments.authorId, users.id))
       .where(eq(comments.videoId, videoId))
       .orderBy(
-        commentToHighlight
-          ? sql`CASE WHEN ${comments.id} = ${commentToHighlight} THEN 0 ELSE 1 END, ${comments.createdAt}`
+        commentToBringToTheTop
+          ? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
           : comments.createdAt
       );
 

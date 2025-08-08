@@ -77,9 +77,9 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
     return (
       <motion.div
         ref={ref}
-        initial={{ opacity: 0, y: 4, scale: 0.98, display: "hidden" }}
+        initial={{ opacity: 0, y: 4, scale: 0.98, display: "none" }}
         animate={{ opacity: 1, y: 0, scale: 1, display: "flex" }}
-        exit={{ opacity: 0, y: 4, scale: 0.98, display: "hidden" }}
+        exit={{ opacity: 0, y: 4, scale: 0.98, display: "none" }}
         transition={{ ease: "easeOut", duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
         className={clsx(
