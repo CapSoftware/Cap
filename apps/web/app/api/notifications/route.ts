@@ -1,12 +1,14 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { notifications, users } from "@cap/database/schema";
 import { db } from "@cap/database";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, ColumnBaseConfig, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { Notification as APINotification } from "@cap/web-api-contract";
 import { AvcProfileInfo } from "node_modules/@remotion/media-parser/dist/containers/avc/parse-avc";
 import { NotificationType } from "@/lib/Notification";
+import { MySqlColumn } from "drizzle-orm/mysql-core";
+import { jsonExtractString } from "@/utils/sql";
 
 const notificationDataSchema = z.object({
   authorId: z.string(),
@@ -46,9 +48,7 @@ export async function GET() {
       .from(notifications)
       .leftJoin(
         users,
-        and(
-          eq(sql`JSON_EXTRACT(${notifications.data}, '$.authorId')`, users.id)
-        )
+        and(eq(jsonExtractString(notifications.data, "authorId"), users.id))
       )
       .where(
         and(
