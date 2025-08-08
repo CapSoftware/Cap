@@ -452,9 +452,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                             () => item.value,
                             item.onChange,
                             [
-                              { text: "Hide Cap", value: "exit" },
+                              { text: "Do Nothing", value: "exit" },
                               {
-                                text: "Open Cap",
+                                text: "Reopen Recording Window",
                                 value: "reopenRecordingWindow",
                               },
                             ]
