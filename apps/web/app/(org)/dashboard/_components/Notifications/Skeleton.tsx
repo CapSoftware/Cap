@@ -9,7 +9,7 @@ export const NotificationItemSkeleton = ({
   return (
     <SkeletonPage
       customSkeleton={(Skeleton) => (
-        <div className={clsx("flex gap-3 p-4 border-r border-l border-gray-3", className)}>
+        <div className={clsx("flex gap-3 p-4", className)}>
           {/* Avatar Skeleton */}
           <div className="flex-shrink-0">
             <Skeleton
@@ -58,7 +58,10 @@ export const NotificationsSkeleton = ({ count = 5 }: { count?: number }) => {
   return (
     <div>
       {Array.from({ length: count }).map((_, i) => (
-        <NotificationItemSkeleton key={i} className={clsx(i !== count - 1 && "border-b")} />
+        <NotificationItemSkeleton
+          key={i}
+          className={clsx(i !== count - 1 && "border-b")}
+        />
       ))}
     </div>
   );

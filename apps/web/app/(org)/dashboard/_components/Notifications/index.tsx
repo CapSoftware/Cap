@@ -83,7 +83,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
         transition={{ ease: "easeOut", duration: 0.2 }}
         onClick={(e) => e.stopPropagation()}
         className={clsx(
-          "flex absolute right-0 top-12 flex-col rounded-xl cursor-default w-[400px] h-[450px] bg-gray-1",
+          "flex absolute right-0 top-12 flex-col rounded-xl cursor-default w-[400px] h-[450px] bg-gray-1 origin-top-right",
           className
         )}
         {...props}
@@ -95,7 +95,10 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
           activeFilter={activeFilter}
           setActiveFilter={setActiveFilter}
         />
-        <div ref={scrollRef} className="isolate flex-1 h-full custom-scroll">
+        <div
+          ref={scrollRef}
+          className="isolate flex-1 h-full custom-scroll border-x border-gray-3 divide-y divide-gray-3 flex flex-col"
+        >
           {notifications.isPending ? (
             <NotificationsSkeleton />
           ) : isNotificationTabEmpty ? (
@@ -124,6 +127,7 @@ const Notifications = forwardRef<HTMLDivElement, NotificationsProps>(
               />
             ))
           )}
+          <div className="flex-1 border-t border-gray-3" />
         </div>
 
         <NotificationFooter />
