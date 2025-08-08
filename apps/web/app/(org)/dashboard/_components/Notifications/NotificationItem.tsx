@@ -62,12 +62,12 @@ export const NotificationItem = ({
           </span>
         </div>
 
-        {notification.type === "comment" ||
-          (notification.type === "reply" && (
+        {(notification.type === "comment" ||
+          notification.type === "reply") && (
             <p className="mb-2 text-[13px] italic leading-4 text-gray-11 line-clamp-2">
               {notification.comment.content}
             </p>
-          ))}
+          )}
         <p className="text-xs text-gray-10">
           {moment(notification.createdAt).fromNow()}
         </p>
@@ -94,8 +94,9 @@ export const NotificationItem = ({
 
 function getLink(notification: APINotification) {
   switch (notification.type) {
-    case "comment":
     case "reply":
+        return `/s/${notification.videoId}/?reply=${notification.comment.id}`
+    case "comment":
     case "reaction":
       // case "mention":
       return `/s/${notification.videoId}/?comment=${notification.comment.id}`;

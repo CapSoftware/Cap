@@ -367,6 +367,7 @@ async function AuthorizedContent({
   const videoId = video.id;
   const userId = user?.id;
   const commentId = searchParams.comment as string | undefined;
+  const replyId = searchParams.reply as string | undefined;
 
   // Fetch spaces data for the sharing dialog
   let spacesData = null;
@@ -597,6 +598,18 @@ async function AuthorizedContent({
     : Promise.resolve([]);
 
   const commentsPromise = (async () => {
+
+    let parentCommentIdValue: string | undefined;
+
+     if (replyId) {
+      const [parentComment] = await db()
+      .select({ parentCommentId: comments.parentCommentId })
+      .from(comments)
+      .where(eq(comments.id, replyId))
+      .limit(1);
+      parentCommentIdValue = parentComment?.parentCommentId;
+    }
+    
     const allComments = await db()
       .select({
         id: comments.id,
@@ -614,8 +627,8 @@ async function AuthorizedContent({
       .leftJoin(users, eq(comments.authorId, users.id))
       .where(eq(comments.videoId, videoId))
       .orderBy(
-        commentId
-          ? sql`CASE WHEN ${comments.id} = ${commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`
+        parentCommentIdValue ?? commentId
+          ? sql`CASE WHEN ${comments.id} = ${parentCommentIdValue ?? commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`
           : comments.createdAt
       );
 

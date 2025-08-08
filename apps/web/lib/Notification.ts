@@ -52,7 +52,6 @@ export async function createNotification(
 
     // Handle replies: notify the parent comment's author
     if (type === "reply" && notification.parentCommentId) {
-
       const [parentComment] = await db()
         .select({ authorId: comments.authorId })
         .from(comments)
@@ -61,7 +60,7 @@ export async function createNotification(
 
       const recipientId = parentComment?.authorId;
       if (!recipientId) return;
-      if (recipientId === notification.authorId) return;
+      if (recipientId === videoResult.ownerId) return;
 
       const [recipientUser] = await db()
         .select({
