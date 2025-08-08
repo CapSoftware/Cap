@@ -156,6 +156,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
         | MainWindowRecordingStartBehaviour
         | PostStudioRecordingBehaviour
         | PostDeletionBehaviour
+        | number
     ) => void | Promise<void>;
   };
 
@@ -258,6 +259,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
               | number
           ) => handleChange("recordingCountdown", value as number),
         },
@@ -272,6 +274,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
           ) =>
             handleChange(
               "mainWindowRecordingStartBehaviour",
@@ -289,6 +293,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
           ) =>
             handleChange(
               "postStudioRecordingBehaviour",
@@ -307,6 +313,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
               | PostDeletionBehaviour
+              | number
           ) =>
             handleChange(
               "postDeletionBehaviour",
