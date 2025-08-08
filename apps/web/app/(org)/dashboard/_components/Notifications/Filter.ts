@@ -2,7 +2,7 @@ import { NotificationType } from "@/lib/Notification";
 
 export type FilterType = "all" | "comments" | "replies" | "views" | "reactions";
 
-const Filters: Array<FilterType> = [
+export const Filters: Array<FilterType> = [
   "all",
   "comments",
   "replies",

@@ -9,6 +9,8 @@ import { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { revalidatePath } from "next/cache";
 import { Notification, NotificationBase } from "@cap/web-api-contract";
 
+export type NotificationType = Notification["type"];
+
 // Notification daata without id, readTime, etc
 type NotificationSpecificData = DistributiveOmit<
   Notification,
