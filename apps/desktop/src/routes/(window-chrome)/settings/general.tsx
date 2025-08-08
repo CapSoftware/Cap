@@ -300,7 +300,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
           description: "What happens to the window after deleting a recording",
           type: "select",
           get value() {
-            return settings.postDeletionBehaviour ?? "closeWindow";
+            return settings.postDeletionBehaviour ?? "doNothing";
           },
           onChange: (
             value:

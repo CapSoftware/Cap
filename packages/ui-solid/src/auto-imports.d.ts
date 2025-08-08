@@ -70,5 +70,6 @@ declare global {
   const IconLucideSquarePlay: typeof import('~icons/lucide/square-play.jsx')['default']
   const IconLucideUnplug: typeof import('~icons/lucide/unplug.jsx')['default']
   const IconLucideVolume2: typeof import('~icons/lucide/volume2.jsx')['default']
+  const IconLucideVolumeX: typeof import('~icons/lucide/volume-x.jsx')['default']
   const IconPhMonitorBold: typeof import('~icons/ph/monitor-bold.jsx')['default']
 }

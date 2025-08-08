@@ -3,6 +3,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -189,9 +190,9 @@ pub fn init(app: &AppHandle) {
     let store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
-        e => {
-            e.unwrap();
-            return;
+        Err(e) => {
+            error!("Failed to deserialize general settings store: {}", e);
+            GeneralSettingsStore::default()
         }
     };
 
