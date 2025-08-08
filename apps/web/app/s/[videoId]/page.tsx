@@ -599,7 +599,7 @@ async function AuthorizedContent({
 
   const commentsPromise = (async () => {
 
-    let parentCommentIdValue: string | undefined;
+    let toplLevelCommentId: string | undefined;
 
      if (replyId) {
       const [parentComment] = await db()
@@ -607,8 +607,11 @@ async function AuthorizedContent({
       .from(comments)
       .where(eq(comments.id, replyId))
       .limit(1);
-      parentCommentIdValue = parentComment?.parentCommentId;
+      toplLevelCommentId = parentComment?.parentCommentId;
     }
+
+    const commentToHighlight = toplLevelCommentId ?? commentId;
+    
     
     const allComments = await db()
       .select({
@@ -627,8 +630,8 @@ async function AuthorizedContent({
       .leftJoin(users, eq(comments.authorId, users.id))
       .where(eq(comments.videoId, videoId))
       .orderBy(
-        parentCommentIdValue ?? commentId
-          ? sql`CASE WHEN ${comments.id} = ${parentCommentIdValue ?? commentId} THEN 0 ELSE 1 END, ${comments.createdAt}`
+        commentToHighlight
+          ? sql`CASE WHEN ${comments.id} = ${commentToHighlight} THEN 0 ELSE 1 END, ${comments.createdAt}`
           : comments.createdAt
       );
 
