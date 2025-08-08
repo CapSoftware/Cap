@@ -1,6 +1,6 @@
 
 
-export const SuccesStep = () => {
+const SuccesStep = () => {
   return (
     <div className="py-10 space-y-1 text-center">
       <h3 className="text-lg font-semibold text-gray-12">Domain has been set successfully</h3>
@@ -10,3 +10,6 @@ export const SuccesStep = () => {
     </div>
   )
 }
+
+export default SuccesStep
+

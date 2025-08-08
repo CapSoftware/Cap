@@ -21,10 +21,10 @@ import { faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { checkOrganizationDomain } from "@/actions/organization/check-domain";
 
-import { SubscribeContent } from "./SubscribeContent";
-import { SuccesStep } from "./SuccessStep";
-import { DomainStep } from "./DomainStep";
-import { VerifyStep } from "./VerifyStep";
+import SubscribeContent from "./SubscribeContent";
+import SuccesStep from "./SuccessStep";
+import DomainStep from "./DomainStep";
+import VerifyStep from "./VerifyStep";
 
 const STEP_CONFIGS: StepConfig[] = [
   {

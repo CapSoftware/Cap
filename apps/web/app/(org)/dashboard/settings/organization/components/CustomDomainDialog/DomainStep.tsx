@@ -13,7 +13,7 @@ interface DomainStepProps {
   onClearError: () => void;
 }
 
-export const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, submitLoading }: DomainStepProps) => {
+const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, submitLoading }: DomainStepProps) => {
   const { isSubscribed } = useDashboardContext();
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDomain(e.target.value);
@@ -51,3 +51,5 @@ export const DomainStep = ({ domain, setDomain, onSubmit, error, onClearError, s
       </div>
   );
 };
+
+export default DomainStep

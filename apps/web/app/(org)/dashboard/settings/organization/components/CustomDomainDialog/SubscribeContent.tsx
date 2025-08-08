@@ -1,6 +1,6 @@
 import { motion } from "motion/react";
 
-export const SubscribeContent = () => {
+const SubscribeContent = () => {
   const capsDomainText = "caps.yourdomain.com"
 
   return (
@@ -74,3 +74,5 @@ export const SubscribeContent = () => {
       </div>
   )
 }
+
+export default SubscribeContent;

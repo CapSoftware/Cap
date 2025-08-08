@@ -17,7 +17,7 @@ interface VerifyStepProps {
 
 const POLL_INTERVAL = 5000;
 
-export const VerifyStep = ({
+const VerifyStep = ({
   domain,
   domainConfig,
   isVerified,
@@ -297,3 +297,5 @@ export const VerifyStep = ({
     </div>
   );
 };
+
+export default VerifyStep;
