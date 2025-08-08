@@ -50,8 +50,18 @@ export async function createNotification(
 
     const { type, ...data } = notification;
 
+    console.log(
+      "Sending notification with parentCommentId:",
+      notification.parentCommentId
+    );
+
     // Handle replies: notify the parent comment's author
     if (type === "reply" && notification.parentCommentId) {
+      console.log(
+        "Sending notification with parentCommentId:",
+        notification.parentCommentId
+      );
+
       const [parentComment] = await db()
         .select({ authorId: comments.authorId })
         .from(comments)
