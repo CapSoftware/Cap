@@ -6,7 +6,7 @@ use crate::{
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
-    general_settings::{GeneralSettingsStore, PostStudioRecordingBehaviour},
+    general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
     upload::{
@@ -485,6 +485,7 @@ pub async fn start_recording(
                     // this clears the current recording for us
                     handle_recording_end(app, None, &mut state).await.ok();
                 }
+                // Actor hasn't errored, it's just finished
                 _ => {}
             }
         }
@@ -588,6 +589,23 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
                     |c, url| c.delete(url),
                 )
                 .await;
+        }
+
+        // Check user's post-deletion behavior setting
+        let settings = GeneralSettingsStore::get(&app)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+        if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+            let _ = window.close();
+        }
+
+        match settings.post_deletion_behaviour {
+            PostDeletionBehaviour::DoNothing => {}
+            PostDeletionBehaviour::ReopenRecordingWindow => {
+                let _ = ShowCapWindow::Main.show(&app).await;
+            }
         }
     }
 

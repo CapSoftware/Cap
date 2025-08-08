@@ -450,7 +450,15 @@ async fn run_actor_iteration(
         // Cancel from any state
         (Msg::Cancel(tx), state) => {
             let result = match state {
-                State::Recording { mut pipeline, .. } => pipeline.inner.shutdown().await,
+                State::Recording { mut pipeline, .. } => {
+                    if let Some(cursor) = &mut pipeline.cursor
+                        && let Some(actor) = cursor.actor.take()
+                    {
+                        actor.stop().await;
+                    }
+
+                    pipeline.inner.shutdown().await
+                }
                 State::Paused { .. } => Ok(()),
             };
 
