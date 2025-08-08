@@ -602,11 +602,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         }
 
         match settings.post_deletion_behaviour {
-            PostDeletionBehaviour::DoNothing => {
-                if let Some(window) = CapWindowId::Main.get(&app) {
-                    let _ = window.close();
-                }
-            }
+            PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
                 let _ = ShowCapWindow::Main.show(&app).await;
             }
