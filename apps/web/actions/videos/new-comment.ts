@@ -34,6 +34,8 @@ export async function newComment(data: {
   }
   const id = nanoId();
 
+  console.log("parent comment id", parentCommentId)
+
   const newComment = {
     id: id,
     authorId: user.id,
