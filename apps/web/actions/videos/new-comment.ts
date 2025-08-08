@@ -54,6 +54,7 @@ export async function newComment(data: {
       videoId,
       authorId: user.id,
       comment: { id, content },
+      parentCommentId,
     });
   } catch (error) {
     console.error("Failed to create notification:", error);
