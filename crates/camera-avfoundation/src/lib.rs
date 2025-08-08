@@ -60,7 +60,7 @@ impl TryFrom<&cf::String> for YCbCrMatrix {
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_601_4() => Self::Rec601,
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_709_2() => Self::Rec709,
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_2020() => Self::Rec2020,
-            s => return Err(()),
+            _ => return Err(()),
         })
     }
 }

@@ -91,10 +91,6 @@ pub struct GeneralSettingsStore {
     pub post_deletion_behaviour: PostDeletionBehaviour,
 }
 
-fn yes(_: &bool) -> bool {
-    true
-}
-
 fn default_server_url() -> String {
     std::option_env!("VITE_SERVER_URL")
         .unwrap_or("https://cap.so")

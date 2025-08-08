@@ -119,7 +119,7 @@ async uploadExportedVideo(path: string, mode: UploadMode) : Promise<UploadResult
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
 },
-async getRecordingMeta(path: string, fileType: string) : Promise<RecordingMetaWithType> {
+async getRecordingMeta(path: string, fileType: FileType) : Promise<RecordingMetaWithType> {
     return await TAURI_INVOKE("get_recording_meta", { path, fileType });
 },
 async saveFileDialog(fileName: string, fileType: string) : Promise<string | null> {
@@ -349,6 +349,7 @@ export type EditorStateChanged = { playhead_position: number }
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato"
 export type ExportEstimates = { duration_seconds: number; estimated_time_seconds: number; estimated_size_mb: number }
 export type ExportSettings = ({ format: "Mp4" } & Mp4ExportSettings) | ({ format: "Gif" } & GifExportSettings)
+export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
 export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; recordingCountdown?: number | null; 

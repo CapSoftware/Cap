@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
-use cap_cursor_info::{CursorShape, CursorShapeMacOS, CursorShapeWindows};
+use cap_cursor_info::{CursorShape, CursorShapeMacOS};
 use sha2::{Digest, Sha256};
 
+#[allow(unreachable_code)]
 fn main() {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     return run();
-    #[allow(unreachable_code)]
     panic!("Unsupported platform!");
 }
 
@@ -45,13 +45,13 @@ fn run() {
 
         for (name, cursor) in cursors {
             let hash = hex::encode(Sha256::digest(
-                &cursor
+                cursor
                     .image()
                     .TIFFRepresentation()
                     .expect("Failed to get TIFF representation of built-in cursor")
                     .as_bytes_unchecked(),
             ));
-            println!("{name}: {}", hash);
+            println!("{name}: {hash}");
             cursor_lookup.insert(hash, name);
         }
 
@@ -61,7 +61,7 @@ fn run() {
             #[allow(deprecated)]
             let cursor = NSCursor::currentSystemCursor().unwrap_or(NSCursor::currentCursor());
             let hash = hex::encode(Sha256::digest(
-                &cursor
+                cursor
                     .image()
                     .TIFFRepresentation()
                     .expect("Failed to get TIFF representation of built-in cursor")
@@ -71,9 +71,9 @@ fn run() {
             // Try to resolve to CursorShape
             if let Some(cursor_shape_macos) = CursorShapeMacOS::from_hash(&hash) {
                 let cursor_shape = CursorShape::MacOS(cursor_shape_macos);
-                println!("CursorShape: {} | Hash: {}", cursor_shape, hash);
+                println!("CursorShape: {cursor_shape} | Hash: {hash}");
             } else {
-                println!("Unknown cursor | Hash: {}", hash);
+                println!("Unknown cursor | Hash: {hash}");
             }
 
             std::thread::sleep(std::time::Duration::from_millis(100));

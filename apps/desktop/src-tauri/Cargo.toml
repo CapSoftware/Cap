@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.62"
+version = "0.3.63"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -9,7 +9,7 @@ edition = "2024"
 workspace = true
 
 [lib]
-name = "cap_desktop"
+name = "cap_desktop_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]

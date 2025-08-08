@@ -48,7 +48,7 @@ impl GifExportSettings {
         );
         let mut gif_encoder =
             GifEncoderWrapper::new(&gif_output_path, output_size.0, output_size.1, fps)
-                .map_err(|e| format!("Failed to create GIF encoder: {}", e))?;
+                .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
@@ -60,8 +60,7 @@ impl GifExportSettings {
                     gif_encoder.add_frame(&frame.data, frame.padded_bytes_per_row as usize)
                 {
                     return Err(ExportError::Other(format!(
-                        "Failed to add frame to GIF: {}",
-                        e
+                        "Failed to add frame to GIF: {e}"
                     )));
                 }
 
@@ -69,7 +68,7 @@ impl GifExportSettings {
             }
 
             if let Err(e) = gif_encoder.finish() {
-                return Err(ExportError::Other(format!("Failed to finish GIF: {}", e)));
+                return Err(ExportError::Other(format!("Failed to finish GIF: {e}")));
             }
 
             Ok(gif_output_path)
