@@ -15,6 +15,7 @@ import { users, organizations, organizationMembers } from "../schema";
 import { nanoId } from "../helpers";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
+import { isEmailAllowedForSignup } from "./domain-utils";
 
 export const config = {
   maxDuration: 120,
@@ -169,6 +170,26 @@ export const authOptions = (): NextAuthOptions => {
       },
     },
     callbacks: {
+      async signIn({ user, account, profile }) {
+        // Only apply domain restrictions for new users, existing ones can always sign in
+        if (user.email) {
+          const [existingUser] = await db()
+            .select()
+            .from(users)
+            .where(eq(users.email, user.email))
+            .limit(1);
+
+          if (!existingUser) {
+            const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+            if (!isEmailAllowedForSignup(user.email, allowedDomains)) {
+              console.log(`Signup blocked for email domain: ${user.email}`);
+              return false;
+            }
+          }
+        }
+
+        return true;
+      },
       async session({ token, session }) {
         if (!session.user) return session;
 
