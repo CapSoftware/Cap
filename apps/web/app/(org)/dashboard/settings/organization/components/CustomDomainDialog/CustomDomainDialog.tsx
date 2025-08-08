@@ -182,7 +182,7 @@ const CustomDomainDialog = ({
     }
 
     if (domain === activeOrganization?.organization.customDomain) {
-      handleNext();
+      return handleNext();
     }
 
     const cleanDomain = (input: string) => {
