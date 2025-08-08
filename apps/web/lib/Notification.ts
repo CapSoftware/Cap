@@ -1,54 +1,33 @@
-import { z } from "zod";
-import { getCurrentUser } from "@cap/database/auth/session";
+// Ideally all the Notification-related types would be in @cap/web-domain
+// but @cap/web-api-contract is the closest we have right now
+
 import { notifications, videos, users } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { and, eq, sql } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 import { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
 import { revalidatePath } from "next/cache";
+import { Notification, NotificationBase } from "@cap/web-api-contract";
 
-const buildNotification = <TType extends string, TFields extends z.ZodRawShape>(
-  type: TType,
-  fields: TFields
-) => z.object({ ...fields, type: z.literal(type) });
+// Notification daata without id, readTime, etc
+type NotificationSpecificData = DistributiveOmit<
+  Notification,
+  keyof NotificationBase
+>;
 
-export const Notification = z.union([
-  buildNotification("view", { videoId: z.string(), authorId: z.string() }),
-  buildNotification("comment", {
-    videoId: z.string(),
-    authorId: z.string(),
-    comment: z.object({
-      id: z.string(),
-      content: z.string(),
-    }),
-  }),
-  buildNotification("reaction", { videoId: z.string(), authorId: z.string() }),
-  // buildNotification("mention", {
-  //   videoId: z.string(),
-  //   authorId: z.string(),
-  //   comment: z.object({
-  //     id: z.string(),
-  //     content: z.string(),
-  //   }),
-  // }),
-  buildNotification("reply", {
-    videoId: z.string(),
-    authorId: z.string(),
-    comment: z.object({
-      id: z.string(),
-      content: z.string(),
-    }),
-  }),
-]);
+// Replaces author object with authorId since we query for that info.
+// If we add more notifications this would probably be better done manually
+// Type is weird since we need to operate on each member of the NotificationSpecificData union
+type CreateNotificationInput<D = NotificationSpecificData> =
+  D extends NotificationSpecificData
+    ? D["author"] extends never
+      ? D
+      : Omit<D, "author"> & { authorId: string }
+    : never;
 
-export type RawNotification = z.infer<typeof Notification>;
-export type NotificationType = z.infer<typeof Notification>["type"];
-
-export type HydratedNotification =
-  | Extract<RawNotification, { type: "view" }>
-  | (Extract<RawNotification, { type: "comment" }> & { content: string });
-
-export async function createNotification(notification: RawNotification) {
+export async function createNotification(
+  notification: CreateNotificationInput
+) {
   try {
     // First, get the video and owner data
     const [videoResult] = await db()
@@ -79,10 +58,9 @@ export async function createNotification(notification: RawNotification) {
 
       const shouldSkipNotification =
         (notification.type === "comment" && notificationPrefs.pauseComments) ||
-        (notification.type === "view" && notificationPrefs.pauseViews);
-      // ||
-      // (variant === "reply" && notificationPrefs.pauseReplies) ||
-      // (variant === "reaction" && notificationPrefs.pauseReactions);
+        (notification.type === "view" && notificationPrefs.pauseViews) ||
+        (notification.type === "reply" && notificationPrefs.pauseReplies) ||
+        (notification.type === "reaction" && notificationPrefs.pauseReactions);
 
       if (shouldSkipNotification) {
         return;
@@ -115,7 +93,7 @@ export async function createNotification(notification: RawNotification) {
           and(
             eq(notifications.type, "comment"),
             eq(notifications.recipientId, videoResult.ownerId),
-            sql`JSON_EXTRACT(${notifications.data}, '$.commentId') = ${notification.comment.id}`
+            sql`JSON_EXTRACT(${notifications.data}, '$.comment.id') = ${notification.comment.id}`
           )
         )
         .limit(1);

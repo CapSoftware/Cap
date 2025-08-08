@@ -8,6 +8,13 @@ export const NotificationAuthor = z.object({
   avatar: z.string().nullable(),
 });
 
+export const NotificationBase = z.object({
+  id: z.string(),
+  readAt: z.coerce.date().nullable(),
+  createdAt: z.coerce.date(),
+});
+export type NotificationBase = z.infer<typeof NotificationBase>;
+
 export const Notification = z
   .union([
     z.object({
@@ -52,13 +59,7 @@ export const Notification = z
     //   }),
     // }),
   ])
-  .and(
-    z.object({
-      id: z.string(),
-      readAt: z.coerce.date().nullable(),
-      createdAt: z.coerce.date(),
-    })
-  );
+  .and(NotificationBase);
 export type Notification = z.infer<typeof Notification>;
 
 export const contract = c.router({

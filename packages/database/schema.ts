@@ -318,7 +318,7 @@ export const notifications = mysqlTable(
     recipientId: nanoId("recipientId").notNull(),
     type: varchar("type", { length: 10 })
       .notNull()
-      .$type<"view" | "comment" | "reply" | "reaction" /* | "mention"*/>(),
+      .$type<"view" | "comment" | "reply" | "reaction" | "mention">(),
     data: json("data")
       .$type<{
         videoId?: string;
