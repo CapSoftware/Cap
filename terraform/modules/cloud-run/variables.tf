@@ -42,3 +42,45 @@ variable "image_url" {
   description = "The URL of the Docker image to deploy."
   type        = string
 }
+
+variable "google_client_id_secret_id" {
+  description = "The ID of the secret for the Google Client ID."
+  type        = string
+  default     = null
+}
+
+variable "google_client_secret_secret_id" {
+  description = "The ID of the secret for the Google Client Secret."
+  type        = string
+  default     = null
+}
+
+variable "workos_client_id_secret_id" {
+  description = "The ID of the secret for the WorkOS Client ID."
+  type        = string
+  default     = null
+}
+
+variable "workos_api_key_secret_id" {
+  description = "The ID of the secret for the WorkOS API Key."
+  type        = string
+  default     = null
+}
+
+variable "resend_api_key_secret_id" {
+  description = "The ID of the secret for the Resend API Key."
+  type        = string
+  default     = null
+}
+
+variable "nextauth_secret_secret_id" {
+  description = "The ID of the secret for the NextAuth Secret."
+  type        = string
+  default     = null
+}
+
+variable "web_url" {
+  description = "The public URL of the web application."
+  type        = string
+  default     = null
+}

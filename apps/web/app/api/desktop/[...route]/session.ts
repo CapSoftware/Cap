@@ -12,71 +12,68 @@ import { z } from "zod";
 
 export const app = new Hono();
 
-app.get(
-  "/request",
-  zValidator(
-    "query",
-    z.object({
-      port: z.string().optional(),
-      platform: z
-        .union([z.literal("web"), z.literal("desktop")])
-        .default("web"),
-      type: z
-        .union([z.literal("session"), z.literal("api_key")])
-        .default("session"),
-    })
-  ),
-  async (c) => {
-    const { port, platform, type } = c.req.valid("query");
+const requestHandler = async (c: any) => {
+  const { port, platform, type } = c.req.valid("query");
 
-    const secret = serverEnv().NEXTAUTH_SECRET;
+  const secret = serverEnv().NEXTAUTH_SECRET;
 
-    const url = new URL(c.req.url);
+  const url = new URL(c.req.url);
 
-    let redirectOrigin = getDeploymentOrigin();
+  let redirectOrigin = getDeploymentOrigin();
 
-    const loginRedirectUrl = new URL(`${redirectOrigin}/login`);
-    loginRedirectUrl.searchParams.set(
-      "next",
-      new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString()
-    );
+  const loginRedirectUrl = new URL(`${redirectOrigin}/login`);
+  loginRedirectUrl.searchParams.set(
+    "next",
+    new URL(`${redirectOrigin}${url.pathname}${url.search}`).toString()
+  );
 
-    const user = await getCurrentUser();
-    if (!user) return c.redirect(loginRedirectUrl);
+  const user = await getCurrentUser();
+  if (!user) return c.redirect(loginRedirectUrl);
 
-    let data;
+  let data;
 
-    if (type === "session") {
-      const token = getCookie(c, "next-auth.session-token");
-      if (token === undefined) return c.redirect(loginRedirectUrl);
+  if (type === "session") {
+    const token = getCookie(c, "next-auth.session-token");
+    if (token === undefined) return c.redirect(loginRedirectUrl);
 
-      const decodedToken = await decode({ token, secret });
+    const decodedToken = await decode({ token, secret });
 
-      if (!decodedToken) return c.redirect(loginRedirectUrl);
+    if (!decodedToken) return c.redirect(loginRedirectUrl);
 
-      data = {
-        type: "token",
-        token,
-        expires: decodedToken.exp as string,
-      };
-    } else {
-      const id = crypto.randomUUID();
-      await db().insert(authApiKeys).values({ id, userId: user.id });
+    data = {
+      type: "token",
+      token,
+      expires: decodedToken.exp as string,
+    };
+  } else {
+    const id = crypto.randomUUID();
+    await db().insert(authApiKeys).values({ id, userId: user.id });
 
-      data = { type: "api_key", api_key: id };
-    }
-
-    const params = new URLSearchParams({ ...data, user_id: user.id });
-
-    const returnUrl = new URL(
-      platform === "web"
-        ? `http://127.0.0.1:${port}?${params}`
-        : `cap-desktop://signin?${params}`
-    );
-
-    return Response.redirect(returnUrl.href);
+    data = { type: "api_key", api_key: id };
   }
+
+  const params = new URLSearchParams({ ...data, user_id: user.id });
+
+  const returnUrl = new URL(
+    platform === "web"
+      ? `http://127.0.0.1:${port}?${params}`
+      : `cap-desktop://signin?${params}`
+  );
+
+  return Response.redirect(returnUrl.href);
+};
+
+const validator = zValidator(
+  "query",
+  z.object({
+    port: z.string().optional(),
+    platform: z.union([z.literal("web"), z.literal("desktop")]).default("web"),
+    type: z.union([z.literal("session"), z.literal("api_key")]).default("session"),
+  })
 );
+
+app.get("/request", validator, requestHandler);
+app.post("/request", validator, requestHandler);
 
 function getDeploymentOrigin() {
   const vercelEnv = serverEnv().VERCEL_ENV;

@@ -32,6 +32,85 @@ resource "google_cloud_run_v2_service" "main" {
         name  = "INSTANCE_CONNECTION_NAME"
         value = var.db_connection_name
       }
+      dynamic "env" {
+        for_each = var.google_client_id_secret_id != null ? { "GOOGLE_CLIENT_ID" = var.google_client_id_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.google_client_secret_secret_id != null ? { "GOOGLE_CLIENT_SECRET" = var.google_client_secret_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.workos_client_id_secret_id != null ? { "WORKOS_CLIENT_ID" = var.workos_client_id_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.workos_api_key_secret_id != null ? { "WORKOS_API_KEY" = var.workos_api_key_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.resend_api_key_secret_id != null ? { "RESEND_API_KEY" = var.resend_api_key_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.nextauth_secret_secret_id != null ? { "NEXTAUTH_SECRET" = var.nextauth_secret_secret_id } : {}
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+      dynamic "env" {
+        for_each = var.web_url != null ? { "WEB_URL" = var.web_url } : {}
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
     }
     vpc_access {
         connector = var.vpc_connector_id

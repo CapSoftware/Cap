@@ -70,3 +70,44 @@ The architecture consists of the following components:
    ```
 
    Type `yes` to confirm and destroy the resources.
+
+## Authentication Setup
+
+The `apps/web` application uses NextAuth.js for authentication and requires several secrets and environment variables to be configured. This setup uses Google Secret Manager to store these secrets securely.
+
+### Creating Secrets
+
+Before running the Cloud Build pipeline, you need to create the following secrets in Google Secret Manager. You can do this through the Google Cloud Console or using the `gcloud` CLI.
+
+**Required Secrets:**
+
+- `google-client-id`: Your Google OAuth client ID.
+- `google-client-secret`: Your Google OAuth client secret.
+- `nextauth-secret`: A random string used to sign JWTs. You can generate one with `openssl rand -base64 32`.
+
+**Optional Secrets (if you use these providers):**
+
+- `workos-client-id`: Your WorkOS client ID.
+- `workos-api-key`: Your WorkOS API key.
+- `resend-api-key`: Your Resend API key for sending magic links.
+
+**Example using `gcloud`:**
+
+```bash
+# Create the secret
+gcloud secrets create nextauth-secret --replication-policy="automatic"
+
+# Add a version with the secret value
+echo "YOUR_SECRET_VALUE" | gcloud secrets versions add nextauth-secret --data-file=-
+
+# Grant the Cloud Build service account access to the secret
+gcloud secrets add-iam-policy-binding nextauth-secret \
+  --member="serviceAccount:YOUR_PROJECT_NUMBER@cloudbuild.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+Replace `YOUR_PROJECT_NUMBER` with your Google Cloud project number. You need to grant the Cloud Build service account access to each secret you create.
+
+### Substitution Variables
+
+The `cloudbuild.yaml` file uses a substitution variable `_WEB_URL` for the public URL of your application. You should replace the default value in `cloudbuild.yaml` with the actual URL of your deployed application. This is used for constructing correct redirect URLs during the OAuth flow.

@@ -17,7 +17,7 @@ steps:
     args: ['install']
     entrypoint: 'pnpm'
 
-  # Build the Docker image
+  # Build the Docker image for web app
   - name: 'gcr.io/cloud-builders/docker'
     args: [
       'build',
@@ -27,9 +27,9 @@ steps:
       '-f',
       'apps/web/Dockerfile'
     ]
-    id: 'Build'
+    id: 'Build-Web'
 
-  # Push the Docker image to Artifact Registry
+  # Push the Docker image for web app to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA']
     id: 'Push-Web'
@@ -61,7 +61,21 @@ steps:
         terraform apply -auto-approve \
           -var="project_id=$PROJECT_ID" \
           -var="region=${_REGION}" \
-          -var='services={ "cap-web" = { image_url = "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA" }, "cap-tasks" = { image_url = "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA" } }'
+          -var="services={ \
+            \"cap-web\" = { \
+              image_url = \"${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA\", \
+              google_client_id_secret_id = \"projects/$PROJECT_ID/secrets/google-client-id\", \
+              google_client_secret_secret_id = \"projects/$PROJECT_ID/secrets/google-client-secret\", \
+              workos_client_id_secret_id = \"projects/$PROJECT_ID/secrets/workos-client-id\", \
+              workos_api_key_secret_id = \"projects/$PROJECT_ID/secrets/workos-api-key\", \
+              resend_api_key_secret_id = \"projects/$PROJECT_ID/secrets/resend-api-key\", \
+              nextauth_secret_secret_id = \"projects/$PROJECT_ID/secrets/nextauth-secret\", \
+              web_url = \"${_WEB_URL}\" \
+            }, \
+            \"cap-tasks\" = { \
+              image_url = \"${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA\" \
+            } \
+          }"
     id: 'Terraform-Apply'
     dir: 'terraform'
 
@@ -69,9 +83,11 @@ substitutions:
   _REGION: 'us-central1'
   _REPOSITORY: 'cloud-run-repo'
   _IMAGE_NAME: 'cap-web'
+  _WEB_URL: 'https://your-app-url.com' # TODO: Replace with your actual URL
 
 images:
 - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA'
+- '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA'
 
 options:
   logging: CLOUD_LOGGING_ONLY

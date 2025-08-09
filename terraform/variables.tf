@@ -10,8 +10,15 @@ variable "region" {
 }
 
 variable "services" {
-  description = "A map of services to deploy, where the key is the service name and the value is an object containing the image URL."
+  description = "A map of services to deploy."
   type = map(object({
-    image_url = string
+    image_url                       = string
+    google_client_id_secret_id      = optional(string)
+    google_client_secret_secret_id  = optional(string)
+    workos_client_id_secret_id      = optional(string)
+    workos_api_key_secret_id        = optional(string)
+    resend_api_key_secret_id        = optional(string)
+    nextauth_secret_secret_id       = optional(string)
+    web_url                         = optional(string)
   }))
 }
