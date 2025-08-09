@@ -1,4 +1,4 @@
-output "cloud_run_service_url" {
-  description = "The URL of the deployed Cloud Run service."
-  value       = module.cloud_run.service_url
+output "cloud_run_service_urls" {
+  description = "The URLs of the deployed Cloud Run services."
+  value       = { for service_name, service in module.cloud_run : service_name => service.service_url }
 }

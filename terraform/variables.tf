@@ -9,7 +9,9 @@ variable "region" {
   default     = "us-central1"
 }
 
-variable "image_url" {
-  description = "The URL of the Docker image to deploy."
-  type        = string
+variable "services" {
+  description = "A map of services to deploy, where the key is the service name and the value is an object containing the image URL."
+  type = map(object({
+    image_url = string
+  }))
 }

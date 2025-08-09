@@ -41,11 +41,13 @@ module "cloud_sql" {
 }
 
 module "cloud_run" {
+  for_each = var.services
+
   source           = "./modules/cloud-run"
   project_id       = var.project_id
   region           = var.region
-  service_name     = "cloud-run-service"
-  image_url        = var.image_url
+  service_name     = each.key
+  image_url        = each.value.image_url
   db_connection_name = module.cloud_sql.db_instance_connection_name
   db_name          = module.cloud_sql.db_name
   db_user_secret_id = module.cloud_sql.db_user_secret_id

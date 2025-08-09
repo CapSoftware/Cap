@@ -32,16 +32,36 @@ steps:
   # Push the Docker image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA']
-    id: 'Push'
+    id: 'Push-Web'
+
+  # Build the Docker image for tasks app
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build',
+      '-t',
+      '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA',
+      '.',
+      '-f',
+      'apps/tasks/Dockerfile'
+    ]
+    id: 'Build-Tasks'
+
+  # Push the Docker image for tasks app to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA']
+    id: 'Push-Tasks'
 
   # Run Terraform
   - name: 'hashicorp/terraform:1.0.0'
+    entrypoint: 'bash'
     args:
       - '-c'
       - |
         terraform init
-        terraform apply -auto-approve -var="project_id=$PROJECT_ID" -var="region=${_REGION}" -var="image_url=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA"
-    entrypoint: 'sh'
+        terraform apply -auto-approve \
+          -var="project_id=$PROJECT_ID" \
+          -var="region=${_REGION}" \
+          -var='services={ "cap-web" = { image_url = "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE_NAME}:$COMMIT_SHA" }, "cap-tasks" = { image_url = "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/cap-tasks:$COMMIT_SHA" } }'
     id: 'Terraform-Apply'
     dir: 'terraform'
 
