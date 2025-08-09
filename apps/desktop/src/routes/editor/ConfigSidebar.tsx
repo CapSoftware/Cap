@@ -1765,6 +1765,30 @@ function ZoomSegmentConfig(props: {
           formatTooltip="x"
         />
       </Field>
+      <Field name="Zoom Duration" icon={<IconLucideClock />}>
+        <Slider
+          value={[props.segment.end]}
+          onChange={(v) =>
+            setProject(
+              "timeline",
+              "zoomSegments",
+              props.segmentIndex,
+              "end",
+              v[0]
+            )
+          }
+          minValue={props.segment.start + 1}
+          maxValue={
+            project.timeline?.zoomSegments[props.segmentIndex + 1]?.start ||
+            project.timeline?.segments[0].end
+          }
+          step={0.001}
+          formatTooltip={(v: number) => {
+            const duration = v - props.segment.start;
+            return `${duration.toFixed(2)}s`;
+          }}
+        />
+      </Field>
       <Field name="Zoom Mode" icon={<IconCapSettings />}>
         <KTabs
           class="space-y-6"
