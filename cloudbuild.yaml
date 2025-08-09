@@ -11,11 +11,13 @@ steps:
           --description="Docker repository for Cloud Run" || true
 
   # Install dependencies
-  - name: 'gcr.io/cloud-builders/npm'
-    args: ['install', '-g', 'pnpm']
-  - name: 'gcr.io/cloud-builders/npm'
-    args: ['install']
-    entrypoint: 'pnpm'
+  - name: 'node:20'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        corepack enable
+        pnpm install
 
   # Build the Docker image for web app
   - name: 'gcr.io/cloud-builders/docker'
