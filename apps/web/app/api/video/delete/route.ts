@@ -6,9 +6,9 @@ import {
   HttpApiGroup,
   HttpServerResponse,
 } from "@effect/platform";
-import { Effect, Layer, Option, Schema } from "effect";
-import { Videos, S3Buckets } from "@/services";
-import { HttpAuthMiddleware, CurrentUser, Video } from "@cap/web-domain";
+import { Effect, Layer, Schema } from "effect";
+import { Videos } from "@cap/web-backend";
+import { HttpAuthMiddleware, Video } from "@cap/web-domain";
 import { apiToHandler } from "@/lib/server";
 
 class Api extends HttpApi.make("Api").add(

@@ -1,6 +1,6 @@
 "use client";
 
-import { getOrganizationSSOData } from "@/actions/organization/get-organization";
+import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
 import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
