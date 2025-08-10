@@ -21,6 +21,8 @@ steps:
 
   # Build the Docker image for web app
   - name: 'gcr.io/cloud-builders/docker'
+    env:
+      - 'DOCKER_BUILDKIT=1'
     args: [
       'build',
       '-t',
@@ -29,7 +31,6 @@ steps:
       '-f',
       'apps/web/Dockerfile'
     ]
-
     id: 'Build-Web'
 
   # Push the Docker image for web app to Artifact Registry
@@ -39,9 +40,6 @@ steps:
 
   # Build the Docker image for tasks app
   - name: 'gcr.io/cloud-builders/docker'
-
-    entrypoint: 'bash'
-
     args: [
       'build',
       '-t',
