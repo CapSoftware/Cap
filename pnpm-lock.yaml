@@ -7,14 +7,13 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@effect/language-service':
-        specifier: ^0.34.0
-        version: 0.34.0
     devDependencies:
       '@clack/prompts':
         specifier: ^0.10.0
         version: 0.10.1
+      '@effect/language-service':
+        specifier: ^0.34.0
+        version: 0.34.0
       dotenv-cli:
         specifier: latest
         version: 10.0.0
@@ -941,39 +940,6 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
-
-  packages/effect:
-    dependencies:
-      '@aws-sdk/client-s3':
-        specifier: ^3.485.0
-        version: 3.804.0
-      '@aws-sdk/cloudfront-signer':
-        specifier: ^3.821.0
-        version: 3.821.0
-      '@aws-sdk/s3-presigned-post':
-        specifier: ^3.485.0
-        version: 3.804.0
-      '@aws-sdk/s3-request-presigner':
-        specifier: ^3.485.0
-        version: 3.804.0
-      '@cap/database':
-        specifier: workspace:*
-        version: link:../database
-      '@effect/platform':
-        specifier: ^0.90.1
-        version: 0.90.1(effect@3.17.7)
-      '@effect/rpc':
-        specifier: ^0.68.3
-        version: 0.68.3(@effect/platform@0.90.1(effect@3.17.7))(effect@3.17.7)
-      '@smithy/types':
-        specifier: ^4.3.1
-        version: 4.3.1
-      drizzle-orm:
-        specifier: 0.43.1
-        version: 0.43.1(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.14.1)
-      effect:
-        specifier: ^3.17.7
-        version: 3.17.7
 
   packages/env:
     dependencies:
