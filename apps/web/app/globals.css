@@ -67,13 +67,14 @@ html {
   border-radius: 10px;
 }
 
-::selection {
-  background: black;
-  color: #ffffff;
+.dark ::selection {
+  background: #ffffff;
+  color: #000000;
 }
 
-input:-webkit-autofill {
-  transition: all 5000s ease-in-out 0s;
+::selection {
+  background: #000000;
+  color: #ffffff;
 }
 
 .wrapper {
@@ -544,9 +545,13 @@ slot:not(.dashboard-layout slot) {
   @apply bg-gray-50;
 }
 
+.hide-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar */
 .custom-scroll {
-  overflow-y: scroll;
+  overflow-y: auto;
 }
 
 .custom-scroll::-webkit-scrollbar {

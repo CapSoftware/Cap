@@ -14,7 +14,7 @@ pub async fn main() {
 
     println!("Recording to directory '{}'", dir.path().display());
 
-    let (handle, ready_rx) = cap_recording::spawn_studio_recording_actor(
+    let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
@@ -28,7 +28,7 @@ pub async fn main() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     let _ = handle.stop().await;
 

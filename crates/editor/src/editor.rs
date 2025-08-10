@@ -1,16 +1,17 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
+use cap_media::frame_ws::WSFrame;
+use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta,
-    ProjectUniforms, RenderVideoConstants, RendererLayers,
+    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
@@ -27,6 +28,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    #[allow(unused)]
     total_frames: u32,
 }
 
@@ -48,12 +50,11 @@ impl Renderer {
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.camera_path() {
-            if let Ok(camera_duration) =
+        if let Some(camera_path) = meta.camera_path()
+            && let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
-            {
-                max_duration = max_duration.max(camera_duration);
-            }
+        {
+            max_duration = max_duration.max(camera_duration);
         }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
@@ -156,7 +157,12 @@ impl RendererHandle {
     pub async fn stop(&self) {
         // Send a stop message to the renderer
         let (tx, rx) = oneshot::channel();
-        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+        if self
+            .tx
+            .send(RendererMessage::Stop { finished: tx })
+            .await
+            .is_err()
+        {
             println!("Failed to send stop message to renderer");
         }
         // Wait for the renderer to acknowledge the stop

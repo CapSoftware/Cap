@@ -8,7 +8,7 @@ const toggleControlStyles = cva(
     variants: {
       size: {
         sm: "w-9 h-[1.25rem] p-[0.125rem]",
-        md: "w-11 h-[1.4rem] p-[0.125rem]",
+        md: "w-11 h-[1.5rem] p-[0.125rem]",
         lg: "w-14 h-[1.75rem] p-[0.1875rem]",
       },
     },

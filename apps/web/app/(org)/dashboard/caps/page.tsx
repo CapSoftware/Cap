@@ -162,6 +162,7 @@ export default async function CapsPage({
       name: videos.name,
       createdAt: videos.createdAt,
       metadata: videos.metadata,
+      public: videos.public,
       totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
       totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
       sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`

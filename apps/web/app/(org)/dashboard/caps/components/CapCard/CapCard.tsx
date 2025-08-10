@@ -41,6 +41,7 @@ export interface CapCardProps extends PropsWithChildren {
     ownerId: string;
     name: string;
     createdAt: Date;
+    public?: boolean;
     totalComments: number;
     totalReactions: number;
     sharedOrganizations?: {
@@ -264,6 +265,7 @@ export const CapCard = ({
         capName={cap.name}
         sharedSpaces={cap.sharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
+        isPublic={cap.public}
       />
       <PasswordDialog
         isOpen={isPasswordDialogOpen}

@@ -24,14 +24,15 @@ specta = { version = "=2.0.0-rc.20", features = [
 	"serde_json",
 	"uuid",
 ] }
+serde = { version = "1", features = ["derive"] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "4d340576772c" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "3cefe71561ff" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = "25.0.2"
+wgpu = "25.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
 sentry = { version = "0.34.0", features = [
@@ -52,16 +53,31 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438", fe
 	"dispatch",
 ], default-features = false }
 
-windows = "0.58.0"
+windows = "0.60.0"
+windows-core = "0.60"
 windows-sys = "0.59.0"
-windows-capture = "1.4.2"
+windows-capture = "1.5.0"
 percent-encoding = "2.3.1"
+
+# TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859
+[workspace.lints.rust]
+deprecated = "allow"
+unexpected_cfgs = "allow"
 
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
 
+# Optimize for smaller binary size
+[profile.release]
+panic = "abort"   # Strip expensive panic clean-up logic
+codegen-units = 1 # Compile crates one after another so the compiler can optimize better
+lto = true        # Enables link to optimizations
+opt-level = "s"   # Optimize for binary size
+debug = true
+
 [patch.crates-io]
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
-wry = { git = "https://github.com/CapSoftware/wry", rev = "293f510" }                                                               # branch = "cap"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
+# https://github.com/gfx-rs/wgpu/pull/7550
+# wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

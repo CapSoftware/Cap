@@ -152,7 +152,7 @@ importers:
         version: 2.0.0
       '@ts-rest/core':
         specifier: ^3.52.1
-        version: 3.52.1(@types/node@22.15.17)(zod@3.24.4)
+        version: 3.52.1(@types/node@22.15.17)(zod@3.25.76)
       '@types/react-tooltip':
         specifier: ^4.2.4
         version: 4.2.4(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -199,8 +199,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       zod:
-        specifier: ^3.24.2
-        version: 3.24.4
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@fontsource/geist-sans':
         specifier: ^5.0.3
@@ -259,6 +259,9 @@ importers:
       valibot:
         specifier: 1.0.0-rc.1
         version: 1.0.0-rc.1(typescript@5.8.3)
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.6.4
@@ -287,6 +290,9 @@ importers:
       solid-js:
         specifier: ^1.9.3
         version: 1.9.6
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@chromatic-com/storybook':
         specifier: ^1.6.1
@@ -375,6 +381,9 @@ importers:
       typescript:
         specifier: ^5.8.3
         version: 5.8.3
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@typescript-eslint/eslint-plugin':
         specifier: ^7.6.0
@@ -480,7 +489,7 @@ importers:
         version: 1.7.19(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       '@hono/zod-validator':
         specifier: ^0.4.3
-        version: 0.4.3(hono@4.7.8)(zod@3.25.20)
+        version: 0.4.3(hono@4.7.8)(zod@3.25.76)
       '@hookform/resolvers':
         specifier: ^3.3.2
         version: 3.10.0(react-hook-form@7.56.2(react@19.1.0))
@@ -549,7 +558,7 @@ importers:
         version: 3.5.0
       '@t3-oss/env-nextjs':
         specifier: ^0.12.0
-        version: 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.20)
+        version: 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.76)
       '@tanstack/react-query':
         specifier: ^5.75.4
         version: 5.75.4(react@19.1.0)
@@ -561,7 +570,7 @@ importers:
         version: 0.5.5
       '@ts-rest/core':
         specifier: ^3.52.1
-        version: 3.52.1(@types/node@20.17.43)(zod@3.25.20)
+        version: 3.52.1(@types/node@20.17.43)(zod@3.25.76)
       '@uidotdev/usehooks':
         specifier: ^2.4.1
         version: 2.4.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
@@ -574,6 +583,9 @@ importers:
       aws-sdk:
         specifier: ^2.1530.0
         version: 2.1692.0
+      canvas-confetti:
+        specifier: ^1.9.3
+        version: 1.9.3
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -597,7 +609,7 @@ importers:
         version: 0.43.1(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.14.1)
       dub:
         specifier: ^0.64.0
-        version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.20)
+        version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.76)
       effect:
         specifier: ^3.17.7
         version: 3.17.7
@@ -613,6 +625,9 @@ importers:
       gif.js:
         specifier: 0.2.0
         version: 0.2.0
+      groq-sdk:
+        specifier: ^0.29.0
+        version: 0.29.0(encoding@0.1.13)
       hls.js:
         specifier: ^1.5.3
         version: 1.6.2
@@ -713,12 +728,15 @@ importers:
         specifier: ^9.0.1
         version: 9.0.1
       zod:
-        specifier: ^3.24.4
-        version: 3.25.20
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@smithy/types':
         specifier: ^4.3.1
         version: 4.3.1
+      '@types/canvas-confetti':
+        specifier: ^1.9.0
+        version: 1.9.0
       '@types/file-saver':
         specifier: ^2.0.7
         version: 2.0.7
@@ -773,6 +791,9 @@ importers:
       '@pulumiverse/vercel':
         specifier: ^1.14.3
         version: 1.14.3(ts-node@10.9.2(@types/node@22.15.17)(typescript@5.8.3))(typescript@5.8.3)
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       sst:
         specifier: 3.10.13
@@ -789,6 +810,9 @@ importers:
       vite-tsconfig-paths:
         specifier: ^4.2.0
         version: 4.3.2(typescript@5.8.3)(vite@6.3.5(@types/node@20.17.43)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^20.4.5
@@ -874,6 +898,9 @@ importers:
       resend:
         specifier: 4.6.0
         version: 4.6.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@cap/ui':
         specifier: workspace:*
@@ -952,10 +979,10 @@ importers:
     dependencies:
       '@t3-oss/env-nextjs':
         specifier: ^0.12.0
-        version: 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.24.4)
+        version: 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.76)
       zod:
-        specifier: ^3.24.2
-        version: 3.24.4
+        specifier: ^3.25.76
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.15.14
@@ -1018,6 +1045,9 @@ importers:
       react-loading-skeleton:
         specifier: ^3.3.1
         version: 3.5.0(react@19.1.0)
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^1.5.11
@@ -1094,6 +1124,9 @@ importers:
       tailwindcss:
         specifier: ^3.4.10
         version: 3.4.17(ts-node@10.9.2(@types/node@22.15.17)(typescript@5.8.3))
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@fontsource/geist-sans':
         specifier: ^5.0.3
@@ -1149,6 +1182,9 @@ importers:
       tailwind-merge:
         specifier: ^2.1.0
         version: 2.6.0
+      zod:
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       react:
         specifier: ^19.1.0
@@ -1170,10 +1206,10 @@ importers:
     dependencies:
       '@ts-rest/core':
         specifier: ^3.52.1
-        version: 3.52.1(@types/node@22.15.17)(zod@3.24.4)
+        version: 3.52.1(@types/node@22.15.17)(zod@3.25.76)
       zod:
-        specifier: ^3.24.2
-        version: 3.24.4
+        specifier: ^3.25.76
+        version: 3.25.76
 
   packages/web-api-contract-effect:
     dependencies:
@@ -6182,6 +6218,9 @@ packages:
   '@types/cacheable-request@6.0.3':
     resolution: {integrity: sha512-IQ3EbTzGxIigb1I3qPZc1rWJnH0BmSKv5QYTalEwweFvyBDLSAe24zP0le/hyi7ecGfZVlIVAg4BZqb8WBwKqw==}
 
+  '@types/canvas-confetti@1.9.0':
+    resolution: {integrity: sha512-aBGj/dULrimR1XDZLtG9JwxX1b4HPRF6CX9Yfwh3NvstZEm1ZL7RBnel4keCPSqs1ANRu1u2Aoz9R+VmtjYuTg==}
+
   '@types/connect@3.4.38':
     resolution: {integrity: sha512-K6uROf1LD88uDQqJCktA4yzL1YYAK6NgfsI0v/mTgyPKWsX1CnJ0XPSDhViejru1GcRkLWb8RlzFYJRqGUbaug==}
 
@@ -7293,6 +7332,9 @@ packages:
 
   caniuse-lite@1.0.30001723:
     resolution: {integrity: sha512-1R/elMjtehrFejxwmexeXAtae5UO9iSyFn6G/I806CYC/BLyyBk1EPhrKBkWhy6wM6Xnm47dSJQec+tLJ39WHw==}
+
+  canvas-confetti@1.9.3:
+    resolution: {integrity: sha512-rFfTURMvmVEX1gyXFgn5QMn81bYk70qa0HLzcIOSVEyl57n6o9ItHeBtUSWdvKAPY0xlvBHno4/v3QPrT83q9g==}
 
   castable-video@1.1.7:
     resolution: {integrity: sha512-L2GkREds6UJVI8yIuiKXVFv5xNiulR+9nNUIutsDT1av5icCma423cB3GyyYsOdvudQ83Y27eC/290HXUSSleA==}
@@ -9105,6 +9147,9 @@ packages:
   gray-matter@4.0.3:
     resolution: {integrity: sha512-5v6yZd4JK3eMI3FqqCouswVqwugaA9r4dNZB1wwcmrD02QkV5H0y7XBQW8QwQqEaZY1pM9aqORSORhJRdNK44Q==}
     engines: {node: '>=6.0'}
+
+  groq-sdk@0.29.0:
+    resolution: {integrity: sha512-oDbTqE5yg7mEzSRG0WnvezA/loaM6rY+hHl1Es8MbeOs/zgZFw+DZu3zTXJ0ik4fdNQ3/N6MluOjmytUMkZHtQ==}
 
   gzip-size@7.0.0:
     resolution: {integrity: sha512-O1Ld7Dr+nqPnmGpdhzLmMTQ4vAsD+rHwMm1NLUmoUFFymBOMKxCCrtDxqdBRYXdeEPEi3SyoR4TizJLQrnKBNA==}
@@ -13734,12 +13779,6 @@ packages:
   zod@3.24.2:
     resolution: {integrity: sha512-lY7CDW43ECgW9u1TcT3IoXHflywfVqDYze4waEz812jR/bZ8FHDsl7pFQoSZTz5N+2NqRXs8GBwnAwo3ZNxqhQ==}
 
-  zod@3.24.4:
-    resolution: {integrity: sha512-OdqJE9UDRPwWsrHjLN2F8bPxvwJBK22EHLWtanu0LSYr5YqzsaaW3RMgmjwr8Rypg5k+meEJdSPXJZXE/yqOMg==}
-
-  zod@3.25.20:
-    resolution: {integrity: sha512-z03fqpTMDF1G02VLKUMt6vyACE7rNWkh3gpXVHgPTw28NPtDFRGvcpTtPwn2kMKtQ0idtYJUTxchytmnqYswcw==}
-
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -14672,7 +14711,7 @@ snapshots:
       semver: 7.7.1
       vitest: 2.1.9(@types/node@22.15.17)(jsdom@26.1.0)(terser@5.39.0)
       wrangler: 3.109.1(@cloudflare/workers-types@4.20250507.0)
-      zod: 3.24.4
+      zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
       - bufferutil
@@ -15562,10 +15601,10 @@ snapshots:
       hono: 4.7.8
       valibot: 1.0.0-rc.1(typescript@5.8.3)
 
-  '@hono/zod-validator@0.4.3(hono@4.7.8)(zod@3.25.20)':
+  '@hono/zod-validator@0.4.3(hono@4.7.8)(zod@3.25.76)':
     dependencies:
       hono: 4.7.8
-      zod: 3.25.20
+      zod: 3.25.76
 
   '@hookform/resolvers@3.10.0(react-hook-form@7.56.2(react@19.1.0))':
     dependencies:
@@ -16321,7 +16360,7 @@ snapshots:
       unixify: 1.0.0
       urlpattern-polyfill: 8.0.2
       yargs: 17.7.2
-      zod: 3.25.20
+      zod: 3.25.76
     transitivePeerDependencies:
       - encoding
       - rollup
@@ -19176,33 +19215,19 @@ snapshots:
     dependencies:
       defer-to-connect: 2.0.1
 
-  '@t3-oss/env-core@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.24.4)':
+  '@t3-oss/env-core@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.76)':
     optionalDependencies:
       typescript: 5.8.3
       valibot: 1.0.0-rc.1(typescript@5.8.3)
-      zod: 3.24.4
+      zod: 3.25.76
 
-  '@t3-oss/env-core@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.20)':
-    optionalDependencies:
-      typescript: 5.8.3
-      valibot: 1.0.0-rc.1(typescript@5.8.3)
-      zod: 3.25.20
-
-  '@t3-oss/env-nextjs@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.24.4)':
+  '@t3-oss/env-nextjs@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.76)':
     dependencies:
-      '@t3-oss/env-core': 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.24.4)
+      '@t3-oss/env-core': 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.76)
     optionalDependencies:
       typescript: 5.8.3
       valibot: 1.0.0-rc.1(typescript@5.8.3)
-      zod: 3.24.4
-
-  '@t3-oss/env-nextjs@0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.20)':
-    dependencies:
-      '@t3-oss/env-core': 0.12.0(typescript@5.8.3)(valibot@1.0.0-rc.1(typescript@5.8.3))(zod@3.25.20)
-    optionalDependencies:
-      typescript: 5.8.3
-      valibot: 1.0.0-rc.1(typescript@5.8.3)
-      zod: 3.25.20
+      zod: 3.25.76
 
   '@tailwindcss/typography@0.5.16(tailwindcss@3.4.17(ts-node@10.9.2(@types/node@20.17.43)(typescript@5.8.3)))':
     dependencies:
@@ -19499,15 +19524,15 @@ snapshots:
 
   '@total-typescript/ts-reset@0.6.1': {}
 
-  '@ts-rest/core@3.52.1(@types/node@20.17.43)(zod@3.25.20)':
+  '@ts-rest/core@3.52.1(@types/node@20.17.43)(zod@3.25.76)':
     optionalDependencies:
       '@types/node': 20.17.43
-      zod: 3.25.20
+      zod: 3.25.76
 
-  '@ts-rest/core@3.52.1(@types/node@22.15.17)(zod@3.24.4)':
+  '@ts-rest/core@3.52.1(@types/node@22.15.17)(zod@3.25.76)':
     optionalDependencies:
       '@types/node': 22.15.17
-      zod: 3.24.4
+      zod: 3.25.76
 
   '@tsconfig/bun@1.0.7': {}
 
@@ -19573,6 +19598,8 @@ snapshots:
       '@types/keyv': 3.1.4
       '@types/node': 20.17.43
       '@types/responselike': 1.0.3
+
+  '@types/canvas-confetti@1.9.0': {}
 
   '@types/connect@3.4.38':
     dependencies:
@@ -20971,6 +20998,8 @@ snapshots:
 
   caniuse-lite@1.0.30001723: {}
 
+  canvas-confetti@1.9.3: {}
+
   castable-video@1.1.7:
     dependencies:
       custom-media-element: 1.4.2
@@ -21630,12 +21659,6 @@ snapshots:
       '@opentelemetry/api': 1.9.0
       '@planetscale/database': 1.19.0
       mysql2: 3.14.1
-
-  dub@0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.20):
-    dependencies:
-      zod: 3.25.20
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.6.1
 
   dub@0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.76):
     dependencies:
@@ -23251,6 +23274,18 @@ snapshots:
       kind-of: 6.0.3
       section-matter: 1.0.0
       strip-bom-string: 1.0.0
+
+  groq-sdk@0.29.0(encoding@0.1.13):
+    dependencies:
+      '@types/node': 18.19.97
+      '@types/node-fetch': 2.6.12
+      abort-controller: 3.0.0
+      agentkeepalive: 4.6.0
+      form-data-encoder: 1.7.2
+      formdata-node: 4.4.1
+      node-fetch: 2.7.0(encoding@0.1.13)
+    transitivePeerDependencies:
+      - encoding
 
   gzip-size@7.0.0:
     dependencies:
@@ -28388,7 +28423,7 @@ snapshots:
       unenv: 1.10.0
       unstorage: 1.16.0(@planetscale/database@1.19.0)(db0@0.3.2(drizzle-orm@0.43.1(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.14.1))(mysql2@3.14.1))(ioredis@5.6.1)
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)
-      zod: 3.25.20
+      zod: 3.25.76
     transitivePeerDependencies:
       - '@azure/app-configuration'
       - '@azure/cosmos'
@@ -28907,10 +28942,6 @@ snapshots:
   zod@3.22.3: {}
 
   zod@3.24.2: {}
-
-  zod@3.24.4: {}
-
-  zod@3.25.20: {}
 
   zod@3.25.76: {}
 

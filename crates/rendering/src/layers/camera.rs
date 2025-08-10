@@ -2,7 +2,7 @@ use cap_project::XY;
 use wgpu::util::DeviceExt;
 
 use crate::{
-    composite_frame::CompositeVideoFramePipeline, CompositeVideoFrameUniforms, DecodedFrame,
+    CompositeVideoFrameUniforms, DecodedFrame, composite_frame::CompositeVideoFramePipeline,
 };
 
 pub struct CameraLayer {
@@ -11,6 +11,7 @@ pub struct CameraLayer {
     uniforms_buffer: wgpu::Buffer,
     bind_group: Option<wgpu::BindGroup>,
     pipeline: CompositeVideoFramePipeline,
+    hidden: bool,
 }
 
 impl CameraLayer {
@@ -28,7 +29,7 @@ impl CameraLayer {
             }),
         );
 
-        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
 
         Self {
             frame_texture,
@@ -36,6 +37,7 @@ impl CameraLayer {
             uniforms_buffer,
             bind_group,
             pipeline,
+            hidden: false,
         }
     }
 
@@ -43,10 +45,14 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        uniforms: CompositeVideoFrameUniforms,
-        frame_size: XY<u32>,
-        camera_frame: &DecodedFrame,
+        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame)>,
     ) {
+        self.hidden = data.is_none();
+
+        let Some((uniforms, frame_size, camera_frame)) = data else {
+            return;
+        };
+
         if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
         {
             self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
@@ -57,7 +63,7 @@ impl CameraLayer {
             self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
             self.bind_group = Some(self.pipeline.bind_group(
-                &device,
+                device,
                 &self.uniforms_buffer,
                 &self.frame_texture_view,
             ));
@@ -87,7 +93,9 @@ impl CameraLayer {
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
-        if let Some(bind_group) = &self.bind_group {
+        if !self.hidden
+            && let Some(bind_group) = &self.bind_group
+        {
             pass.set_pipeline(&self.pipeline.render_pipeline);
             pass.set_bind_group(0, bind_group, &[]);
             pass.draw(0..4, 0..1);

@@ -56,7 +56,7 @@ async function main() {
     const frameworkDir = path.join(nativeDepsDir, "Spacedrive.framework");
     if (downloadedNativeDeps || !(await fileExists(nativeDepsDir))) {
       await fs.mkdir(nativeDepsDir, { recursive: true });
-      await exec(`tar xf ${nativeDepsTarPath} -C ${nativeDepsDir}`);
+      await execFile("tar", ["xf", nativeDepsTarPath, "-C", nativeDepsDir]);
       console.log(`Extracted ${nativeDepsFolder}`);
     } else console.log(`Using cached ${nativeDepsFolder}`);
 

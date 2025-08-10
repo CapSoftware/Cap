@@ -1,6 +1,6 @@
 use std::{fmt::Display, path::PathBuf};
 
-use cap_export::{gif::GifExportSettings, mp4::Mp4ExportSettings, ExporterBase, ExporterBuilder};
+use cap_export::{ExporterBase, gif::GifExportSettings, mp4::Mp4ExportSettings};
 use clap::{Parser, ValueEnum};
 
 #[derive(Parser, Debug)]
@@ -12,6 +12,7 @@ struct Cli {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 enum ExportFormat {
     MP4,
     GIF,
@@ -53,7 +54,7 @@ async fn main() {
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {
-                    print!("Exporting frame {} of {}\r", progress, total_frames);
+                    print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();
@@ -63,7 +64,7 @@ async fn main() {
             let total_frames = base.total_frames(settings.fps);
             settings
                 .export(base, move |progress| {
-                    print!("Exporting frame {} of {}\r", progress, total_frames);
+                    print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();

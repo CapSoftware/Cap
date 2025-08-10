@@ -11,6 +11,7 @@ import {
   createSignal,
 } from "solid-js";
 import { produce } from "solid-js/store";
+import { Menu } from "@tauri-apps/api/menu";
 
 import { useEditorContext } from "../context";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
 import { cx } from "cva";
+import { commands } from "~/utils/tauri";
 
 export type ZoomSegmentDragState =
   | { type: "idle" }
@@ -38,8 +40,33 @@ export function ZoomTrack(props: {
   const [hoveringSegment, setHoveringSegment] = createSignal(false);
   const [hoveredTime, setHoveredTime] = createSignal<number>();
 
+  const handleGenerateZoomSegments = async () => {
+    try {
+      const zoomSegments = await commands.generateZoomSegmentsFromClicks();
+      setProject("timeline", "zoomSegments", zoomSegments);
+    } catch (error) {
+      console.error("Failed to generate zoom segments:", error);
+    }
+  };
+
   return (
     <TrackRoot
+      onContextMenu={async (e) => {
+        if (!import.meta.env.DEV) return;
+
+        e.preventDefault();
+        const menu = await Menu.new({
+          id: "zoom-track-options",
+          items: [
+            {
+              id: "generateZoomSegments",
+              text: "Generate zoom segments from clicks",
+              action: handleGenerateZoomSegments,
+            },
+          ],
+        });
+        menu.popup();
+      }}
       onMouseMove={(e) => {
         if (hoveringSegment()) {
           setHoveredTime(undefined);

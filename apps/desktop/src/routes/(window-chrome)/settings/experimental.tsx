@@ -23,6 +23,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      enableNativeCameraPreview: false,
+      autoZoomOnClicks: false,
     }
   );
 
@@ -49,16 +51,27 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               expected.
             </p>
           </div>
-          <div class="space-y-3">
-            <h3 class="text-sm text-gray-12 w-fit">Recording Features</h3>
-            <div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-              <ToggleSetting
-                label="Custom cursor capture in Studio Mode"
-                description="Studio Mode recordings will capture cursor state separately for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
-                value={!!settings.customCursorCapture}
-                onChange={(value) => handleChange("customCursorCapture", value)}
-              />
-            </div>
+          <div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+            <ToggleSetting
+              label="Custom cursor capture in Studio Mode"
+              description="Studio Mode recordings will capture cursor state separately for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
+              value={!!settings.customCursorCapture}
+              onChange={(value) => handleChange("customCursorCapture", value)}
+            />
+            <ToggleSetting
+              label="Native camera preview"
+              description="Show the camera preview using a native GPU surface instead of rendering it within the webview. This is not functional on certain Windows systems so your mileage may vary."
+              value={!!settings.enableNativeCameraPreview}
+              onChange={(value) =>
+                handleChange("enableNativeCameraPreview", value)
+              }
+            />
+            <ToggleSetting
+              label="Auto zoom on clicks"
+              description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
+              value={!!settings.autoZoomOnClicks}
+              onChange={(value) => handleChange("autoZoomOnClicks", value)}
+            />
           </div>
         </div>
       </div>

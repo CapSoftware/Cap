@@ -1,24 +1,28 @@
-"use client";
 import { userSelectProps } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
-import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { startTransition, useEffect, useState } from "react";
 import { AuthOverlay } from "./AuthOverlay";
-import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "motion/react";
+import { CommentType } from "../Share";
+import { newComment } from "@/actions/videos/new-comment";
 
-const MotionButton = motion(Button);
+const MotionButton = motion.create(Button);
 
 // million-ignore
+interface ToolbarProps {
+  data: typeof videos.$inferSelect;
+  user: typeof userSelectProps | null;
+  onOptimisticComment: (comment: CommentType) => void;
+  onCommentSuccess: (comment: CommentType) => void;
+}
+
 export const Toolbar = ({
   data,
   user,
-}: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-}) => {
-  const router = useRouter();
+  onOptimisticComment,
+  onCommentSuccess,
+}: ToolbarProps) => {
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
@@ -53,33 +57,38 @@ export const Toolbar = ({
 
   const handleEmojiClick = async (emoji: string) => {
 
-    const timestamp = getTimestamp();
+    const optimisticComment: CommentType = {
+      id: `temp-${Date.now()}`,
+      authorId: user?.id || "anonymous",
+      authorName: user?.name || "Anonymous",
+      content: emoji,
+      createdAt: new Date(),
+      videoId: data.id,
+      parentCommentId: "",
+      type: "emoji",
+      timestamp: null,
+      updatedAt: new Date(),
+      sending: true,
+    };
 
-    const response = await fetch("/api/video/comment", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "emoji",
+    onOptimisticComment(optimisticComment);
+
+    try {
+      const newCommentData = await newComment({
         content: emoji,
         videoId: data.id,
-        parentCommentId: null,
-        timestamp: timestamp,
-      }),
-    });
-
-    if (response.status === 429) {
-      toast.error("Too many requests - please try again later.");
-      return;
+        parentCommentId: "",
+        type: "emoji",
+      });
+      startTransition(() => {
+        onCommentSuccess(newCommentData);
+      });
+    } catch (error) {
+      console.error("Error posting comment:", error);
+    } finally {
+      setCommentBoxOpen(false);
+      setComment("");
     }
-
-    if (!response.ok) {
-      console.error("Failed to record emoji reaction");
-      return;
-    }
-
-    router.refresh();
   };
 
   const handleCommentSubmit = async () => {
@@ -87,35 +96,37 @@ export const Toolbar = ({
       return;
     }
 
+    const optimisticComment: CommentType = {
+      id: `temp-${Date.now()}`,
+      authorId: user?.id || "anonymous",
+      authorName: user?.name || "Anonymous",
+      content: comment,
+      createdAt: new Date(),
+      videoId: data.id,
+      parentCommentId: "",
+      type: "text",
+      timestamp: null,
+      updatedAt: new Date(),
+      sending: true,
+    };
+
+    onOptimisticComment(optimisticComment);
+
     try {
-      const timestamp = getTimestamp();
-
-      const response = await fetch("/api/video/comment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "text",
-          content: comment,
-          videoId: data.id,
-          timestamp: timestamp || null,
-          parentCommentId: null,
-        }),
+      const newCommentData = await newComment({
+        content: comment,
+        videoId: data.id,
+        parentCommentId: "",
+        type: "text",
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Comment submission error:", errorData);
-        return;
-      }
-
-      setComment("");
-      setCommentBoxOpen(false);
-
-      router.refresh();
+      startTransition(() => {
+        onCommentSuccess(newCommentData);
+      });
     } catch (error) {
-      console.error("Failed to submit comment:", error);
+      console.error("Error posting comment:", error);
+    } finally {
+      setCommentBoxOpen(false);
+      setComment("");
     }
   };
 

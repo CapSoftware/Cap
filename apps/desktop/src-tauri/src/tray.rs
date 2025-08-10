@@ -1,17 +1,17 @@
 use crate::windows::ShowCapWindow;
 use crate::{
-    recording, RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings,
+    RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings, recording,
 };
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::menu::{MenuId, PredefinedMenuItem};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+use tauri::menu::{MenuId, PredefinedMenuItem};
 use tauri::{
+    AppHandle,
     image::Image,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle,
 };
 use tauri_specta::Event;
 

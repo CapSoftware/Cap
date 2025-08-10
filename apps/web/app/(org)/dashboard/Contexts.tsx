@@ -6,7 +6,7 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePathname } from "next/navigation";
 import { buildEnv } from "@cap/env";
-import { Organization, Spaces } from "./dashboard-data";
+import { Organization, Spaces, UserPreferences } from "./dashboard-data";
 
 type SharedContext = {
   organizationData: Organization[] | null;
@@ -18,6 +18,8 @@ type SharedContext = {
   user: typeof users.$inferSelect;
   isSubscribed: boolean;
   toggleSidebarCollapsed: () => void;
+  anyNewNotifications: boolean;
+  userPreferences: UserPreferences;
   sidebarCollapsed: boolean;
   upgradeModalOpen: boolean;
   setUpgradeModalOpen: (open: boolean) => void;
@@ -32,7 +34,7 @@ const ThemeContext = createContext<{
   setThemeHandler: (newTheme: ITheme) => void;
 }>({
   theme: "light",
-  setThemeHandler: () => {},
+  setThemeHandler: () => { },
 });
 
 export const useTheme = () => useContext(ThemeContext);
@@ -46,6 +48,8 @@ export function DashboardContexts({
   spacesData,
   user,
   isSubscribed,
+  userPreferences,
+  anyNewNotifications,
   initialTheme,
   initialSidebarCollapsed,
 }: {
@@ -55,6 +59,8 @@ export function DashboardContexts({
   spacesData: SharedContext["spacesData"];
   user: SharedContext["user"];
   isSubscribed: SharedContext["isSubscribed"];
+  userPreferences: SharedContext["userPreferences"];
+  anyNewNotifications: boolean;
   initialTheme: ITheme;
   initialSidebarCollapsed: boolean;
 }) {
@@ -133,6 +139,8 @@ export function DashboardContexts({
           organizationData,
           activeOrganization,
           spacesData,
+          anyNewNotifications,
+          userPreferences,
           userSpaces,
           sharedSpaces,
           activeSpace,

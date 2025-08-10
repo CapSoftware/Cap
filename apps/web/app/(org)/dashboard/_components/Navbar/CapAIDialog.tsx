@@ -19,7 +19,7 @@ const CapAIDialog = ({ setOpen }: { setOpen: (open: boolean) => void }) => {
 
   const { RiveComponent: CapAIArt } = useRive({
     src: "/rive/bento.riv",
-    artboard: theme === "light" ? "capai" : "capaidark",
+    artboard: theme === "dark" ? "capai" : "capaidark",
     animations: ["in"],
     autoplay: true,
     layout: new Layout({

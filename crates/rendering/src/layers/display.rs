@@ -1,8 +1,8 @@
 use cap_project::XY;
 
 use crate::{
-    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
     DecodedSegmentFrames,
+    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
 };
 
 pub struct DisplayLayer {
@@ -20,7 +20,7 @@ impl DisplayLayer {
 
         let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
         let pipeline = CompositeVideoFramePipeline::new(device);
-        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
 
         Self {
             frame_texture_view,
@@ -49,7 +49,7 @@ impl DisplayLayer {
             self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
             self.bind_group = Some(self.pipeline.bind_group(
-                &device,
+                device,
                 &self.uniforms_buffer,
                 &self.frame_texture_view,
             ));
