@@ -1,4 +1,4 @@
-import { Option, Context, Data, Effect, Schema } from "effect";
+import { Schema } from "effect";
 
 export const S3BucketId = Schema.String.pipe(Schema.brand("VideoId"));
 export type S3BucketId = typeof S3BucketId.Type;

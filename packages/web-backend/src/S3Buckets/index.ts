@@ -1,11 +1,11 @@
-import { S3Bucket, Video } from "@cap/web-domain";
+import { S3Bucket } from "@cap/web-domain";
 import { Config, Context, Effect, Layer, Option } from "effect";
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { S3_BUCKET_URL } from "@cap/utils";
 
 import { S3BucketsRepo } from "./S3BucketsRepo";
-import { S3BucketAccess, S3Error } from "./S3BucketAccess";
+import { S3BucketAccess } from "./S3BucketAccess";
 import { S3BucketClientProvider } from "./S3BucketClientProvider";
 
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
@@ -125,37 +125,42 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
     );
 
     return {
-      getProviderLayerForVideo: (videoId: Video.VideoId) =>
-        Effect.gen(function* () {
-          const customBucket = yield* repo.getForVideo(videoId);
+      getProviderLayer: Effect.fn("S3Buckets.getProviderLayer")(function* (
+        bucketId: Option.Option<S3Bucket.S3BucketId>
+      ) {
+        const customBucket = yield* bucketId.pipe(
+          Option.map(repo.getById),
+          Effect.transposeOption,
+          Effect.map(Option.flatten)
+        );
 
-          let layer;
+        let layer;
 
-          if (Option.isNone(customBucket)) {
-            const provider = Layer.succeed(S3BucketClientProvider, {
-              getInternal: () => createDefaultClient(true),
-              getPublic: () => createDefaultClient(false),
-              bucket: defaultConfigs.bucket,
-            });
+        if (Option.isNone(customBucket)) {
+          const provider = Layer.succeed(S3BucketClientProvider, {
+            getInternal: () => createDefaultClient(true),
+            getPublic: () => createDefaultClient(false),
+            bucket: defaultConfigs.bucket,
+          });
 
-            layer = Option.match(cloudfrontBucketAccess, {
-              onSome: (access) => access,
-              onNone: () => defaultBucketAccess,
-            }).pipe(Layer.merge(provider));
-          } else {
-            layer = defaultBucketAccess.pipe(
-              Layer.merge(
-                Layer.succeed(S3BucketClientProvider, {
-                  getInternal: () => createBucketClient(customBucket.value),
-                  getPublic: () => createBucketClient(customBucket.value),
-                  bucket: customBucket.value.name,
-                })
-              )
-            );
-          }
+          layer = Option.match(cloudfrontBucketAccess, {
+            onSome: (access) => access,
+            onNone: () => defaultBucketAccess,
+          }).pipe(Layer.merge(provider));
+        } else {
+          layer = defaultBucketAccess.pipe(
+            Layer.merge(
+              Layer.succeed(S3BucketClientProvider, {
+                getInternal: () => createBucketClient(customBucket.value),
+                getPublic: () => createBucketClient(customBucket.value),
+                bucket: customBucket.value.name,
+              })
+            )
+          );
+        }
 
-          return [layer, customBucket] as const;
-        }).pipe(Effect.withSpan("S3Buckets.getProviderLayerForVideo")),
+        return [layer, customBucket] as const;
+      }),
     };
   }),
   dependencies: [S3BucketsRepo.Default],

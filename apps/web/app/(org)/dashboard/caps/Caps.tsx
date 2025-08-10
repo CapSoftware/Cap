@@ -1,10 +1,10 @@
 "use client";
-import { deleteVideo } from "@/actions/videos/delete";
+
 import { VideoMetadata } from "@cap/database/types";
 import { Button } from "@cap/ui";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRouter, useSearchParams, } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { NewFolderDialog } from "./components/NewFolderDialog";
@@ -20,9 +20,13 @@ import { faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import type { FolderDataType } from "./components/Folder";
 import { useUploadingContext } from "./UploadingContext";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { Effect, Exit } from "effect";
+import { Rpc, withRpc } from "@/lib/Rpcs";
+import { Video } from "@cap/web-domain";
 
 export type VideoData = {
-  id: string;
+  id: Video.VideoId;
   ownerId: string;
   name: string;
   createdAt: Date;
@@ -57,7 +61,7 @@ export const Caps = ({
   folders: FolderDataType[];
   dubApiKeyEnabled: boolean;
 }) => {
-  const { refresh } = useRouter();
+  const router = useRouter();
   const params = useSearchParams();
   const page = Number(params.get("page")) || 1;
   const { user } = useDashboardContext();
@@ -65,8 +69,7 @@ export const Caps = ({
   const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
   const totalPages = Math.ceil(count / limit);
   const previousCountRef = useRef<number>(0);
-  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
   const [isDraggingCap, setIsDraggingCap] = useState(false);
   const {
     isUploading,
@@ -79,7 +82,7 @@ export const Caps = ({
   const anyCapSelected = selectedCaps.length > 0;
 
   const { data: analyticsData } = useSuspenseQuery({
-    queryKey: ['analytics', data.map(video => video.id)],
+    queryKey: ["analytics", data.map((video) => video.id)],
     queryFn: async () => {
       if (!dubApiKeyEnabled || data.length === 0) {
         return {};
@@ -88,9 +91,9 @@ export const Caps = ({
       const analyticsPromises = data.map(async (video) => {
         try {
           const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-            method: 'GET',
+            method: "GET",
             headers: {
-              'Content-Type': 'application/json',
+              "Content-Type": "application/json",
             },
           });
 
@@ -100,7 +103,10 @@ export const Caps = ({
           }
           return { videoId: video.id, count: 0 };
         } catch (error) {
-          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          console.warn(
+            `Failed to fetch analytics for video ${video.id}:`,
+            error
+          );
           return { videoId: video.id, count: 0 };
         }
       });
@@ -109,7 +115,7 @@ export const Caps = ({
       const analyticsData: Record<string, number> = {};
 
       results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value) {
+        if (result.status === "fulfilled" && result.value) {
           analyticsData[result.value.videoId] = result.value.count;
         }
       });
@@ -141,7 +147,7 @@ export const Caps = ({
             document.activeElement?.tagName || ""
           )
         ) {
-          deleteSelectedCaps();
+          deleteCaps.mutate(selectedCaps);
         }
       }
 
@@ -177,7 +183,7 @@ export const Caps = ({
     };
   }, []);
 
-  const handleCapSelection = (capId: string) => {
+  const handleCapSelection = (capId: Video.VideoId) => {
     setSelectedCaps((prev) => {
       const newSelection = prev.includes(capId)
         ? prev.filter((id) => id !== capId)
@@ -189,85 +195,78 @@ export const Caps = ({
     });
   };
 
-  const deleteSelectedCaps = async () => {
-    if (selectedCaps.length === 0) return;
+  const deleteCaps = useEffectMutation({
+    mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
+      if (ids.length === 0) return;
 
-    setIsDeleting(true);
+      const rpc = yield* Rpc;
 
-    try {
-      toast.promise(
-        async () => {
-          const results = await Promise.allSettled(
-            selectedCaps.map((capId) => deleteVideo(capId))
-          );
+      const fiber = yield* Effect.gen(function* () {
+        const results = yield* Effect.all(
+          ids.map((id) => rpc.VideoDelete(id).pipe(Effect.exit)),
+          { concurrency: 10 }
+        );
 
-          const successCount = results.filter(
-            (result) => result.status === "fulfilled" && result.value.success
-          ).length;
+        const successCount = results.filter(Exit.isSuccess).length;
 
-          const errorCount = selectedCaps.length - successCount;
+        const errorCount = ids.length - successCount;
 
-          if (successCount > 0 && errorCount > 0) {
-            return { success: successCount, error: errorCount };
-          } else if (successCount > 0) {
-            return { success: successCount };
-          } else {
-            throw new Error(
+        if (successCount > 0 && errorCount > 0) {
+          return { success: successCount, error: errorCount };
+        } else if (successCount > 0) {
+          return { success: successCount };
+        } else {
+          return yield* Effect.fail(
+            new Error(
               `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
-            );
-          }
-        },
-        {
-          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"
-            }...`,
-          success: (data) => {
-            if (data.error) {
-              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
-                }, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"
-                }`;
-            }
-            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
-              }`;
-          },
-          error: (error) =>
-            error.message || "An error occurred while deleting caps",
+            )
+          );
         }
-      );
+      }).pipe(Effect.fork);
 
+      toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
+        loading: `Deleting ${selectedCaps.length} cap${
+          selectedCaps.length === 1 ? "" : "s"
+        }...`,
+        success: (data) => {
+          if (data.error) {
+            return `Successfully deleted ${data.success} cap${
+              data.success === 1 ? "" : "s"
+            }, but failed to delete ${data.error} cap${
+              data.error === 1 ? "" : "s"
+            }`;
+          }
+          return `Successfully deleted ${data.success} cap${
+            data.success === 1 ? "" : "s"
+          }`;
+        },
+        error: (error) =>
+          error.message || "An error occurred while deleting caps",
+      });
+
+      return yield* fiber.await.pipe(Effect.flatten);
+    }),
+    onSuccess: Effect.fn(function* () {
       setSelectedCaps([]);
-      refresh();
-    } catch (error) {
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+      router.refresh();
+    }),
+  });
 
-  const deleteCap = async (capId: string) => {
-    try {
-      await deleteVideo(capId);
+  const deleteCap = useEffectMutation({
+    mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+    onSuccess: Effect.fn(function* () {
       toast.success("Cap deleted successfully");
-      refresh();
-    } catch (error) {
+      router.refresh();
+    }),
+    onError: Effect.fn(function* () {
       toast.error("Failed to delete cap");
-    }
-  };
+    }),
+  });
 
-  if (count === 0) {
-    return <EmptyCapState />;
-  }
+  if (count === 0) return <EmptyCapState />;
 
   return (
-    <div className="flex relative flex-col w-full">
-      {isDraggingCap && (
-        <div className="fixed inset-0 z-50 pointer-events-none">
-          <div className="flex justify-center items-center w-full h-full">
-            <div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
-              <FontAwesomeIcon className="size-3.5 text-white opacity-50" icon={faInfoCircle} />
-              <p className="text-white">Drag to a space to share or folder to move</p>
-            </div>
-          </div>
-        </div>
-      )}
+    <div className="flex relative flex-col w-full h-full">
       <NewFolderDialog
         open={openNewFolderDialog}
         onOpenChange={setOpenNewFolderDialog}
@@ -318,9 +317,7 @@ export const Caps = ({
 
           <div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
             {isUploading && (
-              <UploadPlaceholderCard
-                key={"upload-placeholder"}
-              />
+              <UploadPlaceholderCard key={"upload-placeholder"} />
             )}
             {data.map((cap) => (
               <CapCard
@@ -329,9 +326,9 @@ export const Caps = ({
                 analytics={analytics[cap.id] || 0}
                 onDelete={async () => {
                   if (selectedCaps.length > 0) {
-                    await deleteSelectedCaps();
+                    await deleteCaps.mutateAsync(selectedCaps);
                   } else {
-                    await deleteCap(cap.id);
+                    deleteCap.mutateAsync(cap.id);
                   }
                 }}
                 userId={user?.id}
@@ -350,13 +347,27 @@ export const Caps = ({
           <CapPagination currentPage={page} totalPages={totalPages} />
         </div>
       )}
-
       <SelectedCapsBar
         selectedCaps={selectedCaps}
         setSelectedCaps={setSelectedCaps}
-        deleteSelectedCaps={deleteSelectedCaps}
-        isDeleting={isDeleting}
+        deleteSelectedCaps={() => deleteCaps.mutate(selectedCaps)}
+        isDeleting={deleteCaps.isPending}
       />
+      {isDraggingCap && (
+        <div className="fixed inset-0 z-50 pointer-events-none">
+          <div className="flex justify-center items-center w-full h-full">
+            <div className="flex gap-2 items-center px-5 py-3 text-sm font-medium text-white rounded-xl bg-blue-12">
+              <FontAwesomeIcon
+                className="size-3.5 text-white opacity-50"
+                icon={faInfoCircle}
+              />
+              <p className="text-white">
+                Drag to a space to share or folder to move
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

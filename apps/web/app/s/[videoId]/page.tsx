@@ -16,7 +16,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { transcribeVideo } from "@/actions/videos/transcribe";
+import { transcribeVideo } from "@/lib/transcribe";
 import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -479,14 +479,14 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-      .select({ userId: organizationMembers.userId })
-      .from(organizationMembers)
-      .where(
-        eq(
-          organizationMembers.organizationId,
-          video.sharedOrganization.organizationId
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
         )
-      )
     : Promise.resolve([]);
 
   const commentsPromise = db()
@@ -529,7 +529,6 @@ async function AuthorizedContent({
     password: null,
     hasPassword: video.password !== null,
   };
-
 
   return (
     <>

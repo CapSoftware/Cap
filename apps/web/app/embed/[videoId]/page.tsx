@@ -12,7 +12,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { buildEnv } from "@cap/env";
-import { transcribeVideo } from "@/actions/videos/transcribe";
+import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { userHasAccessToVideo } from "@/utils/auth";
 import { EmbedVideo } from "./_components/EmbedVideo";

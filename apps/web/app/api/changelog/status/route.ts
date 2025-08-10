@@ -4,69 +4,11 @@ import {
   HttpApiError,
   HttpServerResponse,
 } from "@effect/platform";
-import { ApiContract } from "@cap/web-api-contract-effect";
 import { Effect, Layer } from "effect";
 
 import { getChangelogPosts } from "../../../../utils/changelog";
 
 export const revalidate = 0;
-
-const a = HttpApiBuilder.group(ApiContract, "desktop-public", (handler) =>
-  handler
-    .handle(
-      "getChangelogStatus",
-      Effect.fn(function* ({ urlParams: { version } }) {
-        const allUpdates = getChangelogPosts();
-
-        const changelogs: {
-          content: string;
-          title: string;
-          app: string;
-          publishedAt: string;
-          version: string;
-          image?: string;
-        }[] = allUpdates
-          .map((post) => ({
-            metadata: post.metadata,
-            content: post.content,
-            slug: parseInt(post.slug),
-          }))
-          .sort((a, b) => b.slug - a.slug)
-          .map(({ metadata, content }) => ({ ...metadata, content }));
-
-        if (changelogs.length === 0) return { hasUpdate: false } as const;
-
-        const firstChangelog = changelogs[0];
-        if (!firstChangelog) return { hasUpdate: false } as const;
-
-        const latestVersion = firstChangelog.version;
-        const hasUpdate = version ? latestVersion === version : false;
-
-        const response = yield* HttpServerResponse.json({ hasUpdate }).pipe(
-          Effect.catchTag(
-            "HttpBodyError",
-            () => new HttpApiError.InternalServerError()
-          )
-        );
-
-        return response.pipe(
-          HttpServerResponse.setHeader("Access-Control-Allow-Origin", "*"),
-          HttpServerResponse.setHeader(
-            "Access-Control-Allow-Methods",
-            "GET, OPTIONS"
-          ),
-          HttpServerResponse.setHeader(
-            "Access-Control-Allow-Headers",
-            "Content-Type"
-          )
-        );
-      })
-    )
-    .handle(
-      "getChangelogPosts",
-      Effect.fn(function* () {})
-    )
-).pipe(Layer.provide(HttpApiBuilder.middlewareCors()));
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);

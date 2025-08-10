@@ -17,6 +17,7 @@ import { Metadata } from "next";
 import { SharedCaps } from "./SharedCaps";
 import { notFound } from "next/navigation";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 
 export const metadata: Metadata = {
   title: "Shared Caps — Cap",
@@ -83,12 +84,7 @@ async function fetchFolders(spaceId: string) {
         )`,
     })
     .from(folders)
-    .where(
-      and(
-        eq(folders.spaceId, spaceId),
-        isNull(folders.parentId)
-      )
-    );
+    .where(and(eq(folders.spaceId, spaceId), isNull(folders.parentId)));
 }
 
 async function fetchSpaceMembers(spaceId: string) {
@@ -176,12 +172,12 @@ export default async function SharedCapsPage({
     if (!hasAccess) notFound();
 
     // Fetch members in parallel
-    const [spaceMembersData, organizationMembersData, foldersData] = await Promise.all([
-      fetchSpaceMembers(id),
-      fetchOrganizationMembers(space.organizationId),
-      fetchFolders(id),
-    ]);
-
+    const [spaceMembersData, organizationMembersData, foldersData] =
+      await Promise.all([
+        fetchSpaceMembers(id),
+        fetchOrganizationMembers(space.organizationId),
+        fetchFolders(id),
+      ]);
 
     async function fetchSpaceVideos(
       spaceId: string,
@@ -206,7 +202,9 @@ export default async function SharedCapsPage({
           .innerJoin(videos, eq(spaceVideos.videoId, videos.id))
           .leftJoin(comments, eq(videos.id, comments.videoId))
           .leftJoin(users, eq(videos.ownerId, users.id))
-          .where(and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)))
+          .where(
+            and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId))
+          )
           .groupBy(
             videos.id,
             videos.ownerId,
@@ -225,7 +223,9 @@ export default async function SharedCapsPage({
         db()
           .select({ count: count() })
           .from(spaceVideos)
-          .where(and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId))),
+          .where(
+            and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId))
+          ),
       ]);
       return {
         videos: videoRows,
@@ -243,9 +243,10 @@ export default async function SharedCapsPage({
       const { effectiveDate, ...videoWithoutEffectiveDate } = video;
       return {
         ...videoWithoutEffectiveDate,
+        id: Video.VideoId.make(video.id),
         ownerName: video.ownerName ?? null,
         metadata: video.metadata as
-          | { customCreatedAt?: string;[key: string]: any }
+          | { customCreatedAt?: string; [key: string]: any }
           | undefined,
       };
     });
@@ -283,7 +284,6 @@ export default async function SharedCapsPage({
       }
     }
 
-
     async function fetchOrganizationVideos(
       orgId: string,
       page: number,
@@ -307,7 +307,9 @@ export default async function SharedCapsPage({
           .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
           .leftJoin(comments, eq(videos.id, comments.videoId))
           .leftJoin(users, eq(videos.ownerId, users.id))
-          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId)))
+          .where(
+            and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId))
+          )
           .groupBy(
             videos.id,
             videos.ownerId,
@@ -327,7 +329,9 @@ export default async function SharedCapsPage({
           .select({ count: count() })
           .from(sharedVideos)
           .innerJoin(videos, eq(sharedVideos.videoId, videos.id))
-          .where(and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId))),
+          .where(
+            and(eq(sharedVideos.organizationId, orgId), isNull(videos.folderId))
+          ),
       ]);
       return {
         videos: videoRows,
@@ -335,23 +339,24 @@ export default async function SharedCapsPage({
       };
     }
 
-
     // Fetch videos and count in parallel
 
-    const [organizationVideos, organizationMembersData, foldersData] = await Promise.all([
-      fetchOrganizationVideos(id, page, limit),
-      fetchOrganizationMembers(id),
-      fetchFolders(id),
-    ]);
+    const [organizationVideos, organizationMembersData, foldersData] =
+      await Promise.all([
+        fetchOrganizationVideos(id, page, limit),
+        fetchOrganizationMembers(id),
+        fetchFolders(id),
+      ]);
 
     const { videos: orgVideoData, totalCount } = organizationVideos;
     const processedVideoData = orgVideoData.map((video) => {
       const { effectiveDate, ...videoWithoutEffectiveDate } = video;
       return {
         ...videoWithoutEffectiveDate,
+        id: Video.VideoId.make(video.id),
         ownerName: video.ownerName ?? null,
         metadata: video.metadata as
-          | { customCreatedAt?: string;[key: string]: any }
+          | { customCreatedAt?: string; [key: string]: any }
           | undefined,
       };
     });

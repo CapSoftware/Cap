@@ -1,5 +1,3 @@
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient } from "@deepgram/sdk";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";

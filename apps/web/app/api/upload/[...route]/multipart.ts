@@ -302,7 +302,9 @@ app.post(
                 },
                 body: JSON.stringify({ videoId: videoIdFromFileKey }),
               });
-              console.log(`Revalidation triggered for videoId: ${videoId}`);
+              console.log(
+                `Revalidation triggered for videoId: ${videoIdFromFileKey}`
+              );
             } catch (revalidateError) {
               console.error("Failed to revalidate page:", revalidateError);
             }

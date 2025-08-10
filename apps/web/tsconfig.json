@@ -27,8 +27,17 @@
       "@/lib/*": ["lib/*"],
       "@/actions/*": ["actions/*"],
       "@/services": ["services"]
-    }
+    },
+    "types": ["node"]
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules"],
+  "references": [
+    { "path": "../../packages/database" },
+    { "path": "../../packages/env" },
+    { "path": "../../packages/ui" },
+    { "path": "../../packages/utils" },
+    { "path": "../../packages/web-backend" },
+    { "path": "../../packages/web-domain" }
+  ]
 }

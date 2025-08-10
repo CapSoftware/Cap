@@ -1,14 +1,15 @@
 import { Context, Schema } from "effect";
 import { HttpApiError, HttpApiMiddleware } from "@effect/platform";
-import { DatabaseError } from "./Database";
+import { RpcMiddleware } from "@effect/rpc";
+import { InternalError } from "./Errors";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
   CurrentUser,
   { id: string; email: string }
 >() {}
 
-export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()(
-  "AuthMiddleware",
+export class HttpAuthMiddleware extends HttpApiMiddleware.Tag<HttpAuthMiddleware>()(
+  "HttpAuthMiddleware",
   {
     provides: CurrentUser,
     failure: Schema.Union(
@@ -16,4 +17,9 @@ export class AuthMiddleware extends HttpApiMiddleware.Tag<AuthMiddleware>()(
       HttpApiError.InternalServerError
     ),
   }
+) {}
+
+export class RpcAuthMiddleware extends RpcMiddleware.Tag<RpcAuthMiddleware>()(
+  "RpcAuthMiddleware",
+  { provides: CurrentUser, failure: InternalError }
 ) {}

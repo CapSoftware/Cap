@@ -1,4 +1,8 @@
-import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "./components";
+import {
+  ClientMyCapsLink,
+  NewSubfolderButton,
+  BreadcrumbItem,
+} from "./components";
 import Folder from "../../caps/components/Folder";
 import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
 import { getChildFolders } from "@/actions/folders/getChildFolders";
@@ -6,7 +10,6 @@ import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
 import { serverEnv } from "@cap/env";
 import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
 import FolderVideosSection from "./components/FolderVideosSection";
-
 
 const FolderPage = async ({ params }: { params: { id: string } }) => {
   const [childFolders, breadcrumb, videosData] = await Promise.all([
@@ -16,7 +19,6 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
   ]);
 
   return (
-
     <div>
       <div className="flex gap-2 items-center mb-10">
         <NewSubfolderButton parentFolderId={params.id} />
@@ -65,7 +67,6 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
         dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
       />
     </div>
-
   );
 };
 

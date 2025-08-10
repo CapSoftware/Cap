@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces, spaceMembers } from "@cap/database/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { uploadSpaceIcon } from "./upload-space-icon";
 import { v4 as uuidv4 } from "uuid";
@@ -18,6 +18,13 @@ export async function updateSpace(formData: FormData) {
   const name = formData.get("name") as string;
   const members = formData.getAll("members[]") as string[];
   const iconFile = formData.get("icon") as File | null;
+
+  const [membership] = await db()
+    .select()
+    .from(spaceMembers)
+    .where(and(eq(spaceMembers.spaceId, id), eq(spaceMembers.userId, user.id)));
+
+  if (!membership) return { success: false, error: "Unauthorized" };
 
   // Update space name
   await db().update(spaces).set({ name }).where(eq(spaces.id, id));

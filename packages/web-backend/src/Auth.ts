@@ -2,15 +2,16 @@ import * as Db from "@cap/database/schema";
 import * as Dz from "drizzle-orm";
 import { Effect, Layer, Option } from "effect";
 import { HttpApiError, HttpApp } from "@effect/platform";
-import { AuthMiddleware, CurrentUser, Database } from "@cap/web-domain";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@cap/database/auth/auth-options";
+import { HttpAuthMiddleware, CurrentUser } from "@cap/web-domain";
+import { getServerSession } from "@cap/database/auth/auth-options";
+
+import { Database } from "./Database";
 
 export const getCurrentUser = Effect.gen(function* () {
   const db = yield* Database;
 
   return yield* Option.fromNullable(
-    yield* Effect.tryPromise(() => getServerSession(authOptions()))
+    yield* Effect.tryPromise(() => getServerSession())
   ).pipe(
     Option.map((session) =>
       Effect.gen(function* () {
@@ -27,20 +28,14 @@ export const getCurrentUser = Effect.gen(function* () {
     Effect.transposeOption,
     Effect.map(Option.flatten)
   );
-}).pipe(
-  Effect.catchTags({
-    UnknownException: () => new HttpApiError.InternalServerError(),
-    DatabaseError: () => new HttpApiError.InternalServerError(),
-  }),
-  Effect.withSpan("getCurrentUser")
-);
+}).pipe(Effect.withSpan("getCurrentUser"));
 
-export const AuthMiddlewareLive = Layer.effect(
-  AuthMiddleware,
+export const HttpAuthMiddlewareLive = Layer.effect(
+  HttpAuthMiddleware,
   Effect.gen(function* () {
     const database = yield* Database;
 
-    return AuthMiddleware.of(
+    return HttpAuthMiddleware.of(
       Effect.gen(function* () {
         const user = yield* getCurrentUser.pipe(
           Effect.andThen(
@@ -52,7 +47,13 @@ export const AuthMiddlewareLive = Layer.effect(
         );
 
         return { id: user.id, email: user.email };
-      }).pipe(Effect.provideService(Database, database))
+      }).pipe(
+        Effect.provideService(Database, database),
+        Effect.catchTags({
+          UnknownException: () => new HttpApiError.InternalServerError(),
+          DatabaseError: () => new HttpApiError.InternalServerError(),
+        })
+      )
     );
   })
 );
@@ -77,4 +78,13 @@ export const provideOptionalAuth = <E, R>(
         onSome: (ctx) => app.pipe(Effect.provide(ctx)),
       })
     );
-  });
+  }).pipe(
+    Effect.catchTag(
+      "DatabaseError",
+      () => new HttpApiError.InternalServerError()
+    ),
+    Effect.catchTag(
+      "UnknownException",
+      () => new HttpApiError.InternalServerError()
+    )
+  );

@@ -53,7 +53,7 @@
     "@ts-rest/core": "^3.52.1",
     "@types/react-tooltip": "^4.2.4",
     "cva": "npm:class-variance-authority@^0.7.0",
-    "effect": "^3.17.3",
+    "effect": "^3.17.7",
     "mp4box": "^0.5.2",
     "posthog-js": "^1.215.3",
     "solid-js": "^1.9.3",

@@ -1,7 +1,9 @@
 import * as Db from "@cap/database/schema";
 import * as Dz from "drizzle-orm";
-import { Database, S3Bucket, Video } from "@cap/web-domain";
+import { S3Bucket, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
+
+import { Database } from "../Database";
 
 export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
   "S3BucketsRepo",
@@ -28,7 +30,25 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
           })
       );
 
-      return { getForVideo };
+      const getById = Effect.fn("S3BucketsRepo.getById")(
+        (id: S3Bucket.S3BucketId) =>
+          Effect.gen(function* () {
+            const [res] = yield* db.execute((db) =>
+              db
+                .select({ bucket: Db.s3Buckets })
+                .from(Db.s3Buckets)
+                .where(Dz.eq(Db.s3Buckets.id, id))
+            );
+
+            return Option.fromNullable(res).pipe(
+              Option.map((v) =>
+                S3Bucket.decodeSync({ ...v.bucket, name: v.bucket.bucketName })
+              )
+            );
+          })
+      );
+
+      return { getForVideo, getById };
     }),
   }
 ) {}

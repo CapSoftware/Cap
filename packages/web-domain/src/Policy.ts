@@ -1,21 +1,21 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
-import { Context, Effect, Option, Schema } from "effect";
+import { Context, Data, Effect, Option, Schema } from "effect";
 import { CurrentUser } from "./Authentication";
 
 export type Policy<E = never, R = never> = Effect.Effect<
   void,
-  PolicyDenied | E,
+  PolicyDeniedError | E,
   CurrentUser | R
 >;
 
 export type PublicPolicy<E = never, R = never> = Effect.Effect<
   void,
-  PolicyDenied | E,
+  PolicyDeniedError | E,
   R
 >;
 
-export class PolicyDenied extends Schema.TaggedError<PolicyDenied>(
+export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>(
   "PolicyDenied"
 )("PolicyDenied", {}) {}
 
@@ -23,11 +23,16 @@ export class PolicyDenied extends Schema.TaggedError<PolicyDenied>(
  * Creates a policy from a predicate function that evaluates the current user.
  */
 export const policy = <E, R>(
-  predicate: (user: CurrentUser["Type"]) => Effect.Effect<boolean, E, R>
+  predicate: (
+    user: CurrentUser["Type"]
+  ) => Effect.Effect<boolean, E | DenyAccess, R>
 ): Policy<E, R> =>
   Effect.flatMap(CurrentUser, (user) =>
-    Effect.flatMap(predicate(user), (result) =>
-      result ? Effect.void : Effect.fail(new PolicyDenied())
+    Effect.flatMap(
+      predicate(user).pipe(
+        Effect.catchTag("DenyAccess", () => Effect.succeed(false))
+      ),
+      (result) => (result ? Effect.void : Effect.fail(new PolicyDeniedError()))
     )
   );
 
@@ -45,9 +50,11 @@ export const publicPolicy = <E, R>(
     const user = Context.getOption(context, CurrentUser);
 
     return yield* Effect.flatMap(predicate(user), (result) =>
-      result ? Effect.void : Effect.fail(new PolicyDenied())
+      result ? Effect.void : Effect.fail(new PolicyDeniedError())
     );
   });
+
+export class DenyAccess extends Data.TaggedError("DenyAccess")<{}> {}
 
 /**
  * Applies a policy as a pre-check to an effect.

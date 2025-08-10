@@ -5,8 +5,8 @@
   "types": "./src/index.ts",
   "type": "module",
   "dependencies": {
-    "@cap/database": "workspace:*",
-    "@effect/platform": "^0.87.1",
-    "effect": "^3.17.3"
+    "@effect/platform": "^0.90.1",
+    "@effect/rpc": "^0.68.3",
+    "effect": "^3.17.7"
   }
 }

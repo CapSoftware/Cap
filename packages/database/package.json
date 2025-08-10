@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@cap/env": "workspace:*",
+    "@cap/web-domain": "workspace:*",
     "@mattrax/mysql-planetscale": "^0.0.3",
     "@paralleldrive/cuid2": "^2.2.2",
     "@planetscale/database": "^1.13.0",

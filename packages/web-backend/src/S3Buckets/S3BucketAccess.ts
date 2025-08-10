@@ -7,7 +7,7 @@ import {
   createPresignedPost,
   PresignedPostOptions,
 } from "@aws-sdk/s3-presigned-post";
-import { Context, Data, Effect, Layer, Option } from "effect";
+import { Data, Effect, Option } from "effect";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
 import { S3BucketClientProvider } from "./S3BucketClientProvider";
 
@@ -28,6 +28,7 @@ export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
   "S3BucketAccess",
   {
     sync: () => ({
+      bucketName: Effect.map(S3BucketClientProvider, (p) => p.bucket),
       getSignedObjectUrl: (key: string) =>
         wrapS3Promise((provider) =>
           S3Presigner.getSignedUrl(
@@ -87,6 +88,7 @@ export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
             })
           )
         ),
+      /** Copy an object within the same bucket */
       copyObject: (
         source: string,
         key: string,

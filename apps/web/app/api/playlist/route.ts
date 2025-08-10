@@ -13,12 +13,14 @@ import {
   HttpApiGroup,
   HttpServerResponse,
 } from "@effect/platform";
-import { Videos } from "@/services";
+import {
+  Videos,
+  S3Buckets,
+  S3BucketAccess,
+  provideOptionalAuth,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
-import { S3Buckets } from "services/S3Buckets";
-import { S3BucketAccess } from "services/S3Buckets/S3BucketAccess";
-import { provideOptionalAuth } from "services/Authentication";
-import { apiToHandler } from "services/Http";
+import { apiToHandler } from "@/lib/server";
 
 export const revalidate = "force-dynamic";
 
@@ -50,10 +52,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
         return handlers.handle("getVideoSrc", ({ urlParams }) =>
           Effect.gen(function* () {
-            const video = yield* videos
+            const [video] = yield* videos
               .getById(urlParams.videoId)
               .pipe(
-                Effect.andThen(
+                Effect.flatMap(
                   Effect.catchTag(
                     "NoSuchElementException",
                     () => new HttpApiError.NotFound()
@@ -62,7 +64,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
               );
 
             const [S3ProviderLayer, customBucket] =
-              yield* s3Buckets.getProviderLayerForVideo(video.id);
+              yield* s3Buckets.getProviderLayer(video.bucketId);
 
             return yield* getPlaylistResponse(
               video,
@@ -72,7 +74,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
           }).pipe(
             provideOptionalAuth,
             Effect.catchTags({
-              VerifyVideoPasswordError: (e) => new HttpApiError.Forbidden(),
+              VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
               PolicyDenied: () => new HttpApiError.Unauthorized(),
               DatabaseError: (e) =>
                 Effect.logError(e).pipe(

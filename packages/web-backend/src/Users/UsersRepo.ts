@@ -1,7 +1,8 @@
 import * as Db from "@cap/database/schema";
 import * as Dz from "drizzle-orm";
-import { Database } from "@cap/web-domain";
 import { Effect } from "effect";
+
+import { Database } from "../Database";
 
 export class UsersRepo extends Effect.Service<UsersRepo>()("UsersRepo", {
   effect: Effect.gen(function* () {

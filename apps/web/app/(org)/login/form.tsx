@@ -1,6 +1,6 @@
 "use client";
 
-import { getOrganization } from "@/actions/organization/get-organization";
+import { getOrganizationSSOData } from "@/actions/organization/get-organization";
 import { trackEvent } from "@/app/utils/analytics";
 import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
@@ -116,7 +116,7 @@ export function LoginForm() {
     }
 
     try {
-      const data = await getOrganization(organizationId);
+      const data = await getOrganizationSSOData(organizationId);
       setOrganizationName(data.name);
 
       signIn("workos", undefined, {
@@ -134,7 +134,7 @@ export function LoginForm() {
       layout
       transition={{
         layout: { duration: 0.3, ease: "easeInOut" },
-        height: { duration: 0.3, ease: "easeInOut" }
+        height: { duration: 0.3, ease: "easeInOut" },
       }}
       className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[432px] bg-gray-3 border border-gray-5 rounded-2xl"
     >
@@ -151,17 +151,29 @@ export function LoginForm() {
         className="absolute overflow-hidden top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
       >
         <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-        <motion.p layout="position" className="text-xs text-inherit">Back</motion.p>
+        <motion.p layout="position" className="text-xs text-inherit">
+          Back
+        </motion.p>
       </motion.div>
       <MotionLink layout="position" className="flex mx-auto size-fit" href="/">
-        <MotionLogoBadge
-          layout="position"
-          className="w-[72px] h-[72px]"
-        />
+        <MotionLogoBadge layout="position" className="w-[72px] h-[72px]" />
       </MotionLink>
-      <motion.div layout="position" className="flex flex-col justify-center items-center my-7 text-left">
-        <motion.h1 key="title" layout="position" className="text-2xl font-semibold text-gray-12">Sign in to Cap</motion.h1>
-        <motion.p key="subtitle" layout="position" className="text-[16px] text-gray-10">
+      <motion.div
+        layout="position"
+        className="flex flex-col justify-center items-center my-7 text-left"
+      >
+        <motion.h1
+          key="title"
+          layout="position"
+          className="text-2xl font-semibold text-gray-12"
+        >
+          Sign in to Cap
+        </motion.h1>
+        <motion.p
+          key="subtitle"
+          layout="position"
+          className="text-[16px] text-gray-10"
+        >
           Beautiful screen recordings, owned by you.
         </motion.p>
       </motion.div>
@@ -175,10 +187,7 @@ export function LoginForm() {
             </>
           }
         >
-          <motion.div
-            layout
-            className="flex flex-col space-y-3"
-          >
+          <motion.div layout className="flex flex-col space-y-3">
             <AnimatePresence mode="wait" initial={false}>
               <motion.div
                 key={showOrgInput ? "sso-wrapper" : "email-wrapper"}
@@ -186,7 +195,11 @@ export function LoginForm() {
                 initial={{ height: 0, opacity: 0 }}
                 animate={{ height: "auto", opacity: 1 }}
                 exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.25, ease: "easeInOut", opacity: { delay: 0.05 } }}
+                transition={{
+                  duration: 0.25,
+                  ease: "easeInOut",
+                  opacity: { delay: 0.05 },
+                }}
                 className="px-1"
               >
                 {showOrgInput ? (
@@ -211,9 +224,21 @@ export function LoginForm() {
                     key="email"
                     layout
                     initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0, transition: { duration: 0.1 } }}
-                    exit={{ opacity: 0, y: -10, transition: { duration: 0.15 } }}
-                    transition={{ duration: 0.2, ease: "easeInOut", opacity: { delay: 0.05 } }}
+                    animate={{
+                      opacity: 1,
+                      y: 0,
+                      transition: { duration: 0.1 },
+                    }}
+                    exit={{
+                      opacity: 0,
+                      y: -10,
+                      transition: { duration: 0.15 },
+                    }}
+                    transition={{
+                      duration: 0.2,
+                      ease: "easeInOut",
+                      opacity: { delay: 0.05 },
+                    }}
                     onSubmit={async (e) => {
                       e.preventDefault();
                       if (!email) return;
@@ -226,7 +251,9 @@ export function LoginForm() {
                       signIn("email", {
                         email,
                         redirect: false,
-                        ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                        ...(next && next.length > 0
+                          ? { callbackUrl: next }
+                          : {}),
                       })
                         .then((res) => {
                           setLoading(false);
@@ -262,7 +289,9 @@ export function LoginForm() {
               </motion.div>
             </AnimatePresence>
             <motion.p
-              layout="position" className="pt-3 text-xs text-center text-gray-9">
+              layout="position"
+              className="pt-3 text-xs text-center text-gray-9"
+            >
               By typing your email and clicking continue, you acknowledge that
               you have both read and agree to Cap's{" "}
               <Link
@@ -314,7 +343,11 @@ const LoginWithSSO = ({
   organizationName: string | null;
 }) => {
   return (
-    <motion.form layout onSubmit={handleOrganizationLookup} className="relative space-y-2">
+    <motion.form
+      layout
+      onSubmit={handleOrganizationLookup}
+      className="relative space-y-2"
+    >
       <MotionInput
         id="organizationId"
         placeholder="Enter your Organization ID..."
@@ -323,9 +356,7 @@ const LoginWithSSO = ({
         className="w-full max-w-full"
       />
       {organizationName && (
-        <p className="text-sm text-gray-1">
-          Signing in to: {organizationName}
-        </p>
+        <p className="text-sm text-gray-1">Signing in to: {organizationName}</p>
       )}
       <div>
         <Button type="submit" variant="dark" className="w-full max-w-full">
@@ -398,7 +429,10 @@ const NormalLogin = ({
         <p className="text-sm text-center text-gray-10">OR</p>
         <span className="flex-1 h-px bg-gray-5" />
       </div>
-      <motion.div layout className="flex flex-col gap-3 justify-center items-center">
+      <motion.div
+        layout
+        className="flex flex-col gap-3 justify-center items-center"
+      >
         {!oauthError && (
           <>
             <MotionButton
