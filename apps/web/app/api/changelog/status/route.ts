@@ -1,11 +1,4 @@
 import { NextResponse } from "next/server";
-import {
-  HttpApiBuilder,
-  HttpApiError,
-  HttpServerResponse,
-} from "@effect/platform";
-import { Effect, Layer } from "effect";
-
 import { getChangelogPosts } from "../../../../utils/changelog";
 
 export const revalidate = 0;
