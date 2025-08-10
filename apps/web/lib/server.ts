@@ -11,9 +11,6 @@ import {
   S3Buckets,
   Videos,
 } from "@cap/web-backend";
-import { NodeSdk } from "@effect/opentelemetry";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 import {
   HttpApi,
   HttpApiBuilder,
@@ -21,11 +18,7 @@ import {
   HttpServer,
 } from "@effect/platform";
 import { allowedOrigins } from "@/utils/cors";
-
-const TracingLayer = NodeSdk.layer(() => ({
-  resource: { serviceName: "cap-web" },
-  spanProcessor: [new BatchSpanProcessor(new OTLPTraceExporter())],
-}));
+import { TracingLayer } from "./tracing";
 
 const DatabaseLive = Layer.sync(Database, () => ({
   execute: (cb) =>

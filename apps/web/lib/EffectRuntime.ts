@@ -1,18 +1,11 @@
 import { Layer, ManagedRuntime } from "effect";
-import * as WebSdk from "@effect/opentelemetry/WebSdk";
-import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 
 import { Rpc } from "./Rpcs";
 import {
   makeUseEffectMutation,
   makeUseEffectQuery,
 } from "./effect-react-query";
-
-const TracingLayer = WebSdk.layer(() => ({
-  resource: { serviceName: "cap-web" },
-  spanProcessor: [new BatchSpanProcessor(new OTLPTraceExporter())],
-}));
+import { TracingLayer } from "./tracing";
 
 const RuntimeLayer = Layer.mergeAll(Rpc.Default, TracingLayer);
 
