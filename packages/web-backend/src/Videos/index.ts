@@ -1,11 +1,10 @@
-import { Array, Effect, Option, Schema, Stream } from "effect";
-import { CurrentUser, Policy, S3Bucket, Video } from "@cap/web-domain";
+import { Array, Effect, Option } from "effect";
+import { CurrentUser, Policy, Video } from "@cap/web-domain";
 
 import { VideosPolicy } from "./VideosPolicy";
 import { VideosRepo } from "./VideosRepo";
 import { S3Buckets } from "../S3Buckets";
 import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
-import { S3BucketClientProvider } from "../S3Buckets/S3BucketClientProvider";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
   effect: Effect.gen(function* () {

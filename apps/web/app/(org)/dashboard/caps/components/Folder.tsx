@@ -275,7 +275,6 @@ const FolderCard = ({
 
   return (
     <Link
-      legacyBehavior
       prefetch={false}
       href={
         spaceId

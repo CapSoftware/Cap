@@ -226,9 +226,7 @@ export const Caps = ({
       }).pipe(Effect.fork);
 
       toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-        loading: `Deleting ${selectedCaps.length} cap${
-          selectedCaps.length === 1 ? "" : "s"
-        }...`,
+        loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
         success: (data) => {
           if (data.error) {
             return `Successfully deleted ${data.success} cap${

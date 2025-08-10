@@ -18,24 +18,24 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
             );
 
             // All space members can edit space properties
-            if (folder?.spaceId) {
-              const { spaceId } = folder;
-              const [spaceMember] = yield* db.execute((db) =>
-                db
-                  .select()
-                  .from(Db.spaceMembers)
-                  .where(
-                    Dz.and(
-                      Dz.eq(Db.spaceMembers.userId, user.id),
-                      Dz.eq(Db.spaceMembers.spaceId, spaceId)
-                    )
-                  )
-              );
-
-              return spaceMember !== undefined;
-            } else {
+            if (!folder?.spaceId) {
               return folder?.createdById === user.id;
             }
+
+            const { spaceId } = folder;
+            const [spaceMember] = yield* db.execute((db) =>
+              db
+                .select()
+                .from(Db.spaceMembers)
+                .where(
+                  Dz.and(
+                    Dz.eq(Db.spaceMembers.userId, user.id),
+                    Dz.eq(Db.spaceMembers.spaceId, spaceId)
+                  )
+                )
+            );
+
+            return spaceMember !== undefined;
           })
         );
 

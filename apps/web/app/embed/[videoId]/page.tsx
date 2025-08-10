@@ -166,7 +166,8 @@ export default async function EmbedVideoPage(props: Props) {
       <div className="flex flex-col justify-center items-center min-h-screen text-center bg-black text-white">
         <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
         <p className="text-gray-400">
-          If you own this video, please <Link href="/login">sign in</Link> to manage sharing.
+          If you own this video, please <Link href="/login">sign in</Link> to
+          manage sharing.
         </p>
       </div>
     );
@@ -243,7 +244,7 @@ async function EmbedContent({
     video.transcriptionStatus !== "COMPLETE" &&
     video.transcriptionStatus !== "PROCESSING"
   ) {
-    await transcribeVideo(video.id, video.ownerId, aiGenerationEnabled);
+    transcribeVideo(video.id, video.ownerId, aiGenerationEnabled);
   }
 
   const currentMetadata = (video.metadata as VideoMetadata) || {};

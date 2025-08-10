@@ -8,9 +8,9 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
     const folders = yield* Folders;
 
     return {
-      FolderDelete: (videoId) =>
+      FolderDelete: (folderId) =>
         folders
-          .delete(videoId)
+          .delete(folderId)
           .pipe(
             Effect.catchTag(
               "DatabaseError",

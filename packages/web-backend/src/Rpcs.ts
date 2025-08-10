@@ -1,5 +1,9 @@
 import { Effect, Layer, Option } from "effect";
-import { InternalError, RpcAuthMiddleware } from "@cap/web-domain";
+import {
+  InternalError,
+  RpcAuthMiddleware,
+  UnauthenticatedError,
+} from "@cap/web-domain";
 
 import { getCurrentUser } from "./Auth";
 import { Database } from "./Database";
@@ -15,9 +19,14 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 
     return RpcAuthMiddleware.of(() =>
       getCurrentUser.pipe(
-        Effect.map(Option.getOrThrow),
         Effect.provideService(Database, database),
-        Effect.catchAll(() => new InternalError({ type: "database" }))
+        Effect.catchAll(() => new InternalError({ type: "database" })),
+        Effect.flatMap(
+          Option.match({
+            onNone: () => new UnauthenticatedError(),
+            onSome: Effect.succeed,
+          })
+        )
       )
     );
   })

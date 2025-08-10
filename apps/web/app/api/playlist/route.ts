@@ -52,16 +52,13 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
         return handlers.handle("getVideoSrc", ({ urlParams }) =>
           Effect.gen(function* () {
-            const [video] = yield* videos
-              .getById(urlParams.videoId)
-              .pipe(
-                Effect.flatMap(
-                  Effect.catchTag(
-                    "NoSuchElementException",
-                    () => new HttpApiError.NotFound()
-                  )
-                )
-              );
+            const [video] = yield* videos.getById(urlParams.videoId).pipe(
+              Effect.flatten,
+              Effect.catchTag(
+                "NoSuchElementException",
+                () => new HttpApiError.NotFound()
+              )
+            );
 
             const [S3ProviderLayer, customBucket] =
               yield* s3Buckets.getProviderLayer(video.bucketId);
@@ -103,7 +100,7 @@ const getPlaylistResponse = (
     if (!isCustomBucket) {
       let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-      if (video.source.type === "desktopMP4")
+      if (video.source.type === "desktopMP4" || urlParams.videoType === "mp4")
         redirect = `${video.ownerId}/${video.id}/result.mp4`;
       else if (video.source.type === "MediaConvert")
         redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
@@ -150,11 +147,10 @@ const getPlaylistResponse = (
 
         for (const [index, line] of lines.entries()) {
           if (line.endsWith(".ts")) {
-            const url = yield* s3.getObject(
+            const url = yield* s3.getSignedObjectUrl(
               `${video.ownerId}/${video.id}/combined-source/${line}`
             );
-            if (Option.isNone(url)) continue;
-            lines[index] = url.value;
+            lines[index] = url;
           }
         }
 

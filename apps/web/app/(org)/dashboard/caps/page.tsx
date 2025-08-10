@@ -10,11 +10,12 @@ import {
   users,
   videos,
 } from "@cap/database/schema";
-import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -36,12 +37,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     .from(spaceVideos)
     .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
     .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-    .where(
-      sql`${spaceVideos.videoId} IN (${sql.join(
-        videoIds.map((id) => sql`${id}`),
-        sql`, `
-      )})`
-    );
+    .where(inArray(spaceVideos.videoId, videoIds));
 
   // Fetch organization-level sharing
   const orgSharing = await db()
@@ -54,12 +50,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     })
     .from(sharedVideos)
     .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .where(
-      sql`${sharedVideos.videoId} IN (${sql.join(
-        videoIds.map((id) => sql`${id}`),
-        sql`, `
-      )})`
-    );
+    .where(inArray(sharedVideos.videoId, videoIds));
 
   // Combine and group by videoId
   const sharedSpacesMap: Record<
@@ -237,6 +228,7 @@ export default async function CapsPage({
 
     return {
       ...videoWithoutEffectiveDate,
+      id: Video.VideoId.make(video.id),
       foldersData,
       sharedOrganizations: Array.isArray(video.sharedOrganizations)
         ? video.sharedOrganizations.filter(

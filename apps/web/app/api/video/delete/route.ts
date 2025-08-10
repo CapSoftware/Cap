@@ -28,11 +28,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
         const videos = yield* Videos;
 
         return handlers.handle("deleteVideo", ({ urlParams }) =>
-          Effect.gen(function* () {
-            yield* videos.delete(urlParams.videoId);
-
-            return HttpServerResponse.unsafeJson(true);
-          }).pipe(
+          videos.delete(urlParams.videoId).pipe(
             Effect.catchTags({
               VideoNotFoundError: () => new HttpApiError.NotFound(),
               PolicyDenied: () => new HttpApiError.Unauthorized(),

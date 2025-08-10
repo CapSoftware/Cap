@@ -265,6 +265,7 @@ export function makeUseEffectMutation<R>(
               //   })
               // );
               const result = await runtime.runPromiseExit(effectToRun);
+              console.log({ result });
               if (Exit.isFailure(result)) {
                 // we always throw the cause
                 throw result.cause;

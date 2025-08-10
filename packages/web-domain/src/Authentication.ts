@@ -19,7 +19,15 @@ export class HttpAuthMiddleware extends HttpApiMiddleware.Tag<HttpAuthMiddleware
   }
 ) {}
 
+export class UnauthenticatedError extends Schema.TaggedError<UnauthenticatedError>()(
+  "UnauthenticatedError",
+  {}
+) {}
+
 export class RpcAuthMiddleware extends RpcMiddleware.Tag<RpcAuthMiddleware>()(
   "RpcAuthMiddleware",
-  { provides: CurrentUser, failure: InternalError }
+  {
+    provides: CurrentUser,
+    failure: Schema.Union(InternalError, UnauthenticatedError),
+  }
 ) {}

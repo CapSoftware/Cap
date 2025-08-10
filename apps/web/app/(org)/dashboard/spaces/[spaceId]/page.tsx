@@ -128,12 +128,13 @@ export default async function SharedCapsPage({
   const limit = Number(searchParams.limit) || 15;
   const user = await getCurrentUser();
   const userId = user?.id as string;
-  const id = params.spaceId;
+  // this is just how it work atm
+  const spaceOrOrgId = params.spaceId;
 
   // Parallelize fetching space and org data
   const [spaceData, organizationData] = await Promise.all([
-    fetchSpaceData(id),
-    fetchOrganizationData(id),
+    fetchSpaceData(spaceOrOrgId),
+    fetchOrganizationData(spaceOrOrgId),
   ]);
 
   // organizationData assignment handled above
@@ -153,7 +154,10 @@ export default async function SharedCapsPage({
           .select({ id: spaceMembers.id })
           .from(spaceMembers)
           .where(
-            and(eq(spaceMembers.userId, userId), eq(spaceMembers.spaceId, id))
+            and(
+              eq(spaceMembers.userId, userId),
+              eq(spaceMembers.spaceId, spaceOrOrgId)
+            )
           )
           .limit(1),
         db()
@@ -174,9 +178,9 @@ export default async function SharedCapsPage({
     // Fetch members in parallel
     const [spaceMembersData, organizationMembersData, foldersData] =
       await Promise.all([
-        fetchSpaceMembers(id),
+        fetchSpaceMembers(spaceOrOrgId),
         fetchOrganizationMembers(space.organizationId),
-        fetchFolders(id),
+        fetchFolders(spaceOrOrgId),
       ]);
 
     async function fetchSpaceVideos(
@@ -235,7 +239,7 @@ export default async function SharedCapsPage({
 
     // Fetch videos and count in parallel
     const { videos: spaceVideoData, totalCount } = await fetchSpaceVideos(
-      id,
+      spaceOrOrgId,
       page,
       limit
     );
@@ -274,7 +278,7 @@ export default async function SharedCapsPage({
         .where(
           and(
             eq(organizationMembers.userId, userId),
-            eq(organizationMembers.organizationId, id)
+            eq(organizationMembers.organizationId, spaceOrOrgId)
           )
         )
         .limit(1);
@@ -343,9 +347,9 @@ export default async function SharedCapsPage({
 
     const [organizationVideos, organizationMembersData, foldersData] =
       await Promise.all([
-        fetchOrganizationVideos(id, page, limit),
-        fetchOrganizationMembers(id),
-        fetchFolders(id),
+        fetchOrganizationVideos(spaceOrOrgId, page, limit),
+        fetchOrganizationMembers(spaceOrOrgId),
+        fetchFolders(spaceOrOrgId),
       ]);
 
     const { videos: orgVideoData, totalCount } = organizationVideos;

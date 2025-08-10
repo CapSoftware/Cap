@@ -1,11 +1,14 @@
 import { Layer, ManagedRuntime } from "effect";
+import * as WebSdk from "@effect/opentelemetry/WebSdk";
 
 import { Rpc } from "./Rpcs";
 import {
   makeUseEffectMutation,
   makeUseEffectQuery,
 } from "./effect-react-query";
-import { TracingLayer } from "./tracing";
+import { getTracingConfig } from "./tracing";
+
+const TracingLayer = WebSdk.layer(getTracingConfig);
 
 const RuntimeLayer = Layer.mergeAll(Rpc.Default, TracingLayer);
 

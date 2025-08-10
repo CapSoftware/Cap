@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-export const S3BucketId = Schema.String.pipe(Schema.brand("VideoId"));
+export const S3BucketId = Schema.String.pipe(Schema.brand("S3BucketId"));
 export type S3BucketId = typeof S3BucketId.Type;
 
 export class S3Bucket extends Schema.Class<S3Bucket>("S3Bucket")({

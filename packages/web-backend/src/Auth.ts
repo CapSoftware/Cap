@@ -38,11 +38,10 @@ export const HttpAuthMiddlewareLive = Layer.effect(
     return HttpAuthMiddleware.of(
       Effect.gen(function* () {
         const user = yield* getCurrentUser.pipe(
-          Effect.andThen(
-            Effect.catchTag(
-              "NoSuchElementException",
-              () => new HttpApiError.Unauthorized()
-            )
+          Effect.flatten,
+          Effect.catchTag(
+            "NoSuchElementException",
+            () => new HttpApiError.Unauthorized()
           )
         );
 

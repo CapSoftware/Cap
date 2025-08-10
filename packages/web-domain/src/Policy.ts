@@ -15,9 +15,10 @@ export type PublicPolicy<E = never, R = never> = Effect.Effect<
   R
 >;
 
-export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>(
-  "PolicyDenied"
-)("PolicyDenied", {}) {}
+export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
+  "PolicyDenied",
+  {}
+) {}
 
 /**
  * Creates a policy from a predicate function that evaluates the current user.
@@ -61,7 +62,7 @@ export class DenyAccess extends Data.TaggedError("DenyAccess")<{}> {}
  * If the policy fails, the effect will fail with Forbidden.
  */
 export const withPolicy =
-  <E, R>(policy: PublicPolicy<E, R>) =>
+  <E, R>(policy: Policy<E, R>) =>
   <A, E2, R2>(self: Effect.Effect<A, E2, R2>) =>
     Effect.zipRight(policy, self);
 

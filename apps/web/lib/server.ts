@@ -1,5 +1,6 @@
 import "server-only";
 
+import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { db } from "@cap/database";
 import { Effect, Layer } from "effect";
 import { HttpAuthMiddleware } from "@cap/web-domain";
@@ -18,7 +19,7 @@ import {
   HttpServer,
 } from "@effect/platform";
 import { allowedOrigins } from "@/utils/cors";
-import { TracingLayer } from "./tracing";
+import { getTracingConfig } from "./tracing";
 
 const DatabaseLive = Layer.sync(Database, () => ({
   execute: (cb) =>
@@ -27,6 +28,8 @@ const DatabaseLive = Layer.sync(Database, () => ({
       catch: (error) => new DatabaseError({ message: String(error) }),
     }),
 }));
+
+const TracingLayer = NodeSdk.layer(getTracingConfig);
 
 export const Dependencies = Layer.mergeAll(
   S3Buckets.Default,

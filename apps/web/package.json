@@ -3,7 +3,7 @@
   "version": "0.3.1",
   "private": true,
   "scripts": {
-    "dev": "dotenv -e ../../.env -- next dev --port 3030",
+    "dev": "dotenv -e ../../.env -- next dev",
     "build": "next build",
     "build:web": "next build",
     "build:web:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
