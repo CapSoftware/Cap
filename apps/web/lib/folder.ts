@@ -123,7 +123,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
   // Add organization-level sharing
   orgSharing.forEach((org) => {
-    (sharedSpacesMap[(org.videoId] ??= []).push({
+    (sharedSpacesMap[org.videoId] ??= []).push({
       id: org.id,
       name: org.name,
       organizationId: org.organizationId,
