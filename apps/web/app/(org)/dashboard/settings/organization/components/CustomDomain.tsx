@@ -8,12 +8,17 @@ import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
 import { toast } from "sonner";
 import { CheckCircle, XCircle } from "lucide-react";
 import clsx from "clsx";
+import { Tooltip } from "@/components/Tooltip";
+import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faGlobe } from "@fortawesome/free-solid-svg-icons";
 
 export function CustomDomain() {
   const router = useRouter();
   const { activeOrganization, isSubscribed } = useDashboardContext();
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCustomDomainDialog, setShowCustomDomainDialog] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [isVerified, setIsVerified] = useState(
     !!activeOrganization?.organization.domainVerified
   );
@@ -26,8 +31,6 @@ export function CustomDomain() {
       setShowUpgradeModal(true);
       return;
     }
-
-    if (!confirm("Are you sure you want to remove this custom domain?")) return;
     setLoading(true);
     try {
       await removeOrganizationDomain(
@@ -41,6 +44,7 @@ export function CustomDomain() {
       toast.error("Failed to remove domain");
     } finally {
       setLoading(false);
+      setConfirmOpen(false);
     }
   };
 
@@ -55,6 +59,17 @@ export function CustomDomain() {
           onClose={() => setShowCustomDomainDialog(false)}
         />
       )}
+      <ConfirmationDialog
+        open={confirmOpen}
+        title="Remove custom domain"
+        icon={<FontAwesomeIcon icon={faGlobe} />}
+        description={`Are you sure you want to remove this custom domain: "${orgCustomDomain}"?`}
+        onConfirm={handleRemoveDomain}
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        loading={loading}
+        onCancel={() => setConfirmOpen(false)}
+      />
       <div className="flex gap-3 justify-between items-center w-full h-fit">
         <div className="space-y-1">
           <div
@@ -69,7 +84,12 @@ export function CustomDomain() {
             <h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>
             {isVerified && orgCustomDomain ? (
               <>
-                <div className="flex gap-2 items-center px-3 py-0.5 bg-green-900 rounded-full w-fit">
+                <Tooltip
+               content="Remove custom domain"
+               > 
+                <div 
+                onClick={handleRemoveDomain}
+                className="flex gap-2 items-center px-3 py-0.5 bg-green-900 rounded-full w-fit">
                   <CheckCircle className="text-green-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
                     {orgCustomDomain}
@@ -78,10 +98,16 @@ export function CustomDomain() {
                     </span>
                   </p>
                 </div>
+              </Tooltip>
               </>
             ) : orgCustomDomain ? (
               <>
-                <div className="flex gap-2 items-center px-3 py-0.5 bg-red-900 rounded-full w-fit">
+              <Tooltip
+               content="Remove custom domain"
+              > 
+                <div
+                onClick={handleRemoveDomain}
+                className="flex gap-2 items-center px-3 py-0.5 bg-red-900 rounded-full w-fit">
                   <XCircle className="text-red-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
                     {orgCustomDomain}
@@ -90,6 +116,7 @@ export function CustomDomain() {
                     </span>
                   </p>
                 </div>
+              </Tooltip>
               </>
             ) : null}
           </div>
