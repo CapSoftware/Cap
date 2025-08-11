@@ -59,7 +59,7 @@ steps:
 
   # Run Terraform
   - name: 'hashicorp/terraform:1.0.0'
-    entrypoint: 'bash'
+    entrypoint: 'sh'
     args:
       - '-c'
       - |
