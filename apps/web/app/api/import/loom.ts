@@ -249,17 +249,19 @@ async function importVideosFromLoom(
       const videoData = await downloadVideoFromLoom(loomVideo.id);
 
       const videoId = nanoId();
-      await db().insert(videos).values({
-        id: videoId,
-        ownerId: videoOwnerId,
-        name: loomVideo.title,
-        loomVideoId: loomVideo.id,
-        public: true,
-        metadata: videoData.metadata,
-        source: { type: "desktopMP4" },
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
+      await db()
+        .insert(videos)
+        .values({
+          id: videoId,
+          ownerId: videoOwnerId,
+          name: loomVideo.title,
+          loomVideoId: loomVideo.id,
+          public: true,
+          metadata: videoData.metadata,
+          source: { type: "desktopMP4" },
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
 
       if (videoOwnerId !== ownerId) {
         await db().insert(sharedVideos).values({
