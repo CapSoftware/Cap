@@ -5,6 +5,7 @@ import {
   spaceMembers,
   videos,
   sharedVideos,
+  organizationMembers,
 } from "@cap/database/schema";
 import { db } from "@cap/database";
 import { eq, inArray, or } from "drizzle-orm";
@@ -55,16 +56,16 @@ app.post(
 
       let targetSpaceId: string;
 
-      const userSpaces = await db
-        .select({ spaceId: spaces.id })
+      const userSpaces = await db()
+        .select({ spacesId: spaces.id })
         .from(spaces)
         .leftJoin(spaceMembers, eq(spaces.id, spaceMembers.spaceId))
         .where(
-          or(eq(spaces.ownerId, user.id), eq(spaceMembers.userId, user.id))
+          or(eq(spaces.createdById, user.id), eq(spaceMembers.userId, user.id))
         );
 
       const hasAccess = userSpaces.some(
-        (space) => space.spaceId === body.selectedWorkspaceId
+        (space) => space.spacesId === body.selectedWorkspaceId
       );
 
       if (hasAccess) {
@@ -84,7 +85,7 @@ app.post(
         targetSpaceId
       );
 
-      await addUsersToOwnerWorkspace(userIds, user.id, targetSpaceId);
+      await addUsersToOwnerOrganization(userIds, user.id, targetSpaceId);
 
       await importVideosFromLoom(
         body.videos,
@@ -116,12 +117,12 @@ app.post(
  * Creates user accounts for Loom workspace members
  */
 async function createUsersFromLoomWorkspaceMembers(
-  workspaceMembers: WorkspaceMember[],
-  workspaceId: string
+  organizationMembers: WorkspaceMember[],
+  organizationId: string
 ) {
-  const emails = workspaceMembers.map((member) => member.email);
+  const emails = organizationMembers.map((member) => member.email);
 
-  const existingUsers = await db
+  const existingUsers = await db()
     .select({ id: users.id, email: users.email })
     .from(users)
     .where(inArray(users.email, emails));
@@ -129,7 +130,7 @@ async function createUsersFromLoomWorkspaceMembers(
   const existingEmails = new Set(existingUsers.map((user) => user.email));
   const newUserIds: string[] = existingUsers.map((user) => user.id);
 
-  for (const member of workspaceMembers.filter(
+  for (const member of organizationMembers.filter(
     (m) => !existingEmails.has(m.email)
   )) {
     const nameParts = member.name.split(" ");
@@ -137,13 +138,13 @@ async function createUsersFromLoomWorkspaceMembers(
     const lastName = nameParts.slice(1).join(" ") || "";
 
     const userId = nanoId();
-    await db.insert(users).values({
+    await db().insert(users).values({
       id: userId,
       email: member.email,
       name: firstName,
       lastName: lastName,
       inviteQuota: 1,
-      activeSpaceId: workspaceId,
+      activeOrganizationId: organizationId,
     });
 
     newUserIds.push(userId);
@@ -153,17 +154,17 @@ async function createUsersFromLoomWorkspaceMembers(
 }
 
 /**
- * Adds users to the owner's workspace
+ * Adds users to the owner's organization
  */
-async function addUsersToOwnerWorkspace(
+async function addUsersToOwnerOrganization(
   userIds: string[],
   ownerId: string,
-  spaceId: string
+  organizationId: string
 ) {
-  const existingMembers = await db
-    .select({ userId: spaceMembers.userId })
-    .from(spaceMembers)
-    .where(eq(spaceMembers.spaceId, spaceId));
+  const existingMembers = await db()
+    .select({ userId: organizationMembers.userId })
+    .from(organizationMembers)
+    .where(eq(organizationMembers.organizationId, organizationId));
 
   const existingMemberIds = new Set(
     existingMembers.map((member) => member.userId)
@@ -172,25 +173,25 @@ async function addUsersToOwnerWorkspace(
   for (const userId of userIds.filter(
     (id) => !existingMemberIds.has(id) && id !== ownerId
   )) {
-    await db.insert(spaceMembers).values({
+    await db().insert(organizationMembers).values({
       id: nanoId(),
       userId: userId,
-      spaceId: spaceId,
+      organizationId: organizationId,
       role: "member",
       createdAt: new Date(),
       updatedAt: new Date(),
     });
 
-    const user = await db
-      .select({ activeSpaceId: users.activeSpaceId })
+    const user = await db()
+      .select({ activeOrganizationId: users.activeOrganizationId })
       .from(users)
       .where(eq(users.id, userId))
       .then((results) => results[0]);
 
-    if (!user?.activeSpaceId) {
-      await db
+    if (!user?.activeOrganizationId) {
+      await db()
         .update(users)
-        .set({ activeSpaceId: spaceId })
+        .set({ activeOrganizationId: organizationId })
         .where(eq(users.id, userId));
     }
   }
@@ -219,7 +220,7 @@ async function downloadVideoFromLoom(videoId: string) {
 async function importVideosFromLoom(
   loomVideos: Video[],
   ownerId: string,
-  spaceId: string,
+  organizationId: string,
   userEmail: string
 ) {
   for (const loomVideo of loomVideos) {
@@ -234,7 +235,7 @@ async function importVideosFromLoom(
       }
       // Otherwise try to find user by email
       else if (owner && owner.email) {
-        const existingOwner = await db
+        const existingOwner = await db()
           .select({ id: users.id })
           .from(users)
           .where(eq(users.email, owner.email))
@@ -248,7 +249,7 @@ async function importVideosFromLoom(
       const videoData = await downloadVideoFromLoom(loomVideo.id);
 
       const videoId = nanoId();
-      await db.insert(videos).values({
+      await db().insert(videos).values({
         id: videoId,
         ownerId: videoOwnerId,
         name: loomVideo.title,
@@ -261,10 +262,10 @@ async function importVideosFromLoom(
       });
 
       if (videoOwnerId !== ownerId) {
-        await db.insert(sharedVideos).values({
+        await db().insert(sharedVideos).values({
           id: nanoId(),
           videoId: videoId,
-          spaceId: spaceId,
+          organizationId: organizationId,
           sharedByUserId: ownerId,
           sharedAt: new Date(),
         });

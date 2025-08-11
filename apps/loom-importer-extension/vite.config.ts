@@ -7,11 +7,9 @@ import hotReloadExtension from "hot-reload-extension-vite";
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
-    process.env.MODE !== "production"
-      ? react({
-          jsxRuntime: "classic",
-        })
-      : react(),
+    // Use automatic runtime in all modes so JSX doesn't require React in scope
+    // across all files (prevents 'React is not defined' in popup and content scripts).
+    react({ jsxRuntime: "automatic" }),
     tsconfigPaths(),
     hotReloadExtension({
       log: true,
