@@ -71,20 +71,23 @@ export const FoldersDropdown = ({
                   }, 0);
                 },
               },
-              // note(@brendonovich): Commented out for now as it's not clear whether we care about this
-              // // Only show Duplicate if there is NO active space
-              // ...(!activeSpace ? [{
-              //   label: "Duplicate",
-              //   icon: faCopy,
-              //   onClick: async () => {
-              //     try {
-              //       await duplicateFolder(id, parentId);
-              //       toast.success("Folder duplicated successfully");
-              //     } catch (error) {
-              //       toast.error("Failed to duplicate folder");
-              //     }
-              //   }
-              // }] : []),
+              // Only show Duplicate if there is NO active space
+              ...(!activeSpace
+                ? [
+                    {
+                      label: "Duplicate",
+                      icon: faCopy,
+                      onClick: async () => {
+                        try {
+                          await duplicateFolder(id, parentId);
+                          toast.success("Folder duplicated successfully");
+                        } catch (error) {
+                          toast.error("Failed to duplicate folder");
+                        }
+                      },
+                    },
+                  ]
+                : []),
               {
                 label: "Delete",
                 icon: faTrash,

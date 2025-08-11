@@ -1,6 +1,8 @@
-"use server";
+import "server-only";
 
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { folders } from "@cap/database/schema";
 import {
   videos,
   comments,
@@ -10,9 +12,50 @@ import {
   spaceVideos,
   spaces,
 } from "@cap/database/schema";
-import { eq, desc } from "drizzle-orm";
+import { Folder } from "@cap/web-domain";
+import { eq, and, desc } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
 import { revalidatePath } from "next/cache";
+
+export async function getFolderById(folderId: string | undefined) {
+  if (!folderId) throw new Error("Folder ID is required");
+
+  const [folder] = await db()
+    .select()
+    .from(folders)
+    .where(eq(folders.id, Folder.FolderId.make(folderId)));
+
+  if (!folder) throw new Error("Folder not found");
+
+  revalidatePath(`/dashboard/folder/${folderId}`);
+  return folder;
+}
+
+export async function getFolderBreadcrumb(folderId: string) {
+  const breadcrumb: Array<{
+    id: string;
+    name: string;
+    color: "normal" | "blue" | "red" | "yellow";
+  }> = [];
+  let currentFolderId = folderId;
+
+  while (currentFolderId) {
+    const folder = await getFolderById(currentFolderId);
+    if (!folder) break;
+
+    breadcrumb.unshift({
+      id: folder.id,
+      name: folder.name,
+      color: folder.color,
+    });
+
+    if (!folder.parentId) break;
+    currentFolderId = folder.parentId;
+  }
+
+  revalidatePath(`/dashboard/folder/${folderId}`);
+  return breadcrumb;
+}
 
 // Helper function to fetch shared spaces data for videos
 async function getSharedSpacesForVideos(videoIds: string[]) {
@@ -30,7 +73,12 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     .from(spaceVideos)
     .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
     .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-    .where(sql`${spaceVideos.videoId} IN (${sql.join(videoIds.map(id => sql`${id}`), sql`, `)})`);
+    .where(
+      sql`${spaceVideos.videoId} IN (${sql.join(
+        videoIds.map((id) => sql`${id}`),
+        sql`, `
+      )})`
+    );
 
   // Fetch organization-level sharing
   const orgSharing = await db()
@@ -43,41 +91,43 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     })
     .from(sharedVideos)
     .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .where(sql`${sharedVideos.videoId} IN (${sql.join(videoIds.map(id => sql`${id}`), sql`, `)})`);
+    .where(
+      sql`${sharedVideos.videoId} IN (${sql.join(
+        videoIds.map((id) => sql`${id}`),
+        sql`, `
+      )})`
+    );
 
   // Combine and group by videoId
-  const sharedSpacesMap: Record<string, Array<{
-    id: string;
-    name: string;
-    organizationId: string;
-    iconUrl: string;
-    isOrg: boolean;
-  }>> = {};
+  const sharedSpacesMap: Record<
+    string,
+    Array<{
+      id: string;
+      name: string;
+      organizationId: string;
+      iconUrl: string;
+      isOrg: boolean;
+    }>
+  > = {};
 
   // Add space-level sharing
-  spaceSharing.forEach(space => {
-    if (!sharedSpacesMap[space.videoId]) {
-      sharedSpacesMap[space.videoId] = [];
-    }
-    sharedSpacesMap[space.videoId].push({
+  spaceSharing.forEach((space) => {
+    (sharedSpacesMap[space.videoId] ??= []).push({
       id: space.id,
       name: space.name,
       organizationId: space.organizationId,
-      iconUrl: space.iconUrl || '',
+      iconUrl: space.iconUrl || "",
       isOrg: false,
     });
   });
 
   // Add organization-level sharing
-  orgSharing.forEach(org => {
-    if (!sharedSpacesMap[org.videoId]) {
-      sharedSpacesMap[org.videoId] = [];
-    }
-    sharedSpacesMap[org.videoId].push({
+  orgSharing.forEach((org) => {
+    (sharedSpacesMap[(org.videoId] ??= []).push({
       id: org.id,
       name: org.name,
       organizationId: org.organizationId,
-      iconUrl: org.iconUrl || '',
+      iconUrl: org.iconUrl || "",
       isOrg: true,
     });
   });
@@ -141,7 +191,7 @@ export async function getVideosByFolderId(folderId: string) {
     );
 
   // Fetch shared spaces data for all videos
-  const videoIds = videoData.map(video => video.id);
+  const videoIds = videoData.map((video) => video.id);
   const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
 
   // Process the video data to match the expected format
@@ -151,7 +201,9 @@ export async function getVideosByFolderId(folderId: string) {
     return {
       ...videoWithoutEffectiveDate,
       sharedOrganizations: Array.isArray(video.sharedOrganizations)
-        ? video.sharedOrganizations.filter((organization) => organization.id !== null)
+        ? video.sharedOrganizations.filter(
+            (organization) => organization.id !== null
+          )
         : [],
       sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
         ? sharedSpacesMap[video.id]
@@ -170,4 +222,33 @@ export async function getVideosByFolderId(folderId: string) {
   revalidatePath(`/dashboard/folder/${folderId}`);
 
   return processedVideoData;
+}
+
+export async function getChildFolders(folderId: Folder.FolderId) {
+  const user = await getCurrentUser();
+  if (!user || !user.activeOrganizationId)
+    throw new Error("Unauthorized or no active organization");
+
+  const childFolders = await db()
+    .select({
+      id: folders.id,
+      name: folders.name,
+      color: folders.color,
+      parentId: folders.parentId,
+      organizationId: folders.organizationId,
+      videoCount: sql<number>`(
+        SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+      )`,
+    })
+    .from(folders)
+    .where(
+      and(
+        eq(folders.parentId, folderId),
+        eq(folders.organizationId, user.activeOrganizationId)
+      )
+    );
+
+  revalidatePath(`/dashboard/folder/${folderId}`);
+
+  return childFolders;
 }
