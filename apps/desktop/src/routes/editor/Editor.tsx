@@ -1,10 +1,8 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
-import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { cx } from "cva";
 import {
   Match,
   Show,
@@ -17,9 +15,8 @@ import {
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import CropArea from "~/components/CropArea";
 import { Toggle } from "~/components/Toggle";
-import Tooltip from "~/components/Tooltip";
+
 import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
@@ -35,7 +32,7 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
-import { createCropController } from "~/utils/cropController";
+import Cropper, { CROP_ZERO, CropperRef } from "~/components/Cropper";
 
 export function Editor() {
   return (
@@ -298,15 +295,15 @@ function Dialogs() {
                   useEditorContext();
 
                 const display = editorInstance.recordings.segments[0].display;
-                const cropController = createCropController({
-                  mappedSize: { x: display.width, y: display.height },
-                  initialCrop: {
-                    x: dialog().position.x,
-                    y: dialog().position.y,
-                    width: dialog().size.x,
-                    height: dialog().size.y,
-                  },
-                });
+
+                let cropperRef: CropperRef | undefined;
+                const [crop, setCrop] = createSignal(CROP_ZERO);
+                const initialBounds = {
+                  x: dialog().position.x,
+                  y: dialog().position.y,
+                  width: dialog().size.x,
+                  height: dialog().size.y,
+                };
 
                 return (
                   <>
@@ -317,23 +314,23 @@ function Dialogs() {
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
-                              value={cropController.crop().width}
+                              value={crop().width}
                               onChange={(e) =>
-                                cropController.setCrop({
-                                  ...cropController.crop(),
+                                cropperRef?.setCrop({
+                                  ...crop(),
                                   width: Number(e.currentTarget.value),
                                 })
                               }
                             />
                           </div>
-                          <span>x</span>
+                          <span>×</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
-                              value={cropController.crop().height}
+                              value={crop().height}
                               onChange={(e) =>
-                                cropController.setCrop({
-                                  ...cropController.crop(),
+                                cropperRef?.setCrop({
+                                  ...crop(),
                                   height: Number(e.currentTarget.value),
                                 })
                               }
@@ -345,23 +342,23 @@ function Dialogs() {
                           <div class="w-[3.25rem]">
                             <Input
                               class="bg-transparent dark:!text-[#ababab]"
-                              value={cropController.crop().x}
+                              value={crop().x}
                               onChange={(e) =>
-                                cropController.setCrop({
-                                  ...cropController.crop(),
+                                cropperRef?.setCrop({
+                                  ...crop(),
                                   x: Number(e.currentTarget.value),
                                 })
                               }
                             />
                           </div>
-                          <span>x</span>
+                          <span>×</span>
                           <div class="w-[3.25rem]">
                             <Input
                               class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
-                              value={cropController.crop().y}
+                              value={crop().y}
                               onChange={(e) =>
-                                cropController.setCrop({
-                                  ...cropController.crop(),
+                                cropperRef?.setCrop({
+                                  ...crop(),
                                   y: Number(e.currentTarget.value),
                                 })
                               }
@@ -371,23 +368,39 @@ function Dialogs() {
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
                         <EditorButton
-                          leftIcon={<IconCapCircleX />}
-                          onClick={() => cropController.reset()}
+                          leftIcon={<IconLucideMaximize />}
+                          onClick={() => cropperRef?.fill()}
+                          disabled={
+                            crop().width === display.width &&
+                            crop().height === display.height
+                          }
                         >
-                          Reset
+                          Full
                         </EditorButton>
                         <EditorButton
-                          leftIcon={<IconLucideMaximize />}
-                          onClick={() => cropController.fill()}
+                          leftIcon={<IconCapCircleX />}
+                          onClick={() => cropperRef?.reset()}
+                          disabled={
+                            crop().x === dialog().position.x &&
+                            crop().y === dialog().position.y &&
+                            crop().width === dialog().size.x &&
+                            crop().height === dialog().size.y
+                          }
                         >
-                          Fill
+                          Reset
                         </EditorButton>
                       </div>
                     </Dialog.Header>
                     <Dialog.Content>
                       <div class="flex flex-row justify-center">
-                        <div class="overflow-hidden rounded divide-black-transparent-10">
-                          <CropArea controller={cropController}>
+                        <div class="rounded divide-black-transparent-10">
+                          <Cropper
+                            ref={cropperRef}
+                            onCropChange={setCrop}
+                            targetSize={{ x: display.width, y: display.height }}
+                            initialCrop={initialBounds}
+                            snapToRatioEnabled={true}
+                          >
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"
                               alt="screenshot"
@@ -395,14 +408,14 @@ function Dialogs() {
                                 `${editorInstance.path}/screenshots/display.jpg`
                               )}
                             />
-                          </CropArea>
+                          </Cropper>
                         </div>
                       </div>
                     </Dialog.Content>
                     <Dialog.Footer>
                       <Button
                         onClick={() => {
-                          const bounds = cropController.crop();
+                          const bounds = crop();
                           setState("background", "crop", {
                             position: {
                               x: bounds.x,
