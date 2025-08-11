@@ -11,7 +11,7 @@
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.6.4",
 		"@cloudflare/workers-types": "^4.20250214.0",
-		"typescript": "^5.5.2",
+		"typescript": "^5.8.3",
 		"vitest": "~2.1.9",
 		"wrangler": "^3.109.1"
 	},
@@ -22,6 +22,7 @@
 		"jose": "^5.10.0",
 		"octokit": "^4.1.2",
 		"tweetnacl": "^1.0.3",
-		"valibot": "1.0.0-rc.1"
+		"valibot": "1.0.0-rc.1",
+		"zod": "^3"
 	}
 }

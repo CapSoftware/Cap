@@ -1,16 +1,16 @@
 import { NODE_ENV } from "@cap/env";
-import { Button, Dialog, DialogContent, LogoBadge } from "@cap/ui";
-import { motion } from "framer-motion";
+import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
 import { signIn } from "next-auth/react";
 import { useState } from "react";
-import { toast } from "react-hot-toast";
+import { toast } from "sonner";
+import Image from "next/image";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faEnvelope } from "@fortawesome/free-solid-svg-icons";
 
 interface AuthOverlayProps {
   isOpen: boolean;
   onClose: () => void;
 }
-
-const MotionDialogContent = motion(DialogContent);
 
 export const AuthOverlay: React.FC<AuthOverlayProps> = ({
   isOpen,
@@ -26,75 +26,36 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <MotionDialogContent
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        transition={{ duration: 0.2 }}
-        className="w-[90vw] sm:max-w-md p-6 rounded-xl"
-      >
+      <DialogContent className="w-[90vw] sm:max-w-md p-6 rounded-xl">
         <div className="space-y-6">
           <LogoBadge className="w-auto h-12" />
 
-          <div className="space-y-3 text-left">
-            <motion.h1
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-              className="text-3xl font-semibold"
-            >
-              Sign in to comment
-            </motion.h1>
-            <motion.p
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-              className="text-2xl text-gray-1"
-            >
-              Join the conversation.
-            </motion.p>
+          <div className="text-left">
+            <h1 className="text-xl font-semibold">Sign in to comment</h1>
+            <p className="text-lg text-gray-9">Join the conversation.</p>
           </div>
 
-          <div className="flex flex-col space-y-3 fade-in-down animate-delay-2">
-            {NODE_ENV !== "development" && (
+          <div className="flex flex-col space-y-3">
+            {NODE_ENV === "development" && (
               <>
                 <Button
-                  variant="darkgradient"
-                  size="lg"
-                  className="flex justify-center items-center space-x-2 h-12 text-lg"
+                  variant="primary"
                   onClick={handleGoogleSignIn}
                   disabled={loading}
                 >
-                  <svg
-                    className="w-4 h-4"
-                    xmlns="http://www.w3.org/2000/svg"
-                    fill="none"
-                    viewBox="0 0 12 12"
-                  >
-                    <g fill="#E1E1E6" clipPath="url(#clip0)">
-                      <path d="M11.762 6.138c0-.408-.033-.818-.104-1.22h-5.66V7.23H9.24a2.78 2.78 0 0 1-1.2 1.823v1.5h1.934c1.135-1.046 1.788-2.589 1.788-4.414"></path>
-                      <path d="M5.999 12c1.618 0 2.983-.531 3.977-1.448l-1.933-1.5c-.538.367-1.233.574-2.042.574-1.565 0-2.892-1.056-3.369-2.476H.637v1.545A6 6 0 0 0 6 12"></path>
-                      <path d="M2.63 7.15a3.6 3.6 0 0 1 0-2.297V3.307H.637a6 6 0 0 0 0 5.388z"></path>
-                      <path d="M5.999 2.374a3.26 3.26 0 0 1 2.302.9l1.713-1.713A5.77 5.77 0 0 0 5.999 0 6 6 0 0 0 .637 3.307L2.63 4.852C3.104 3.43 4.434 2.374 6 2.374"></path>
-                    </g>
-                    <defs>
-                      <clipPath id="clip0">
-                        <path fill="#fff" d="M0 0h11.762v12H0z"></path>
-                      </clipPath>
-                    </defs>
-                  </svg>
-                  <span className="text-gray-50">Continue with Google</span>
+                  <Image
+                    src="/google.svg"
+                    alt="Google"
+                    className="mr-1 size-4"
+                    width={16}
+                    height={16}
+                  />
+                  Continue with Google
                 </Button>
-
-                <div className="relative">
-                  <div className="flex absolute inset-0 items-center">
-                    <div className="w-full border-t border-blue-100" />
-                  </div>
-                  <div className="flex relative justify-center">
-                    <span className="px-2 text-xs rounded-xl bg-gray-1 text-gray-1">
-                      Or
-                    </span>
-                  </div>
+                <div className="flex gap-4 items-center my-4">
+                  <span className="flex-1 h-px bg-gray-5" />
+                  <p className="text-sm text-center text-gray-8">OR</p>
+                  <span className="flex-1 h-px bg-gray-5" />
                 </div>
               </>
             )}
@@ -119,7 +80,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                       toast.error("Error sending email - try again?");
                     }
                   })
-                  .catch((err) => {
+                  .catch(() => {
                     setEmailSent(false);
                     setLoading(false);
                     toast.error("Error sending email - try again?");
@@ -128,7 +89,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               className="flex flex-col space-y-3"
             >
               <div>
-                <input
+                <Input
                   id="email"
                   name="email"
                   autoFocus
@@ -141,12 +102,11 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                   onChange={(e) => {
                     setEmail(e.target.value);
                   }}
-                  className="block px-3 w-full h-12 text-lg placeholder-gray-400 rounded-full border border-gray-300 shadow-sm appearance-none focus:border-black focus:outline-none focus:ring-black"
                 />
                 {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
                     <p className="text-lg text-white">
-                      <span className="font-bold text-white">
+                      <span className="font-medium text-white">
                         Development mode:
                       </span>{" "}
                       Auth URL will be logged to your dev console.
@@ -156,9 +116,10 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
               </div>
               <Button
                 variant="primary"
-                size="lg"
-                className="h-12 text-lg"
                 type="submit"
+                icon={
+                  <FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />
+                }
                 disabled={loading || emailSent}
               >
                 {emailSent
@@ -167,13 +128,13 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                     : "Email sent to your inbox"
                   : "Continue with Email"}
               </Button>
-              <p className="pt-2 text-xs text-gray-1">
+              <p className="pt-2 text-xs text-center text-gray-12">
                 By typing your email and clicking continue, you acknowledge that
                 you have both read and agree to Cap's{" "}
                 <a
                   href="/terms"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-600"
+                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
                 >
                   Terms of Service
                 </a>{" "}
@@ -181,7 +142,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
                 <a
                   href="/privacy"
                   target="_blank"
-                  className="text-xs font-semibold text-gray-600"
+                  className="text-xs font-semibold text-gray-12 hover:text-blue-300"
                 >
                   Privacy Policy
                 </a>
@@ -205,7 +166,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
             </div>
           )}
         </div>
-      </MotionDialogContent>
+      </DialogContent>
     </Dialog>
   );
 };

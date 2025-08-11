@@ -20,17 +20,17 @@ impl Video {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
         fn inner(path: &Path, start_time: f64) -> Result<Video, String> {
             let input =
-                ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {}", e))?;
+                ffmpeg::format::input(path).map_err(|e| format!("Failed to open video: {e}"))?;
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Video)
                 .ok_or_else(|| "No video stream found".to_string())?;
 
             let video_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .map_err(|e| format!("Failed to create decoder: {}", e))?
+                .map_err(|e| format!("Failed to create decoder: {e}"))?
                 .decoder()
                 .video()
-                .map_err(|e| format!("Failed to get video decoder: {}", e))?;
+                .map_err(|e| format!("Failed to get video decoder: {e}"))?;
 
             let rate = stream.avg_frame_rate();
             let fps = rate.numerator() as f64 / rate.denominator() as f64;
@@ -64,17 +64,17 @@ impl Audio {
     pub fn new(path: impl AsRef<Path>, start_time: f64) -> Result<Self, String> {
         fn inner(path: &Path, start_time: f64) -> Result<Audio, String> {
             let input =
-                ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {}", e))?;
+                ffmpeg::format::input(path).map_err(|e| format!("Failed to open audio: {e}"))?;
             let stream = input
                 .streams()
                 .best(ffmpeg::media::Type::Audio)
                 .ok_or_else(|| "No audio stream found".to_string())?;
 
             let audio_decoder = ffmpeg::codec::Context::from_parameters(stream.parameters())
-                .map_err(|e| format!("Failed to create decoder: {}", e))?
+                .map_err(|e| format!("Failed to create decoder: {e}"))?
                 .decoder()
                 .audio()
-                .map_err(|e| format!("Failed to get audio decoder: {}", e))?;
+                .map_err(|e| format!("Failed to get audio decoder: {e}"))?;
 
             Ok(Audio {
                 duration: input.duration() as f64 / 1_000_000.0,
@@ -89,11 +89,11 @@ impl Audio {
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
-pub struct ProjectRecordings {
+pub struct ProjectRecordingsMeta {
     pub segments: Vec<SegmentRecordings>,
 }
 
-impl ProjectRecordings {
+impl ProjectRecordingsMeta {
     pub fn new(recording_path: &PathBuf, meta: &StudioRecordingMeta) -> Result<Self, String> {
         let segments = match &meta {
             StudioRecordingMeta::SingleSegment { segment: s } => {
@@ -124,7 +124,7 @@ impl ProjectRecordings {
                     let has_start_times = RefCell::new(None);
 
                     let ensure_start_time = |time: Option<f64>| {
-                        let Some(has_start_times) = has_start_times.borrow_mut().clone() else {
+                        let Some(has_start_times) = *has_start_times.borrow_mut() else {
                             *has_start_times.borrow_mut() = Some(time.is_some());
                             return Ok(time.unwrap_or_default());
                         };
@@ -135,12 +135,10 @@ impl ProjectRecordings {
                             } else {
                                 return Err("Missing start time".to_string());
                             }
+                        } else if time.is_some() {
+                            return Err("Start time mismatch".to_string());
                         } else {
-                            if time.is_some() {
-                                return Err("Start time mismatch".to_string());
-                            } else {
-                                0.0
-                            }
+                            0.0
                         })
                     };
 

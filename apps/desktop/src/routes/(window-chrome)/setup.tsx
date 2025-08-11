@@ -1,23 +1,23 @@
 import { Button } from "@cap/ui-solid";
-import {
-  createEffect,
-  createResource,
-  createSignal,
-  Show,
-  For,
-  startTransition,
-  onCleanup,
-  onMount,
-  Match,
-  Switch,
-} from "solid-js";
 import { createTimer } from "@solid-primitives/timer";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+    createEffect,
+    createResource,
+    createSignal,
+    For,
+    Match,
+    onCleanup,
+    onMount,
+    Show,
+    startTransition,
+    Switch,
+} from "solid-js";
 
-import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 import { makePersisted } from "@solid-primitives/storage";
 import { createStore } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
+import { commands, OSPermission, type OSPermissionStatus } from "~/utils/tauri";
 
 function isPermitted(status?: OSPermissionStatus): boolean {
   return status === "granted" || status === "notNeeded";
@@ -87,7 +87,7 @@ export default function () {
 
   return (
     <>
-      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-50 justify-evenly items-center">
+      <div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
         {showStartup() && (
           <Startup
             onClose={() => {
@@ -102,7 +102,7 @@ export default function () {
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Permissions Required
             </h1>
-            <p class="text-gray-400">Cap needs permissions to run properly.</p>
+            <p class="text-gray-11">Cap needs permissions to run properly.</p>
           </div>
 
           <ul class="flex flex-col gap-4 py-8">
@@ -162,7 +162,7 @@ export default function () {
             <h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
               Select Recording Mode
             </h1>
-            <p class="text-gray-400">Choose how you want to record with Cap.</p>
+            <p class="text-gray-11">Choose how you want to record with Cap.</p>
           </div>
 
           <div class="w-full py-4">
@@ -182,12 +182,12 @@ import cloud1 from "../../assets/illustrations/cloud-1.png";
 import cloud2 from "../../assets/illustrations/cloud-2.png";
 import cloud3 from "../../assets/illustrations/cloud-3.png";
 
-import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
-import { generalSettingsStore } from "~/store";
-import { Portal } from "solid-js/web";
-import { cx } from "cva";
 import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
+import { Portal } from "solid-js/web";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import { generalSettingsStore } from "~/store";
+import startupAudio from "../../assets/tears-and-fireflies-adi-goldstein.mp3";
 
 function Startup(props: { onClose: () => void }) {
   const [audioState, setAudioState] = makePersisted(

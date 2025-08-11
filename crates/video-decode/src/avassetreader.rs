@@ -112,7 +112,7 @@ impl AVAssetReaderDecoder {
         Ok((reader_track_output, reader))
     }
 
-    pub fn frames(&mut self) -> FramesIter {
+    pub fn frames(&mut self) -> FramesIter<'_> {
         FramesIter {
             track_output: &mut self.track_output,
         }

@@ -35,10 +35,7 @@ export const UpdatesPage = () => {
     });
 
   return (
-    <div className="py-32 wrapper wrapper-sm">
-      <div className="mb-14 text-center page-intro">
-        <h1>Blog</h1>
-      </div>
+    <div className="py-32 md:py-40 wrapper wrapper-sm">
 
       {featuredPosts.length > 0 && (
         <div className="mb-6">
@@ -46,7 +43,7 @@ export const UpdatesPage = () => {
             {featuredPosts.map((post) => (
               <article
                 key={post.slug}
-                className="overflow-hidden w-full rounded-xl border transition-shadow border-gray-3 hover:shadow-md"
+                className="overflow-hidden w-full rounded-xl border transition-shadow bg-gray-1 border-gray-5 hover:shadow-md"
               >
                 <Link href={`/blog/${post.slug}`}>
                   {post.metadata.image && (
@@ -109,7 +106,7 @@ export const UpdatesPage = () => {
           {remainingPosts.map((post) => (
             <article
               key={post.slug}
-              className="overflow-hidden w-full rounded-xl border"
+              className="overflow-hidden w-full rounded-xl border bg-gray-1 border-gray-5"
             >
               <Link href={`/blog/${post.slug}`}>
                 {post.metadata.image && (

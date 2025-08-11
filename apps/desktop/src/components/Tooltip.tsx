@@ -14,7 +14,7 @@ export default function Tooltip(props: Props) {
         {props.children}
       </KTooltip.Trigger>
       <KTooltip.Portal>
-        <KTooltip.Content class="z-50 px-1.5 py-1 text-xs border border-gray-200 bg-gray-50 dark:bg-gray-50 text-[--text-secondary] rounded shadow-lg duration-100 animate-in fade-in slide-in-from-top-1 min-w-6 text-center">
+        <KTooltip.Content class="z-50 px-1.5 py-1 text-xs border border-gray-3 bg-gray-12 text-gray-1 rounded shadow-lg duration-100 animate-in fade-in slide-in-from-top-1 min-w-6 text-center">
           {props.content}
           <KTooltip.Arrow size={16} />
         </KTooltip.Content>

@@ -41,17 +41,36 @@ function createServerEnv() {
       STRIPE_SECRET_KEY_LIVE: z.string().optional(),
       STRIPE_WEBHOOK_SECRET: z.string().optional(),
       DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
+      OPENAI_API_KEY: z.string().optional(),
+      GROQ_API_KEY: z.string().optional(),
       INTERCOM_SECRET: z.string().optional(),
+      CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true),
+      VERCEL_ENV: z
+        .union([
+          z.literal("production"),
+          z.literal("preview"),
+          z.literal("development"),
+        ])
+        .optional(),
       VERCEL_TEAM_ID: z.string().optional(),
       VERCEL_PROJECT_ID: z.string().optional(),
       VERCEL_AUTH_TOKEN: z.string().optional(),
-      VERCEL_URL: z.string().optional(),
-      VERCEL_BRANCH_URL: z.string().optional(),
-      VERCEL_PROJECT_PRODUCTION_URL: z.string().optional(),
+      VERCEL_URL_HOST: z.string().optional(),
+      VERCEL_BRANCH_URL_HOST: z.string().optional(),
+      VERCEL_PROJECT_PRODUCTION_URL_HOST: z.string().optional(),
       DOCKER_BUILD: z.string().optional(),
+      POSTHOG_PERSONAL_API_KEY: z.string().optional(),
+      CLOUDFRONT_KEYPAIR_ID: z.string().optional(),
+      CLOUDFRONT_KEYPAIR_PRIVATE_KEY: z.string().optional(),
+      S3_PUBLIC_ENDPOINT: z.string().optional(),
+      S3_INTERNAL_ENDPOINT: z.string().optional(),
     },
     experimental__runtimeEnv: {
       ...process.env,
+      VERCEL_URL_HOST: process.env.VERCEL_URL,
+      VERCEL_BRANCH_URL_HOST: process.env.VERCEL_BRANCH_URL,
+      VERCEL_PROJECT_PRODUCTION_URL_HOST:
+        process.env.VERCEL_PROJECT_PRODUCTION_URL,
     },
   });
 }
@@ -60,6 +79,5 @@ let _cached: ReturnType<typeof createServerEnv> | undefined;
 export const serverEnv = () => {
   if (_cached) return _cached;
   _cached = createServerEnv();
-  console.log({ S3_PATH_STYLE: _cached.S3_PATH_STYLE });
   return _cached;
 };

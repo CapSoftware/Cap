@@ -1,26 +1,71 @@
-use crate::{frame_pipeline::FramePipeline, DecodedSegmentFrames};
+use cap_project::XY;
+
+use crate::{
+    DecodedSegmentFrames,
+    composite_frame::{CompositeVideoFramePipeline, CompositeVideoFrameUniforms},
+};
 
 pub struct DisplayLayer {
-    // composite_resources: CompositeFrameResources,
+    frame_texture: wgpu::Texture,
+    frame_texture_view: wgpu::TextureView,
+    uniforms_buffer: wgpu::Buffer,
+    pipeline: CompositeVideoFramePipeline,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
 impl DisplayLayer {
-    pub fn render(pipeline: &mut FramePipeline, segment_frames: &DecodedSegmentFrames) {
-        let constants = pipeline.state.constants;
-        let uniforms = pipeline.state.uniforms;
-        let frame_size = pipeline.state.constants.options.screen_size;
+    pub fn new(device: &wgpu::Device) -> Self {
+        let frame_texture = CompositeVideoFramePipeline::create_frame_texture(device, 1920, 1080);
+        let frame_texture_view = frame_texture.create_view(&Default::default());
 
-        constants.queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &constants.screen_frame.0,
+        let uniforms_buffer = CompositeVideoFrameUniforms::default().to_buffer(device);
+        let pipeline = CompositeVideoFramePipeline::new(device);
+        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
+
+        Self {
+            frame_texture_view,
+            frame_texture,
+            uniforms_buffer,
+            pipeline,
+            bind_group,
+        }
+    }
+
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        segment_frames: &DecodedSegmentFrames,
+        frame_size: XY<u32>,
+        uniforms: CompositeVideoFrameUniforms,
+    ) {
+        if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
+        {
+            self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
+                device,
+                frame_size.x,
+                frame_size.y,
+            );
+            self.frame_texture_view = self.frame_texture.create_view(&Default::default());
+
+            self.bind_group = Some(self.pipeline.bind_group(
+                device,
+                &self.uniforms_buffer,
+                &self.frame_texture_view,
+            ));
+        }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.frame_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             &segment_frames.screen_frame,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(constants.options.screen_size.x * 4),
+                bytes_per_row: Some(frame_size.x * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -30,18 +75,14 @@ impl DisplayLayer {
             },
         );
 
-        pipeline.state.switch_output();
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
+    }
 
-        pipeline.encoder.do_render_pass(
-            pipeline.state.get_current_texture_view(),
-            &constants.composite_video_frame_pipeline.render_pipeline,
-            constants.composite_video_frame_pipeline.bind_group(
-                &constants.device,
-                &uniforms.display.to_buffer(&constants.device),
-                &constants.screen_frame.1,
-                pipeline.state.get_other_texture_view(),
-            ),
-            wgpu::LoadOp::Load,
-        );
+    pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {
+        if let Some(bind_group) = &self.bind_group {
+            pass.set_pipeline(&self.pipeline.render_pipeline);
+            pass.set_bind_group(0, bind_group, &[]);
+            pass.draw(0..4, 0..1);
+        }
     }
 }

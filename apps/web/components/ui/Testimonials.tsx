@@ -1,8 +1,8 @@
 "use client";
 
-import { testimonials, Testimonial } from "../../data/testimonials";
-import Image from "next/image";
 import { motion } from "framer-motion";
+import Image from "next/image";
+import { Testimonial, testimonials } from "../../data/testimonials";
 
 interface TestimonialsProps {
   amount?: number;
@@ -31,7 +31,7 @@ export const Testimonials = ({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4 }}
-            className="text-3xl text-center md:text-4xl tracking-[-.05em] font-medium text-[--text-primary]"
+            className="text-3xl text-center md:text-4xl tracking-[-.05em] text-gray-12"
           >
             {title}
           </motion.h2>
@@ -39,18 +39,18 @@ export const Testimonials = ({
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.4, delay: 0.1 }}
-            className="mx-auto mt-4 max-w-2xl text-center text-gray-400"
+            className="mx-auto mt-3 max-w-2xl text-center text-gray-10"
           >
             {subtitle}
           </motion.p>
         </>
       )}
 
-      <div className="mt-8 columns-1 md:columns-2 lg:columns-3 gap-3 space-y-3">
+      <div className="gap-3 mt-8 space-y-3 columns-1 md:columns-2 lg:columns-3">
         {displayedTestimonials.map((testimonial, i) => (
           <motion.div
             key={i}
-            className="break-inside-avoid mb-3"
+            className="mb-3 break-inside-avoid"
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{

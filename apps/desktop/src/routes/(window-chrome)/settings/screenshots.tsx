@@ -1,6 +1,6 @@
 import { createQuery } from "@tanstack/solid-query";
-import { For, Show, createSignal } from "solid-js";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { For, Show, createSignal } from "solid-js";
 
 import { commands, events } from "~/utils/tauri";
 
@@ -81,11 +81,11 @@ function ScreenshotItem(props: {
   const [imageExists, setImageExists] = createSignal(true);
 
   return (
-    <li class="flex flex-row justify-between items-center p-2 w-full rounded hover:bg-gray-100 dark:hover:bg-gray-200">
+    <li class="flex flex-row justify-between items-center p-2 w-full rounded hover:bg-gray-2 dark:hover:bg-gray-3">
       <div class="flex items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="mr-4 w-8 h-8 bg-gray-400 rounded" />}
+          fallback={<div class="mr-4 w-8 h-8 bg-gray-10 rounded" />}
         >
           <img
             class="object-cover mr-4 w-8 h-8 rounded"
@@ -107,7 +107,7 @@ function ScreenshotItem(props: {
             e.stopPropagation();
             props.onOpenFolder();
           }}
-          class="p-2 hover:bg-gray-200 dark:hover:bg-gray-300 text-[--text-tertiary] hover:text-[--text-primary] rounded-full mr-2"
+          class="p-2 hover:bg-gray-3 dark:hover:bg-gray-5 text-[--text-tertiary] hover:text-[--text-primary] rounded-full mr-2"
         >
           <IconLucideFolder class="size-5" />
         </button>
@@ -117,7 +117,7 @@ function ScreenshotItem(props: {
             e.stopPropagation();
             props.onClick();
           }}
-          class="p-2 hover:bg-gray-200 dark:hover:bg-gray-300 text-[--text-tertiary] hover:text-[--text-primary] rounded-full"
+          class="p-2 hover:bg-gray-3 dark:hover:bg-gray-5 text-[--text-tertiary] hover:text-[--text-primary] rounded-full"
         >
           <IconLucideEye class="size-5" />
         </button>

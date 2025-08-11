@@ -22,13 +22,20 @@ Cap is the open source alternative to Loom. It's a video messaging tool that all
 
 <img src="https://raw.githubusercontent.com/CapSoftware/Cap/refs/heads/main/apps/web/public/landing-cover.png"/>
 
-# Cap Self Hosting
+# Self Hosting
 
-We're working on a self-hosting guide for Cap. This will include one-click deployment buttons for Vercel and Render, as well as an option to self host with Docker. Join the <a href="https://discord.gg/y8gdQ3WRN3">Cap Discord</a> if you want to help contribute to this particular project.
+Cap Web is available to self-host using Docker or Railway, see our [self-hosting docs](https://cap.so/docs/self-hosting) to learn more.
+You can also use the button below to deploy Cap Web to Railway:
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template/PwpGcf)
+
+Cap Desktop can connect to your self-hosted Cap Web instance regardless of if you build it yourself or [download from our website](https://cap.so/download).
 
 # Monorepo App Architecture
 
 We use a combination of Rust, React (Next.js), TypeScript, Tauri, Drizzle (ORM), MySQL, TailwindCSS throughout this Turborepo powered monorepo.
+
+> A note about database: The codebase is currently designed to work with MySQL only. MariaDB or other compatible databases might partially work but are not officially supported.
 
 ### Apps:
 

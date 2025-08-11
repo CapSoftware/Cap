@@ -14,6 +14,13 @@ export async function updateDomain(domain: string, organizationId: string) {
     throw new Error("Unauthorized");
   }
 
+  //check user subscription to prevent abuse
+  const isSubscribed = user.stripeSubscriptionStatus === "active";
+
+  if (!isSubscribed) {
+    throw new Error("User is not subscribed");
+  }
+
   const [organization] = await db()
     .select()
     .from(organizations)
@@ -21,6 +28,17 @@ export async function updateDomain(domain: string, organizationId: string) {
 
   if (!organization || organization.ownerId !== user.id) {
     throw new Error("Only the owner can update the custom domain");
+  }
+
+  // Check if domain is already being used by another organization
+  const existingDomain = await db()
+    .select()
+    .from(organizations)
+    .where(eq(organizations.customDomain, domain))
+    .limit(1);
+
+  if (existingDomain.length > 0 && existingDomain[0]?.id !== organizationId) {
+    throw new Error("This domain is already being used.");
   }
 
   try {
@@ -56,6 +74,5 @@ export async function updateDomain(domain: string, organizationId: string) {
     if (error instanceof Error) {
       throw new Error(error.message);
     }
-    throw new Error("Failed to update domain");
   }
 }

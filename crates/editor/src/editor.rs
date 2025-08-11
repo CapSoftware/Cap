@@ -1,16 +1,17 @@
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 
-use cap_media::{feeds::RawCameraFrame, frame_ws::WSFrame};
-use cap_project::{BackgroundSource, CursorEvents, RecordingMeta, StudioRecordingMeta, XY};
+use cap_media::frame_ws::WSFrame;
+use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
-    decoder::DecodedFrame, DecodedSegmentFrames, FrameRenderer, ProjectRecordings, ProjectUniforms,
-    RenderVideoConstants,
+    DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
+    RenderVideoConstants, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum RendererMessage {
     RenderFrame {
         segment_frames: DecodedSegmentFrames,
@@ -27,6 +28,7 @@ pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
     frame_tx: flume::Sender<WSFrame>,
     render_constants: Arc<RenderVideoConstants>,
+    #[allow(unused)]
     total_frames: u32,
 }
 
@@ -41,16 +43,18 @@ impl Renderer {
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Result<RendererHandle, String> {
-        let recordings = Arc::new(ProjectRecordings::new(&recording_meta.project_path, meta)?);
+        let recordings = Arc::new(ProjectRecordingsMeta::new(
+            &recording_meta.project_path,
+            meta,
+        )?);
         let mut max_duration = recordings.duration();
 
         // Check camera duration if it exists
-        if let Some(camera_path) = meta.camera_path() {
-            if let Ok(camera_duration) =
+        if let Some(camera_path) = meta.camera_path()
+            && let Ok(camera_duration) =
                 recordings.get_source_duration(&recording_meta.path(&camera_path))
-            {
-                max_duration = max_duration.max(camera_duration);
-            }
+        {
+            max_duration = max_duration.max(camera_duration);
         }
 
         let total_frames = (30_f64 * max_duration).ceil() as u32;
@@ -74,6 +78,9 @@ impl Renderer {
 
         let mut frame_renderer = FrameRenderer::new(&self.render_constants);
 
+        let mut layers =
+            RendererLayers::new(&self.render_constants.device, &self.render_constants.queue);
+
         loop {
             while let Some(msg) = self.rx.recv().await {
                 match msg {
@@ -96,7 +103,7 @@ impl Renderer {
                         let output_size = uniforms.output_size;
 
                         let frame = frame_renderer
-                            .render(segment_frames, uniforms, &cursor)
+                            .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 
@@ -150,7 +157,12 @@ impl RendererHandle {
     pub async fn stop(&self) {
         // Send a stop message to the renderer
         let (tx, rx) = oneshot::channel();
-        if let Err(_) = self.tx.send(RendererMessage::Stop { finished: tx }).await {
+        if self
+            .tx
+            .send(RendererMessage::Stop { finished: tx })
+            .await
+            .is_err()
+        {
             println!("Failed to send stop message to renderer");
         }
         // Wait for the renderer to acknowledge the stop

@@ -1,0 +1,17 @@
+[package]
+name = "cap-camera-avfoundation"
+version = "0.1.0"
+edition = "2024"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+clap = { version = "4.5.40", features = ["derive"] }
+inquire = "0.7.5"
+
+[dependencies]
+tracing.workspace = true

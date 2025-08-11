@@ -17,8 +17,7 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var frame_texture: texture_2d<f32>;
-@group(0) @binding(2) var intermediate_texture: texture_2d<f32>;
-@group(0) @binding(3) var frame_sampler: sampler;
+@group(0) @binding(2) var frame_sampler: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -54,17 +53,17 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Advanced shadow calculation
     let min_frame_size = min(size.x, size.y);
     let shadow_enabled = uniforms.shadow > 0.0;
-    
+
     // Get shadow parameters, either from advanced settings or fallback to basic shadow
     let shadow_strength = uniforms.shadow / 100.0;
-    
+
     // Use shadow_strength as a multiplier for all advanced settings
     let shadow_size = select(
         shadow_strength * min_frame_size,
         shadow_strength * (uniforms.shadow_size / 100.0) * min_frame_size,
         shadow_enabled
     );
-    
+
     let shadow_opacity = select(
         shadow_strength * 0.18,
         shadow_strength * (uniforms.shadow_opacity / 100.0),
@@ -79,7 +78,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // Calculate shadow with no offset
     let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
-    
+
     // Apply blur and size to shadow
     let shadow_strength_final = smoothstep(shadow_size + shadow_blur, -shadow_blur, abs(shadow_dist));
     let shadow_color = vec4<f32>(0.0, 0.0, 0.0, shadow_strength_final * shadow_opacity);
@@ -88,14 +87,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let target_uv = (p - uniforms.target_bounds.xy) / uniforms.target_size;
     let crop_bounds_uv = vec4<f32>(uniforms.crop_bounds.xy / uniforms.frame_size, uniforms.crop_bounds.zw / uniforms.frame_size);
 
-    let bg_color = textureSample(intermediate_texture, frame_sampler, uv);
-    
+    let bg_color = vec4<f32>(0.0);
+
     // If outside the target area, just blend shadow with intermediate
     if target_uv.x < 0.0 || target_uv.x > 1.0 || target_uv.y < 0.0 || target_uv.y > 1.0 {
-        return vec4<f32>(
-            mix(bg_color.rgb, vec3<f32>(0.0), shadow_color.a),
-            1.0
-        );
+        return shadow_color;
     }
 
     var base_color = sample_texture(target_uv, crop_bounds_uv);
@@ -105,11 +101,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     if blur_amount < 0.01 {
         // First blend shadow with intermediate, then blend result with base color
-        let with_shadow = vec4<f32>(
-            mix(bg_color.rgb, vec3<f32>(0.0), shadow_color.a),
-            1.0
-        );
-        return mix(with_shadow, base_color, base_color.a);
+        return mix(shadow_color, base_color, base_color.a);
     }
 
     let center_uv = vec2<f32>(0.5, 0.5);
@@ -155,7 +147,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let final_color = accum / weight_sum;
     let blurred = vec4(final_color.rgb, base_color.a);
-    return mix(mix(bg_color, shadow_color, shadow_color.a), blurred, blurred.a);
+    return mix(shadow_color, blurred, blurred.a);
 }
 
 fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
@@ -182,7 +174,8 @@ fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4
     let distance_blur = 1.0;
 
     if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 && distance >= -distance_blur/2.0 {
-        return mix(current_color, vec4<f32>(0.0), min(distance / distance_blur + 0.5, 1.0));
+    		return vec4<f32>(0.0);
+        // return mix(current_color, vec4<f32>(0.0), min(distance / distance_blur + 0.5, 1.0));
     }
 
     return current_color;

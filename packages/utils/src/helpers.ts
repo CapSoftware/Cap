@@ -59,3 +59,25 @@ export const isUserPro = async () => {
 
   return false;
 };
+
+export const getProgressCircleConfig = () => {
+  const radius = 8;
+  const circumference = 2 * Math.PI * radius;
+  
+  return { radius, circumference };
+};
+
+export const calculateStrokeDashoffset = (progress: number, circumference: number) => {
+  return circumference - (progress / 100) * circumference;
+};
+
+export const getUploadStatus = (uploadProgress?: number) => {
+  if (uploadProgress !== undefined) {
+    return "Uploading";
+  }
+  return "Processing";
+};
+
+export const getDisplayProgress = (uploadProgress?: number, processingProgress: number = 0) => {
+  return uploadProgress !== undefined ? uploadProgress : processingProgress;
+};

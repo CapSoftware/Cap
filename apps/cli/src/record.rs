@@ -1,9 +1,8 @@
-use std::{env::current_dir, hash::Hash, path::PathBuf, sync::Arc};
+use std::{env::current_dir, path::PathBuf, sync::Arc};
 
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_recording::{RecordingMode, RecordingOptions};
+use cap_camera::ModelID;
+use cap_media::sources::ScreenCaptureTarget;
 use clap::Args;
-use nokhwa::utils::{ApiBackend, CameraIndex};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
 use uuid::Uuid;
 
@@ -13,7 +12,7 @@ pub struct RecordStart {
     target: RecordTargets,
     /// Index of the camera to record
     #[arg(long)]
-    camera: Option<u32>,
+    camera: Option<String>,
     /// ID of the microphone to record
     #[arg(long)]
     mic: Option<u32>,
@@ -30,39 +29,27 @@ pub struct RecordStart {
 
 impl RecordStart {
     pub async fn run(self) -> Result<(), String> {
-        let (target_info, _) = self
-            .target
-            .screen
-            .map(|id| {
-                cap_media::sources::list_screens()
-                    .into_iter()
-                    .find(|s| s.0.id == id)
-                    .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
-                    .ok_or(format!("Screen with id '{id}' not found"))
-            })
-            .or_else(|| {
-                self.target.window.map(|id| {
-                    cap_media::sources::list_windows()
-                        .into_iter()
-                        .find(|s| s.0.id == id)
-                        .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
-                        .ok_or(format!("Window with id '{id}' not found"))
-                })
-            })
-            .ok_or("No target specified".to_string())??;
-
-        let camera = if let Some(camera_index) = self.camera {
-            if let Some(camera_info) = nokhwa::query(ApiBackend::Auto)
-                .unwrap()
+        let (target_info, _) = match (self.target.screen, self.target.window) {
+            (Some(id), _) => cap_media::sources::list_screens()
                 .into_iter()
-                .find(|c| *c.index() == CameraIndex::Index(camera_index))
-            {
-                let name = camera_info.human_name();
+                .find(|s| s.0.id == id)
+                .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
+                .ok_or(format!("Screen with id '{id}' not found")),
+            (_, Some(id)) => cap_media::sources::list_windows()
+                .into_iter()
+                .find(|s| s.0.id == id)
+                .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
+                .ok_or(format!("Window with id '{id}' not found")),
+            _ => Err("No target specified".to_string()),
+        }?;
 
-                Some(CameraFeed::init(&name).await.unwrap())
-            } else {
-                None
-            }
+        let camera = if let Some(model_id) = self.camera {
+            let _model_id: ModelID = model_id
+                .try_into()
+                .map_err(|_| "Invalid model ID".to_string())?;
+
+            todo!()
+            // Some(CameraFeed::init(model_id).await.unwrap())
         } else {
             None
         };
@@ -75,15 +62,12 @@ impl RecordStart {
         let actor = cap_recording::spawn_studio_recording_actor(
             id,
             path,
-            RecordingOptions {
+            cap_recording::RecordingBaseInputs {
                 capture_target: target_info,
-                camera_label: camera.as_ref().map(|c| c.camera_info.human_name()),
-                mic_name: None,
-                mode: RecordingMode::Studio,
                 capture_system_audio: self.system_audio,
+                mic_feed: &None,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
-            &None,
             false,
         )
         .await

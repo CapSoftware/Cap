@@ -1,16 +1,15 @@
 import Image from "next/image";
-import { useMDXComponent } from "next-contentlayer2/hooks";
+import { MDXRemote } from "next-mdx-remote/rsc";
 
 const mdxComponents = {
   Image,
 };
 
 interface MdxProps {
-  code: string;
+  source: string;
 }
 
-export function Mdx({ code }: MdxProps) {
-  const MDXContent = useMDXComponent(code);
-
-  return <MDXContent components={mdxComponents} />;
+// Updated to use next-mdx-remote/rsc for React 19 and Next.js 14 compatibility
+export function Mdx({ source }: MdxProps) {
+  return <MDXRemote source={source} components={mdxComponents} />;
 }

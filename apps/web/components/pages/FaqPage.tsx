@@ -40,7 +40,7 @@ const faqContent = [
 
 export const FaqPage = () => {
   return (
-    <div className="py-32 wrapper wrapper-sm">
+    <div className="py-32 md:py-40 wrapper wrapper-sm">
       <div className="mb-14 text-center page-intro">
         <h1>FAQ</h1>
       </div>

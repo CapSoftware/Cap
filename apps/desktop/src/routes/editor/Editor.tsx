@@ -1,8 +1,10 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
+import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { cx } from "cva";
 import {
   Match,
   Show,
@@ -14,10 +16,9 @@ import {
   onMount,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { mergeProps } from "solid-js";
-import { makePersisted } from "@solid-primitives/storage";
 
 import Cropper, { cropToFloor } from "~/components/Cropper";
+import { Toggle } from "~/components/Toggle";
 import Tooltip from "~/components/Tooltip";
 import { events, type Crop } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
@@ -33,14 +34,8 @@ import { ExportDialog } from "./ExportDialog";
 import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
-import {
-  Dialog,
-  DialogContent,
-  EditorButton,
-  Input,
-  Subfield,
-  Toggle,
-} from "./ui";
+import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 export function Editor() {
   return (
@@ -81,12 +76,10 @@ export function Editor() {
 function Inner() {
   const { project, editorState, setEditorState } = useEditorContext();
 
-  onMount(() =>
-    events.editorStateChanged.listen((e) => {
-      renderFrame.clear();
-      setEditorState("playbackTime", e.payload.playhead_position / FPS);
-    })
-  );
+  createTauriEventListener(events.editorStateChanged, (payload) => {
+    renderFrame.clear();
+    setEditorState("playbackTime", payload.playhead_position / FPS);
+  });
 
   const renderFrame = throttle((time: number) => {
     if (!editorState.playing) {
@@ -285,7 +278,7 @@ function Dialogs() {
                       </Dialog.ConfirmButton>
                     }
                   >
-                    <p class="text-gray-400">
+                    <p class="text-gray-11">
                       Are you sure you want to delete this preset?
                     </p>
                   </DialogContent>
@@ -320,7 +313,7 @@ function Dialogs() {
                   <>
                     <Dialog.Header>
                       <div class="flex flex-row space-x-[2rem]">
-                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Size</span>
                           <div class="w-[3.25rem]">
                             <Input
@@ -354,7 +347,7 @@ function Dialogs() {
                             />
                           </div>
                         </div>
-                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.75rem] text-gray-11">
                           <span>Position</span>
                           <div class="w-[3.25rem]">
                             <Input
@@ -390,21 +383,30 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
-                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-400">
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
                           <Tooltip content="Rule of Thirds">
-                            <button
-                              type="button"
-                              class={`flex items-center bg-gray-200 justify-center text-center rounded-[0.5rem] h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-300 outline-none transition-colors duration-200 ${
+                            <Button
+                              variant="secondary"
+                              size="xs"
+                              class={cx(
+                                "flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",
                                 cropOptions.showGrid
-                                  ? "bg-gray-200 text-blue-300 border-blue-300"
-                                  : "text-gray-500"
-                              }`}
+                                  ? "border-blue-9"
+                                  : "border-transparent"
+                              )}
                               onClick={() =>
                                 setCropOptions("showGrid", (s) => !s)
                               }
                             >
-                              <IconCapPadding class="w-4" />
-                            </button>
+                              <IconCapPadding
+                                class={cx(
+                                  "w-4",
+                                  cropOptions.showGrid
+                                    ? "text-blue-9"
+                                    : "text-gray-12"
+                                )}
+                              />
+                            </Button>
                           </Tooltip>
                         </div>
                         <EditorButton

@@ -1,20 +1,61 @@
 import "@/app/globals.css";
-import { BentoScript } from "@/components/BentoScript";
-import { Footer } from "@/components/Footer";
-import { Navbar } from "@/components/Navbar";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { buildEnv, serverEnv } from "@cap/env";
+import { SonnerToaster } from "@/components/SonnerToastProvider";
+import { PublicEnvContext } from "@/utils/public-env";
+import { buildEnv } from "@cap/env";
+import { S3_BUCKET_URL } from "@cap/utils";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import type { Metadata } from "next";
-import { Toaster } from "react-hot-toast";
-import { AuthProvider } from "./AuthProvider";
-import { PostHogProvider, Providers } from "./providers";
-import { PublicEnvContext } from "@/utils/public-env";
-import { S3_BUCKET_URL } from "@cap/utils";
+import localFont from "next/font/local";
 import { PropsWithChildren } from "react";
-import crypto from "crypto";
+import { getBootstrapData } from "@/utils/getBootstrapData";
+import { Analytics as DubAnalytics } from "@dub/analytics/react";
+
+import {
+  SessionProvider,
+  PostHogProvider,
+  ReactQueryProvider,
+} from "./Layout/providers";
+
 //@ts-expect-error
 import { script } from "./themeScript";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { AuthContextProvider } from "./Layout/AuthContext";
+import { PosthogIdentify } from "./Layout/PosthogIdentify";
+
+const defaultFont = localFont({
+  src: [
+    {
+      path: "../public/fonts/NeueMontreal-Bold.otf",
+      weight: "700",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Regular.otf",
+      weight: "400",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Medium.otf",
+      weight: "500",
+      style: "normal",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-MediumItalic.otf",
+      weight: "500",
+      style: "italic",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-Italic.otf",
+      weight: "400",
+      style: "italic",
+    },
+    {
+      path: "../public/fonts/NeueMontreal-BoldItalic.otf",
+      weight: "700",
+      style: "italic",
+    },
+  ],
+});
 
 export const metadata: Metadata = {
   title: "Cap — Beautiful screen recordings, owned by you.",
@@ -30,19 +71,14 @@ export const metadata: Metadata = {
   },
 };
 
+export const dynamic = "force-dynamic";
+
 export default async function RootLayout({ children }: PropsWithChildren) {
-  const user = await getCurrentUser();
-  const intercomSecret = serverEnv().INTERCOM_SECRET;
-  let intercomHash = "";
-  if (intercomSecret) {
-    intercomHash = crypto
-      .createHmac("sha256", intercomSecret)
-      .update(user?.id ?? "")
-      .digest("hex");
-  }
+  const bootstrapData = await getBootstrapData();
+  const userPromise = getCurrentUser();
 
   return (
-    <html lang="en">
+    <html className={defaultFont.className} lang="en">
       <head>
         <link
           rel="apple-touch-icon"
@@ -72,33 +108,33 @@ export default async function RootLayout({ children }: PropsWithChildren) {
           dangerouslySetInnerHTML={{ __html: `(${script.toString()})()` }}
         />
         <TooltipPrimitive.Provider>
-          <PostHogProvider>
-            <AuthProvider>
-              <PublicEnvContext
-                value={{
-                  webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-                  awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
-                  s3BucketUrl: S3_BUCKET_URL,
-                }}
-              >
-                <Providers
-                  userId={user?.id}
-                  intercomHash={intercomHash}
-                  name={`${user?.name ?? ""} ${user?.lastName ?? ""}`}
-                  email={user?.email ?? ""}
+          <PostHogProvider bootstrapData={bootstrapData}>
+            <AuthContextProvider user={userPromise}>
+              <SessionProvider>
+                <PublicEnvContext
+                  value={{
+                    webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+                    awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+                    s3BucketUrl: S3_BUCKET_URL,
+                  }}
                 >
-                  <Toaster />
-                  <main className="overflow-x-hidden w-full">
-                    <Navbar auth={user ? true : false} />
-                    {children}
-                    <Footer />
-                  </main>
-                  <BentoScript user={user} />
-                </Providers>
-              </PublicEnvContext>
-            </AuthProvider>
+                  <ReactQueryProvider>
+                    <SonnerToaster />
+                    <main className="w-full">{children}</main>
+                    <PosthogIdentify />
+                  </ReactQueryProvider>
+                </PublicEnvContext>
+              </SessionProvider>
+            </AuthContextProvider>
           </PostHogProvider>
         </TooltipPrimitive.Provider>
+        {buildEnv.NEXT_PUBLIC_IS_CAP && (
+          <DubAnalytics
+            domainsConfig={{
+              refer: "go.cap.so",
+            }}
+          />
+        )}
       </body>
     </html>
   );

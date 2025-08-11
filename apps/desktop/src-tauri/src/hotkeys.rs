@@ -1,6 +1,4 @@
-use crate::{
-    RequestNewScreenshot, RequestRestartRecording, RequestStartRecording, RequestStopRecording,
-};
+use crate::{RequestStartRecording, recording};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -21,29 +19,30 @@ pub struct Hotkey {
     shift: bool,
 }
 
-impl Hotkey {
-    fn to_shortcut(&self) -> Shortcut {
+impl From<Hotkey> for Shortcut {
+    fn from(hotkey: Hotkey) -> Self {
         let mut modifiers = Modifiers::empty();
 
-        if self.meta {
+        if hotkey.meta {
             modifiers |= Modifiers::META;
         }
-        if self.ctrl {
+        if hotkey.ctrl {
             modifiers |= Modifiers::CONTROL;
         }
-        if self.alt {
+        if hotkey.alt {
             modifiers |= Modifiers::ALT;
         }
-        if self.shift {
+        if hotkey.shift {
             modifiers |= Modifiers::SHIFT;
         }
 
-        Shortcut::new(Some(modifiers), self.code)
+        Shortcut::new(Some(modifiers), hotkey.code)
     }
 }
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
+#[allow(clippy::enum_variant_names)]
 pub enum HotkeyAction {
     StartRecording,
     StopRecording,
@@ -79,20 +78,8 @@ pub fn init(app: &AppHandle) {
                 let store = state.lock().unwrap();
 
                 for (action, hotkey) in &store.hotkeys {
-                    if &hotkey.to_shortcut() == shortcut {
-                        match action {
-                            HotkeyAction::StartRecording => {
-                                let _ = RequestStartRecording.emit(app);
-                            }
-                            HotkeyAction::StopRecording => {
-                                let _ = RequestStopRecording.emit(app);
-                            }
-                            HotkeyAction::RestartRecording => {
-                                let _ = RequestRestartRecording.emit(app);
-                            } // HotkeyAction::TakeScreenshot => {
-                              //     let _ = RequestNewScreenshot.emit(app);
-                              // }
-                        }
+                    if &Shortcut::from(*hotkey) == shortcut {
+                        tokio::spawn(handle_hotkey(app.clone(), *action));
                     }
                 }
             })
@@ -105,10 +92,23 @@ pub fn init(app: &AppHandle) {
     let global_shortcut = app.global_shortcut();
 
     for hotkey in store.hotkeys.values() {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(Shortcut::from(*hotkey)).ok();
     }
 
     app.manage(Mutex::new(store));
+}
+
+async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
+    match action {
+        HotkeyAction::StartRecording => {
+            let _ = RequestStartRecording.emit(&app);
+            Ok(())
+        }
+        HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
+        HotkeyAction::RestartRecording => {
+            recording::restart_recording(app.clone(), app.state()).await
+        }
+    }
 }
 
 #[tauri::command(async)]
@@ -126,14 +126,14 @@ pub fn set_hotkey(app: AppHandle, action: HotkeyAction, hotkey: Option<Hotkey>) 
         store.hotkeys.remove(&action);
     }
 
-    if let Some(prev) = prev {
-        if !store.hotkeys.values().any(|h| h == &prev) {
-            global_shortcut.unregister(prev.to_shortcut()).ok();
-        }
+    if let Some(prev) = prev
+        && !store.hotkeys.values().any(|h| h == &prev)
+    {
+        global_shortcut.unregister(Shortcut::from(prev)).ok();
     }
 
     if let Some(hotkey) = hotkey {
-        global_shortcut.register(hotkey.to_shortcut()).ok();
+        global_shortcut.register(Shortcut::from(hotkey)).ok();
     }
 
     Ok(())

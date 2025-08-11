@@ -4,6 +4,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 
 #[derive(Serialize, Deserialize, Type, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -26,7 +27,10 @@ impl PresetsStore {
                 // Handle potential deserialization errors gracefully
                 match serde_json::from_value(store) {
                     Ok(settings) => Ok(Some(settings)),
-                    Err(_) => Err("Failed to deserialize presets store".to_string()),
+                    Err(_) => {
+                        error!("Failed to deserialize presets store");
+                        Ok(None)
+                    }
                 }
             }
             _ => Ok(None),
@@ -45,6 +49,7 @@ impl PresetsStore {
         Ok(this.presets.get(default_i as usize).cloned())
     }
 
+    #[allow(unused)]
     pub fn update(app: &AppHandle, update: impl FnOnce(&mut Self)) -> Result<(), String> {
         let Ok(store) = app.store("store") else {
             return Err("Store not found".to_string());
@@ -58,6 +63,7 @@ impl PresetsStore {
 }
 
 impl Preset {
+    #[allow(unused)]
     fn resolve(&self, timeline: TimelineConfiguration) -> ProjectConfiguration {
         let mut ret = self.config.clone();
         ret.timeline = Some(timeline);

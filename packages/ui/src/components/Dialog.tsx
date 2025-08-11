@@ -15,7 +15,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={classNames("fixed inset-0 z-50 bg-black/60", className)}
+    className={classNames("fixed inset-0 z-[500] bg-black/60", className)}
     {...props}
   />
 ));
@@ -27,7 +27,7 @@ const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className="animate-fadeIn" />
-    <div className="flex fixed inset-0 z-50 justify-center items-center">
+    <div className="flex fixed inset-0 z-[501] justify-center items-center">
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
@@ -35,10 +35,10 @@ const DialogContent = React.forwardRef<
           className
         )}
         style={{
-          position: 'fixed',
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
+          position: "fixed",
+          top: "50%",
+          left: "50%",
+          transform: "translate(-50%, -50%)",
         }}
         {...props}
       >
@@ -67,21 +67,19 @@ const DialogHeader = ({
 }: DialogHeaderProps) => (
   <div
     className={classNames(
-      "flex gap-3 items-center p-5 border-b border-gray-4",
+      "flex flex-col gap-3 items-start p-5 border-b md:items-center md:flex-row border-gray-4",
       className
     )}
     {...props}
   >
     {icon && (
-      <div className="flex justify-center items-center rounded-full border text-gray-12 border-gray-5 bg-gray-3 size-10">
+      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 min-w-10 min-h-10 size-10">
         {icon}
       </div>
     )}
     <div className="flex flex-col">
       {children}
-      {description && (
-        <p className="text-sm text-gray-10">{description}</p>
-      )}
+      {description && <p className="text-sm text-gray-10">{description}</p>}
     </div>
   </div>
 );
@@ -107,10 +105,7 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={classNames(
-      "text-lg font-bold text-gray-12",
-      className
-    )}
+    className={classNames("text-lg font-medium text-gray-12", className)}
     {...props}
   />
 ));
@@ -135,7 +130,7 @@ export {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger
+  DialogTrigger,
 };
 
 export type { DialogHeaderProps };

@@ -1,13 +1,17 @@
+import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { LogoSpinner } from "@cap/ui";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import Image from "next/image";
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 interface VideoThumbnailProps {
   userId: string;
   videoId: string;
   alt: string;
   imageClass?: string;
+  objectFit?: string;
+  containerClass?: string;
 }
 
 function generateRandomGrayScaleColor() {
@@ -20,61 +24,86 @@ function generateRandomGrayScaleColor() {
 }
 
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
-  ({ userId, videoId, alt, imageClass }) => {
-    const [imageUrls, setImageUrls] = useState({ screen: "" });
-    const [loading, setLoading] = useState(true);
-    const [failed, setFailed] = useState(false);
+  ({
+    userId,
+    videoId,
+    alt,
+    imageClass,
+    objectFit = "cover",
+    containerClass,
+  }) => {
+    const imageUrl = useQuery({
+      queryKey: ["thumbnail", userId, videoId],
+      queryFn: async () => {
+        const cacheBuster = new Date().getTime();
+        const response = await fetch(
+          `/api/thumbnail?userId=${userId}&videoId=${videoId}&t=${cacheBuster}`
+        );
+        if (response.ok) {
+          const data = await response.json();
+          // Add cache busting to the thumbnail URL as well
+          return `${data.screen}${data.screen.includes("?") ? "&" : "?"
+            }t=${cacheBuster}`;
+        } else {
+          throw new Error("Failed to fetch pre-signed URLs");
+        }
+      },
+    });
+    const imageRef = useRef<HTMLImageElement>(null);
+
+    const { uploadingCapId } = useUploadingContext();
 
     useEffect(() => {
-      const fetchPreSignedUrls = async () => {
-        try {
-          const response = await fetch(
-            `/api/thumbnail?userId=${userId}&videoId=${videoId}`
-          );
-          if (response.ok) {
-            const data = await response.json();
-            setImageUrls({ screen: data.screen });
-          } else {
-            console.error("Failed to fetch pre-signed URLs");
-          }
-        } catch (error) {
-          console.error("Error fetching pre-signed URLs:", error);
-        }
-      };
-
-      fetchPreSignedUrls();
-    }, [userId, videoId]);
+      imageUrl.refetch();
+    }, [imageUrl.refetch, uploadingCapId]);
 
     const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
 
+    const [imageStatus, setImageStatus] = useState<
+      "loading" | "error" | "success"
+    >("loading");
+
+    useEffect(() => {
+      if (imageRef.current?.complete && imageRef.current.naturalWidth != 0) {
+        setImageStatus("success");
+      }
+    }, []);
+
     return (
       <div
-        className={`overflow-hidden relative mx-auto w-full bg-black rounded-t-xl border-b border-gray-3 max-h-[175px] aspect-video`}
+        className={clsx(
+          `overflow-hidden relative mx-auto w-full h-full bg-black rounded-t-xl border-b border-gray-3 aspect-video`,
+          containerClass
+        )}
       >
-        <div className="flex absolute top-0 left-0 z-10 justify-center items-center w-full h-full">
-          {failed ? (
+        <div className="flex absolute inset-0 z-10 justify-center items-center">
+          {imageUrl.isError || imageStatus === "error" ? (
             <div
               className="w-full h-full"
               style={{ backgroundImage: randomGradient }}
-            ></div>
+            />
           ) : (
-            loading === true && (
+            (imageUrl.isPending || imageStatus === "loading") && (
               <LogoSpinner className="w-5 h-auto animate-spin md:w-8" />
             )
           )}
         </div>
-        {imageUrls.screen && (
+        {imageUrl.data && (
           <Image
-            src={imageUrls.screen}
-            layout="fill"
+            ref={imageRef}
+            src={imageUrl.data}
+            fill={true}
+            sizes="(max-width: 768px) 100vw, 33vw"
             alt={alt}
-            objectFit="cover"
-            className={clsx("w-full h-full", imageClass)}
-            onLoad={() => setLoading(false)}
-            onError={() => {
-              setFailed(true);
-              setLoading(false);
-            }}
+            key={videoId}
+            style={{ objectFit: objectFit as any }}
+            className={clsx(
+              "w-full h-full",
+              imageClass,
+              imageStatus === "loading" && "opacity-0"
+            )}
+            onLoad={() => setImageStatus("success")}
+            onError={() => setImageStatus("error")}
           />
         )}
       </div>

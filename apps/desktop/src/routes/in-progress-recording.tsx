@@ -1,31 +1,53 @@
+import { createTimer } from "@solid-primitives/timer";
+import { createMutation } from "@tanstack/solid-query";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
+import { cx } from "cva";
 import {
   createEffect,
   createSignal,
-  onMount,
   type ComponentProps,
+  Show,
+  onCleanup,
 } from "solid-js";
-import { cx } from "cva";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { createTimer } from "@solid-primitives/timer";
-import { createMutation } from "@tanstack/solid-query";
 import { createStore, produce } from "solid-js/store";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import * as dialog from "@tauri-apps/plugin-dialog";
+import createPresence from "solid-presence";
 
-import { commands, events } from "~/utils/tauri";
 import {
-  createOptionsQuery,
   createCurrentRecordingQuery,
+  createOptionsQuery,
 } from "~/utils/queries";
+import { commands, events } from "~/utils/tauri";
+import { createMemo } from "solid-js";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
-type State = "recording" | "paused" | "stopped";
+type State =
+  | { variant: "countdown"; from: number; current: number }
+  | { variant: "recording" }
+  | { variant: "paused" }
+  | { variant: "stopped" };
+
+declare global {
+  interface Window {
+    COUNTDOWN: number;
+  }
+}
 
 export default function () {
-  const start = Date.now();
+  const [state, setState] = createSignal<State>(
+    window.COUNTDOWN === 0
+      ? { variant: "recording" }
+      : {
+          variant: "countdown",
+          from: window.COUNTDOWN,
+          current: window.COUNTDOWN,
+        }
+  );
+  const [start, setStart] = createSignal(Date.now());
   const [time, setTime] = createSignal(Date.now());
-  const [state, setState] = createSignal<State>("recording");
   const currentRecording = createCurrentRecordingQuery();
-  const { options } = createOptionsQuery();
+  const optionsQuery = createOptionsQuery();
 
   const audioLevel = createAudioInputLevel();
 
@@ -37,9 +59,22 @@ export default function () {
       ]
   >([]);
 
+  createTauriEventListener(events.recordingEvent, (payload) => {
+    if (payload.variant === "Countdown") {
+      setState((s) => {
+        if (s.variant === "countdown") return { ...s, current: payload.value };
+
+        return s;
+      });
+    } else if (payload.variant === "Started") {
+      setState({ variant: "recording" });
+      setStart(Date.now());
+    }
+  });
+
   createTimer(
     () => {
-      if (state() !== "recording") return;
+      if (state().variant !== "recording") return;
       setTime(Date.now());
     },
     100,
@@ -47,20 +82,24 @@ export default function () {
   );
 
   createEffect(() => {
-    if (!currentRecording.isPending && currentRecording.data === undefined)
+    if (
+      state().variant === "stopped" &&
+      !currentRecording.isPending &&
+      (currentRecording.data === undefined || currentRecording.data === null)
+    )
       getCurrentWindow().close();
   });
 
   const stopRecording = createMutation(() => ({
     mutationFn: async () => {
-      setState("stopped");
+      setState({ variant: "stopped" });
       await commands.stopRecording();
     },
   }));
 
   const togglePause = createMutation(() => ({
     mutationFn: async () => {
-      if (state() === "paused") {
+      if (state().variant === "paused") {
         await commands.resumeRecording();
         setPauseResumes(
           produce((a) => {
@@ -68,11 +107,11 @@ export default function () {
             a[a.length - 1].resume = Date.now();
           })
         );
-        setState("recording");
+        setState({ variant: "recording" });
       } else {
         await commands.pauseRecording();
         setPauseResumes((a) => [...a, { pause: Date.now() }]);
-        setState("paused");
+        setState({ variant: "paused" });
       }
       setTime(Date.now());
     },
@@ -87,22 +126,68 @@ export default function () {
 
       if (!shouldRestart) return;
 
-      await events.requestRestartRecording.emit();
-      setState("recording");
+      await commands.restartRecording();
+
+      setState({ variant: "recording" });
       setTime(Date.now());
     },
   }));
 
+  const deleteRecording = createMutation(() => ({
+    mutationFn: async () => {
+      const shouldDelete = await dialog.confirm(
+        "Are you sure you want to delete the recording?",
+        { title: "Confirm Delete", okLabel: "Delete", cancelLabel: "Cancel" }
+      );
+
+      if (!shouldDelete) return;
+
+      await commands.deleteRecording();
+
+      setState({ variant: "stopped" });
+    },
+  }));
+
   const adjustedTime = () => {
-    let t = time() - start;
+    if (state().variant === "countdown") return 0;
+    let t = time() - start();
     for (const { pause, resume } of pauseResumes) {
       if (pause && resume) t -= resume - pause;
     }
     return t;
   };
 
+  let [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
+    null
+  );
+  const showCountdown = () => state().variant === "countdown";
+  const countdownPresence = createPresence({
+    show: showCountdown,
+    element: countdownRef,
+  });
+  const countdownState = createMemo<
+    Extract<State, { variant: "countdown" }> | undefined
+  >((prev) => {
+    const s = state();
+    if (s.variant === "countdown") return s;
+    if (prev && countdownPresence.present()) return prev;
+  });
+
   return (
-    <div class="flex flex-row items-stretch bg-gray-500 dark:bg-gray-50 w-full h-full animate-in fade-in">
+    <div class="flex flex-row items-stretch w-full h-full bg-gray-1 animate-in fade-in">
+      <Show when={countdownState()}>
+        {(state) => (
+          <div
+            ref={setCountdownRef}
+            class={cx(
+              "transition-opacity",
+              showCountdown() ? "opacity-100" : "opacity-0"
+            )}
+          >
+            <Countdown from={state().from} current={state().current} />
+          </div>
+        )}
+      </Show>
       <div class="flex flex-row justify-between p-[0.25rem] flex-1">
         <button
           disabled={stopRecording.isPending}
@@ -116,14 +201,14 @@ export default function () {
           </span>
         </button>
 
-        <div class="flex items-center gap-1">
-          <div class="relative h-8 w-8 flex items-center justify-center">
-            {options.data?.micName != null ? (
+        <div class="flex gap-1 items-center">
+          <div class="flex relative justify-center items-center w-8 h-8">
+            {optionsQuery.rawOptions.micName != null ? (
               <>
-                <IconCapMicrophone class="size-5 text-gray-400" />
-                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-400 overflow-hidden rounded-full">
+                <IconCapMicrophone class="size-5 text-gray-12" />
+                <div class="absolute bottom-1 left-1 right-1 h-0.5 bg-gray-10 overflow-hidden rounded-full">
                   <div
-                    class="absolute inset-0 bg-blue-400 transition-transform duration-100"
+                    class="absolute inset-0 transition-transform duration-100 bg-blue-9"
                     style={{
                       transform: `translateX(-${(1 - audioLevel()) * 100}%)`,
                     }}
@@ -132,7 +217,7 @@ export default function () {
               </>
             ) : (
               <IconLucideMicOff
-                class="size-5 text-gray-300 opacity-20 dark:text-gray-300 dark:opacity-100"
+                class="text-gray-7 size-5"
                 data-tauri-drag-region
               />
             )}
@@ -144,7 +229,7 @@ export default function () {
               disabled={togglePause.isPending}
               onClick={() => togglePause.mutate()}
             >
-              {state() === "paused" ? (
+              {state().variant === "paused" ? (
                 <IconCapPlayCircle />
               ) : (
                 <IconCapPauseCircle />
@@ -158,13 +243,19 @@ export default function () {
           >
             <IconCapRestart />
           </ActionButton>
+          <ActionButton
+            disabled={deleteRecording.isPending}
+            onClick={() => deleteRecording.mutate()}
+          >
+            <IconCapTrash />
+          </ActionButton>
         </div>
       </div>
       <div
-        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-400 dark:border-gray-200 hover:cursor-move"
+        class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
         data-tauri-drag-region
       >
-        <IconCapMoreVertical class="pointer-events-none text-gray-400 dark:text-gray-400" />
+        <IconCapMoreVertical class="pointer-events-none text-gray-10" />
       </div>
     </div>
   );
@@ -175,9 +266,10 @@ function ActionButton(props: ComponentProps<"button">) {
     <button
       {...props}
       class={cx(
-        "p-[0.25rem] rounded-lg transition-colors",
-        "text-gray-400",
+        "p-[0.25rem] rounded-lg transition-all",
+        "text-gray-11",
         "h-8 w-8 flex items-center justify-center",
+        "disabled:opacity-50 disabled:cursor-not-allowed",
         props.class
       )}
       type="button"
@@ -195,11 +287,11 @@ function formatTime(secs: number) {
 function createAudioInputLevel() {
   const [level, setLevel] = createSignal(0);
 
-  events.audioInputLevelChange.listen((dbs) => {
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
     const DB_MIN = -60;
     const DB_MAX = 0;
 
-    const dbValue = dbs.payload ?? DB_MIN;
+    const dbValue = dbs ?? DB_MIN;
     const normalizedLevel = Math.max(
       0,
       Math.min(1, (dbValue - DB_MIN) / (DB_MAX - DB_MIN))
@@ -208,4 +300,47 @@ function createAudioInputLevel() {
   });
 
   return level;
+}
+
+function Countdown(props: { from: number; current: number }) {
+  const [animation, setAnimation] = createSignal(1);
+  setTimeout(() => setAnimation(0), 10);
+
+  return (
+    <div class="flex flex-row justify-between p-[0.25rem] flex-1 bg-gray-1 fixed inset-0 z-10">
+      <div class="flex flex-1 gap-3 items-center px-3">
+        <div class="flex-1 text-[13px] text-gray-11">Recording starting...</div>
+        <div class="relative w-5 h-5 text-red-300">
+          <svg class="absolute inset-0 w-5 h-5 -rotate-90" viewBox="0 0 20 20">
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              opacity="0.2"
+            />
+            <circle
+              cx="10"
+              cy="10"
+              r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-dasharray={`${animation() * 50.265} 50.265`}
+              stroke-linecap="round"
+              class="transition-all duration-1000 ease-linear"
+              style={{
+                "transition-duration": `${props.from * 1000}ms`,
+              }}
+            />
+          </svg>
+          <span class="flex absolute inset-0 justify-center items-center text-[11px]">
+            {props.current}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
 }

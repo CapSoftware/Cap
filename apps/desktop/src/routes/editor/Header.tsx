@@ -5,11 +5,20 @@ import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
-import { ComponentProps, onCleanup, onMount } from "solid-js";
+import {
+  ComponentProps,
+  createEffect,
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 
 import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
+import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
+import { commands, events } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import PresetsDropdown from "./PresetsDropdown";
@@ -43,6 +52,7 @@ export function Header() {
     meta,
     exportState,
     setExportState,
+    customDomain,
   } = useEditorContext();
 
   let unlistenTitlebar: UnlistenFn | undefined;
@@ -70,6 +80,7 @@ export function Header() {
             await remove(editorInstance.path, {
               recursive: true,
             });
+            events.recordingDeleted.emit({ path: editorInstance.path });
             await currentWindow.close();
           }}
           tooltipText="Delete recording"
@@ -81,32 +92,10 @@ export function Header() {
           leftIcon={<IconLucideFolder class="w-5" />}
         />
 
-        <p class="text-sm text-gray-500">
-          {meta().prettyName}
-          <span class="text-sm text-gray-400">.cap</span>
-        </p>
-        {/* <ErrorBoundary fallback={<></>}>
-            <Suspense>
-              <span
-                onClick={async () => {
-                  if (license.data?.type !== "pro") {
-                    await commands.showWindow("Upgrade");
-                  }
-                }}
-                class={`text-[0.8rem] ${
-                  license.data?.type === "pro"
-                    ? "bg-[--blue-400] text-gray-50 dark:text-gray-500"
-                    : "bg-gray-200 cursor-pointer hover:bg-gray-300"
-                } rounded-[0.55rem] px-2 py-1`}
-              >
-                {license.data?.type === "commercial"
-                  ? "Commercial License"
-                  : license.data?.type === "pro"
-                  ? "Pro"
-                  : "Personal License"}
-              </span>
-            </Suspense>
-          </ErrorBoundary> */}
+        <div class="flex flex-row items-center">
+          <NameEditor name={meta().prettyName} />
+          <span class="text-sm text-gray-11">.cap</span>
+        </div>
         <div data-tauri-drag-region class="flex-1 h-full" />
         <EditorButton
           tooltipText="Captions"
@@ -147,10 +136,12 @@ export function Header() {
           leftIcon={<IconCapRedo class="w-5" />}
         />
         <div data-tauri-drag-region class="flex-1 h-full" />
-        <ShareButton />
+        <Show when={customDomain.data}>
+          <ShareButton />
+        </Show>
         <Button
           variant="lightdark"
-          class={cx("flex gap-2 justify-center")}
+          class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
           onClick={() => {
             trackEvent("export_button_clicked");
             if (exportState.type === "done") setExportState({ type: "idle" });
@@ -158,7 +149,7 @@ export function Header() {
             setDialog({ type: "export", open: true });
           }}
         >
-          <UploadIcon class="text-gray-50 size-5" />
+          <UploadIcon class="text-gray-1 size-4" />
           Export
         </Button>
         {ostype() === "windows" && <CaptionControlsWindows11 />}
@@ -202,3 +193,59 @@ const UploadIcon = (props: ComponentProps<"svg">) => {
     </svg>
   );
 };
+
+function NameEditor(props: { name: string }) {
+  const { refetchMeta } = useEditorContext();
+
+  let prettyNameRef: HTMLInputElement | undefined;
+  let prettyNameMeasureRef: HTMLSpanElement | undefined;
+  const [truncated, setTruncated] = createSignal(false);
+  const [prettyName, setPrettyName] = createSignal(props.name);
+
+  createEffect(() => {
+    if (!prettyNameRef || !prettyNameMeasureRef) return;
+    prettyNameMeasureRef.textContent = prettyName();
+    const inputWidth = prettyNameRef.offsetWidth;
+    const textWidth = prettyNameMeasureRef.offsetWidth;
+    setTruncated(inputWidth < textWidth);
+  });
+
+  return (
+    <Tooltip disabled={!truncated()} content={props.name}>
+      <div class="flex flex-row items-center relative text-sm font-inherit font-normal tracking-inherit text-gray-12">
+        <input
+          ref={prettyNameRef}
+          class={cx(
+            "absolute inset-0 px-px m-0 opacity-0 overflow-hidden focus:opacity-100 bg-transparent border-b border-transparent focus:border-gray-7 focus:outline-none peer whitespace-pre",
+            truncated() && "truncate",
+            (prettyName().length < 5 || prettyName().length > 100) &&
+              "focus:border-red-500"
+          )}
+          value={prettyName()}
+          onInput={(e) => setPrettyName(e.currentTarget.value)}
+          onBlur={async () => {
+            const trimmed = prettyName().trim();
+            if (trimmed.length < 5 || trimmed.length > 100) {
+              setPrettyName(props.name);
+              return;
+            }
+            if (trimmed && trimmed !== props.name) {
+              await commands.setPrettyName(trimmed);
+              refetchMeta();
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") {
+              prettyNameRef?.blur();
+            }
+          }}
+        />
+        {/* Hidden span for measuring text width */}
+        <span
+          ref={prettyNameMeasureRef}
+          class="pointer-events-none max-w-[200px] px-px m-0 peer-focus:opacity-0 border-b border-transparent truncate whitespace-pre"
+        />
+      </div>
+    </Tooltip>
+  );
+}

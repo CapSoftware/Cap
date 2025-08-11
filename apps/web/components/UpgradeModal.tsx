@@ -1,8 +1,8 @@
 "use client";
 
-import { Button, Dialog, DialogContent, DialogTitle, Switch } from "@cap/ui";
+import { Button, Dialog, DialogContent, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
-import NumberFlow from '@number-flow/react';
+import NumberFlow from "@number-flow/react";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -17,11 +17,12 @@ import {
   Share2,
   Shield,
   Sparkles,
-  Users,
+  Video,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { memo, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
+import { buildEnv } from "@cap/env";
 
 interface UpgradeModalProps {
   open: boolean;
@@ -56,6 +57,8 @@ const modalVariants = {
 };
 
 export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
+  if (buildEnv.NEXT_PUBLIC_IS_CAP !== "true") return;
+
   const [proLoading, setProLoading] = useState(false);
   const [isAnnual, setIsAnnual] = useState(true);
   const [proQuantity, setProQuantity] = useState(1);
@@ -70,11 +73,10 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
     artboard: "cap-pro-modal",
     animations: ["animation"],
     layout: new Layout({
-      fit: Fit.Cover
+      fit: Fit.Cover,
     }),
     autoplay: true,
   });
-
 
   const iconStyling = "text-blue-500 size-[18px]";
   const proFeatures = [
@@ -89,6 +91,16 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
       description: "Cloud storage & shareable links",
     },
     {
+      icon: <Sparkles className={iconStyling} />,
+      title: "Cap AI",
+      description: "Automatic video chapters, summaries & more",
+    },
+    {
+      icon: <Lock className={iconStyling} />,
+      title: "Password protected videos",
+      description: "Enhanced security for your content",
+    },
+    {
       icon: <Database className={iconStyling} />,
       title: "Custom storage",
       description: "Connect your own S3 bucket",
@@ -99,24 +111,14 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
       description: "Commercial license for desktop app automatically included",
     },
     {
-      icon: <Users className={iconStyling} />,
-      title: "Team features",
-      description: "Collaborate with your team and create shared spaces",
+      icon: <Video className={iconStyling} />,
+      title: "Upload videos",
+      description: "Upload custom videos directly to Cap",
     },
     {
-      icon: <Sparkles className={iconStyling} />,
-      title: "Cap AI (Coming Soon)",
-      description: "Automatic video chapters, summaries & more",
-    },
-    {
-      icon: <Infinity className={iconStyling} />, 
+      icon: <Infinity className={iconStyling} />,
       title: "Unlimited views",
       description: "No limits on video views",
-    },
-    {
-      icon: <Lock className={iconStyling} />,
-      title: "Password protected videos",
-      description: "Enhanced security for your content",
     },
     {
       icon: <BarChart3 className={iconStyling} />,
@@ -165,9 +167,10 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border 
-      border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0">
-        <DialogTitle className="sr-only">Upgrade to Cap Pro</DialogTitle>
+      <DialogContent
+        className="sm:max-w-[1100px] w-[calc(100%-20px)] custom-scroll bg-gray-2 border
+      border-gray-4 overflow-y-auto md:overflow-hidden max-h-[90vh] p-0"
+      >
         <AnimatePresence mode="wait">
           {open && (
             <motion.div
@@ -178,92 +181,108 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
               exit="exit"
             >
               <div className="flex relative flex-col flex-1 justify-between items-end self-stretch border-r-0 border-b md:border-b-0 md:border-r border-gray-4">
-                <div 
-                className="h-[275px] border-b border-gray-4 w-full overflow-hidden">
-                 <ProRiveArt />
+                <div className="h-[275px] border-b border-gray-4 w-full overflow-hidden">
+                  <ProRiveArt />
                 </div>
-              <div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
-                <div className="flex flex-col items-center">                 
-                  <h1 className="text-3xl font-bold text-gray-12">
-                    Upgrade to Cap Pro
-                  </h1>
-                </div>
-                <p className="mt-1 text-lg text-center text-gray-11">
-                  You can cancel anytime. Early adopter pricing locked in.
-                </p>
-
-                <div className="flex flex-col items-center mt-3 mb-4 w-full">
-                  <div className="flex flex-col items-center mb-1 sm:items-end sm:flex-row">
-                    <NumberFlow
-                      value={totalPrice}
-                      className="text-3xl font-medium tabular-nums text-gray-12"
-                      format={{
-                        style: "currency",
-                        currency: "USD",
-                      }}
-                    />
-                    <span className="mb-1 ml-2 text-gray-11">
-                      {proQuantity === 1 ? (
-                        `per user, ${billingText}`
-                      ) : (
-                        <>
-                          for <NumberFlow value={proQuantity} className="tabular-nums text-gray-12" /> users,{" "}
-                          {billingText}
-                        </>
-                      )}
-                    </span>
+                <div className="flex relative flex-col flex-1 justify-center items-center py-6 w-full">
+                  <div className="flex flex-col items-center">
+                    <h1 className="text-3xl font-medium text-gray-12">
+                      Upgrade to Cap Pro
+                    </h1>
                   </div>
+                  <p className="mt-1 text-lg text-center text-gray-11">
+                    You can cancel anytime. Early adopter pricing locked in.
+                  </p>
 
-                  <div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
-                    <div className="flex gap-3 items-center">
-                      <span className="text-gray-12">Annual billing</span>
-                      <Switch
-                        checked={isAnnual}
-                        onCheckedChange={() => setIsAnnual(!isAnnual)}
+                  <div className="flex flex-col items-center mt-3 mb-4 w-full">
+                    <div className="flex flex-col items-center mb-1 sm:items-end sm:flex-row">
+                      <NumberFlow
+                        value={totalPrice}
+                        className="text-3xl font-medium tabular-nums text-gray-12"
+                        format={{
+                          style: "currency",
+                          currency: "USD",
+                        }}
                       />
+                      <span className="mb-2 ml-2 text-gray-11">
+                        {proQuantity === 1 ? (
+                          `per user, ${billingText}`
+                        ) : (
+                          <>
+                            for{" "}
+                            <NumberFlow
+                              value={proQuantity}
+                              className="tabular-nums text-gray-12"
+                            />{" "}
+                            users, {billingText}
+                          </>
+                        )}
+                      </span>
                     </div>
 
-                    <div className="flex items-center">
-                      <span className="mr-3 text-gray-12">Users:</span>
+                    <div className="flex flex-col gap-6 justify-evenly items-center mt-8 w-full max-w-md sm:gap-10 sm:flex-row">
+                      <div className="flex gap-3 items-center">
+                        <span className="text-gray-12">Annual billing</span>
+                        <Switch
+                          checked={isAnnual}
+                          onCheckedChange={() => setIsAnnual(!isAnnual)}
+                        />
+                      </div>
+
                       <div className="flex items-center">
-                        <button
-                          onClick={() =>
-                            proQuantity > 1 && setProQuantity(proQuantity - 1)
-                          }
-                          className="flex justify-center items-center w-8 h-8 rounded-l-md bg-gray-4 hover:bg-gray-5"
-                          disabled={proQuantity <= 1}
-                        >
-                          <Minus className="w-4 h-4 text-gray-12" />
-                        </button>
-                        <NumberFlow value={proQuantity} className="mx-auto w-6 text-sm tabular-nums text-center text-gray-12" />
-                        <button
-                          onClick={() => setProQuantity(proQuantity + 1)}
-                          className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5"
-                        >
-                          <Plus className="w-4 h-4 text-gray-12" />
-                        </button>
+                        <span className="mr-3 text-gray-12">Users:</span>
+                        <div className="flex items-center">
+                          <button
+                            onClick={() =>
+                              proQuantity > 1 && setProQuantity(proQuantity - 1)
+                            }
+                            className="flex justify-center items-center w-8 h-8 rounded-l-md bg-gray-4 hover:bg-gray-5"
+                            disabled={proQuantity <= 1}
+                          >
+                            <Minus className="w-4 h-4 text-gray-12" />
+                          </button>
+                          <NumberFlow
+                            value={proQuantity}
+                            className="mx-auto w-6 text-sm tabular-nums text-center text-gray-12"
+                          />
+                          <button
+                            onClick={() => setProQuantity(proQuantity + 1)}
+                            className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5"
+                          >
+                            <Plus className="w-4 h-4 text-gray-12" />
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
+
+                  <Button
+                    variant="blue"
+                    onClick={planCheckout}
+                    className="mt-5 w-full max-w-sm h-14 text-lg"
+                    disabled={proLoading}
+                  >
+                    {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
+                  </Button>
+                  <button
+                    className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
+                    onClick={() => onOpenChange(false)}
+                  >
+                    Skip
+                  </button>
                 </div>
-
-                <Button
-                  variant="primary"
-                  onClick={planCheckout}
-                  className="mt-5 w-full max-w-sm h-14 text-lg rounded-xl"
-                  disabled={proLoading}
-                >
-                  {proLoading ? "Loading..." : "Upgrade to Cap Pro"}
-                </Button>
-              </div>
               </div>
 
-              
               <div className="flex flex-1 justify-center items-center self-stretch p-8 bg-transparent md:bg-gray-3">
                 <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
                   {proFeatures.map((feature, index) => (
-                    <div key={index} className="flex flex-col justify-center items-center">
-                      <div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center border border-gray-6 justify-center">{feature.icon}</div>
+                    <div
+                      key={index}
+                      className="flex flex-col justify-center items-center"
+                    >
+                      <div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center justify-center">
+                        {feature.icon}
+                      </div>
                       <h3 className="text-base font-medium text-center text-gray-12">
                         {feature.title}
                       </h3>
@@ -283,12 +302,12 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 };
 
 const ProRiveArt = memo(() => {
-  const {RiveComponent: ProModal} = useRive({
+  const { RiveComponent: ProModal } = useRive({
     src: "/rive/main.riv",
     artboard: "cap-pro-modal",
     animations: ["animation"],
     layout: new Layout({
-      fit: Fit.Cover
+      fit: Fit.Cover,
     }),
     autoplay: true,
   });

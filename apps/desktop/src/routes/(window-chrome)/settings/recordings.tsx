@@ -6,21 +6,23 @@ import {
   useQueryClient,
 } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
   createMemo,
   createSignal,
   For,
   JSX,
+  onCleanup,
   ParentProps,
   Show,
 } from "solid-js";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ask } from "@tauri-apps/plugin-dialog";
-import * as shell from "@tauri-apps/plugin-shell";
 
 import { trackEvent } from "~/utils/analytics";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import { commands, events, RecordingMetaWithType } from "~/utils/tauri";
 
 type Recording = {
@@ -75,6 +77,8 @@ export default function Recordings() {
   );
   const recordings = createQuery(() => recordingsQuery);
 
+  createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
+
   const filteredRecordings = createMemo(() => {
     if (!recordings.data) {
       return [];
@@ -110,7 +114,13 @@ export default function Recordings() {
   };
 
   return (
-    <div class="flex relative flex-col w-full h-full">
+    <div class="flex relative flex-col p-4 space-y-4 w-full h-full">
+      <div class="flex flex-col">
+        <h2 class="text-lg font-medium text-gray-12">Previous Recordings</h2>
+        <p class="text-sm text-gray-10">
+          Manage your recordings and perform actions.
+        </p>
+      </div>
       <Show
         when={recordings.data && recordings.data.length > 0}
         fallback={
@@ -119,28 +129,27 @@ export default function Recordings() {
           </p>
         }
       >
-        <div class="p-4 border-b border-gray-300 border-dashed">
-          <div class="flex gap-3 items-center w-fit">
-            <For each={Tabs}>
-              {(tab) => (
-                <div
-                  class={cx(
-                    "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
-                    activeTab() === tab.id
-                      ? "bg-gray-300 cursor-default border-gray-300"
-                      : "bg-transparent cursor-pointer hover:bg-gray-200 border-gray-200"
-                  )}
-                  onClick={() => setActiveTab(tab.id)}
-                >
-                  {tab.icon && tab.icon}
-                  <p class="text-xs text-gray-500">{tab.label}</p>
-                </div>
-              )}
-            </For>
-          </div>
+        <div class="flex gap-3 items-center pb-4 w-full border-b border-gray-2">
+          <For each={Tabs}>
+            {(tab) => (
+              <div
+                class={cx(
+                  "flex gap-1.5 items-center transition-colors duration-200 p-2 px-3 border rounded-full",
+                  activeTab() === tab.id
+                    ? "bg-gray-5 cursor-default border-gray-5"
+                    : "bg-transparent cursor-pointer hover:bg-gray-3 border-gray-5"
+                )}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                {tab.icon && tab.icon}
+                <p class="text-xs text-gray-12">{tab.label}</p>
+              </div>
+            )}
+          </For>
         </div>
-        <div class="flex flex-col flex-1 custom-scroll">
-          <ul class="p-4 flex flex-col gap-[0.5rem] w-full text-[--text-primary]">
+
+        <div class="flex flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+          <ul class="p-4 flex flex-col gap-5 w-full text-[--text-primary]">
             <For each={filteredRecordings()}>
               {(recording) => (
                 <RecordingItem
@@ -176,11 +185,11 @@ function RecordingItem(props: {
   const queryClient = useQueryClient();
 
   return (
-    <li class="flex flex-row justify-between items-center px-4 py-3 w-full rounded-xl transition-colors duration-200 hover:bg-gray-100">
+    <li class="flex flex-row justify-between [&:not(:last-child)]:border-b [&:not(:last-child)]:pb-5 [&:not(:last-child)]:border-gray-3 items-center w-full  transition-colors duration-200 hover:bg-gray-2">
       <div class="flex gap-5 items-center">
         <Show
           when={imageExists()}
-          fallback={<div class="mr-4 bg-gray-400 rounded size-11" />}
+          fallback={<div class="mr-4 rounded bg-gray-10 size-11" />}
         >
           <img
             class="object-cover rounded size-12"
@@ -195,8 +204,8 @@ function RecordingItem(props: {
           <span>{props.recording.prettyName}</span>
           <div
             class={cx(
-              "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-500 rounded-full w-fit",
-              type() === "instant" ? "bg-blue-100" : "bg-gray-200"
+              "px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
+              type() === "instant" ? "bg-blue-100" : "bg-gray-3"
             )}
           >
             {type() === "instant" ? (
@@ -208,7 +217,7 @@ function RecordingItem(props: {
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex gap-2 items-center">
         <Show when={type() === "studio"}>
           <Show when={props.recording.meta.sharing}>
             {(sharing) => (
@@ -302,12 +311,12 @@ function TooltipIconButton(
           props.onClick();
         }}
         disabled={props.disabled}
-        class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-300"
+        class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5"
       >
         {props.children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-100 text-gray-500 border border-gray-200 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
+        <Tooltip.Content class="py-2 px-3 font-medium bg-gray-2 text-gray-12 border border-gray-3 text-xs rounded-lg animate-in fade-in slide-in-from-top-0.5">
           {props.tooltipText}
         </Tooltip.Content>
       </Tooltip.Portal>

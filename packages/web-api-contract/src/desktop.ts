@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { c } from "./util";
+import { AppRoute } from "@ts-rest/core";
 
 const CHANGELOG = z.object({
   metadata: z.object({
@@ -38,13 +39,22 @@ const publicContract = c.router({
   },
 });
 
+const a = publicContract.getChangelogPosts;
+type A = typeof a;
+
+type B = A extends AppRoute ? number : string;
+
 const protectedContract = c.router(
   {
     submitFeedback: {
       method: "POST",
       path: "/desktop/feedback",
       contentType: "application/x-www-form-urlencoded",
-      body: z.object({ feedback: z.string() }),
+      body: z.object({
+        feedback: z.string(),
+        os: z.union([z.literal("macos"), z.literal("windows")]),
+        version: z.string(),
+      }),
       responses: {
         200: z.object({ success: z.boolean() }),
       },
@@ -66,11 +76,11 @@ const protectedContract = c.router(
         200: z.object({
           config: z.custom<{
             provider: string;
-            accessKeyId: string | null;
-            secretAccessKey: string | null;
-            endpoint: string | null;
-            bucketName: string | null;
-            region: string | null;
+            accessKeyId: string;
+            secretAccessKey: string;
+            endpoint: string;
+            bucketName: string;
+            region: string;
           }>(),
         }),
       },
@@ -123,6 +133,12 @@ const protectedContract = c.router(
           auth: z.literal(false),
         }),
       },
+    },
+    deleteVideo: {
+      method: "DELETE",
+      path: "/desktop/video/delete",
+      query: z.object({ videoId: z.string() }),
+      responses: { 200: z.unknown() },
     },
   },
   {

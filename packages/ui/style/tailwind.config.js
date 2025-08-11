@@ -1,16 +1,15 @@
-module.exports = function (app, options) {
+module.exports = function (__app, _options) {
+  // Function to generate color scales for Radix colors
+  function getColorScale(name, alpha = false) {
+    let scale = {};
+    for (let i = 1; i <= 12; i++) {
+      scale[i] = `var(--${name}-${i})`;
+      // next line only needed if using alpha values
+      if (alpha) scale[`a${i}`] = `var(--${name}-a${i})`;
+    }
 
-// Function to generate color scales for Radix colors
-function getColorScale(name, alpha = false) {
-  let scale = {};
-  for (let i = 1; i <= 12; i++) {
-    scale[i] = `var(--${name}-${i})`;
-    // next line only needed if using alpha values
-    if (alpha) scale[`a${i}`] = `var(--${name}-a${i})`
+    return scale;
   }
-
-  return scale;
-}
 
   const config = {
     content: [
@@ -22,12 +21,12 @@ function getColorScale(name, alpha = false) {
     ],
     theme: {
       screens: {
-        'xs': '480px',
-        'sm': '640px',
-        'md': '768px',
-        'lg': '1024px',
-        'xl': '1280px',
-        '2xl': '1536px',
+        xs: "480px",
+        sm: "640px",
+        md: "768px",
+        lg: "1024px",
+        xl: "1280px",
+        "2xl": "1536px",
       },
       fontWeight: {
         thin: "300",
@@ -42,9 +41,41 @@ function getColorScale(name, alpha = false) {
         "extra-bold": "600",
       },
       extend: {
+        typography: {
+          DEFAULT: {
+            css: {
+              strong: {
+                fontWeight: "500",
+              },
+              b: {
+                fontWeight: "500",
+              },
+              h1: {
+                fontWeight: "500",
+              },
+              h2: {
+                fontWeight: "500",
+              },
+              h3: {
+                fontWeight: "500",
+              },
+              h4: {
+                fontWeight: "500",
+              },
+              h5: {
+                fontWeight: "500",
+              },
+              h6: {
+                fontWeight: "500",
+              },
+            }
+          }
+        },
         colors: {
           gray: getColorScale("gray"),
+          "gray-a": getColorScale("gray-a", true),
           blue: getColorScale("blue"),
+          red: getColorScale("red"),
           border: "hsl(var(--border))",
           input: "hsl(var(--input))",
           ring: "hsl(var(--ring))",
@@ -126,7 +157,7 @@ function getColorScale(name, alpha = false) {
             "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
         },
         fontFamily: {
-          primary: ['var(--font-sf-pro-display)', 'sans-serif'],
+          primary: ["var(--font-sf-pro-display)", "sans-serif"],
         },
         keyframes: {
           flyEmoji: {
@@ -141,15 +172,18 @@ function getColorScale(name, alpha = false) {
           },
           fadeIn: {
             from: { opacity: 0 },
-            to: { opacity: 1 }
+            to: { opacity: 1 },
           },
           fadeOut: {
             from: { opacity: 1 },
-            to: { opacity: 0 }
+            to: { opacity: 0 },
           },
           contentShow: {
-            from: { opacity: 0, transform: "translate(-50%, -48%) scale(0.96)" },
-            to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" }
+            from: {
+              opacity: 0,
+              transform: "translate(-50%, -48%) scale(0.96)",
+            },
+            to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
           },
         },
         animation: {

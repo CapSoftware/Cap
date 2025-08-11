@@ -9,7 +9,7 @@ const Card = forwardRef<
     ref={ref}
     className={classNames(
       !noStyle &&
-        "border p-5 bg-gray-2 rounded-2xl border-gray-3 text-card-foreground",
+      "border p-5 bg-gray-1 rounded-2xl border-gray-3 text-card-foreground",
       className
     )}
     {...props}
@@ -36,7 +36,7 @@ const CardTitle = forwardRef<
   <h3
     ref={ref}
     className={classNames(
-      "text-lg font-semibold tracking-tight leading-none",
+      "text-lg font-semibold tracking-tight leading-none text-gray-12",
       className
     )}
     {...props}

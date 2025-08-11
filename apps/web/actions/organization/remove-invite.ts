@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations, organizationInvites } from "@cap/database/schema";
@@ -33,14 +33,17 @@ export async function removeOrganizationInvite(
   const result = await db()
     .delete(organizationInvites)
     .where(
-      and(eq(organizationInvites.id, inviteId), eq(organizationInvites.organizationId, organizationId))
+      and(
+        eq(organizationInvites.id, inviteId),
+        eq(organizationInvites.organizationId, organizationId)
+      )
     );
 
   if (result.rowsAffected === 0) {
     throw new Error("Invite not found");
   }
 
-  revalidatePath('/dashboard/settings/organization');
-  
+  revalidatePath("/dashboard/settings/organization");
+
   return { success: true };
-} 
+}

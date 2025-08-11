@@ -1,25 +1,18 @@
 import { createSignal } from "solid-js";
+
 import Tooltip from "~/components/Tooltip";
-import { createOptionsQuery } from "~/utils/queries";
+import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { commands } from "~/utils/tauri";
 
 const Mode = () => {
-  const { options, setOptions } = createOptionsQuery();
+  const { rawOptions, setOptions } = useRecordingOptions();
   const [isInfoHovered, setIsInfoHovered] = createSignal(false);
 
-  const openModeSelectWindow = async () => {
-    try {
-      await commands.showWindow("ModeSelect");
-    } catch (error) {
-      console.error("Failed to open mode select window:", error);
-    }
-  };
-
   return (
-    <div class="flex gap-2 relative justify-end items-center p-1.5 rounded-full bg-gray-200 w-fit">
+    <div class="flex gap-2 relative justify-end items-center p-1.5 rounded-full bg-gray-3 w-fit">
       <div
-        class="absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-300 group"
-        onClick={openModeSelectWindow}
+        class="absolute -left-1.5 -top-2 p-1 rounded-full w-fit bg-gray-5 group"
+        onClick={() => commands.showWindow("ModeSelect")}
         onMouseEnter={() => setIsInfoHovered(true)}
         onMouseLeave={() => setIsInfoHovered(false)}
       >
@@ -35,13 +28,12 @@ const Mode = () => {
         >
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "instant" });
+              setOptions({ mode: "instant" });
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "instant"
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
-                : "bg-gray-200 hover:bg-[--gray-300]"
+              rawOptions.mode === "instant"
+                ? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-10"
+                : "bg-gray-3 hover:bg-gray-7"
             }`}
           >
             <IconCapInstant class="invert size-4 dark:invert-0" />
@@ -58,13 +50,12 @@ const Mode = () => {
         >
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "studio" });
+              setOptions({ mode: "studio" });
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "studio"
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
-                : "bg-gray-200 hover:bg-[--gray-300]"
+              rawOptions.mode === "studio"
+                ? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-10"
+                : "bg-gray-3 hover:bg-gray-7"
             }`}
           >
             <IconCapFilmCut class="size-3.5 invert dark:invert-0" />
@@ -76,13 +67,12 @@ const Mode = () => {
         <>
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "instant" });
+              setOptions({ mode: "instant" });
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "instant"
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
-                : "bg-gray-200 hover:bg-[--gray-300]"
+              rawOptions.mode === "instant"
+                ? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-5 hover:bg-gray-7 ring-blue-10"
+                : "bg-gray-3 hover:bg-gray-7"
             }`}
           >
             <IconCapInstant class="invert size-4 dark:invert-0" />
@@ -90,13 +80,12 @@ const Mode = () => {
 
           <div
             onClick={() => {
-              if (!options.data) return;
-              setOptions.mutate({ ...options.data, mode: "studio" });
+              setOptions({ mode: "studio" });
             }}
             class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
-              options.data?.mode === "studio"
-                ? "ring-2 ring-offset-1 ring-offset-gray-50 bg-gray-300 hover:bg-[--gray-300] ring-[--blue-300]"
-                : "bg-gray-200 hover:bg-[--gray-300]"
+              rawOptions.mode === "studio"
+                ? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-5 hover:bg-gray-7 ring-blue-10"
+                : "bg-gray-3 hover:bg-gray-7"
             }`}
           >
             <IconCapFilmCut class="size-3.5 invert dark:invert-0" />

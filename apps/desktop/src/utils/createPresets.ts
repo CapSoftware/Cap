@@ -1,6 +1,6 @@
-import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
+import { produce, unwrap } from "solid-js/store";
 import { presetsStore } from "~/store";
-import { produce } from "solid-js/store";
+import type { PresetsStore, ProjectConfiguration } from "~/utils/tauri";
 
 export type CreatePreset = {
   name: string;
@@ -11,7 +11,7 @@ export type CreatePreset = {
 export function createPresets() {
   const query = presetsStore.createQuery();
 
-  async function updatePresets(fn: (prev: PresetsStore) => PresetsStore) {
+  async function updatePresets(fn: (prev: PresetsStore) => void) {
     if (query.isLoading) throw new Error("Presets not loaded");
 
     let p = query.data;
@@ -29,33 +29,26 @@ export function createPresets() {
       // @ts-ignore we reeeally don't want the timeline in the preset
       config.timeline = undefined;
 
-      await updatePresets((prev) => ({
-        presets: [...prev.presets, { name: preset.name, config }],
-        default: preset.default ? prev.presets.length : prev.default,
-      }));
+      await updatePresets((store) => {
+        store.presets.push({ name: preset.name, config });
+        store.default = preset.default ? store.presets.length : store.default;
+      });
     },
     deletePreset: (index: number) =>
-      updatePresets((prev) => {
-        prev.presets.splice(index, 1);
-
-        return {
-          presets: prev.presets,
-          default:
-            index > prev.presets.length - 1
-              ? prev.presets.length - 1
-              : prev.default,
-        };
+      updatePresets((store) => {
+        store.presets.splice(index, 1);
+        store.default =
+          index > store.presets.length - 1
+            ? store.presets.length - 1
+            : store.default;
       }),
     setDefault: (index: number) =>
-      updatePresets((prev) => ({
-        presets: [...prev.presets],
-        default: index,
-      })),
+      updatePresets((store) => {
+        store.default = index;
+      }),
     renamePreset: (index: number, name: string) =>
-      updatePresets((prev) => {
-        prev.presets[index].name = name;
-
-        return prev;
+      updatePresets((store) => {
+        store.presets[index].name = name;
       }),
   };
 }

@@ -25,3 +25,17 @@ export function useWindowChrome(state: WindowChromeState) {
     ctx.setState?.();
   });
 }
+
+export function WindowChromeHeader(props: {
+  hideMaximize?: boolean;
+  children?: JSX.Element;
+}) {
+  useWindowChrome({
+    hideMaximize: props.hideMaximize,
+    get items() {
+      return props.children;
+    },
+  });
+
+  return null;
+}

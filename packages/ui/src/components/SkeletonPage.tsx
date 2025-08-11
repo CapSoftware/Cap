@@ -9,7 +9,7 @@ interface SkeletonPageProps {
 
 export const SkeletonPage = ({ customSkeleton }: SkeletonPageProps) => {
   return (
-    <div className="dashboard-page">
+    <div>
       {customSkeleton ? (
         customSkeleton(Skeleton)
       ) : (

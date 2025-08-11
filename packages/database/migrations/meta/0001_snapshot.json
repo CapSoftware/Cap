@@ -1,8 +1,8 @@
 {
   "version": "5",
   "dialect": "mysql",
-  "id": "94acb4a1-1de9-4bcf-bb06-5aeae407cd92",
-  "prevId": "b08d5e93-8b36-4743-bcfb-7671d65af504",
+  "id": "b5bc5676-a4a0-47e2-9d59-1ee12ab6a9c2",
+  "prevId": "3d91bc9d-85c3-45eb-b6b6-e1db45b8151d",
   "tables": {
     "accounts": {
       "name": "accounts",
@@ -144,6 +144,52 @@
       "uniqueConstraints": {
         "accounts_id_unique": {
           "name": "accounts_id_unique",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "checkConstraint": {}
+    },
+    "auth_api_keys": {
+      "name": "auth_api_keys",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar(36)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "userId": {
+          "name": "userId",
+          "type": "varchar(15)",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "(now())"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {
+        "auth_api_keys_id": {
+          "name": "auth_api_keys_id",
+          "columns": [
+            "id"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "auth_api_keys_id_unique": {
+          "name": "auth_api_keys_id_unique",
           "columns": [
             "id"
           ]
@@ -523,6 +569,13 @@
         "domainVerified": {
           "name": "domainVerified",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "iconUrl": {
+          "name": "iconUrl",
+          "type": "varchar(1024)",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -1138,6 +1191,13 @@
           "notNull": true,
           "autoincrement": false,
           "default": true
+        },
+        "password": {
+          "name": "password",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
         },
         "videoStartTime": {
           "name": "videoStartTime",

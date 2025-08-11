@@ -2,7 +2,7 @@ import { type NextRequest } from "next/server";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizationMembers, organizations, users } from "@cap/database/schema";
 import { db } from "@cap/database";
-import { eq, or } from "drizzle-orm";
+import { eq, or, and, ne } from "drizzle-orm";
 import { nanoId } from "@cap/database/helpers";
 
 export async function POST(request: NextRequest) {
@@ -27,6 +27,24 @@ export async function POST(request: NextRequest) {
   if (lastName) {
     fullName += ` ${lastName}`;
   }
+
+  const memberButNotOwner = await db()
+    .select()
+    .from(organizationMembers)
+    .leftJoin(organizations, eq(organizationMembers.organizationId, organizations.id))
+    .where(
+      and(
+        eq(organizationMembers.userId, user.id),
+        ne(organizations.ownerId, user.id)
+      )
+    )
+    .limit(1);
+
+  console.log("memberButNotOwner", memberButNotOwner);
+
+  const isMemberOfOrganization = memberButNotOwner.length > 0;
+
+  console.log("isMemberOfOrganization", isMemberOfOrganization);
 
   const [organization] = await db()
     .select()
@@ -57,7 +75,11 @@ export async function POST(request: NextRequest) {
   }
 
   return Response.json(
-    { success: true, message: "Onboarding completed successfully" },
+    { 
+      success: true, 
+      message: "Onboarding completed successfully",
+      isMemberOfOrganization 
+    },
     { status: 200 }
   );
 }

@@ -1,9 +1,7 @@
 use std::sync::Arc;
 
 use flume::Receiver;
-use tokio::sync::mpsc;
-
-use crate::feeds::RawCameraFrame;
+use tokio_util::sync::CancellationToken;
 
 pub struct WSFrame {
     pub data: Vec<u8>,
@@ -12,11 +10,11 @@ pub struct WSFrame {
     pub stride: u32,
 }
 
-pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, mpsc::Sender<()>) {
+pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, CancellationToken) {
     use axum::{
         extract::{
-            ws::{Message, WebSocket, WebSocketUpgrade},
             State,
+            ws::{Message, WebSocket, WebSocketUpgrade},
         },
         response::IntoResponse,
         routing::get,
@@ -81,17 +79,18 @@ pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, mpsc::Sender<
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tracing::info!("WebSocket server listening on port {}", port);
-    let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
+    let cancel_token = CancellationToken::new();
+    let cancel_token_child = cancel_token.child_token();
     tokio::spawn(async move {
         let server = axum::serve(listener, router.into_make_service());
         tokio::select! {
             _ = server => {},
-            _ = shutdown_rx.recv() => {
+            _ = cancel_token.cancelled() => {
                 println!("WebSocket server shutting down");
             }
         }
     });
 
-    (port, shutdown_tx)
+    (port, cancel_token_child)
 }

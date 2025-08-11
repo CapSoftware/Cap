@@ -2,16 +2,26 @@ import {
   createEventListener,
   createEventListenerMap,
 } from "@solid-primitives/event-listener";
-import { For, Show, batch, createRoot, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  batch,
+  createMemo,
+  createRoot,
+  createSignal,
+} from "solid-js";
 import { produce } from "solid-js/store";
+import { Menu } from "@tauri-apps/api/menu";
 
+import { useEditorContext } from "../context";
 import {
   useSegmentContext,
   useTimelineContext,
   useTrackContext,
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
-import { useEditorContext } from "../context";
+import { cx } from "cva";
+import { commands } from "~/utils/tauri";
 
 export type ZoomSegmentDragState =
   | { type: "idle" }
@@ -30,8 +40,33 @@ export function ZoomTrack(props: {
   const [hoveringSegment, setHoveringSegment] = createSignal(false);
   const [hoveredTime, setHoveredTime] = createSignal<number>();
 
+  const handleGenerateZoomSegments = async () => {
+    try {
+      const zoomSegments = await commands.generateZoomSegmentsFromClicks();
+      setProject("timeline", "zoomSegments", zoomSegments);
+    } catch (error) {
+      console.error("Failed to generate zoom segments:", error);
+    }
+  };
+
   return (
     <TrackRoot
+      onContextMenu={async (e) => {
+        if (!import.meta.env.DEV) return;
+
+        e.preventDefault();
+        const menu = await Menu.new({
+          id: "zoom-track-options",
+          items: [
+            {
+              id: "generateZoomSegments",
+              text: "Generate zoom segments from clicks",
+              action: handleGenerateZoomSegments,
+            },
+          ],
+        });
+        menu.popup();
+      }}
       onMouseMove={(e) => {
         if (hoveringSegment()) {
           setHoveredTime(undefined);
@@ -200,10 +235,27 @@ export function ZoomTrack(props: {
             };
           }
 
+          const isSelected = createMemo(() => {
+            const selection = editorState.timeline.selection;
+            if (!selection || selection.type !== "zoom") return false;
+
+            const segmentIndex = project.timeline?.zoomSegments?.findIndex(
+              (s) => s.start === segment.start && s.end === segment.end
+            );
+
+            return segmentIndex === selection.index;
+          });
+
           return (
             <SegmentRoot
-              class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]"
-              innerClass="ring-red-300"
+              class={cx(
+                "border duration-200 hover:border-gray-12 transition-colors group",
+                "bg-gradient-to-r from-[#292929] via-[#434343] to-[#292929] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]",
+                isSelected()
+                  ? "wobble-wrapper border-gray-12"
+                  : "border-transparent"
+              )}
+              innerClass="ring-red-5"
               segment={segment}
               onMouseEnter={() => {
                 setHoveringSegment(true);
@@ -246,6 +298,14 @@ export function ZoomTrack(props: {
                         value.maxValue,
                         Math.max(value.minValue, newStart)
                       )
+                    );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
                     );
                   }
                 )}
@@ -294,7 +354,7 @@ export function ZoomTrack(props: {
 
                   return (
                     <Show when={ctx.width() > 100}>
-                      <div class="flex flex-col gap-1 justify-center items-center text-xs text-gray-50 whitespace-nowrap dark:text-gray-500 animate-in fade-in">
+                      <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
                         <span class="opacity-70">Zoom</span>
                         <div class="flex gap-1 items-center text-md">
                           <IconLucideSearch class="size-3.5" />{" "}
@@ -336,6 +396,14 @@ export function ZoomTrack(props: {
                       "end",
                       Math.min(value.maxValue, Math.max(value.minValue, newEnd))
                     );
+
+                    setProject(
+                      "timeline",
+                      "zoomSegments",
+                      produce((s) => {
+                        s.sort((a, b) => a.start - b.start);
+                      })
+                    );
                   }
                 )}
               />
@@ -355,8 +423,8 @@ export function ZoomTrack(props: {
               end: time() + 1,
             }}
           >
-            <SegmentContent class="bg-gradient-to-r zoom-gradient-border hover:border duration-300 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
-              <p class="w-full text-center text-gray-50 dark:text-gray-500 text-md text-primary">
+            <SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#292929] via-[#434343] to-[#292929] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+              <p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
                 +
               </p>
             </SegmentContent>

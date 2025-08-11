@@ -63,7 +63,7 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={classNames(
-      "border-b transition-colors border-gray-5 hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "border-b transition-colors border-gray-3 data-[state=selected]:bg-muted",
       className
     )}
     {...props}
@@ -121,5 +121,6 @@ export {
   TableFooter,
   TableHead,
   TableHeader,
-  TableRow,
+  TableRow
 };
+

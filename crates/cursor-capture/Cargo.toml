@@ -9,7 +9,7 @@ workspace = true
 [dependencies]
 cap-displays = { path = "../displays" }
 
-device_query = "3.0.1"
+device_query = "4.0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

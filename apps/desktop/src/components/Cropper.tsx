@@ -1,4 +1,7 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { makePersisted } from "@solid-primitives/storage";
+import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
   type ParentProps,
   batch,
@@ -13,15 +16,12 @@ import {
   onMount,
   Show,
 } from "solid-js";
-import CropAreaRenderer from "./CropAreaRenderer";
-import Box from "~/utils/box";
-import { type XY, type Crop, commands } from "~/utils/tauri";
 import { createStore } from "solid-js/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { generalSettingsStore } from "~/store";
-import { type CheckMenuItemOptions, Menu } from "@tauri-apps/api/menu";
-import { makePersisted } from "@solid-primitives/storage";
 import { Transition } from "solid-transition-group";
+import { generalSettingsStore } from "~/store";
+import Box from "~/utils/box";
+import { type Crop, type XY, commands } from "~/utils/tauri";
+import CropAreaRenderer from "./CropAreaRenderer";
 
 type Direction = "n" | "e" | "s" | "w" | "nw" | "ne" | "se" | "sw";
 type HandleSide = {
@@ -682,7 +682,7 @@ export default function Cropper(
             }}
           >
             <Show when={snappedRatio() !== null}>
-              <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-200 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-400 text-sm border border-gray-50 dark:border-gray-300 outline outline-1 outline-[#dedede] dark:outline-[#000]">
+              <div class="absolute left-0 right-0 mx-auto top-2 bg-gray-3 opacity-80 h-6 w-10 rounded-[7px] text-center text-blue-9 text-sm border border-blue-9 outline outline-1 outline-[#dedede] dark:outline-[#000]">
                 {snappedRatio()![0]}:{snappedRatio()![1]}
               </div>
             </Show>

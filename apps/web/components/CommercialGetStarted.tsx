@@ -20,7 +20,11 @@ export function CommercialGetStarted() {
   return (
     <div
       className="custom-bg max-w-[1000px] mx-auto rounded-[20px] overflow-hidden relative flex flex-col justify-center p-8"
-      style={{ minHeight: "264px" }}
+      style={{
+        minHeight: "264px",
+        background:
+          "linear-gradient(135deg, #4f46e5 0%, #3b82f6 50%, #0ea5e9 100%)",
+      }}
     >
       <div
         id="cloud-4"

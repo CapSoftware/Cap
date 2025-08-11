@@ -1,7 +1,6 @@
 import { Router, useCurrentMatches } from "@solidjs/router";
 import { FileRoutes } from "@solidjs/start/router";
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { message } from "@tauri-apps/plugin-dialog";
 import {
   createEffect,
@@ -10,27 +9,27 @@ import {
   onMount,
   Suspense,
 } from "solid-js";
-
-import "@cap/ui-solid/main.css";
-import "unfonts.css";
-import "./styles/theme.css";
-
-import { Button } from "@cap/ui-solid";
 import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { Toaster } from "solid-toast";
+
+import "@cap/ui-solid/main.css";
+import "unfonts.css";
+import "./styles/theme.css";
+
 import { generalSettingsStore } from "./store";
 import { initAnonymousUser } from "./utils/analytics";
 import { commands, type AppTheme } from "./utils/tauri";
 import titlebar from "./utils/titlebar-state";
+import { CapErrorBoundary } from "./components/CapErrorBoundary";
 
 const queryClient = new QueryClient({
   defaultOptions: {
     mutations: {
       onError: (e) => {
-        message(`An error occured, here are the details:\n${e}`);
+        message(`Error\n${e}`);
       },
     },
   },
@@ -74,39 +73,7 @@ function Inner() {
           },
         }}
       />
-      <ErrorBoundary
-        fallback={(e: Error) => {
-          console.error(e);
-          return (
-            <div class="w-screen h-screen flex flex-col justify-center items-center bg-gray-100 border-gray-200 max-h-screen overflow-hidden transition-[border-radius] duration-200 text-[--text-secondary] gap-y-4 max-sm:gap-y-2 px-8 text-center">
-              <IconCapLogo class="max-sm:size-16" />
-              <h1 class="text-[--text-primary] text-3xl max-sm:text-xl font-bold">
-                An Error Occured
-              </h1>
-              <p class="mb-2 max-sm:text-sm">
-                We're very sorry, but something has gone wrong.
-              </p>
-              <div class="flex flex-row gap-4 max-sm:flex-col max-sm:gap-2">
-                <Button
-                  onClick={() => {
-                    writeText(`${e.toString()}\n\n${e.stack}`);
-                  }}
-                >
-                  Copy Error to Clipboard
-                </Button>
-                <Button
-                  onClick={() => {
-                    location.reload();
-                  }}
-                  variant="secondary"
-                >
-                  Reload
-                </Button>
-              </div>
-            </div>
-          );
-        }}
-      >
+      <CapErrorBoundary>
         <Router
           root={(props) => {
             const matches = useCurrentMatches();
@@ -116,7 +83,7 @@ function Inner() {
                 if (match.route.info?.AUTO_SHOW_WINDOW === false) return;
               }
 
-              currentWindow.show();
+              if (location.pathname !== "/camera") currentWindow.show();
             });
 
             return (
@@ -134,7 +101,7 @@ function Inner() {
         >
           <FileRoutes />
         </Router>
-      </ErrorBoundary>
+      </CapErrorBoundary>
     </>
   );
 }
@@ -154,18 +121,15 @@ function createThemeListener(currentWindow: WebviewWindow) {
   });
 
   function update(appTheme: AppTheme | null | undefined) {
+    if (location.pathname === "/camera") return;
+
     if (appTheme === undefined || appTheme === null) return;
-    if (
-      location.pathname === "/camera" ||
-      location.pathname === "/prev-recordings"
-    )
-      return;
 
     commands.setTheme(appTheme).then(() => {
       document.documentElement.classList.toggle(
         "dark",
         appTheme === "dark" ||
-          window.matchMedia("(prefers-color-scheme: dark)").matches
+        window.matchMedia("(prefers-color-scheme: dark)").matches
       );
     });
   }

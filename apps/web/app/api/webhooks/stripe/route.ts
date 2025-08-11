@@ -6,6 +6,7 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { buildEnv, serverEnv } from "@cap/env";
 import { PostHog } from "posthog-node";
+import { nanoId } from "@cap/database/helpers";
 
 const relevantEvents = new Set([
   "checkout.session.completed",
@@ -13,7 +14,33 @@ const relevantEvents = new Set([
   "customer.subscription.deleted",
 ]);
 
-// Helper function to find user with retries
+async function createGuestUser(email: string): Promise<typeof users.$inferSelect> {  
+  const userId = nanoId();
+  
+  await db().insert(users).values({
+    id: userId,
+    email: email,
+    emailVerified: null,
+    name: null,
+    image: null,
+    activeOrganizationId: "",
+  });
+  
+  
+  const result = await db()
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+    
+  const newUser = result[0];
+  if (!newUser) {
+    throw new Error("Failed to create user");
+  }
+    
+  return newUser;
+}
+
 async function findUserWithRetry(
   email: string,
   userId?: string,
@@ -26,7 +53,6 @@ async function findUserWithRetry(
     });
 
     try {
-      // Try finding by userId first if available
       if (userId) {
         console.log(`Attempting to find user by ID: ${userId}`);
         const userById = await db()
@@ -43,7 +69,6 @@ async function findUserWithRetry(
         console.log(`No user found by ID: ${userId}`);
       }
 
-      // If not found by ID or no ID provided, try email
       if (email) {
         console.log(`Attempting to find user by email: ${email}`);
         const userByEmail = await db()
@@ -60,9 +85,8 @@ async function findUserWithRetry(
         console.log(`No user found by email: ${email}`);
       }
 
-      // If we reach here, no user was found on this attempt
       if (i < maxRetries - 1) {
-        const delay = Math.pow(2, i) * 3000; // 3s, 6s, 12s, 24s, 48s
+        const delay = Math.pow(2, i) * 3000;
         console.log(
           `No user found on attempt ${
             i + 1
@@ -72,7 +96,6 @@ async function findUserWithRetry(
       }
     } catch (error) {
       console.error(`Error during attempt ${i + 1}:`, error);
-      // If this is not the last attempt, continue to next retry
       if (i < maxRetries - 1) {
         const delay = Math.pow(2, i) * 3000;
         await new Promise((resolve) => setTimeout(resolve, delay));
@@ -141,11 +164,34 @@ export const POST = async (req: Request) => {
           customerEmail,
         });
 
-        // Try to find user with retries
-        const dbUser = await findUserWithRetry(
+        let dbUser = await findUserWithRetry(
           customerEmail as string,
           foundUserId
         );
+
+        if (!dbUser && session.metadata?.guestCheckout === "true") {
+          const guestEmail = customerEmail || session.customer_details?.email;
+          
+          if (!guestEmail) {
+            console.error("No email found for guest checkout");
+            return new Response("No email found for guest checkout", { status: 400 });
+          }
+          
+          console.log("Guest checkout detected, creating new user with email:", guestEmail);
+          try {
+            dbUser = await createGuestUser(guestEmail);
+            
+            await stripe().customers.update(customer.id, {
+              metadata: { 
+                ...("metadata" in customer ? customer.metadata : {}),
+                userId: dbUser.id 
+              },
+            });
+          } catch (error) {
+            console.error("Failed to create guest user:", error);
+            return new Response("Failed to create user", { status: 500 });
+          }
+        }
 
         if (!dbUser) {
           console.log(
@@ -194,35 +240,35 @@ export const POST = async (req: Request) => {
 
         console.log("Successfully updated user in database");
 
-        // Add server-side PostHog tracking here:
         try {
-          // Initialize server-side PostHog
           const serverPostHog = new PostHog(
             buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "",
             { host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "" }
           );
 
-          // Track subscription completed event
+          const isFirstPurchase = !dbUser.stripeSubscriptionId;
+          const isGuestCheckout = session.metadata?.guestCheckout === "true";
           serverPostHog.capture({
             distinctId: dbUser.id,
-            event: "subscription_completed",
+            event: "purchase_completed",
             properties: {
               subscription_id: subscription.id,
               subscription_status: subscription.status,
               invite_quota: inviteQuota,
               price_id: subscription.items.data[0]?.price.id,
               quantity: inviteQuota,
-              platform: "web",
-              is_first_subscription: true,
+              platform:
+                (session.metadata && (session.metadata as any).platform) ||
+                "web",
+              is_first_purchase: isFirstPurchase,
+              is_guest_checkout: isGuestCheckout,
             },
           });
 
-          // Shutdown the client
           await serverPostHog.shutdown();
-          console.log("Successfully tracked subscription event in PostHog");
+          console.log("Successfully tracked purchase event in PostHog");
         } catch (error) {
-          console.error("Error tracking subscription in PostHog:", error);
-          // Don't throw - we don't want to fail the webhook because of analytics
+          console.error("Error tracking purchase in PostHog:", error);
         }
       }
 
@@ -259,7 +305,6 @@ export const POST = async (req: Request) => {
           customerEmail,
         });
 
-        // Try to find user with retries
         const dbUser = await findUserWithRetry(
           customerEmail as string,
           foundUserId
@@ -280,7 +325,6 @@ export const POST = async (req: Request) => {
           name: dbUser.name,
         });
 
-        // Get all active subscriptions for this customer
         const subscriptions = await stripe().subscriptions.list({
           customer: customer.id,
           status: "active",
@@ -290,7 +334,6 @@ export const POST = async (req: Request) => {
           count: subscriptions.data.length,
         });
 
-        // Calculate total invite quota based on all active subscriptions
         const inviteQuota = subscriptions.data.reduce((total, sub) => {
           return (
             total +
@@ -345,7 +388,6 @@ export const POST = async (req: Request) => {
             if (userByEmail && userByEmail.length > 0 && userByEmail[0]) {
               foundUserId = userByEmail[0].id;
               console.log(`User found by email: ${foundUserId}`);
-              // Update customer metadata with userId
               await stripe().customers.update(customer.id, {
                 metadata: { userId: foundUserId },
               });
@@ -378,7 +420,7 @@ export const POST = async (req: Request) => {
           .set({
             stripeSubscriptionId: subscription.id,
             stripeSubscriptionStatus: subscription.status,
-            inviteQuota: 1, // Reset to default quota
+            inviteQuota: 1,
           })
           .where(eq(users.id, foundUserId));
 

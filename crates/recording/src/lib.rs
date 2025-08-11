@@ -4,10 +4,10 @@ pub mod instant_recording;
 pub mod studio_recording;
 
 pub use studio_recording::{
-    spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
+    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_media::{platform::Bounds, sources::*, MediaError};
+use cap_media::{MediaError, feeds::AudioInputFeed, platform::Bounds, sources::*};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -30,6 +30,13 @@ pub struct RecordingOptions {
     pub mode: RecordingMode,
 }
 
+#[derive(Clone)]
+pub struct RecordingBaseInputs<'a> {
+    pub capture_target: ScreenCaptureTarget,
+    pub capture_system_audio: bool,
+    pub mic_feed: &'a Option<AudioInputFeed>,
+}
+
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingOptionCaptureTarget {
@@ -37,17 +44,6 @@ pub enum RecordingOptionCaptureTarget {
     Screen { id: u32 },
     Area { screen_id: u32, bounds: Bounds },
 }
-
-// impl Default for RecordingOptions {
-//     fn default() -> Self {
-//         Self {
-//             capture_target: None,
-//             camera_label: None,
-//             audio_input_name: None,
-//             mode: RecordingMode::Studio,
-//         }
-//     }
-// }
 
 impl RecordingOptions {
     pub fn camera_label(&self) -> Option<&str> {

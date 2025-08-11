@@ -18,12 +18,33 @@ export function TrackRoot(props: ComponentProps<"div">) {
       <div
         {...props}
         ref={mergeRefs(setRef, props.ref)}
-        class={cx("flex flex-row relative h-14", props.class)}
+        class={cx("flex flex-row relative h-[3.25rem]", props.class)}
       >
         {props.children}
       </div>
     </TrackContextProvider>
   );
+}
+
+export function useSegmentTranslateX(
+  segment: () => { start: number; end: number }
+) {
+  const { editorState: state } = useEditorContext();
+  const { secsPerPixel } = useTrackContext();
+
+  return createMemo(() => {
+    const base = state.timeline.transform.position;
+
+    const delta = segment().start;
+
+    return (delta - base) / secsPerPixel();
+  });
+}
+
+export function useSegmentWidth(segment: () => { start: number; end: number }) {
+  const { secsPerPixel } = useTrackContext();
+
+  return () => (segment().end - segment().start) / secsPerPixel();
 }
 
 export function SegmentRoot(
@@ -35,40 +56,16 @@ export function SegmentRoot(
     ) => void;
   }
 ) {
-  const { secsPerPixel } = useTrackContext();
-  const { editorState: state, project } = useEditorContext();
-
-  const isSelected = createMemo(() => {
-    const selection = state.timeline.selection;
-    if (!selection || selection.type !== "zoom") return false;
-
-    const segmentIndex = project.timeline?.zoomSegments?.findIndex(
-      (s) => s.start === props.segment.start && s.end === props.segment.end
-    );
-
-    return segmentIndex === selection.index;
-  });
-
-  const translateX = createMemo(() => {
-    const base = state.timeline.transform.position;
-
-    const delta = props.segment.start;
-
-    return (delta - base) / secsPerPixel();
-  });
-
-  const width = () => {
-    return (props.segment.end - props.segment.start) / secsPerPixel();
-  };
+  const translateX = useSegmentTranslateX(() => props.segment);
+  const width = useSegmentWidth(() => props.segment);
 
   return (
     <SegmentContextProvider width={width}>
       <div
         {...props}
         class={cx(
-          "absolute border rounded-xl inset-y-0 w-full",
-          props.class,
-          isSelected() && "wobble-wrapper border border-gray-500"
+          "absolute overflow-hidden border rounded-xl inset-y-0",
+          props.class
         )}
         style={{
           "--segment-x": `${translateX()}px`,
@@ -91,11 +88,13 @@ export function SegmentRoot(
 }
 
 export function SegmentContent(props: ComponentProps<"div">) {
+  const ctx = useSegmentContext();
   return (
     <div
       {...props}
       class={cx(
-        "relative w-full h-full flex flex-row items-center px-[0.5rem] py-[0.25rem]",
+        "relative w-full h-full flex flex-row items-center py-[0.25rem]",
+        ctx.width() < 100 ? "px-0" : "px-[0.5rem]",
         props.class
       )}
     />
@@ -112,7 +111,7 @@ export function SegmentHandle(
     <div
       {...props}
       class={cx(
-        "w-3 cursor-col-resize shrink-0 transition-opacity h-full flex flex-row items-center",
+        "w-3 cursor-col-resize transition-opacity h-full flex flex-row items-center",
         props.position === "start"
           ? "left-0 justify-end"
           : "right-0 justify-start",

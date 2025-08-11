@@ -1,30 +1,48 @@
 use cap_fail::{fail, fail_err};
-use ffmpeg::format::Pixel;
+use cap_media_info::VideoInfo;
+use ffmpeg::frame;
 use flume::{Receiver, Sender, TryRecvError, TrySendError};
-use nokhwa::{pixel_format::RgbAFormat, utils::*, Camera};
+use futures::channel::oneshot;
 use std::{
-    thread::{self},
-    time::SystemTime,
+    cmp::Ordering,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{
-    data::{FFVideo, VideoInfo},
-    MediaError,
-};
+use cap_camera_ffmpeg::*;
 
-type CameraSwitchResult = Result<(CameraInfo, VideoInfo), MediaError>;
+pub struct CameraFeedInfo {
+    pub camera: cap_camera::CameraInfo,
+    pub video_info: VideoInfo,
+    pub reference_time: Instant,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SwitchCameraError {
+    #[error("Setup/{0}")]
+    Setup(#[from] SetupCameraError),
+    #[error("Failed to send request")]
+    RequestFailed(oneshot::Canceled),
+    #[error("Failed to initialize camera")]
+    InitializeFailed(oneshot::Canceled),
+}
 
 enum CameraControl {
-    Switch(String, Sender<CameraSwitchResult>),
+    Switch(
+        DeviceOrModelID,
+        oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
+    ),
     AttachConsumer(Sender<RawCameraFrame>),
     Shutdown,
 }
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
-    pub frame: FFVideo,
-    pub captured_at: SystemTime,
+    pub frame: frame::Video,
+    pub timestamp: Duration,
+    pub refrence_time: Instant,
 }
 
 pub struct CameraConnection {
@@ -42,47 +60,80 @@ impl CameraConnection {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone, Debug)]
+pub enum DeviceOrModelID {
+    DeviceID(String),
+    ModelID(cap_camera::ModelID),
+}
+
+impl DeviceOrModelID {
+    pub fn from_info(info: &cap_camera::CameraInfo) -> Self {
+        info.model_id()
+            .map(|v| Self::ModelID(v.clone()))
+            .unwrap_or_else(|| Self::DeviceID(info.device_id().to_string()))
+    }
+}
+
 pub struct CameraFeed {
-    pub camera_info: CameraInfo,
+    pub camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    reference_time: Instant,
     control: Sender<CameraControl>,
 }
 
 impl CameraFeed {
-    pub async fn init(selected_camera: &str) -> Result<CameraFeed, MediaError> {
-        trace!("Initializing camera feed for: {}", selected_camera);
+    pub async fn init(selected_camera: DeviceOrModelID) -> Result<CameraFeed, SetupCameraError> {
+        trace!("Initializing camera feed for: {:?}", &selected_camera);
 
         fail_err!(
             "media::feeds::camera::init",
-            MediaError::Any("forced fail".into())
+            SetupCameraError::Initialisation
         );
 
-        let camera_info = find_camera(selected_camera)?;
+        let camera_info = find_camera(&selected_camera).unwrap();
         let (control, control_receiver) = flume::bounded(1);
 
-        let video_info = start_capturing(camera_info.clone(), control_receiver).await?;
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        thread::spawn(move || {
+            run_camera_feed(selected_camera, control_receiver, ready_tx);
+        });
+
+        let state = ready_rx
+            .await
+            .map_err(|_| SetupCameraError::Initialisation)??;
 
         let camera_feed = Self {
             camera_info,
-            video_info,
             control,
-            // join_handle,
+            video_info: state.video_info,
+            reference_time: state.reference_time,
         };
 
         Ok(camera_feed)
     }
 
-    pub fn list_cameras() -> Vec<String> {
-        match nokhwa::query(ApiBackend::Auto) {
-            Ok(cameras) => cameras
-                .into_iter()
-                .map(|i| i.human_name().to_string())
-                .collect::<Vec<String>>(),
-            Err(_) => Vec::new(),
-        }
+    /// Initialize camera asynchronously, returning a receiver immediately.
+    /// The actual initialization happens in a background task.
+    /// Dropping the receiver cancels the initialization.
+    pub fn init_async(
+        id: DeviceOrModelID,
+    ) -> flume::Receiver<Result<CameraFeed, SetupCameraError>> {
+        let (tx, rx) = flume::bounded(1);
+
+        tokio::spawn(async move {
+            let result = Self::init(id).await;
+            let _ = tx.send(result);
+        });
+
+        rx
     }
 
-    pub fn camera_info(&self) -> CameraInfo {
+    pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
+        cap_camera::list_cameras().collect()
+    }
+
+    pub fn camera_info(&self) -> cap_camera::CameraInfo {
         self.camera_info.clone()
     }
 
@@ -90,29 +141,26 @@ impl CameraFeed {
         self.video_info
     }
 
-    pub async fn switch_cameras(&mut self, camera_name: &str) -> Result<(), MediaError> {
+    pub async fn switch_cameras(&mut self, id: DeviceOrModelID) -> Result<(), SwitchCameraError> {
         fail_err!(
             "media::feeds::camera::switch_cameras",
-            MediaError::Any("forced fail".into())
+            SwitchCameraError::Setup(SetupCameraError::CameraNotFound)
         );
 
-        let current_camera_name = self.camera_info.human_name();
-        if camera_name != &current_camera_name {
-            let (result_tx, result_rx) = flume::bounded::<CameraSwitchResult>(1);
+        let (result_tx, result_rx) = oneshot::channel();
 
-            let _ = self
-                .control
-                .send_async(CameraControl::Switch(camera_name.to_string(), result_tx))
-                .await;
+        let _ = self
+            .control
+            .send_async(CameraControl::Switch(id, result_tx))
+            .await;
 
-            let (camera_info, video_info) = result_rx
-                .recv_async()
-                .await
-                .map_err(|_| MediaError::Any("Failed to prepare camera feed".into()))??;
+        let data = result_rx
+            .await
+            .map_err(SwitchCameraError::RequestFailed)??;
 
-            self.camera_info = camera_info;
-            self.video_info = video_info;
-        }
+        self.camera_info = data.camera;
+        self.video_info = data.video_info;
+        self.reference_time = data.reference_time;
 
         Ok(())
     }
@@ -136,321 +184,210 @@ impl Drop for CameraFeed {
     }
 }
 
-fn find_camera(selected_camera: &str) -> Result<CameraInfo, MediaError> {
-    let all_cameras = nokhwa::query(ApiBackend::Auto)?;
-
-    all_cameras
-        .into_iter()
-        .find(|c| &c.human_name() == selected_camera)
-        .ok_or(MediaError::DeviceUnreachable(selected_camera.to_string()))
-}
-
-fn create_camera(info: &CameraInfo) -> Result<Camera, MediaError> {
-    #[cfg(feature = "debug-logging")]
-    debug!("Creating camera with info: {:?}", info);
-
-    let format = RequestedFormat::new::<RgbAFormat>(RequestedFormatType::AbsoluteHighestFrameRate);
-
-    #[cfg(feature = "debug-logging")]
-    trace!("Requested camera format: {:?}", format);
-
-    let index = info.index().clone();
-
-    #[cfg(target_os = "macos")]
-    {
-        let device = nokhwa_bindings_macos::AVCaptureDevice::new(&index).unwrap();
-        if let Ok(formats) = device.supported_formats() {
-            #[cfg(feature = "debug-logging")]
-            trace!("Supported formats: {:?}", formats);
-        }
-    }
-
-    let camera = Camera::new(index, format)?;
-
-    #[cfg(feature = "debug-logging")]
-    debug!("Created camera with format: {:?}", camera.camera_format());
-
-    Ok(camera)
-}
-
-fn find_and_create_camera(selected_camera: &String) -> Result<(CameraInfo, Camera), MediaError> {
-    let info = find_camera(selected_camera)?;
-    let camera = create_camera(&info)?;
-
-    #[cfg(feature = "debug-logging")]
-    trace!("Camera format: {:?}", camera.camera_format());
-
-    Ok((info, camera))
-}
-
-async fn start_capturing(
-    camera_info: CameraInfo,
-    control: Receiver<CameraControl>,
-) -> Result<VideoInfo, MediaError> {
-    let (ready_tx, ready_rx) = flume::bounded::<Result<VideoInfo, MediaError>>(1);
-
-    thread::spawn(move || {
-        run_camera_feed(camera_info, control, ready_tx);
-    });
-
-    let video_info = ready_rx
-        .recv_async()
-        .await
-        .map_err(|_| MediaError::Any("Failed to prepare camera feed".into()))??;
-
-    Ok(video_info)
-    // Ok((video_info, join_handle))
+fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraInfo> {
+    cap_camera::list_cameras().find(|c| match selected_camera {
+        DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
+        DeviceOrModelID::ModelID(model_id) => c.model_id() == Some(model_id),
+    })
 }
 
 // #[tracing::instrument(skip_all)]
 fn run_camera_feed(
-    camera_info: CameraInfo,
+    id: DeviceOrModelID,
     control: Receiver<CameraControl>,
-    ready_signal: Sender<Result<VideoInfo, MediaError>>,
+    ready_tx: oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
 ) {
     fail!("media::feeds::camera::run panic");
 
-    let mut camera = match create_camera(&camera_info) {
-        Ok(cam) => cam,
-        Err(error) => {
-            error!("Failed to create camera: {:?}", error);
-            ready_signal.send(Err(error)).unwrap();
+    let mut senders: Vec<Sender<RawCameraFrame>> = vec![];
+
+    let mut state = match setup_camera(id) {
+        Ok(state) => {
+            let _ = ready_tx.send(Ok(CameraFeedInfo {
+                camera: state.camera_info.clone(),
+                video_info: state.video_info,
+                reference_time: state.reference_time,
+            }));
+            state
+        }
+        Err(e) => {
+            let _ = ready_tx.send(Err(e));
             return;
         }
     };
 
-    if let Err(error) = camera.open_stream() {
-        error!("Failed to open camera stream: {:?}", error);
-        ready_signal.send(Err(error.into())).unwrap();
-        return;
-    }
+    'outer: loop {
+        debug!("Video feed camera format: {:#?}", &state.video_info);
 
-    let mut ready_signal = Some(ready_signal);
-    let mut camera_format = camera.camera_format();
-    let mut video_info = {
-        VideoInfo::from_raw_ffmpeg(
-            match camera_format.format() {
-                FrameFormat::BGRA => Pixel::BGRA,
-                FrameFormat::MJPEG => {
-                    Pixel::RGB24
-                    // todo!("handle mjpeg for camera")
+        loop {
+            match control.try_recv() {
+                Err(TryRecvError::Disconnected) => {
+                    trace!("Control disconnected");
+                    break 'outer;
                 }
-                FrameFormat::RAWRGB => Pixel::RGB24,
-                FrameFormat::NV12 => Pixel::NV12,
-                FrameFormat::GRAY => Pixel::GRAY8,
-                FrameFormat::YUYV => {
-                    let pix_fmt = if cfg!(windows) {
-                        Pixel::YUYV422 // This is correct for Windows
-                    } else {
-                        // let bytes = buffer.buffer().len() as f32;
-                        // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
-                        // if ratio == 2.0
-
-                        // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                        Pixel::UYVY422
-                    };
-
-                    pix_fmt
+                Ok(CameraControl::Shutdown) => {
+                    state
+                        .handle
+                        .stop_capturing()
+                        .map_err(|err| error!("Error stopping capture: {err:?}"))
+                        .ok();
+                    println!("Deliberate shutdown");
+                    break 'outer;
                 }
-            },
-            camera_format.width(),
-            camera_format.height(),
-            camera_format.frame_rate(),
-        )
-    };
+                Err(TryRecvError::Empty) => {}
+                Ok(CameraControl::AttachConsumer(sender)) => {
+                    senders.push(sender);
+                }
+                Ok(CameraControl::Switch(new_id, switch_result)) => match setup_camera(new_id) {
+                    Ok(new_state) => {
+                        let _ = switch_result.send(Ok(CameraFeedInfo {
+                            camera: new_state.camera_info.clone(),
+                            video_info: new_state.video_info,
+                            reference_time: new_state.reference_time,
+                        }));
+                        state = new_state;
 
-    debug!("Camera video info: {:?}", video_info);
-
-    let mut senders: Vec<Sender<RawCameraFrame>> = vec![];
-
-    loop {
-        match control.try_recv() {
-            Err(TryRecvError::Disconnected) => {
-                trace!("Control disconnected");
-                break;
-            }
-            Ok(CameraControl::Shutdown) => {
-                trace!("Deliberate shutdown");
-                break;
-            }
-            Err(TryRecvError::Empty) => {}
-            Ok(CameraControl::AttachConsumer(sender)) => {
-                senders.push(sender);
-            }
-            Ok(CameraControl::Switch(camera_name, switch_result)) => {
-                match find_and_create_camera(&camera_name) {
-                    Err(error) => {
-                        switch_result.send(Err(error)).unwrap();
+                        break;
                     }
-                    Ok((new_info, mut new_camera)) => {
-                        if new_camera.open_stream().is_ok() {
-                            let _ = camera.stop_stream();
-                            camera_format = new_camera.camera_format();
-                            video_info = VideoInfo::from_raw_ffmpeg(
-                                match camera_format.format() {
-                                    FrameFormat::BGRA => Pixel::BGRA,
-                                    FrameFormat::MJPEG => {
-                                        Pixel::RGB24
-                                        // todo!("handle mjpeg for camera")
-                                    }
-                                    FrameFormat::RAWRGB => Pixel::RGB24,
-                                    FrameFormat::NV12 => Pixel::NV12,
-                                    FrameFormat::GRAY => Pixel::GRAY8,
-                                    FrameFormat::YUYV => {
-                                        let pix_fmt = if cfg!(windows) {
-                                            tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
-                                            Pixel::YUYV422 // This is correct for Windows
-                                        } else {
-                                            Pixel::UYVY422
-                                        };
-                                        pix_fmt
-                                    }
-                                },
-                                camera_format.width(),
-                                camera_format.height(),
-                                camera_format.frame_rate(),
-                            );
-                            switch_result.send(Ok((new_info, video_info))).unwrap();
-                            camera = new_camera;
-                        } else {
-                            switch_result
-                                .send(Err(MediaError::DeviceUnreachable(camera_name)))
-                                .unwrap();
-                        }
+                    Err(e) => {
+                        let _ = switch_result.send(Err(e));
+                        continue;
                     }
-                }
+                },
             }
-        }
 
-        match camera.frame() {
-            Ok(raw_buffer) => {
-                let captured_at = raw_buffer.timestamp().unwrap_or_else(|| SystemTime::now());
+            let Ok(frame) = state.frame_rx.recv_timeout(Duration::from_secs(5)) else {
+                return;
+            };
 
-                let frame = RawCameraFrame {
-                    frame: buffer_to_ffvideo(raw_buffer),
-                    captured_at,
+            let mut to_remove = vec![];
+
+            for (i, sender) in senders.iter().enumerate() {
+                if let Err(TrySendError::Disconnected(_)) = sender.try_send(frame.clone()) {
+                    warn!("Camera sender {} disconnected, will be removed", i);
+                    to_remove.push(i);
                 };
-
-                ready_signal.take().map(|signal| {
-                    signal.send(Ok(video_info)).ok();
-                });
-
-                let mut to_remove = vec![];
-
-                for (i, sender) in senders.iter().enumerate() {
-                    if let Err(TrySendError::Disconnected(_)) = sender.try_send(frame.clone()) {
-                        warn!("Camera sender {} disconnected, will be removed", i);
-                        to_remove.push(i);
-                    };
-                }
-
-                if !to_remove.is_empty() {
-                    debug!("Removing {} disconnected audio senders", to_remove.len());
-                    for i in to_remove.into_iter().rev() {
-                        senders.swap_remove(i);
-                    }
-                }
             }
-            Err(error) => {
-                warn!("Failed to capture frame: {:?}", error);
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                continue;
+
+            if !to_remove.is_empty() {
+                // debug!("Removing {} disconnected audio senders", to_remove.len());
+                for i in to_remove.into_iter().rev() {
+                    senders.swap_remove(i);
+                }
             }
         }
     }
-
-    let _ = camera.stop_stream();
 
     info!("Camera feed stopping");
 }
 
-fn buffer_to_ffvideo(buffer: nokhwa::Buffer) -> FFVideo {
-    use ffmpeg::format::Pixel;
-    let (format, load_data): (Pixel, fn(&mut FFVideo, &nokhwa::Buffer)) = {
-        match buffer.source_frame_format() {
-            FrameFormat::BGRA => (Pixel::BGRA, |frame, buffer| {
-                let stride = frame.stride(0) as usize;
-                let width = frame.width() as usize;
-                let height = frame.height() as usize;
+#[derive(Debug, thiserror::Error)]
+pub enum SetupCameraError {
+    #[error("Camera not found")]
+    CameraNotFound,
+    #[error("Invalid format")]
+    InvalidFormat,
+    #[error("Camera timed out")]
+    Timeout(mpsc::RecvTimeoutError),
+    #[error("StartCapturing/{0}")]
+    StartCapturing(#[from] cap_camera::StartCapturingError),
+    #[error("Failed to initialize camera")]
+    Initialisation,
+}
 
-                for y in 0..height {
-                    let row_length = width * 4;
+const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
-                    frame.data_mut(0)[y * stride..(width * 4 * y + row_length)].copy_from_slice(
-                        &buffer.buffer()[width * 4 * y..width * 4 * y + row_length],
-                    );
-                }
-            }),
-            FrameFormat::NV12 => (Pixel::NV12, |frame, buffer| {
-                let width = frame.width() as usize;
-                let height = frame.height() as usize;
+struct SetupCameraState {
+    handle: cap_camera::RecordingHandle,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
+    frame_rx: mpsc::Receiver<RawCameraFrame>,
+    reference_time: Instant,
+}
 
-                let stride = frame.stride(0) as usize;
-                for y in 0..height {
-                    let row_length = width;
-                    frame.data_mut(0)[y * stride..(y * stride + row_length)]
-                        .copy_from_slice(&buffer.buffer()[width * y..width * y + row_length]);
-                }
+fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraError> {
+    let camera = find_camera(&id).ok_or(SetupCameraError::CameraNotFound)?;
+    let formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
+    if formats.is_empty() {
+        return Err(SetupCameraError::InvalidFormat);
+    }
 
-                let stride = frame.stride(1) as usize;
-                for y in 0..height / 2 {
-                    let row_length = width;
-                    frame.data_mut(1)[y * stride..(y * stride + row_length)]
-                        .copy_from_slice(&buffer.buffer()[y * width..y * width + row_length]);
-                }
-            }),
-            FrameFormat::YUYV => {
-                // nokhwa moment
-                let pix_fmt = if cfg!(windows) {
-                    tracing::debug!("Using YUYV422 format for Windows camera in buffer_to_ffvideo");
-                    Pixel::YUYV422 // This is correct for Windows
-                } else {
-                    // let bytes = buffer.buffer().len() as f32;
-                    // let ratio = bytes / (buffer.resolution().x() * buffer.resolution().y()) as f32;
-                    // if ratio == 2.0
+    let mut ideal_formats = formats
+        .clone()
+        .into_iter()
+        .filter(|f| f.frame_rate() >= 30.0 && f.width() < 2000 && f.height() < 2000)
+        .collect::<Vec<_>>();
 
-                    // nokhwa merges yuvu420 and uyvy422 into the same format, we should probably distinguish them with the frame size
-                    Pixel::UYVY422
-                };
-
-                (pix_fmt, |frame, buffer| {
-                    let width = frame.width() as usize;
-                    let height = frame.height() as usize;
-
-                    let stride = frame.stride(0) as usize;
-                    for y in 0..height {
-                        let row_length = width * 2;
-                        frame.data_mut(0)[y * stride..(y * stride + row_length)].copy_from_slice(
-                            &buffer.buffer()[2 * width * y..2 * width * y + row_length],
-                        );
-                    }
-                })
-            }
-            FrameFormat::MJPEG => (Pixel::RGB24, |frame, buffer| {
-                let decoded = buffer
-                    .decode_image::<nokhwa::pixel_format::RgbFormat>()
-                    .unwrap();
-
-                let bytes = decoded.into_raw();
-
-                let width = frame.width() as usize;
-                let height = frame.height() as usize;
-                let stride = frame.stride(0) as usize;
-
-                for y in 0..height {
-                    let row_length = width * 3;
-
-                    frame.data_mut(0)[y * stride..(y * stride + row_length)]
-                        .copy_from_slice(&bytes[y * width * 3..y * width * 3 + row_length]);
-                }
-            }),
-            _ => todo!("implement more camera formats"),
-        }
+    if ideal_formats.is_empty() {
+        ideal_formats = formats;
     };
 
-    let mut frame = FFVideo::new(format, buffer.resolution().x(), buffer.resolution().y());
+    // Sort formats to prioritize:
+    // 1. Closest to 16:9 aspect ratio
+    // 2. Highest resolution (total pixels)
+    // 3. Highest frame rate
+    // Most relevant ends up in index 0
+    ideal_formats.sort_by(|a, b| {
+        let target_aspect_ratio = 16.0 / 9.0;
 
-    load_data(&mut frame, &buffer);
+        let aspect_ratio_a = a.width() as f32 / a.height() as f32;
+        let aspect_ratio_b = b.width() as f32 / b.height() as f32;
 
-    frame
+        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
+        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+
+        let aspect_cmp = aspect_cmp_a.partial_cmp(&aspect_cmp_b);
+        let resolution_cmp = (a.width() * a.height()).cmp(&(b.width() * b.height()));
+        let fr_cmp = a.frame_rate().partial_cmp(&b.frame_rate());
+
+        aspect_cmp
+            .unwrap_or(Ordering::Equal)
+            .then(resolution_cmp.reverse())
+            .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
+    });
+
+    let format = ideal_formats.swap_remove(0);
+    let frame_rate = format.frame_rate() as u32;
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let mut ready_signal = Some(ready_tx);
+
+    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
+
+    let capture_handle = camera.start_capturing(format.clone(), move |frame| {
+        let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+            return;
+        };
+
+        ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+
+        if let Some(signal) = ready_signal.take() {
+            let video_info = VideoInfo::from_raw_ffmpeg(
+                ff_frame.format(),
+                ff_frame.width(),
+                ff_frame.height(),
+                frame_rate,
+            );
+
+            let _ = signal.send((video_info, frame.reference_time));
+        }
+
+        let _ = frame_tx.send(RawCameraFrame {
+            frame: ff_frame,
+            timestamp: frame.timestamp,
+            refrence_time: frame.reference_time,
+        });
+    })?;
+
+    let (video_info, reference_time) = ready_rx
+        .recv_timeout(CAMERA_INIT_TIMEOUT)
+        .map_err(SetupCameraError::Timeout)?;
+
+    Ok(SetupCameraState {
+        handle: capture_handle,
+        camera_info: camera,
+        video_info,
+        frame_rx,
+        reference_time,
+    })
 }

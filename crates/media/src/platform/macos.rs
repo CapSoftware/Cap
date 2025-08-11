@@ -1,22 +1,21 @@
-use cidre::cv;
+use cidre::{cg, cv};
 use cocoa::{base::id, foundation::NSDictionary};
 use core_foundation::{
     array::CFArrayGetCount,
     base::FromVoid,
     dictionary::CFDictionaryGetValue,
-    number::{kCFNumberIntType, CFNumberGetValue, CFNumberRef},
+    number::{CFNumberGetValue, CFNumberRef, kCFNumberIntType},
     string::{CFString, CFStringRef},
 };
 use core_graphics::{
     base::boolean_t,
     display::{CFArrayGetValueAtIndex, CFDictionaryRef, CGDisplay, CGDisplayBounds, CGRect},
     window::{
-        kCGNullWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListExcludeDesktopElements,
-        kCGWindowListOptionOnScreenOnly, kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
-        kCGWindowOwnerPID, CGWindowListCopyWindowInfo,
+        CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowBounds, kCGWindowLayer,
+        kCGWindowListExcludeDesktopElements, kCGWindowListOptionOnScreenOnly, kCGWindowName,
+        kCGWindowNumber, kCGWindowOwnerName, kCGWindowOwnerPID,
     },
 };
-pub use nokhwa_bindings_macos::{AVAuthorizationStatus, AVMediaType};
 use std::{collections::HashMap, ffi::c_void};
 
 use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
@@ -24,7 +23,7 @@ use crate::platform::{Bounds, LogicalPosition, LogicalSize, Window};
 use super::LogicalBounds;
 
 #[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CGRectMakeWithDictionaryRepresentation(
         dict: CFDictionaryRef,
         rect: *mut CGRect,
@@ -101,7 +100,7 @@ unsafe fn get_nullable_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<*const c_void> {
-    let value_ref = CFDictionaryGetValue(cf_dictionary_ref, key as *const c_void);
+    let value_ref = unsafe { CFDictionaryGetValue(cf_dictionary_ref, key as *const c_void) };
     if value_ref.is_null() {
         return None;
     }
@@ -113,10 +112,10 @@ unsafe fn get_number_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<u32> {
-    get_nullable_value_from_dict(cf_dictionary_ref, key).and_then(|value_ref| {
+    unsafe { get_nullable_value_from_dict(cf_dictionary_ref, key) }.and_then(|value_ref| {
         let mut value: u32 = 0;
         let value_ptr = &mut value as *mut _ as *mut c_void;
-        match CFNumberGetValue(value_ref as CFNumberRef, kCFNumberIntType, value_ptr) {
+        match unsafe { CFNumberGetValue(value_ref as CFNumberRef, kCFNumberIntType, value_ptr) } {
             true => Some(value),
             false => None,
         }
@@ -127,25 +126,27 @@ unsafe fn get_string_value_from_dict(
     cf_dictionary_ref: CFDictionaryRef,
     key: CFStringRef,
 ) -> Option<String> {
-    get_nullable_value_from_dict(cf_dictionary_ref, key)
-        .map(|value_ref| CFString::from_void(value_ref).to_string())
+    unsafe { get_nullable_value_from_dict(cf_dictionary_ref, key) }
+        .map(|value_ref| unsafe { CFString::from_void(value_ref).to_string() })
 }
 
-unsafe fn get_window_bounds(window_cf_dictionary_ref: CFDictionaryRef) -> Option<Bounds> {
-    get_nullable_value_from_dict(window_cf_dictionary_ref, kCGWindowBounds).map(|value_ref| {
-        let rect: CGRect = {
-            let mut rect = std::mem::zeroed();
-            CGRectMakeWithDictionaryRepresentation(value_ref.cast(), &mut rect);
-            rect
-        };
+fn get_window_bounds(window_cf_dictionary_ref: CFDictionaryRef) -> Option<Bounds> {
+    unsafe { get_nullable_value_from_dict(window_cf_dictionary_ref, kCGWindowBounds) }.map(
+        |value_ref| {
+            let rect: CGRect = {
+                let mut rect = unsafe { std::mem::zeroed() };
+                unsafe { CGRectMakeWithDictionaryRepresentation(value_ref.cast(), &mut rect) };
+                rect
+            };
 
-        Bounds {
-            x: rect.origin.x,
-            y: rect.origin.y,
-            width: rect.size.width,
-            height: rect.size.height,
-        }
-    })
+            Bounds {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            }
+        },
+    )
 }
 
 pub fn bring_window_to_focus(window_id: u32) {
@@ -154,7 +155,7 @@ pub fn bring_window_to_focus(window_id: u32) {
     use std::process::Command;
     use tempfile::NamedTempFile;
 
-    println!("Attempting to bring window {} to focus", window_id);
+    println!("Attempting to bring window {window_id} to focus");
 
     // Get the window information associated with the window id
     let windows = get_on_screen_windows();
@@ -242,15 +243,15 @@ pub fn bring_window_to_focus(window_id: u32) {
                     println!("Successfully executed AppleScript");
                 } else {
                     let error_message = String::from_utf8_lossy(&output.stderr);
-                    eprintln!("AppleScript execution failed: {}", error_message);
+                    eprintln!("AppleScript execution failed: {error_message}");
                 }
             }
-            Err(e) => eprintln!("Failed to execute AppleScript: {}", e),
+            Err(e) => eprintln!("Failed to execute AppleScript: {e}"),
         }
 
-        println!("Finished attempt to bring window {} to focus", window_id);
+        println!("Finished attempt to bring window {window_id} to focus");
     } else {
-        eprintln!("Window with id {} not found", window_id);
+        eprintln!("Window with id {window_id} not found");
     }
 }
 
@@ -341,13 +342,13 @@ pub fn get_display_refresh_rate(
     let display = CGDisplay::new(display_id);
     let rate = display
         .display_mode()
-        .ok_or_else(|| "no display_mode")?
+        .ok_or("no display_mode")?
         .refresh_rate()
         .round() as u32;
 
     if rate == 0 {
         // adapted from https://github.com/mpv-player/mpv/commit/eacf22e42a6bbce8a32e64f5563ac431122c1186
-        let link = cv::DisplayLink::with_cg_display(display.id)
+        let link = cv::DisplayLink::with_cg_display(cg::DirectDisplayId(display.id))
             .map_err(|e| format!("with_cg_display / {e}"))?;
 
         let t = link.nominal_output_video_refresh_period();
@@ -483,18 +484,5 @@ pub fn logical_monitor_bounds(monitor_id: u32) -> Option<LogicalBounds> {
         }
 
         None
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn bruh() {
-        dbg!(MonitorHandle::list_all()
-            .into_iter()
-            .map(|v| logical_monitor_bounds(v.0))
-            .collect::<Vec<_>>());
     }
 }

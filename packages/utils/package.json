@@ -11,18 +11,19 @@
     "typecheck": "tsc -b"
   },
   "devDependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
     "react-router-dom": "^6.18.0",
     "tsconfig": "workspace:*",
-    "typescript": "^5.7.2"
+    "typescript": "^5.8.3"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.485.0",
     "@cap/env": "workspace:*",
     "clsx": "^2.0.0",
     "stripe": "^14.24.0",
-    "tailwind-merge": "^2.1.0"
+    "tailwind-merge": "^2.1.0",
+    "zod": "^3"
   },
   "engines": {
     "node": "20"

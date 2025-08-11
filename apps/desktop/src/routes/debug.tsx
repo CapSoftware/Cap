@@ -11,7 +11,7 @@ export default function Debug() {
   const orderedFails = () => Object.entries(fails.data ?? {});
 
   return (
-    <main class="w-full h-full bg-gray-100 text-[--text-primary] p-4">
+    <main class="w-full h-full bg-gray-2 text-[--text-primary] p-4">
       <h2 class="text-2xl font-bold">Debug Windows</h2>
       <div class="p-2 mb-4">
         <button
@@ -19,6 +19,14 @@ export default function Debug() {
           onClick={() => commands.showWindow("Setup")}
         >
           Show Setup Window
+        </button>
+        <button
+          class="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded"
+          onClick={() =>
+            commands.showWindow({ InProgressRecording: { countdown: 3 } })
+          }
+        >
+          Show In Progress Recording Window
         </button>
       </div>
 

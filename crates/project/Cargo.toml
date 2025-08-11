@@ -1,15 +1,19 @@
 [package]
 name = "cap-project"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
 
 [dependencies]
-specta.workspace = true
+cap-cursor-info = { path = "../cursor-info" }
 
-serde = { version = "1", features = ["derive"] }
+specta.workspace = true
+serde = { workspace = true }
+
 serde_json = "1.0.127"
 either = "1.13.0"
 relative-path = { version = "1.9.3", features = ["serde"] }
+log = "0.4"
+tracing = "0.1.41"

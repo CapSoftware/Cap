@@ -1,28 +1,37 @@
+use cap_media_info::VideoInfo;
+use ffmpeg::frame;
 use flume::{Receiver, Sender};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant};
 use tracing::{error, info};
 
 use crate::{
-    data::{FFVideo, VideoInfo},
+    MediaError,
     feeds::{CameraConnection, CameraFeed, RawCameraFrame},
     pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
-    MediaError,
 };
 
 pub struct CameraSource {
     feed_connection: CameraConnection,
     video_info: VideoInfo,
-    output: Sender<(FFVideo, f64)>,
-    start_time: SystemTime,
+    output: Sender<(frame::Video, f64)>,
+    first_frame_instant: Option<Instant>,
+    first_frame_timestamp: Option<Duration>,
+    start_instant: Instant,
 }
 
 impl CameraSource {
-    pub fn init(feed: &CameraFeed, output: Sender<(FFVideo, f64)>, start_time: SystemTime) -> Self {
+    pub fn init(
+        feed: &CameraFeed,
+        output: Sender<(frame::Video, f64)>,
+        start_instant: Instant,
+    ) -> Self {
         Self {
             feed_connection: feed.create_connection(),
             video_info: feed.video_info(),
             output,
-            start_time,
+            first_frame_instant: None,
+            first_frame_timestamp: None,
+            start_instant,
         }
     }
 
@@ -30,15 +39,32 @@ impl CameraSource {
         self.video_info
     }
 
-    fn process_frame(&self, camera_frame: RawCameraFrame) -> Result<(), MediaError> {
-        let RawCameraFrame { frame, captured_at } = camera_frame;
-        if let Err(_) = self.output.send((
-            frame,
-            captured_at
-                .duration_since(self.start_time)
-                .unwrap()
-                .as_secs_f64(),
-        )) {
+    fn process_frame(
+        &self,
+        camera_frame: RawCameraFrame,
+        first_frame_instant: Instant,
+        first_frame_timestamp: Duration,
+    ) -> Result<(), MediaError> {
+        let check_skip_send = || {
+            cap_fail::fail_err!("media::sources::camera::skip_send", ());
+
+            Ok::<(), ()>(())
+        };
+
+        if check_skip_send().is_err() {
+            return Ok(());
+        }
+
+        let relative_timestamp = camera_frame.timestamp - first_frame_timestamp;
+
+        if self
+            .output
+            .send((
+                camera_frame.frame,
+                (first_frame_instant + relative_timestamp - self.start_instant).as_secs_f64(),
+            ))
+            .is_err()
+        {
             return Err(MediaError::Any(
                 "Pipeline is unreachable! Stopping capture".into(),
             ));
@@ -47,12 +73,17 @@ impl CameraSource {
         Ok(())
     }
 
-    fn pause_and_drain_frames(&self, frames_rx: Receiver<RawCameraFrame>) {
+    fn pause_and_drain_frames(&mut self, frames_rx: Receiver<RawCameraFrame>) {
         let frames: Vec<RawCameraFrame> = frames_rx.drain().collect();
         drop(frames_rx);
 
         for frame in frames {
-            if let Err(error) = self.process_frame(frame) {
+            let first_frame_instant = *self.first_frame_instant.get_or_insert(frame.refrence_time);
+            let first_frame_timestamp = *self.first_frame_timestamp.get_or_insert(frame.timestamp);
+
+            if let Err(error) =
+                self.process_frame(frame, first_frame_instant, first_frame_timestamp)
+            {
                 eprintln!("{error}");
                 break;
             }
@@ -69,7 +100,7 @@ impl PipelineSourceTask for CameraSource {
         _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let mut frames_rx: Option<Receiver<RawCameraFrame>> = None;
 
         info!("Camera source ready");
@@ -82,7 +113,14 @@ impl PipelineSourceTask for CameraSource {
             match control_signal.last() {
                 Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
                     Some(frame) => {
-                        if let Err(error) = self.process_frame(frame) {
+                        let first_frame_instant =
+                            *self.first_frame_instant.get_or_insert(frame.refrence_time);
+                        let first_frame_timestamp =
+                            *self.first_frame_timestamp.get_or_insert(frame.timestamp);
+
+                        if let Err(error) =
+                            self.process_frame(frame, first_frame_instant, first_frame_timestamp)
+                        {
                             eprintln!("{error}");
                             break;
                         }
@@ -101,5 +139,7 @@ impl PipelineSourceTask for CameraSource {
                 }
             }
         }
+
+        Ok(())
     }
 }

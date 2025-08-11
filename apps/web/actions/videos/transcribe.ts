@@ -4,8 +4,9 @@ import { createClient } from "@deepgram/sdk";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
-import { createS3Client } from "@/utils/s3";
+import { createBucketProvider } from "@/utils/s3";
 import { serverEnv } from "@cap/env";
+import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 
 type TranscribeResult = {
   success: boolean;
@@ -14,7 +15,8 @@ type TranscribeResult = {
 
 export async function transcribeVideo(
   videoId: string,
-  userId: string
+  userId: string,
+  aiGenerationEnabled = false
 ): Promise<TranscribeResult> {
   if (!serverEnv().DEEPGRAM_API_KEY) {
     return {
@@ -48,20 +50,10 @@ export async function transcribeVideo(
     return { success: false, message: "Video information is missing" };
   }
 
-  const { video, bucket } = result;
+  const { video } = result;
 
   if (!video) {
     return { success: false, message: "Video information is missing" };
-  }
-
-  const awsRegion = video.awsRegion;
-  const awsBucket = video.awsBucket;
-
-  if (!awsRegion || !awsBucket) {
-    return {
-      success: false,
-      message: "AWS region or bucket information is missing",
-    };
   }
 
   if (
@@ -79,18 +71,12 @@ export async function transcribeVideo(
     .set({ transcriptionStatus: "PROCESSING" })
     .where(eq(videos.id, videoId));
 
-  const [s3Client] = await createS3Client(bucket);
+  const bucket = await createBucketProvider(result.bucket);
 
   try {
     const videoKey = `${userId}/${videoId}/result.mp4`;
 
-    const videoUrl = await getSignedUrl(
-      s3Client,
-      new GetObjectCommand({
-        Bucket: awsBucket,
-        Key: videoKey,
-      })
-    );
+    const videoUrl = await bucket.getSignedObjectUrl(videoKey);
 
     const transcription = await transcribeAudio(videoUrl);
 
@@ -98,25 +84,50 @@ export async function transcribeVideo(
       throw new Error("Failed to transcribe audio");
     }
 
-    const uploadCommand = new PutObjectCommand({
-      Bucket: awsBucket,
-      Key: `${userId}/${videoId}/transcription.vtt`,
-      Body: transcription,
-      ContentType: "text/vtt",
-    });
-
-    await s3Client.send(uploadCommand);
+    await bucket.putObject(
+      `${userId}/${videoId}/transcription.vtt`,
+      transcription,
+      { contentType: "text/vtt" }
+    );
 
     await db()
       .update(videos)
       .set({ transcriptionStatus: "COMPLETE" })
       .where(eq(videos.id, videoId));
 
+    console.log(
+      `[transcribeVideo] Transcription completed for video ${videoId}`
+    );
+
+    if (aiGenerationEnabled) {
+      console.log(
+        `[transcribeVideo] AI generation enabled, triggering AI metadata generation for video ${videoId}`
+      );
+      try {
+        generateAiMetadata(videoId, userId).catch((error) => {
+          console.error(
+            `[transcribeVideo] Error generating AI metadata for video ${videoId}:`,
+            error
+          );
+        });
+      } catch (error) {
+        console.error(
+          `[transcribeVideo] Error starting AI metadata generation for video ${videoId}:`,
+          error
+        );
+      }
+    } else {
+      console.log(
+        `[transcribeVideo] AI generation disabled, skipping AI metadata generation for video ${videoId}`
+      );
+    }
+
     return {
       success: true,
       message: "VTT file generated and uploaded successfully",
     };
   } catch (error) {
+    console.error("Error transcribing video:", error);
     await db()
       .update(videos)
       .set({ transcriptionStatus: "ERROR" })
@@ -174,6 +185,7 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
+  console.log("[transcribeAudio] Starting transcription for URL:", videoUrl);
   const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 
   const { result, error } = await deepgram.listen.prerecorded.transcribeUrl(
@@ -181,7 +193,7 @@ async function transcribeAudio(videoUrl: string): Promise<string> {
       url: videoUrl,
     },
     {
-      model: "nova-2",
+      model: "nova-3",
       smart_format: true,
       detect_language: true,
       utterances: true,
@@ -190,10 +202,15 @@ async function transcribeAudio(videoUrl: string): Promise<string> {
   );
 
   if (error) {
+    console.error("[transcribeAudio] Deepgram transcription error:", error);
     return "";
   }
 
+  console.log(
+    "[transcribeAudio] Transcription result received, formatting to WebVTT"
+  );
   const captions = formatToWebVTT(result);
 
+  console.log("[transcribeAudio] Transcription complete, returning captions");
   return captions;
 }

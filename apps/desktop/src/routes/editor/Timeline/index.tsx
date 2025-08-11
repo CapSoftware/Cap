@@ -1,15 +1,17 @@
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
+import { platform } from "@tauri-apps/plugin-os";
 import { cx } from "cva";
 import { For, Show, batch, createRoot, createSignal, onMount } from "solid-js";
 import { produce } from "solid-js/store";
-import { platform } from "@tauri-apps/plugin-os";
 
-import { TimelineContextProvider, useTimelineContext } from "./context";
-import { formatTime } from "../utils";
-import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
-import { ClipTrack } from "./ClipTrack";
+import "./styles.css";
+
 import { useEditorContext } from "../context";
+import { formatTime } from "../utils";
+import { ClipTrack } from "./ClipTrack";
+import { TimelineContextProvider, useTimelineContext } from "./context";
+import { ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
 
@@ -22,6 +24,7 @@ export function Timeline() {
     setEditorState,
     totalDuration,
     editorState,
+    projectActions,
   } = useEditorContext();
 
   const duration = () => editorInstance.recordingDuration;
@@ -84,17 +87,20 @@ export function Timeline() {
   }
 
   createEventListener(window, "keydown", (e) => {
-    if (e.code === "Backspace" || e.code === "Delete") {
-      if (editorState.timeline.selection?.type !== "zoom") return;
-      const selection = editorState.timeline.selection;
+    const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
 
-      batch(() => {
-        setProject(
-          produce((project) => {
-            project.timeline?.zoomSegments.splice(selection.index, 1);
-          })
-        );
-      });
+    if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
+      const selection = editorState.timeline.selection;
+      if (!selection) return;
+
+      if (selection.type === "zoom")
+        projectActions.deleteZoomSegment(selection.index);
+      else if (selection.type === "clip")
+        projectActions.deleteClipSegment(selection.index);
+    } else if (e.code === "KeyC" && hasNoModifiers) {
+      if (!editorState.previewTime) return;
+
+      projectActions.splitClipSegment(editorState.previewTime);
     }
   });
 
@@ -178,8 +184,8 @@ export function Timeline() {
           {(time) => (
             <div
               class={cx(
-                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%] from-gray-400",
-                split() ? "text-red-300" : "text-black-transparent-20"
+                "flex absolute bottom-0 top-4 left-5 z-10 justify-center items-center w-px pointer-events-none bg-gradient-to-b to-[120%]",
+                split() ? "from-red-300" : "from-gray-400"
               )}
               style={{
                 left: `${TIMELINE_PADDING}px`,
@@ -188,31 +194,35 @@ export function Timeline() {
                 }px)`,
               }}
             >
-              <div class="absolute -top-2 bg-gray-400 rounded-full size-3" />
-              <Show when={split()}>
-                <div class="absolute size-[2rem] bg-[currentColor] z-20 top-6 rounded-lg flex items-center justify-center">
-                  <IconCapScissors class="size-[1.25rem] text-gray-50 z-20" />
-                </div>
-              </Show>
+              <div
+                class={cx(
+                  "absolute -top-2 rounded-full size-3",
+                  split() ? "bg-red-300" : "bg-gray-10"
+                )}
+              />
             </div>
           )}
         </Show>
-        <Show when={!split()}>
-          <div
-            class="absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]"
-            style={{
-              left: `${TIMELINE_PADDING}px`,
-              transform: `translateX(${Math.min(
-                (editorState.playbackTime - transform().position) /
-                  secsPerPixel(),
-                timelineBounds.width ?? 0
-              )}px)`,
-            }}
-          >
-            <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
-          </div>
-        </Show>
-        <ClipTrack ref={setTimelineRef} />
+        <div
+          class={cx(
+            "absolute bottom-0 top-4 h-full rounded-full z-10 w-px pointer-events-none bg-gradient-to-b to-[120%] from-[rgb(226,64,64)]",
+            split() && "opacity-50"
+          )}
+          style={{
+            left: `${TIMELINE_PADDING}px`,
+            transform: `translateX(${Math.min(
+              (editorState.playbackTime - transform().position) /
+                secsPerPixel(),
+              timelineBounds.width ?? 0
+            )}px)`,
+          }}
+        >
+          <div class="size-3 bg-[rgb(226,64,64)] rounded-full -mt-2 -ml-[calc(0.37rem-0.5px)]" />
+        </div>
+        <ClipTrack
+          ref={setTimelineRef}
+          handleUpdatePlayhead={handleUpdatePlayhead}
+        />
         <ZoomTrack
           onDragStateChanged={(v) => {
             zoomSegmentDragState = v;
@@ -239,12 +249,12 @@ function TimelineMarkings() {
   };
 
   return (
-    <div class="relative mb-1 h-4 text-xs">
+    <div class="relative h-4 text-xs text-gray-9">
       <For each={timelineMarkings()}>
         {(second) => (
           <Show when={second > 0}>
             <div
-              class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-[--text-tertiary] text-[--text-tertiary]"
+              class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-current"
               style={{
                 transform: `translateX(${
                   (second - transform().position) / secsPerPixel() - 1
@@ -252,7 +262,7 @@ function TimelineMarkings() {
               }}
             >
               <Show when={second % 1 === 0}>
-                <div class="absolute -top-5 -translate-x-1/2">
+                <div class="absolute -top-[1.125rem] -translate-x-1/2">
                   {formatTime(second)}
                 </div>
               </Show>

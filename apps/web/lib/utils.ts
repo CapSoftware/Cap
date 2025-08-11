@@ -1,3 +1,6 @@
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
 /**
  * Format a date string to a more readable format
  * @param dateString - ISO 8601 date string
@@ -10,4 +13,8 @@ export function formatDate(dateString: string): string {
     month: "long",
     day: "numeric",
   });
-} 
+}
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}
