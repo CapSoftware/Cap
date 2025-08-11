@@ -11,7 +11,7 @@ import clsx from "clsx";
 import { Tooltip } from "@/components/Tooltip";
 import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faGlobe } from "@fortawesome/free-solid-svg-icons";
+import { faExclamationCircle, faGlobe } from "@fortawesome/free-solid-svg-icons";
 
 export function CustomDomain() {
   const router = useRouter();
@@ -63,7 +63,7 @@ export function CustomDomain() {
         open={confirmOpen}
         title="Remove custom domain"
         icon={<FontAwesomeIcon icon={faGlobe} />}
-        description={`Are you sure you want to remove this custom domain: "${orgCustomDomain}"?`}
+        description={`Are you sure you want to remove this custom domain: ${orgCustomDomain}?`}
         onConfirm={handleRemoveDomain}
         confirmLabel="Remove"
         cancelLabel="Cancel"
@@ -82,13 +82,19 @@ export function CustomDomain() {
             )}
           >
             <h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>
+            {process.env.NODE_ENV === "development" && (
+           <div className="flex gap-2 items-center p-2 text-xs bg-red-900 rounded-full w-fit text-gray-10">
+              <FontAwesomeIcon className="text-red-200 size-3" icon={faExclamationCircle} />
+             <p className="text-white text-xs">Custom domains are not available in development mode</p>
+            </div>
+          )}
             {isVerified && orgCustomDomain ? (
               <>
                 <Tooltip
                content="Remove custom domain"
                > 
                 <div 
-                onClick={handleRemoveDomain}
+                onClick={() => setConfirmOpen(true)}
                 className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit">
                   <CheckCircle className="text-green-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
@@ -106,7 +112,7 @@ export function CustomDomain() {
                content="Remove custom domain"
               > 
                 <div
-                onClick={handleRemoveDomain}
+                onClick={() => setConfirmOpen(true)}
                 className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit">
                   <XCircle className="text-red-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
@@ -135,7 +141,7 @@ export function CustomDomain() {
           onClick={async (e) => {
             e.preventDefault();
             if (isVerified) {
-              await handleRemoveDomain();
+              setConfirmOpen(true);
             } else {
               setShowCustomDomainDialog(true);
             }
