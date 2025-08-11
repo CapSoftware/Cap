@@ -7,13 +7,17 @@ edition = "2024"
 
 # [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
+	"System",
 	"Graphics_Capture",
 	"Graphics_DirectX_Direct3D11",
+	"Win32_Graphics_Gdi",
 	"Win32_Graphics_Direct3D",
 	"Win32_Graphics_Direct3D11",
 	"Win32_Graphics_Dxgi",
+	"Win32_System_Com",
 	"Win32_System_WinRT_Direct3D11",
 	"Win32_System_WinRT_Graphics_Capture",
+	"Win32_UI_WindowsAndMessaging",
 ] }
 
 [lints]
