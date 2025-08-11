@@ -89,7 +89,7 @@ export function CustomDomain() {
                > 
                 <div 
                 onClick={handleRemoveDomain}
-                className="flex gap-2 items-center px-3 py-0.5 bg-green-900 rounded-full w-fit">
+                className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit">
                   <CheckCircle className="text-green-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
                     {orgCustomDomain}
@@ -107,7 +107,7 @@ export function CustomDomain() {
               > 
                 <div
                 onClick={handleRemoveDomain}
-                className="flex gap-2 items-center px-3 py-0.5 bg-red-900 rounded-full w-fit">
+                className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit">
                   <XCircle className="text-red-200 size-2.5" />
                   <p className="text-[11px] italic font-medium text-white">
                     {orgCustomDomain}
