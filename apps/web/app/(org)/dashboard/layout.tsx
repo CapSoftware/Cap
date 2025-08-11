@@ -2,14 +2,14 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
-import { getDashboardData, Organization, Spaces } from "./dashboard-data";
+import { getDashboardData, Organization, Spaces, UserPreferences } from "./dashboard-data";
 import DashboardInner from "./_components/DashboardInner";
 import { DashboardContexts } from "./Contexts";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
+import { UploadingProvider } from "./caps/UploadingContext";
 
 export const dynamic = "force-dynamic";
-import { UploadingProvider } from "./caps/UploadingContext";
 
 export default async function DashboardLayout({
   children,
@@ -28,14 +28,20 @@ export default async function DashboardLayout({
 
   let organizationSelect: Organization[] = [];
   let spacesData: Spaces[] = [];
+  let anyNewNotifications = false;
+  let userPreferences: UserPreferences;
   try {
     const dashboardData = await getDashboardData(user);
     organizationSelect = dashboardData.organizationSelect;
+    userPreferences = dashboardData.userPreferences?.preferences || null;
     spacesData = dashboardData.spacesData;
+    anyNewNotifications = dashboardData.anyNewNotifications;
   } catch (error) {
     console.error("Failed to load dashboard data", error);
     organizationSelect = [];
     spacesData = [];
+    anyNewNotifications = false;
+    userPreferences = null;
   }
 
   let activeOrganization = organizationSelect.find(
@@ -64,6 +70,8 @@ export default async function DashboardLayout({
         isSubscribed={isSubscribed}
         initialTheme={theme as "light" | "dark"}
         initialSidebarCollapsed={sidebar === "true"}
+        anyNewNotifications={anyNewNotifications}
+        userPreferences={userPreferences}
       >
         <div className="grid grid-cols-[auto,1fr] overflow-y-auto bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
           <aside className="z-10 col-span-1 row-span-2">

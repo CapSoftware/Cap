@@ -13,7 +13,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { authStore, generalSettingsStore } from "~/store";
 import { createQueryInvalidate } from "./events";
-import { commands, RecordingMode, ScreenCaptureTarget } from "./tauri";
+import {
+  CameraInfo,
+  commands,
+  DeviceOrModelID,
+  ModelIDType,
+  RecordingMode,
+  ScreenCaptureTarget,
+} from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
@@ -54,7 +61,7 @@ const listVideoDevices = queryOptions({
 export function createVideoDevicesQuery() {
   const query = createQuery(() => listVideoDevices);
 
-  const [videoDevicesStore, setVideoDevices] = createStore<string[]>([]);
+  const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
 
   createMemo(() => {
     setVideoDevices(reconcile(query.data ?? []));
@@ -84,9 +91,11 @@ export function createOptionsQuery() {
     createStore<{
       captureTarget: ScreenCaptureTarget;
       micName: string | null;
-      cameraLabel: string | null;
       mode: RecordingMode;
       captureSystemAudio?: boolean;
+      cameraID?: DeviceOrModelID | null;
+      /** @deprecated */
+      cameraLabel: string | null;
     }>({
       captureTarget: { variant: "screen", id: 0 },
       micName: null,
@@ -97,7 +106,6 @@ export function createOptionsQuery() {
   );
 
   createEventListener(window, "storage", (e) => {
-    console.log(e);
     if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
   });
 
@@ -137,16 +145,24 @@ export function createLicenseQuery() {
 }
 
 export function createCameraMutation() {
-  const { setOptions } = useRecordingOptions();
+  const { setOptions, rawOptions } = useRecordingOptions();
 
   const setCameraInput = createMutation(() => ({
-    mutationFn: async (label: string | null) => {
-      setOptions("cameraLabel", label);
-      if (label) {
+    mutationFn: async (model: DeviceOrModelID | null) => {
+      const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
+      setOptions("cameraID", reconcile(model));
+      if (model) {
         await commands.showWindow("Camera");
         getCurrentWindow().setFocus();
       }
-      await commands.setCameraInput(label);
+
+      await commands.setCameraInput(model).catch(async (e) => {
+        if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+          setOptions("cameraID", null);
+        } else setOptions("cameraID", reconcile(before));
+
+        throw e;
+      });
     },
   }));
 

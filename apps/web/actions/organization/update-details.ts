@@ -1,4 +1,4 @@
-'use server';
+"use server";
 
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
@@ -6,11 +6,15 @@ import { db } from "@cap/database";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function updateOrganizationDetails(
-  organizationName: string,
-  allowedEmailDomain: string,
-  organizationId: string
-) {
+export async function updateOrganizationDetails({
+  organizationName,
+  allowedEmailDomain,
+  organizationId,
+}: {
+  organizationName?: string | null;
+  allowedEmailDomain?: string | null;
+  organizationId: string;
+}) {
   const user = await getCurrentUser();
 
   if (!user) {
@@ -30,15 +34,25 @@ export async function updateOrganizationDetails(
     throw new Error("Only the owner can update organization details");
   }
 
-  await db()
-    .update(organizations)
-    .set({
-      name: organizationName,
-      allowedEmailDomain: allowedEmailDomain || null,
-    })
-    .where(eq(organizations.id, organizationId));
+  if (organizationName) {
+    await db()
+      .update(organizations)
+      .set({
+        name: organizationName,
+      })
+      .where(eq(organizations.id, organizationId));
+  }
+
+  if (allowedEmailDomain || allowedEmailDomain === "") {
+    await db()
+      .update(organizations)
+      .set({
+        allowedEmailDomain: allowedEmailDomain,
+      })
+      .where(eq(organizations.id, organizationId));
+  }
 
   revalidatePath("/dashboard/settings/organization");
 
   return { success: true };
-} 
+}

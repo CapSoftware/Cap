@@ -1,8 +1,8 @@
 pub mod plugin {
     use cap_flags::FLAGS;
     use tauri::{
-        plugin::{Builder, TauriPlugin},
         Runtime,
+        plugin::{Builder, TauriPlugin},
     };
 
     pub fn init<R: Runtime>() -> TauriPlugin<R> {

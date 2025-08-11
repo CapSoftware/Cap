@@ -20,6 +20,11 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+const MotionInput = motion(Input);
+const MotionLogoBadge = motion(LogoBadge);
+const MotionLink = motion(Link);
+const MotionButton = motion(Button);
+
 export function LoginForm() {
   const searchParams = useSearchParams();
   const next = searchParams?.get("next");
@@ -125,31 +130,42 @@ export function LoginForm() {
   };
 
   return (
-    <div className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[472px] bg-gray-3 border border-gray-5 rounded-2xl">
+    <motion.div
+      layout
+      transition={{
+        layout: { duration: 0.3, ease: "easeInOut" },
+        height: { duration: 0.3, ease: "easeInOut" }
+      }}
+      className="overflow-hidden relative w-[calc(100%-5%)] p-[28px] max-w-[432px] bg-gray-3 border border-gray-5 rounded-2xl"
+    >
       <motion.div
+        layout="position"
         key="back-button"
         initial={{ opacity: 0, display: "none" }}
         animate={{
           opacity: showOrgInput ? 1 : 0,
           display: showOrgInput ? "flex" : "none",
-          transition: { duration: 0.2 },
+          transition: { duration: 0.1, delay: 0.2 },
         }}
         onClick={() => setShowOrgInput(false)}
-        className="flex absolute top-5 left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent rounded-full border border-gray-4 transition-colors duration-300 cursor-pointer "
+        className="absolute overflow-hidden top-5 rounded-full left-5 z-20 hover:bg-gray-1 gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 transition-colors duration-300 cursor-pointer"
       >
         <FontAwesomeIcon className="w-2" icon={faArrowLeft} />
-        <p className="text-xs text-inherit">Back</p>
+        <motion.p layout="position" className="text-xs text-inherit">Back</motion.p>
       </motion.div>
-      <Link className="flex mx-auto w-fit" href="/">
-        <LogoBadge className="w-[72px] mx-auto" />
-      </Link>
-      <div className="flex flex-col justify-center items-center my-7 text-left">
-        <h1 className="text-2xl font-semibold text-gray-12">Sign in to Cap</h1>
-        <p className="text-[16px] text-gray-10">
+      <MotionLink layout="position" className="flex mx-auto size-fit" href="/">
+        <MotionLogoBadge
+          layout="position"
+          className="w-[72px] h-[72px]"
+        />
+      </MotionLink>
+      <motion.div layout="position" className="flex flex-col justify-center items-center my-7 text-left">
+        <motion.h1 key="title" layout="position" className="text-2xl font-semibold text-gray-12">Sign in to Cap</motion.h1>
+        <motion.p key="subtitle" layout="position" className="text-[16px] text-gray-10">
           Beautiful screen recordings, owned by you.
-        </p>
-      </div>
-      <div className="flex flex-col space-y-3">
+        </motion.p>
+      </motion.div>
+      <motion.div layout="position" className="flex flex-col space-y-3">
         <Suspense
           fallback={
             <>
@@ -159,77 +175,94 @@ export function LoginForm() {
             </>
           }
         >
-          <div className="flex flex-col space-y-3">
+          <motion.div
+            layout
+            className="flex flex-col space-y-3"
+          >
             <AnimatePresence mode="wait" initial={false}>
-              {showOrgInput ? (
-                <motion.div
-                  key="sso"
-                  initial={{ x: 450, opacity: 0, filter: "blur(10px)" }}
-                  animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-                  exit={{ x: 450, opacity: 0, filter: "blur(10px)" }}
-                  transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
-                >
-                  <LoginWithSSO
-                    handleOrganizationLookup={handleOrganizationLookup}
-                    organizationId={organizationId}
-                    setOrganizationId={setOrganizationId}
-                    organizationName={organizationName}
-                  />
-                </motion.div>
-              ) : (
-                <motion.form
-                  key="email"
-                  initial={{ x: -450, opacity: 0, filter: "blur(10px)" }}
-                  animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-                  exit={{ x: -450, opacity: 0, filter: "blur(10px)" }}
-                  transition={{ duration: 0.2, type: "spring", bounce: 0.2 }}
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!email) return;
+              <motion.div
+                key={showOrgInput ? "sso-wrapper" : "email-wrapper"}
+                layout
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.25, ease: "easeInOut", opacity: { delay: 0.05 } }}
+                className="px-1"
+              >
+                {showOrgInput ? (
+                  <motion.div
+                    key="sso"
+                    layout
+                    className="min-w-fit"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0, transition: { delay: 0.1 } }}
+                    exit={{ opacity: 0, y: -10, transition: { duration: 0.1 } }}
+                    transition={{ duration: 0.2, ease: "easeInOut" }}
+                  >
+                    <LoginWithSSO
+                      handleOrganizationLookup={handleOrganizationLookup}
+                      organizationId={organizationId}
+                      setOrganizationId={setOrganizationId}
+                      organizationName={organizationName}
+                    />
+                  </motion.div>
+                ) : (
+                  <motion.form
+                    key="email"
+                    layout
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0, transition: { duration: 0.1 } }}
+                    exit={{ opacity: 0, y: -10, transition: { duration: 0.15 } }}
+                    transition={{ duration: 0.2, ease: "easeInOut", opacity: { delay: 0.05 } }}
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!email) return;
 
-                    setLoading(true);
-                    trackEvent("auth_started", {
-                      method: "email",
-                      is_signup: !oauthError,
-                    });
-                    signIn("email", {
-                      email,
-                      redirect: false,
-                      ...(next && next.length > 0 ? { callbackUrl: next } : {}),
-                    })
-                      .then((res) => {
-                        setLoading(false);
-                        if (res?.ok && !res?.error) {
-                          setEmailSent(true);
-                          trackEvent("auth_email_sent", {
-                            email_domain: email.split("@")[1],
-                          });
-                          toast.success("Email sent - check your inbox!");
-                        } else {
-                          toast.error("Error sending email - try again?");
-                        }
-                      })
-                      .catch(() => {
-                        setEmailSent(false);
-                        setLoading(false);
-                        toast.error("Error sending email - try again?");
+                      setLoading(true);
+                      trackEvent("auth_started", {
+                        method: "email",
+                        is_signup: !oauthError,
                       });
-                  }}
-                  className="flex flex-col space-y-3"
-                >
-                  <NormalLogin
-                    setShowOrgInput={setShowOrgInput}
-                    email={email}
-                    emailSent={emailSent}
-                    setEmail={setEmail}
-                    loading={loading}
-                    oauthError={oauthError}
-                    handleGoogleSignIn={handleGoogleSignIn}
-                  />
-                </motion.form>
-              )}
+                      signIn("email", {
+                        email,
+                        redirect: false,
+                        ...(next && next.length > 0 ? { callbackUrl: next } : {}),
+                      })
+                        .then((res) => {
+                          setLoading(false);
+                          if (res?.ok && !res?.error) {
+                            setEmailSent(true);
+                            trackEvent("auth_email_sent", {
+                              email_domain: email.split("@")[1],
+                            });
+                            toast.success("Email sent - check your inbox!");
+                          } else {
+                            toast.error("Error sending email - try again?");
+                          }
+                        })
+                        .catch(() => {
+                          setEmailSent(false);
+                          setLoading(false);
+                          toast.error("Error sending email - try again?");
+                        });
+                    }}
+                    className="flex flex-col space-y-3"
+                  >
+                    <NormalLogin
+                      setShowOrgInput={setShowOrgInput}
+                      email={email}
+                      emailSent={emailSent}
+                      setEmail={setEmail}
+                      loading={loading}
+                      oauthError={oauthError}
+                      handleGoogleSignIn={handleGoogleSignIn}
+                    />
+                  </motion.form>
+                )}
+              </motion.div>
             </AnimatePresence>
-            <p className="pt-3 text-xs text-center text-gray-9">
+            <motion.p
+              layout="position" className="pt-3 text-xs text-center text-gray-9">
               By typing your email and clicking continue, you acknowledge that
               you have both read and agree to Cap's{" "}
               <Link
@@ -248,10 +281,11 @@ export function LoginForm() {
                 Privacy Policy
               </Link>
               .
-            </p>
-          </div>
+            </motion.p>
+          </motion.div>
           {emailSent && (
-            <button
+            <motion.button
+              layout
               className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
               onClick={() => {
                 setEmailSent(false);
@@ -260,11 +294,11 @@ export function LoginForm() {
               }}
             >
               Click to restart sign in process
-            </button>
+            </motion.button>
           )}
         </Suspense>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -280,27 +314,25 @@ const LoginWithSSO = ({
   organizationName: string | null;
 }) => {
   return (
-    <>
-      <form onSubmit={handleOrganizationLookup} className="relative space-y-2">
-        <Input
-          id="organizationId"
-          placeholder="Enter your Organization ID..."
-          value={organizationId}
-          onChange={(e) => setOrganizationId(e.target.value)}
-          className="w-full max-w-full"
-        />
-        {organizationName && (
-          <p className="text-sm text-gray-1">
-            Signing in to: {organizationName}
-          </p>
-        )}
-        <div>
-          <Button type="submit" variant="dark" className="w-full max-w-full">
-            Continue with SSO
-          </Button>
-        </div>
-      </form>
-    </>
+    <motion.form layout onSubmit={handleOrganizationLookup} className="relative space-y-2">
+      <MotionInput
+        id="organizationId"
+        placeholder="Enter your Organization ID..."
+        value={organizationId}
+        onChange={(e) => setOrganizationId(e.target.value)}
+        className="w-full max-w-full"
+      />
+      {organizationName && (
+        <p className="text-sm text-gray-1">
+          Signing in to: {organizationName}
+        </p>
+      )}
+      <div>
+        <Button type="submit" variant="dark" className="w-full max-w-full">
+          Continue with SSO
+        </Button>
+      </div>
+    </motion.form>
   );
 };
 
@@ -322,9 +354,9 @@ const NormalLogin = ({
   handleGoogleSignIn: () => void;
 }) => {
   return (
-    <>
-      <div className="flex flex-col space-y-3">
-        <Input
+    <motion.div>
+      <motion.div layout className="flex flex-col space-y-3">
+        <MotionInput
           id="email"
           name="email"
           autoFocus
@@ -338,7 +370,7 @@ const NormalLogin = ({
             setEmail(e.target.value);
           }}
         />
-        <Button
+        <MotionButton
           variant="primary"
           type="submit"
           disabled={loading || emailSent}
@@ -349,7 +381,7 @@ const NormalLogin = ({
               ? "Email sent to your terminal"
               : "Email sent to your inbox"
             : "Login with email"}
-        </Button>
+        </MotionButton>
         {/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
                     <p className="text-lg text-white">
@@ -360,16 +392,16 @@ const NormalLogin = ({
                     </p>
                   </div>
                 )} */}
-      </div>
+      </motion.div>
       <div className="flex gap-4 items-center my-4">
         <span className="flex-1 h-px bg-gray-5" />
-        <p className="text-sm text-center text-gray-8">OR</p>
+        <p className="text-sm text-center text-gray-10">OR</p>
         <span className="flex-1 h-px bg-gray-5" />
       </div>
-      <div className="flex flex-col gap-3 justify-center items-center">
+      <motion.div layout className="flex flex-col gap-3 justify-center items-center">
         {!oauthError && (
           <>
-            <Button
+            <MotionButton
               variant="gray"
               type="button"
               className="flex gap-2 justify-center items-center w-full text-sm"
@@ -378,7 +410,7 @@ const NormalLogin = ({
             >
               <Image src="/google.svg" alt="Google" width={16} height={16} />
               Login with Google
-            </Button>
+            </MotionButton>
           </>
         )}
 
@@ -395,17 +427,18 @@ const NormalLogin = ({
             </p>
           </div>
         )}
-        <Button
+        <MotionButton
           variant="gray"
           type="button"
           className="w-full"
+          layout
           onClick={() => setShowOrgInput(true)}
           disabled={loading}
         >
           <LucideArrowUpRight size={20} />
           Login with SAML SSO
-        </Button>
-      </div>
-    </>
+        </MotionButton>
+      </motion.div>
+    </motion.div>
   );
 };

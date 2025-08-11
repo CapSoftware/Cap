@@ -1,9 +1,10 @@
 use std::collections::VecDeque;
 
+use cap_media_info::{AudioInfo, PlanarData};
 use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
 
-use crate::data::{cast_bytes_to_f32_slice, AudioInfo, PlanarData};
+use crate::data::cast_bytes_to_f32_slice;
 
 #[derive(Debug)]
 pub struct AudioBuffer {

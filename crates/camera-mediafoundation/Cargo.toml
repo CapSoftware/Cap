@@ -4,14 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-windows-core = { version = "0.60" }
-windows = { version = "0.60", features = [
+tracing.workspace = true
+thiserror.workspace = true
+windows-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-core = { workspace = true }
+windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 	"Win32_Media_DirectShow",
 	"Win32_System_Com",
 ] }
-tracing.workspace = true
+
+[dev-dependencies]
 inquire = "0.7.5"
+windows-core = { workspace = true }
+windows = { workspace = true }
 
 [lints]
 workspace = true

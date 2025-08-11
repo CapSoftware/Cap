@@ -42,7 +42,9 @@ function createServerEnv() {
       STRIPE_WEBHOOK_SECRET: z.string().optional(),
       DISCORD_FEEDBACK_WEBHOOK_URL: z.string().optional(),
       OPENAI_API_KEY: z.string().optional(),
+      GROQ_API_KEY: z.string().optional(),
       INTERCOM_SECRET: z.string().optional(),
+      CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true),
       VERCEL_ENV: z
         .union([
           z.literal("production"),

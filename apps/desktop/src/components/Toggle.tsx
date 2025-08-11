@@ -1,9 +1,9 @@
 import { Switch as KSwitch } from "@kobalte/core/switch";
-import { cva, type VariantProps } from "cva";
+import { cva } from "cva";
 import { splitProps, type ComponentProps } from "solid-js";
 
 const toggleControlStyles = cva(
-  "rounded-full bg-gray-5 ui-disabled:bg-gray-3 ui-checked:bg-blue-9 transition-colors outline-2 outline-offset-2 outline-blue-300",
+  "rounded-full bg-gray-6 ui-disabled:bg-gray-3 ui-checked:bg-blue-500 transition-colors outline-2 outline-offset-2 outline-blue-300",
   {
     variants: {
       size: {

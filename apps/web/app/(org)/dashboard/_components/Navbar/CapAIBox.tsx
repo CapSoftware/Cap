@@ -54,7 +54,7 @@ const CapAIArt = memo(() => {
   const { theme } = useTheme();
   const { RiveComponent: CapAIArt } = useRive({
     src: "/rive/bento.riv",
-    artboard: theme === "light" ? "capai" : "capaidark",
+    artboard: theme === "dark" ? "capai" : "capaidark",
     autoplay: true,
     layout: new Layout({
       fit: Fit.Contain,

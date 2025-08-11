@@ -1,23 +1,25 @@
+use cap_media_info::{AudioInfo, PlanarData, RawVideoFormat, VideoInfo};
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, ChannelLayout};
+use ffmpeg::{format::Sample, frame};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::Sender;
 use scap::{
+    Target,
     capturer::{Area, Capturer, Options, Point, Resolution as ScapResolution, Size},
     frame::{Frame, FrameType, VideoFrame},
-    Target,
 };
 
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{collections::HashMap, ops::ControlFlow, sync::Arc, time::SystemTime};
+use std::{collections::HashMap, ops::ControlFlow, rc::Rc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
+#[cfg(target_os = "windows")]
+use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
-    data::{AudioInfo, FFVideo, PlanarData, RawVideoFormat, VideoInfo},
-    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform::{self, logical_monitor_bounds, Bounds, Window},
     MediaError,
+    pipeline::{clock::*, control::Control, task::PipelineSourceTask},
+    platform::{self, Bounds, Window, logical_monitor_bounds},
 };
 
 static EXCLUDED_WINDOWS: &[&str] = &[
@@ -105,11 +107,10 @@ impl ScreenCaptureTarget {
 
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
-    output_resolution: Option<ScapResolution>,
     output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
-    options: Arc<Options>,
+    options: Rc<Options>,
     show_camera: bool,
     force_show_cursor: bool,
     bounds: Bounds,
@@ -126,7 +127,7 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
         f.debug_struct("ScreenCaptureSource")
             .field("target", &self.target)
             .field("bounds", &self.bounds)
-            .field("output_resolution", &self.output_resolution)
+            // .field("output_resolution", &self.output_resolution)
             .field("output_type", &self.output_type)
             .field("fps", &self.fps)
             .field("video_info", &self.video_info)
@@ -145,7 +146,7 @@ pub trait ScreenCaptureFormat {
 }
 
 impl ScreenCaptureFormat for AVFrameCapture {
-    type VideoFormat = FFVideo;
+    type VideoFormat = ffmpeg::frame::Video;
 
     fn audio_info() -> AudioInfo {
         let host = cpal::default_host();
@@ -166,11 +167,10 @@ unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
 impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
-            target: self.target.clone(),
-            output_resolution: self.output_resolution,
+            target: self.target,
             output_type: self.output_type,
             fps: self.fps,
-            video_info: self.video_info.clone(),
+            video_info: self.video_info,
             options: self.options.clone(),
             show_camera: self.show_camera,
             force_show_cursor: self.force_show_cursor,
@@ -179,7 +179,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
             _phantom: std::marker::PhantomData,
-            start_time: self.start_time.clone(),
+            start_time: self.start_time,
         }
     }
 }
@@ -197,6 +197,7 @@ pub struct CropRatio {
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
+    #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,
         output_type: Option<FrameType>,
@@ -214,24 +215,19 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             bounds,
             crop_area,
             display_size,
-        } = Self::get_options_config(&target)?;
+        } = Self::get_options_config(target)?;
 
         let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
         let fps = fps.min(max_fps);
 
-        if !(fps > 0) {
-            return Err("FPS must be greater than 0".to_string());
-        }
-
         let captures_audio = audio_tx.is_some();
 
         let mut this = Self {
-            target: target.clone(),
-            output_resolution: None,
+            target: *target,
             output_type,
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
-            options: Arc::new(Default::default()),
+            options: std::rc::Rc::new(Default::default()),
             bounds,
             display_size,
             show_camera,
@@ -244,7 +240,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let options = this.create_options(scap_target, crop_area, captures_audio)?;
 
-        this.options = Arc::new(options);
+        this.options = std::rc::Rc::new(options);
 
         #[cfg(target_os = "macos")]
         let video_size = {
@@ -360,7 +356,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
                 let (screen_info, target) = screens
                     .into_iter()
-                    .find(|(i, t)| i.id == *id)
+                    .find(|(i, _t)| i.id == *id)
                     .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
                 let bounds = platform::monitor_bounds(screen_info.id);
@@ -432,8 +428,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             target: Some(target.clone()),
             crop_area,
             output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
-            output_resolution: self.output_resolution.unwrap_or(ScapResolution::Captured),
-            excluded_targets: (!excluded_targets.is_empty()).then(|| excluded_targets),
+            output_resolution: ScapResolution::Captured,
+            excluded_targets: (!excluded_targets.is_empty()).then_some(excluded_targets),
             captures_audio,
             exclude_current_process_audio: true,
         })
@@ -457,10 +453,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     // #[instrument(skip_all)]
     fn run(
         &mut self,
-        mut clock: Self::Clock,
+        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -469,6 +465,48 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         let mut video_i = 0;
         let mut audio_i = 0;
+
+        let mut frames_dropped = 0;
+
+        // Frame drop rate tracking state
+        use std::collections::VecDeque;
+        use std::time::{Duration, Instant};
+
+        let mut frame_events: VecDeque<(Instant, bool)> = VecDeque::new();
+        let window_duration = Duration::from_secs(3);
+        let max_drop_rate_threshold = 0.25;
+        let mut last_cleanup = Instant::now();
+        let mut last_log = Instant::now();
+        let log_interval = Duration::from_secs(5);
+
+        // Helper function to clean up old frame events
+        let cleanup_old_events = |frame_events: &mut VecDeque<(Instant, bool)>, now: Instant| {
+            let cutoff = now - window_duration;
+            while let Some(&(timestamp, _)) = frame_events.front() {
+                if timestamp < cutoff {
+                    frame_events.pop_front();
+                } else {
+                    break;
+                }
+            }
+        };
+
+        // Helper function to calculate current drop rate
+        let calculate_drop_rate =
+            |frame_events: &mut VecDeque<(Instant, bool)>| -> (f64, usize, usize) {
+                let now = Instant::now();
+                cleanup_old_events(frame_events, now);
+
+                if frame_events.is_empty() {
+                    return (0.0, 0, 0);
+                }
+
+                let total_frames = frame_events.len();
+                let dropped_frames = frame_events.iter().filter(|(_, dropped)| *dropped).count();
+                let drop_rate = dropped_frames as f64 / total_frames as f64;
+
+                (drop_rate, dropped_frames, total_frames)
+            };
 
         inner(
             self,
@@ -487,8 +525,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         return ControlFlow::Continue(());
                     };
 
-                    let mut buffer =
-                        FFVideo::new(video_info.pixel_format, video_info.width, video_info.height);
+                    let mut buffer = frame::Video::new(
+                        video_info.pixel_format,
+                        video_info.width,
+                        video_info.height,
+                    );
 
                     let bytes_per_pixel = 4;
                     let width_in_bytes = frame.width as usize * bytes_per_pixel;
@@ -530,9 +571,54 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                     ));
 
-                    if let Err(_) = video_tx.send((buffer, elapsed.as_secs_f64())) {
-                        error!("Pipeline is unreachable. Shutting down recording.");
-                        return ControlFlow::Break(());
+                    // Record frame attempt and check if it was dropped
+                    let now = Instant::now();
+                    let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
+                        Err(flume::TrySendError::Disconnected(_)) => {
+                            return ControlFlow::Break(Err(
+                                "Pipeline is unreachable. Shutting down recording".to_string(),
+                            ));
+                        }
+                        Err(flume::TrySendError::Full(_)) => {
+                            warn!("Screen capture sender is full, dropping frame");
+                            frames_dropped += 1;
+                            true
+                        }
+                        _ => false,
+                    };
+
+                    frame_events.push_back((now, frame_dropped));
+
+                    if now.duration_since(last_cleanup) > Duration::from_millis(100) {
+                        cleanup_old_events(&mut frame_events, now);
+                        last_cleanup = now;
+                    }
+
+                    // Check drop rate and potentially exit
+                    let (drop_rate, dropped_count, total_count) =
+                        calculate_drop_rate(&mut frame_events);
+
+                    if drop_rate > max_drop_rate_threshold && total_count >= 10 {
+                        error!(
+                            "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            window_duration.as_secs()
+                        );
+                        return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
+                    }
+
+                    // Periodic logging of drop rate
+                    if now.duration_since(last_log) > log_interval && total_count > 0 {
+                        info!(
+                            "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
+                            drop_rate * 100.0,
+                            dropped_count,
+                            total_count,
+                            frames_dropped
+                        );
+                        last_log = now;
                     }
 
                     ControlFlow::Continue(())
@@ -553,10 +639,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     ControlFlow::Continue(())
                 }
                 Ok(_) => panic!("Unsupported video format"),
-                Err(error) => {
-                    error!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }
@@ -566,8 +649,8 @@ fn inner<T: ScreenCaptureFormat>(
     source: &mut ScreenCaptureSource<T>,
     ready_signal: crate::pipeline::task::PipelineReadySignal,
     mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<()>,
-) {
+    mut get_frame: impl FnMut(&mut Capturer) -> ControlFlow<Result<(), String>>,
+) -> Result<(), String> {
     trace!("Preparing screen capture source thread...");
 
     let maybe_capture_window_id = match &source.target {
@@ -580,7 +663,7 @@ fn inner<T: ScreenCaptureFormat>(
         Err(e) => {
             error!("Failed to build capturer: {e}");
             let _ = ready_signal.send(Err(MediaError::Any("Failed to build capturer".into())));
-            return;
+            return Err(e.to_string());
         }
     };
 
@@ -613,9 +696,14 @@ fn inner<T: ScreenCaptureFormat>(
                 }
 
                 match get_frame(&mut capturer) {
-                    ControlFlow::Break(_) => {
+                    ControlFlow::Break(res) => {
                         warn!("breaking from loop");
-                        break;
+
+                        if let Err(e) = &res {
+                            error!("Capture loop broke with error: {}", e)
+                        }
+
+                        return res;
                     }
                     ControlFlow::Continue(_) => {
                         continue;
@@ -626,6 +714,7 @@ fn inner<T: ScreenCaptureFormat>(
     }
 
     info!("Shut down screen capture source thread.");
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -651,10 +740,10 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
     fn run(
         &mut self,
-        clock: Self::Clock,
+        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
@@ -680,6 +769,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 Ok((sample_buffer, typ)) => {
                     use cidre::sc;
 
+                    #[allow(clippy::useless_transmute)]
                     let sample_buffer = unsafe {
                         std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
                     };
@@ -708,19 +798,21 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                                 Ok::<(), ()>(())
                             };
 
-                            if check_skip_send().is_ok() {
-                                if let Err(_) = video_tx.send((sample_buffer, relative_time)) {
-                                    error!("Pipeline is unreachable. Shutting down recording.");
-                                    return ControlFlow::Continue(());
-                                }
+                            if check_skip_send().is_ok()
+                                && video_tx.send((sample_buffer, relative_time)).is_err()
+                            {
+                                error!("Pipeline is unreachable. Shutting down recording.");
+                                return ControlFlow::Continue(());
                             }
                         }
                         sc::stream::OutputType::Audio => {
+                            use ffmpeg::ChannelLayout;
+
                             let res = || {
                                 cap_fail::fail_err!("screen_capture audio skip", ());
                                 Ok::<(), ()>(())
                             };
-                            if let Err(_) = res() {
+                            if res().is_err() {
                                 return ControlFlow::Continue(());
                             }
 
@@ -739,6 +831,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             frame.set_rate(48_000);
                             let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                             for i in 0..frame.planes() {
+                                use cap_media_info::PlanarData;
+
                                 frame.plane_data_mut(i).copy_from_slice(
                                     &slice[i * data_bytes_size as usize
                                         ..(i + 1) * data_bytes_size as usize],
@@ -754,10 +848,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     ControlFlow::Continue(())
                 }
-                Err(error) => {
-                    eprintln!("Capture error: {error}");
-                    ControlFlow::Break(())
-                }
+                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
             },
         )
     }
@@ -848,9 +939,11 @@ pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
     }
     #[cfg(target_os = "windows")]
     match target {
-        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle),
+        scap::Target::Display(display) => {
+            platform::get_display_refresh_rate(HMONITOR(display.raw_handle.0))
+        }
         scap::Target::Window(window) => platform::get_display_refresh_rate(
-            platform::display_for_window(window.raw_handle)
+            platform::display_for_window(HWND(window.raw_handle.0))
                 .ok_or_else(|| "failed to get display for window".to_string())?,
         ),
     }
@@ -875,9 +968,9 @@ fn display_for_target<'a>(
             }
             #[cfg(windows)]
             {
-                let id = platform::display_for_window(window.raw_handle)?;
+                let id = platform::display_for_window(HWND(window.raw_handle.0))?;
                 targets.iter().find(|t| match t {
-                    scap::Target::Display(d) => d.raw_handle == id,
+                    scap::Target::Display(d) => d.raw_handle.0 == id.0,
                     _ => false,
                 })
             }

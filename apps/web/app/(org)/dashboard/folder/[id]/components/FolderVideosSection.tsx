@@ -3,15 +3,15 @@
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { ClientCapCard } from "./index";
 import { useRouter } from "next/navigation";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { toast } from "sonner";
 import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
-import { useApiClient } from "@/utils/web-api";
 import { useUploadingContext } from "../../../caps/UploadingContext";
 import { type VideoData } from "../../../caps/Caps";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 interface FolderVideosSectionProps {
   initialVideos: VideoData;
@@ -27,14 +27,11 @@ export default function FolderVideosSection({
   userId,
 }: FolderVideosSectionProps) {
   const router = useRouter();
-  const apiClient = useApiClient();
   const { isUploading } = useUploadingContext();
   const { activeOrganization } = useDashboardContext();
 
   const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [analytics, setAnalytics] = useState<Record<string, number>>({});
-
   const [isDeleting, setIsDeleting] = useState(false);
 
   const deleteSelectedCaps = async () => {
@@ -102,28 +99,49 @@ export default function FolderVideosSection({
     });
   };
 
-  useEffect(() => {
-    const fetchAnalytics = async () => {
-      if (!dubApiKeyEnabled) return;
-
-      const analyticsData: Record<string, number> = {};
-      for (const video of initialVideos) {
-        const response = await apiClient.video.getAnalytics({
-          query: { videoId: video.id },
-          fetchOptions: {
-            cache: "force-cache",
-          },
-        });
-
-        if (response.status !== 200) continue;
-
-        analyticsData[video.id] = response.body.count || 0;
+  const { data: analyticsData, isLoading: isLoadingAnalytics } = useSuspenseQuery({
+    queryKey: ['analytics', initialVideos.map(video => video.id)],
+    queryFn: async () => {
+      if (!dubApiKeyEnabled || initialVideos.length === 0) {
+        return {};
       }
-      setAnalytics(analyticsData);
-    };
 
-    fetchAnalytics();
-  }, [initialVideos]);
+      const analyticsPromises = initialVideos.map(async (video) => {
+        try {
+          const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (response.ok) {
+            const responseData = await response.json();
+            return { videoId: video.id, count: responseData.count || 0 };
+          }
+          return { videoId: video.id, count: 0 };
+        } catch (error) {
+          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          return { videoId: video.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.allSettled(analyticsPromises);
+      const analyticsData: Record<string, number> = {};
+
+
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value) {
+          analyticsData[result.value.videoId] = result.value.count;
+        }
+      });
+      return analyticsData;
+    },
+    staleTime: 30000, // 30 seconds
+    refetchOnWindowFocus: false,
+  });
+
+  const analytics = analyticsData || {};
 
   return (
     <>
@@ -160,6 +178,7 @@ export default function FolderVideosSection({
                   videoId={video.id}
                   cap={video}
                   analytics={analytics[video.id] || 0}
+                  isLoadingAnalytics={isLoadingAnalytics}
                   isSelected={selectedCaps.includes(video.id)}
                   anyCapSelected={selectedCaps.length > 0}
                   isDeleting={isDeleting}

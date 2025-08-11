@@ -55,7 +55,7 @@ jobs:
           file: apps/web/Dockerfile
           platforms: linux/${{ matrix.platform }}
           push: true
-          outputs: type=image,name=ghcr.io/capsoftware/cap-web,push-by-digest=true
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/cap-web,push-by-digest=true
           cache-from: type=gha,scope=buildx-${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=buildx-${{ matrix.platform }}
 
@@ -101,5 +101,5 @@ jobs:
 
       - name: Create Image Manifest
         run: |
-          docker buildx imagetools create -t ghcr.io/capsoftware/cap-web:${{ inputs.tag || 'latest' }} \
-            $(find /tmp/digests -type f -not -path "*/\.*" -exec basename {} \; | xargs -I {} echo "ghcr.io/capsoftware/cap-web@sha256:{}")
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/cap-web:${{ inputs.tag || 'latest' }} \
+            $(find /tmp/digests -type f -not -path "*/\.*" -exec basename {} \; | xargs -I {} echo "ghcr.io/${{ github.repository_owner }}/cap-web@sha256:{}")

@@ -63,6 +63,16 @@ export const users = mysqlTable(
     stripeSubscriptionPriceId: varchar("stripeSubscriptionPriceId", {
       length: 255,
     }),
+    preferences: json("preferences")
+      .$type<{
+        notifications: {
+          pauseComments: boolean;
+          pauseReplies: boolean;
+          pauseViews: boolean;
+          pauseReactions: boolean;
+        };
+      } | null>()
+      .default(null),
     activeOrganizationId: nanoId("activeOrganizationId"),
     created_at: timestamp("created_at").notNull().defaultNow(),
     updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
@@ -300,6 +310,45 @@ export const comments = mysqlTable(
   })
 );
 
+export const notifications = mysqlTable(
+  "notifications",
+  {
+    id: nanoId("id").notNull().primaryKey().unique(),
+    orgId: nanoId("orgId").notNull(),
+    recipientId: nanoId("recipientId").notNull(),
+    type: varchar("type", { length: 10 })
+      .notNull()
+      .$type<"view" | "comment" | "reply" | "reaction" /*| "mention"*/>(),
+    data: json("data")
+      .$type<{
+        videoId?: string;
+        authorId?: string;
+        comment?: {
+          id: string;
+          content: string;
+        };
+      }>()
+      .notNull(),
+    readAt: timestamp("readAt"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+  },
+  (table) => ({
+    recipientIdIndex: index("recipient_id_idx").on(table.recipientId),
+    orgIdIndex: index("org_id_idx").on(table.orgId),
+    typeIndex: index("type_idx").on(table.type),
+    readAtIndex: index("read_at_idx").on(table.readAt),
+    createdAtIndex: index("created_at_idx").on(table.createdAt),
+    recipientReadIndex: index("recipient_read_idx").on(
+      table.recipientId,
+      table.readAt
+    ),
+    recipientCreatedIndex: index("recipient_created_idx").on(
+      table.recipientId,
+      table.createdAt
+    ),
+  })
+);
+
 export const s3Buckets = mysqlTable("s3_buckets", {
   id: nanoId("id").notNull().primaryKey().unique(),
   ownerId: nanoId("ownerId").notNull(),
@@ -311,6 +360,17 @@ export const s3Buckets = mysqlTable("s3_buckets", {
   secretAccessKey: encryptedText("secretAccessKey").notNull(),
   provider: text("provider").notNull().default("aws"),
 });
+
+export const notificationsRelations = relations(notifications, ({ one }) => ({
+  org: one(organizations, {
+    fields: [notifications.orgId],
+    references: [organizations.id],
+  }),
+  recipient: one(users, {
+    fields: [notifications.recipientId],
+    references: [users.id],
+  }),
+}));
 
 export const authApiKeys = mysqlTable("auth_api_keys", {
   id: varchar("id", { length: 36 }).notNull().primaryKey().unique(),

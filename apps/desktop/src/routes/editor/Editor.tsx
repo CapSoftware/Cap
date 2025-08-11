@@ -32,6 +32,7 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import Cropper, { CROP_ZERO, CropperRef } from "~/components/Cropper";
 
 export function Editor() {
@@ -73,12 +74,10 @@ export function Editor() {
 function Inner() {
   const { project, editorState, setEditorState } = useEditorContext();
 
-  onMount(() =>
-    events.editorStateChanged.listen((e) => {
-      renderFrame.clear();
-      setEditorState("playbackTime", e.payload.playhead_position / FPS);
-    })
-  );
+  createTauriEventListener(events.editorStateChanged, (payload) => {
+    renderFrame.clear();
+    setEditorState("playbackTime", payload.playhead_position / FPS);
+  });
 
   const renderFrame = throttle((time: number) => {
     if (!editorState.playing) {
@@ -367,6 +366,7 @@ function Dialogs() {
                         </div>
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
+                        <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11"></div>
                         <EditorButton
                           leftIcon={<IconLucideMaximize />}
                           onClick={() => cropperRef?.fill()}

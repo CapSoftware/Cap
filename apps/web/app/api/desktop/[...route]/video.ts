@@ -80,27 +80,33 @@ app.get(
         }
       }
 
-      const idToUse = videoId !== undefined ? videoId : nanoId();
+      const idToUse = nanoId();
 
-      const videoData = {
-        id: idToUse,
-        name:
-          name ??
-          `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`,
-        ownerId: user.id,
-        awsRegion: "auto",
-        awsBucket: bucket.name,
-        source:
-          recordingMode === "hls"
-            ? { type: "local" as const }
-            : recordingMode === "desktopMP4"
-            ? { type: "desktopMP4" as const }
-            : undefined,
-        isScreenshot,
-        bucket: customBucket?.id,
-      };
+      const videoName =
+        name ??
+        `Cap ${isScreenshot ? "Screenshot" : "Recording"} - ${formattedDate}`;
 
-      await db().insert(videos).values(videoData);
+      await db()
+        .insert(videos)
+        .values({
+          id: idToUse,
+          name: videoName,
+          ownerId: user.id,
+          awsRegion: "auto",
+          awsBucket: bucket.name,
+          source:
+            recordingMode === "hls"
+              ? { type: "local" as const }
+              : recordingMode === "desktopMP4"
+              ? { type: "desktopMP4" as const }
+              : undefined,
+          isScreenshot,
+          bucket: customBucket?.id,
+          public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
+          metadata: {
+            duration,
+          },
+        });
 
       if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
         await dub().links.create({

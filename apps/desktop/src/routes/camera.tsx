@@ -1,30 +1,33 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-  LogicalPosition,
-  LogicalSize,
-  currentMonitor,
-  getCurrentWindow,
-} from "@tauri-apps/api/window";
-import { cx } from "cva";
-import {
   type ComponentProps,
-  Show,
-  Suspense,
   createEffect,
   createResource,
   createSignal,
   on,
   onCleanup,
+  onMount,
+  Show,
+  Suspense,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { createCameraMutation } from "~/utils/queries";
-import { createImageDataWS, createLazySignal } from "~/utils/socket";
 import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./(window-chrome)/OptionsContext";
+import { commands } from "~/utils/tauri";
+import { generalSettingsStore } from "~/store";
+import { createImageDataWS, createLazySignal } from "~/utils/socket";
+import {
+  currentMonitor,
+  getCurrentWindow,
+  LogicalPosition,
+  LogicalSize,
+} from "@tauri-apps/api/window";
+import { cx } from "cva";
 
 namespace CameraWindow {
   export type Size = "sm" | "lg";
@@ -36,21 +39,115 @@ namespace CameraWindow {
   };
 }
 
-const BAR_HEIGHT = 56;
-
-const { cameraWsPort } = (window as any).__CAP__;
-
 export default function () {
   document.documentElement.classList.toggle("dark", true);
 
+  const generalSettings = generalSettingsStore.createQuery();
+  const isNativePreviewEnabled =
+    generalSettings.data?.enableNativeCameraPreview || false;
+
   return (
     <RecordingOptionsProvider>
-      <Page />
+      <Show
+        when={isNativePreviewEnabled}
+        fallback={<LegacyCameraPreviewPage />}
+      >
+        <NativeCameraPreviewPage />
+      </Show>
     </RecordingOptionsProvider>
   );
 }
 
-function Page() {
+function NativeCameraPreviewPage() {
+  const { rawOptions } = useRecordingOptions();
+
+  const [state, setState] = makePersisted(
+    createStore<CameraWindow.State>({
+      size: "sm",
+      shape: "round",
+      mirrored: false,
+    }),
+    { name: "cameraWindowState" }
+  );
+
+  createEffect(() => commands.setCameraPreviewState(state));
+
+  const [cameraPreviewReady] = createResource(() =>
+    commands.awaitCameraPreviewReady()
+  );
+
+  const setCamera = createCameraMutation();
+
+  return (
+    <div
+      data-tauri-drag-region
+      class="flex relative flex-col w-screen h-screen cursor-move group"
+    >
+      <div class="h-13">
+        <div class="flex flex-row justify-center items-center">
+          <div class="flex flex-row gap-[0.25rem] p-[0.25rem] opacity-0 group-hover:opacity-100 translate-y-2 group-hover:translate-y-0 rounded-xl transition-[opacity,transform] bg-gray-1 border border-white-transparent-20 text-gray-10">
+            <ControlButton onClick={() => setCamera.mutate(null)}>
+              <IconCapCircleX class="size-5.5" />
+            </ControlButton>
+            <ControlButton
+              pressed={state.size === "lg"}
+              onClick={() => {
+                setState("size", (s) => (s === "sm" ? "lg" : "sm"));
+              }}
+            >
+              <IconCapEnlarge class="size-5.5" />
+            </ControlButton>
+            <ControlButton
+              pressed={state.shape !== "round"}
+              onClick={() =>
+                setState("shape", (s) =>
+                  s === "round" ? "square" : s === "square" ? "full" : "round"
+                )
+              }
+            >
+              {state.shape === "round" && <IconCapCircle class="size-5.5" />}
+              {state.shape === "square" && <IconCapSquare class="size-5.5" />}
+              {state.shape === "full" && (
+                <IconLucideRectangleHorizontal class="size-5.5" />
+              )}
+            </ControlButton>
+            <ControlButton
+              pressed={state.mirrored}
+              onClick={() => setState("mirrored", (m) => !m)}
+            >
+              <IconCapArrows class="size-5.5" />
+            </ControlButton>
+          </div>
+        </div>
+      </div>
+
+      {/* The camera preview is rendered in Rust by wgpu */}
+      <Show when={cameraPreviewReady.loading}>
+        <div class="w-full flex-1 flex items-center justify-center">
+          <div class="text-gray-11">Loading camera...</div>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+function ControlButton(
+  props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
+    active?: boolean;
+  }
+) {
+  return (
+    <KToggleButton
+      type="button"
+      class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
+      {...props}
+    />
+  );
+}
+
+// Legacy stuff below
+
+function LegacyCameraPreviewPage() {
   const { rawOptions } = useRecordingOptions();
 
   const [state, setState] = makePersisted(
@@ -91,6 +188,7 @@ function Page() {
     ctx?.putImageData(imageData.data, 0, 0);
   }
 
+  const { cameraWsPort } = (window as any).__CAP__;
   const [ws, isConnected] = createImageDataWS(
     `ws://localhost:${cameraWsPort}`,
     imageDataHandler
@@ -125,6 +223,7 @@ function Page() {
     async ([size, shape, frameWidth, frameHeight]) => {
       const monitor = await currentMonitor();
 
+      const BAR_HEIGHT = 56;
       const base = size === "sm" ? 230 : 400;
       const aspect = frameWidth && frameHeight ? frameWidth / frameHeight : 1;
       const windowWidth =
@@ -165,6 +264,8 @@ function Page() {
       { defer: true }
     )
   );
+
+  onMount(() => getCurrentWindow().show());
 
   return (
     <div
@@ -290,18 +391,4 @@ function cameraBorderRadius(state: CameraWindow.State) {
   if (state.shape === "round") return "9999px";
   if (state.size === "sm") return "3rem";
   return "4rem";
-}
-
-function ControlButton(
-  props: Omit<ComponentProps<typeof KToggleButton>, "type" | "class"> & {
-    active?: boolean;
-  }
-) {
-  return (
-    <KToggleButton
-      type="button"
-      class="p-2 rounded-lg ui-pressed:bg-gray-3 ui-pressed:text-gray-12"
-      {...props}
-    />
-  );
 }

@@ -6,7 +6,7 @@ import {
 } from "@tauri-apps/plugin-notification";
 import { type, type OsType } from "@tauri-apps/plugin-os";
 import "@total-typescript/ts-reset/filter-boolean";
-import { createResource, For, ParentProps, Show } from "solid-js";
+import { createResource, For, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import { authStore, generalSettingsStore } from "~/store";
@@ -16,17 +16,16 @@ import {
   type GeneralSettingsStore,
   type MainWindowRecordingStartBehaviour,
   type PostStudioRecordingBehaviour,
+  type PostDeletionBehaviour,
 } from "~/utils/tauri";
-// import { themeStore } from "~/store/theme";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { cx } from "cva";
 import themePreviewAuto from "~/assets/theme-previews/auto.jpg";
 import themePreviewDark from "~/assets/theme-previews/dark.jpg";
 import themePreviewLight from "~/assets/theme-previews/light.jpg";
-import { TextInput } from "~/routes/editor/TextInput";
 import { Setting, ToggleSetting } from "./Setting";
-import Tooltip from "~/components/Tooltip";
+import { Input } from "~/routes/editor/ui";
 
 export default function GeneralSettings() {
   const [store] = createResource(() => generalSettingsStore.get());
@@ -50,50 +49,59 @@ function AppearanceSection(props: {
 
   return (
     <div class="flex flex-col gap-4">
-      <p class="text-[--text-primary]">Appearance</p>
+      <div class="flex flex-col pb-4 border-b border-gray-2">
+        <h2 class="text-lg font-medium text-gray-12">General</h2>
+        <p class="text-sm text-gray-10">
+          General settings of your Cap application.
+        </p>
+      </div>
       <div
-        class="flex justify-start items-center text-[--text-primary]"
+        class="flex justify-start items-center text-gray-12"
         onContextMenu={(e) => e.preventDefault()}
       >
-        <div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
-          <For each={options}>
-            {(theme) => (
-              <button
-                type="button"
-                aria-checked={props.currentTheme === theme.id}
-                class="flex flex-col items-center rounded-md group focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
-                onClick={() => props.onThemeChange(theme.id)}
-              >
-                <div
-                  class={cx(
-                    `w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
-                    {
-                      "ring-2 ring-offset-2": props.currentTheme === theme.id,
-                      "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
-                        props.currentTheme !== theme.id,
-                    }
-                  )}
-                  aria-label={`Select theme: ${theme.name}`}
+        <div class="flex flex-col gap-3">
+          <p class="text-sm text-gray-12">Appearance</p>
+          <div class="flex justify-between m-1 min-w-[20rem] w-[22.2rem] flex-nowrap">
+            <For each={options}>
+              {(theme) => (
+                <button
+                  type="button"
+                  aria-checked={props.currentTheme === theme.id}
+                  class="flex flex-col items-center rounded-md group focus:outline-none focus-visible:ring-gray-300 focus-visible:ring-offset-gray-50 focus-visible:ring-offset-2 focus-visible:ring-4"
+                  onClick={() => props.onThemeChange(theme.id)}
                 >
-                  <div class="flex justify-center items-center w-full h-full">
-                    <img
-                      draggable={false}
-                      src={theme.preview}
-                      alt={`Preview of ${theme.name} theme`}
-                    />
+                  <div
+                    class={cx(
+                      `w-24 h-[4.8rem] rounded-md overflow-hidden focus:outline-none ring-offset-gray-50 transition-all duration-200`,
+                      {
+                        "ring-2 ring-gray-12 ring-offset-2":
+                          props.currentTheme === theme.id,
+                        "group-hover:ring-2 ring-offset-2 group-hover:ring-gray-5":
+                          props.currentTheme !== theme.id,
+                      }
+                    )}
+                    aria-label={`Select theme: ${theme.name}`}
+                  >
+                    <div class="flex justify-center items-center w-full h-full">
+                      <img
+                        draggable={false}
+                        src={theme.preview}
+                        alt={`Preview of ${theme.name} theme`}
+                      />
+                    </div>
                   </div>
-                </div>
-                <span
-                  class={cx(`mt-2 text-sm transition-color duration-200`, {
-                    "text-blue-9": props.currentTheme === theme.id,
-                    "text-gray-11": props.currentTheme !== theme.id,
-                  })}
-                >
-                  {theme.name}
-                </span>
-              </button>
-            )}
-          </For>
+                  <span
+                    class={cx(`mt-2 text-sm transition-color duration-200`, {
+                      "text-gray-12": props.currentTheme === theme.id,
+                      "text-gray-10": props.currentTheme !== theme.id,
+                    })}
+                  >
+                    {theme.name}
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
         </div>
       </div>
     </div>
@@ -108,6 +116,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
+      enableNativeCameraPreview: false,
+      autoZoomOnClicks: false,
     }
   );
 
@@ -123,10 +133,244 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
   const ostype: OsType = type();
 
+  type ToggleSettingItem = {
+    label: string;
+    type: "toggle";
+    description: string;
+    value: boolean;
+    onChange: (value: boolean) => void | Promise<void>;
+    os?: "macos" | "windows" | "linux";
+  };
+
+  type SelectSettingItem = {
+    label: string;
+    type: "select";
+    description: string;
+    value:
+      | MainWindowRecordingStartBehaviour
+      | PostStudioRecordingBehaviour
+      | PostDeletionBehaviour
+      | number;
+    onChange: (
+      value:
+        | MainWindowRecordingStartBehaviour
+        | PostStudioRecordingBehaviour
+        | PostDeletionBehaviour
+        | number
+    ) => void | Promise<void>;
+  };
+
+  type SettingItem = ToggleSettingItem | SelectSettingItem;
+
+  type SettingsGroup = {
+    title: string;
+    titleStyling?: string;
+    items: SettingItem[];
+  };
+
+  // Static settings groups structure to preserve component identity
+  const settingsGroups: SettingsGroup[] = [
+    {
+      title: "Cap Pro",
+      titleStyling:
+        "bg-blue-500 py-1.5 mb-4 text-white text-xs px-2 rounded-lg",
+      items: [
+        {
+          label: "Disable automatic link opening",
+          type: "toggle",
+          description:
+            "When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link).",
+          get value() {
+            return !!settings.disableAutoOpenLinks;
+          },
+          onChange: (value: boolean) =>
+            handleChange("disableAutoOpenLinks", value),
+        },
+      ],
+    },
+    {
+      title: "App",
+      items: [
+        {
+          label: "Hide dock icon",
+          type: "toggle",
+          os: "macos",
+          description:
+            "The dock icon will be hidden when there are no windows available to close.",
+          get value() {
+            return !!settings.hideDockIcon;
+          },
+          onChange: (value: boolean) => handleChange("hideDockIcon", value),
+        },
+        {
+          label: "Enable system notifications",
+          type: "toggle",
+          os: "macos",
+          description:
+            "Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings.",
+          get value() {
+            return !!settings.enableNotifications;
+          },
+          onChange: async (value: boolean) => {
+            if (value) {
+              // Check current permission state
+              console.log("Checking notification permission status");
+              const permissionGranted = await isPermissionGranted();
+              console.log(`Current permission status: ${permissionGranted}`);
+
+              if (!permissionGranted) {
+                // Request permission if not granted
+                console.log("Permission not granted, requesting permission");
+                const permission = await requestPermission();
+                console.log(`Permission request result: ${permission}`);
+                if (permission !== "granted") {
+                  // If permission denied, don't enable the setting
+                  console.log("Permission denied, aborting setting change");
+                  return;
+                }
+              }
+            }
+            handleChange("enableNotifications", value);
+          },
+        },
+        {
+          label: "Enable haptics",
+          type: "toggle",
+          os: "macos",
+          description: "Use haptics on Force Touch™ trackpads",
+          get value() {
+            return !!settings.hapticsEnabled;
+          },
+          onChange: (value: boolean) => handleChange("hapticsEnabled", value),
+        },
+      ],
+    },
+    {
+      title: "Recording",
+      items: [
+        {
+          label: "Recording countdown",
+          description: "Countdown before recording starts",
+          type: "select",
+          get value() {
+            return settings.recordingCountdown ?? 0;
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
+          ) => handleChange("recordingCountdown", value as number),
+        },
+        {
+          label: "Main window recording start behaviour",
+          description: "The main window recording start behaviour",
+          type: "select",
+          get value() {
+            return settings.mainWindowRecordingStartBehaviour ?? "close";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
+          ) =>
+            handleChange(
+              "mainWindowRecordingStartBehaviour",
+              value as MainWindowRecordingStartBehaviour
+            ),
+        },
+        {
+          label: "Studio recording finish behaviour",
+          description: "The studio recording finish behaviour",
+          type: "select",
+          get value() {
+            return settings.postStudioRecordingBehaviour ?? "openEditor";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
+          ) =>
+            handleChange(
+              "postStudioRecordingBehaviour",
+              value as PostStudioRecordingBehaviour
+            ),
+        },
+        {
+          label: "After deleting recording",
+          description: "What happens to the window after deleting a recording",
+          type: "select",
+          get value() {
+            return settings.postDeletionBehaviour ?? "doNothing";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
+          ) =>
+            handleChange(
+              "postDeletionBehaviour",
+              value as PostDeletionBehaviour
+            ),
+        },
+      ],
+    },
+  ];
+
+  // Helper function to render select dropdown for recording behaviors
+  const renderRecordingSelect = (
+    label: string,
+    description: string,
+    getValue: () =>
+      | MainWindowRecordingStartBehaviour
+      | PostStudioRecordingBehaviour
+      | PostDeletionBehaviour
+      | number,
+    onChange: (value: any) => void,
+    options: { text: string; value: any }[]
+  ) => {
+    return (
+      <Setting label={label} description={description}>
+        <button
+          class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
+          onClick={async () => {
+            const currentValue = getValue();
+            const items = options.map((option) =>
+              CheckMenuItem.new({
+                text: option.text,
+                checked: currentValue === option.value,
+                action: () => onChange(option.value),
+              })
+            );
+            const menu = await Menu.new({
+              items: await Promise.all(items),
+            });
+            await menu.popup();
+            await menu.close();
+          }}
+        >
+          {(() => {
+            const currentValue = getValue();
+            const option = options.find((opt) => opt.value === currentValue);
+            return option ? option.text : currentValue;
+          })()}
+          <IconCapChevronDown class="size-4" />
+        </button>
+      </Setting>
+    );
+  };
+
   return (
     <div class="flex flex-col w-full h-full">
       <div class="flex-1 custom-scroll">
-        <div class="p-4 space-y-2 divide-y divide-gray-200">
+        <div class="p-4 space-y-6">
           <AppearanceSection
             currentTheme={settings.theme ?? "system"}
             onThemeChange={(newTheme) => {
@@ -134,137 +378,104 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
               generalSettingsStore.set({ theme: newTheme });
             }}
           />
-          <ToggleSetting
-            pro
-            label="Disable automatic link opening"
-            description="When enabled, Cap will not automatically open links in your browser (e.g. after creating a shareable link)."
-            value={!!settings.disableAutoOpenLinks}
-            onChange={(value) => handleChange("disableAutoOpenLinks", value)}
-          />
 
-          {ostype === "macos" && (
-            <>
-              <ToggleSetting
-                label="Hide dock icon"
-                description="The dock icon will be hidden when there are no windows available to close."
-                value={!!settings.hideDockIcon}
-                onChange={(value) => handleChange("hideDockIcon", value)}
-              />
-              <ToggleSetting
-                label="Enable haptics"
-                description="Use haptics on Force Touch™ trackpads"
-                value={!!settings.hapticsEnabled}
-                onChange={(value) => handleChange("hapticsEnabled", value)}
-              />
-            </>
-          )}
-          <HexInputSetting
-            label="Active recording area border color"
-            description="Changes the border color around the active recording area"
-            defaultColor="#4686FF"
-            value={settings.activeRecordingBorderColorHex}
-            onChange={(newColor) =>
-              handleChange("activeRecordingBorderColorHex", newColor)
-            }
-          />
-          <ToggleSetting
-            label="Enable system notifications"
-            description="Show system notifications for events like copying to clipboard, saving files, and more. You may need to manually allow Cap access via your system's notification settings."
-            value={!!settings.enableNotifications}
-            onChange={async (value) => {
-              if (value) {
-                // Check current permission state
-                console.log("Checking notification permission status");
-                const permissionGranted = await isPermissionGranted();
-                console.log(`Current permission status: ${permissionGranted}`);
+          <For each={settingsGroups}>
+            {(group) => (
+              <div>
+                <h3
+                  class={cx(
+                    "mb-3 text-sm text-gray-12 w-fit",
+                    group.titleStyling
+                  )}
+                >
+                  {group.title}
+                </h3>
+                <div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+                  <For each={group.items}>
+                    {(item) => {
+                      // Check OS compatibility
+                      if (
+                        item.type === "toggle" &&
+                        item.os &&
+                        item.os !== ostype
+                      ) {
+                        return null;
+                      }
 
-                if (!permissionGranted) {
-                  // Request permission if not granted
-                  console.log("Permission not granted, requesting permission");
-                  const permission = await requestPermission();
-                  console.log(`Permission request result: ${permission}`);
-                  if (permission !== "granted") {
-                    // If permission denied, don't enable the setting
-                    console.log("Permission denied, aborting setting change");
-                    return;
-                  }
-                }
-              }
+                      if (item.type === "toggle") {
+                        return (
+                          <ToggleSetting
+                            pro={group.title === "Cap Pro"}
+                            label={item.label}
+                            description={item.description}
+                            value={item.value}
+                            onChange={item.onChange}
+                          />
+                        );
+                      } else if (item.type === "select") {
+                        if (
+                          item.label === "Main window recording start behaviour"
+                        ) {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Close", value: "close" },
+                              { text: "Minimise", value: "minimise" },
+                            ]
+                          );
+                        } else if (
+                          item.label === "Studio recording finish behaviour"
+                        ) {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Open editor", value: "openEditor" },
+                              { text: "Show in overlay", value: "showOverlay" },
+                            ]
+                          );
+                        } else if (item.label === "Recording countdown") {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Off", value: 0 },
+                              { text: "3 seconds", value: 3 },
+                              { text: "5 seconds", value: 5 },
+                              { text: "10 seconds", value: 10 },
+                            ]
+                          );
+                        } else if (item.label === "After deleting recording") {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Do Nothing", value: "exit" },
+                              {
+                                text: "Reopen Recording Window",
+                                value: "reopenRecordingWindow",
+                              },
+                            ]
+                          );
+                        }
+                      }
+                      return null;
+                    }}
+                  </For>
+                </div>
+              </div>
+            )}
+          </For>
 
-              handleChange("enableNotifications", value);
-            }}
-          />
-          {/* <ToggleSetting
-            label="Enable window transparency"
-            description="Make the background of some windows (eg. the Editor) transparent."
-            value={!!settings.windowTransparency}
-            onChange={(value) => handleChange("windowTransparency", value)}
-          /> */}
-          <Setting
-            label="Studio recording finish behaviour"
-            description="What should happen when a studio recording finishes"
-          >
-            <button
-              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
-              onClick={async () => {
-                const item = (
-                  text: string,
-                  value: PostStudioRecordingBehaviour
-                ) =>
-                  CheckMenuItem.new({
-                    text,
-                    checked: settings.postStudioRecordingBehaviour === value,
-                    action: () =>
-                      handleChange("postStudioRecordingBehaviour", value),
-                  });
-                const menu = await Menu.new({
-                  items: await Promise.all([
-                    item("Open editor", "openEditor"),
-                    item("Show in overlay", "showOverlay"),
-                  ]),
-                });
-                menu.popup();
-              }}
-            >
-              {settings.postStudioRecordingBehaviour === "showOverlay"
-                ? "Show in overlay"
-                : "Open editor"}
-              <IconCapChevronDown class="size-4" />
-            </button>
-          </Setting>
-          <Setting
-            label="Main window recording start behaviour"
-            description="What should the main window do when starting a recording"
-          >
-            <button
-              class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border border-gray-300"
-              onClick={async () => {
-                const item = (
-                  text: string,
-                  value: MainWindowRecordingStartBehaviour
-                ) =>
-                  CheckMenuItem.new({
-                    text,
-                    checked:
-                      settings.mainWindowRecordingStartBehaviour === value,
-                    action: () =>
-                      handleChange("mainWindowRecordingStartBehaviour", value),
-                  });
-                const menu = await Menu.new({
-                  items: await Promise.all([
-                    item("Close", "close"),
-                    item("Minimise", "minimise"),
-                  ]),
-                });
-                menu.popup();
-              }}
-            >
-              {settings.mainWindowRecordingStartBehaviour === "close"
-                ? "Close"
-                : "Minimise"}
-              <IconCapChevronDown class="size-4" />
-            </button>
-          </Setting>
           <ServerURLSetting
             value={settings.serverUrl ?? "https://cap.so"}
             onChange={async (v) => {
@@ -296,91 +507,30 @@ function ServerURLSetting(props: {
   const [value, setValue] = createWritableMemo(() => props.value);
 
   return (
-    <Setting
-      label="Cap Server URL"
-      description="This setting should only be changed if you are self hosting your own instance of Cap Web."
-    >
-      <div class="flex flex-col gap-2 items-end">
-        <TextInput
-          class="flex flex-row gap-1 items-center px-2 py-1 rounded-md border outline-none border-gray-7 bg-gray-1 focus:border-blue-10 max-w-48"
-          value={value()}
-          onInput={(e) => setValue(e.currentTarget.value)}
-        />
-        <Button
-          size="sm"
-          disabled={props.value === value()}
-          onClick={() => props.onChange(value())}
+    <div class="flex flex-col gap-3">
+      <h3 class="text-sm text-gray-12 w-fit">Self host</h3>
+      <div class="flex flex-col gap-2 px-4 rounded-xl border border-gray-3 bg-gray-2">
+        <Setting
+          label="Cap Server URL"
+          description="This setting should only be changed if you are self hosting your own instance of Cap Web."
         >
-          Update
-        </Button>
-      </div>
-    </Setting>
-  );
-}
-
-function HexInputSetting(props: {
-  label: string;
-  description?: string;
-  defaultColor: string;
-  value?: string | null;
-  onChange(v: string): void;
-}) {
-  const [text, setText] = createWritableMemo(
-    () => props.value || props.defaultColor
-  );
-  let prevHex = props.value;
-
-  let colorInput!: HTMLInputElement;
-
-  return (
-    <Setting {...props}>
-      <div class="flex flex-row items-center gap-[0.75rem] relative h-full">
-        <button
-          type="button"
-          class="size-[2rem] rounded-[0.5rem]"
-          style={{
-            "background-color": props.value || props.defaultColor,
-          }}
-          onClick={() => colorInput.click()}
-        />
-        <input
-          ref={colorInput}
-          type="color"
-          class="absolute left-0 bottom-0 w-[2.1rem] opacity-0 cursor-pointer"
-          onChange={(e) => props.onChange(e.target.value)}
-        />
-        <div class="w-[6.70rem] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 group-focus-within:ring-gray-500 group-focus-within:ring-offset-1 group-focus-within:ring-offset-gray-200 flex items-center">
-          <TextInput
-            class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border-none bg-transparent outline-none"
-            value={text()}
-            onFocus={() => {
-              prevHex = props.value || props.defaultColor;
-            }}
-            onInput={(e) => {
-              setText(e.currentTarget.value);
-
-              const value = e.target.value;
-              if (value) props.onChange(value);
-            }}
-            onBlur={(e) => {
-              const value = e.target.value;
-              if (value) props.onChange(value);
-              else {
-                setText(prevHex || props.defaultColor);
-                props.onChange(text());
-              }
-            }}
-          />
-          <Tooltip content={<span>Reset</span>}>
-            <button
-              class="m-1 size-6 inline-flex items-center justify-center bg-gray-3 text-gray-11 rounded-[0.3rem]"
-              onClick={() => props.onChange(props.defaultColor)}
+          <div class="flex flex-col gap-2 items-end">
+            <Input
+              class="bg-gray-3"
+              value={value()}
+              onInput={(e) => setValue(e.currentTarget.value)}
+            />
+            <Button
+              size="sm"
+              class="mt-2"
+              disabled={props.value === value()}
+              onClick={() => props.onChange(value())}
             >
-              <IconCapRestart class="size-4" />
-            </button>
-          </Tooltip>
-        </div>
+              Update
+            </Button>
+          </div>
+        </Setting>
       </div>
-    </Setting>
+    </div>
   );
 }

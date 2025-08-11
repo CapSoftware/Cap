@@ -1,8 +1,8 @@
 use std::{env::current_dir, path::PathBuf, sync::Arc};
 
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_camera::ModelID;
+use cap_media::sources::ScreenCaptureTarget;
 use clap::Args;
-use nokhwa::utils::{ApiBackend, CameraIndex};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
 use uuid::Uuid;
 
@@ -12,7 +12,7 @@ pub struct RecordStart {
     target: RecordTargets,
     /// Index of the camera to record
     #[arg(long)]
-    camera: Option<u32>,
+    camera: Option<String>,
     /// ID of the microphone to record
     #[arg(long)]
     mic: Option<u32>,
@@ -43,18 +43,13 @@ impl RecordStart {
             _ => Err("No target specified".to_string()),
         }?;
 
-        let camera = if let Some(camera_index) = self.camera {
-            if let Some(camera_info) = nokhwa::query(ApiBackend::Auto)
-                .unwrap()
-                .into_iter()
-                .find(|c| *c.index() == CameraIndex::Index(camera_index))
-            {
-                let name = camera_info.human_name();
+        let camera = if let Some(model_id) = self.camera {
+            let _model_id: ModelID = model_id
+                .try_into()
+                .map_err(|_| "Invalid model ID".to_string())?;
 
-                Some(CameraFeed::init(&name).await.unwrap())
-            } else {
-                None
-            }
+            todo!()
+            // Some(CameraFeed::init(model_id).await.unwrap())
         } else {
             None
         };

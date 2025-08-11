@@ -1,21 +1,28 @@
-"use client";
 import { userSelectProps } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { startTransition, useEffect, useState } from "react";
 import { AuthOverlay } from "./AuthOverlay";
+import { AnimatePresence, motion } from "motion/react";
+import { CommentType } from "../Share";
+import { newComment } from "@/actions/videos/new-comment";
+
+const MotionButton = motion.create(Button);
 
 // million-ignore
+interface ToolbarProps {
+  data: typeof videos.$inferSelect;
+  user: typeof userSelectProps | null;
+  onOptimisticComment: (comment: CommentType) => void;
+  onCommentSuccess: (comment: CommentType) => void;
+}
+
 export const Toolbar = ({
   data,
   user,
-}: {
-  data: typeof videos.$inferSelect;
-  user: typeof userSelectProps | null;
-}) => {
-  const { refresh } = useRouter();
+  onOptimisticComment,
+  onCommentSuccess,
+}: ToolbarProps) => {
   const [commentBoxOpen, setCommentBoxOpen] = useState(false);
   const [comment, setComment] = useState("");
   const [showAuthOverlay, setShowAuthOverlay] = useState(false);
@@ -37,24 +44,8 @@ export const Toolbar = ({
 
     checkForVideoElement();
 
-    return () => {
-      // Clean up any ongoing checks if component unmounts
-    };
   }, []);
 
-  const [currentEmoji, setCurrentEmoji] = useState<{
-    emoji: string;
-    id: number;
-  } | null>(null);
-  const clearEmojiTimeout = useRef<NodeJS.Timeout | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (clearEmojiTimeout.current) {
-        clearTimeout(clearEmojiTimeout.current);
-      }
-    };
-  }, []);
 
   const getTimestamp = (): number => {
     if (videoElement) {
@@ -65,46 +56,39 @@ export const Toolbar = ({
   };
 
   const handleEmojiClick = async (emoji: string) => {
-    // Clear any existing timeout
-    if (clearEmojiTimeout.current) {
-      clearTimeout(clearEmojiTimeout.current);
-    }
 
-    // Set the current emoji with a unique identifier
-    setCurrentEmoji({ emoji, id: Date.now() });
+    const optimisticComment: CommentType = {
+      id: `temp-${Date.now()}`,
+      authorId: user?.id || "anonymous",
+      authorName: user?.name || "Anonymous",
+      content: emoji,
+      createdAt: new Date(),
+      videoId: data.id,
+      parentCommentId: "",
+      type: "emoji",
+      timestamp: null,
+      updatedAt: new Date(),
+      sending: true,
+    };
 
-    // Remove the emoji after the animation duration
-    clearEmojiTimeout.current = setTimeout(() => {
-      setCurrentEmoji(null);
-    }, 3000);
+    onOptimisticComment(optimisticComment);
 
-    const timestamp = getTimestamp();
-    console.log("Current timestamp:", timestamp);
-
-    const response = await fetch("/api/video/comment", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        type: "emoji",
+    try {
+      const newCommentData = await newComment({
         content: emoji,
         videoId: data.id,
-        parentCommentId: null,
-        timestamp: timestamp,
-      }),
-    });
-
-    if (response.status === 429) {
-      toast.error("Too many requests - please try again later.");
-      return;
+        parentCommentId: "",
+        type: "emoji",
+      });
+      startTransition(() => {
+        onCommentSuccess(newCommentData);
+      });
+    } catch (error) {
+      console.error("Error posting comment:", error);
+    } finally {
+      setCommentBoxOpen(false);
+      setComment("");
     }
-
-    if (!response.ok) {
-      console.error("Failed to record emoji reaction");
-    }
-
-    refresh();
   };
 
   const handleCommentSubmit = async () => {
@@ -112,57 +96,53 @@ export const Toolbar = ({
       return;
     }
 
+    const optimisticComment: CommentType = {
+      id: `temp-${Date.now()}`,
+      authorId: user?.id || "anonymous",
+      authorName: user?.name || "Anonymous",
+      content: comment,
+      createdAt: new Date(),
+      videoId: data.id,
+      parentCommentId: "",
+      type: "text",
+      timestamp: null,
+      updatedAt: new Date(),
+      sending: true,
+    };
+
+    onOptimisticComment(optimisticComment);
+
     try {
-      const timestamp = getTimestamp();
-
-      const response = await fetch("/api/video/comment", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          type: "text",
-          content: comment,
-          videoId: data.id,
-          timestamp: timestamp || null,
-          parentCommentId: null,
-        }),
+      const newCommentData = await newComment({
+        content: comment,
+        videoId: data.id,
+        parentCommentId: "",
+        type: "text",
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Comment submission error:", errorData);
-        return;
-      }
-
-      setComment("");
-      setCommentBoxOpen(false);
-      refresh();
+      startTransition(() => {
+        onCommentSuccess(newCommentData);
+      });
     } catch (error) {
-      console.error("Failed to submit comment:", error);
+      console.error("Error posting comment:", error);
+    } finally {
+      setCommentBoxOpen(false);
+      setComment("");
     }
   };
 
   const Emoji = ({ label, emoji }: { label: string; emoji: string }) => (
-    <div className="relative w-fit">
-      <button
-        className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full ease-in-out font-emoji sm:text-2xl transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
+    <motion.div layout className="relative size-10">
+      <motion.button
+        layout
+        className="inline-flex relative justify-center items-center p-1 text-xl leading-6 align-middle bg-transparent rounded-full transition-colors ease-in-out size-full font-emoji sm:text-2xl duration-600 hover:bg-gray-200 active:bg-blue-500 active:duration-0"
         role="img"
         aria-label={label ? label : ""}
         aria-hidden={label ? "false" : "true"}
         onClick={() => handleEmojiClick(emoji)}
       >
         {emoji}
-        {currentEmoji && currentEmoji.emoji === emoji && (
-          <span
-            key={currentEmoji.id}
-            className="absolute right-0 left-0 -top-10 mx-auto font-emoji animate-flyEmoji duration-3000"
-          >
-            {currentEmoji.emoji}
-          </span>
-        )}
-      </button>
-    </div>
+      </motion.button>
+    </motion.div>
   );
 
   useEffect(() => {
@@ -210,92 +190,104 @@ export const Toolbar = ({
 
   return (
     <>
-      <div
-        className={`${
-          !commentBoxOpen ? "max-w-[350px]" : "max-w-[500px]"
-        } mx-auto`}
-      >
-        <div
-          className={`new-card-style mx-auto transition-all ${
-            commentBoxOpen === true && "w-full"
-          }`}
-        >
-          <div className="flex">
-            <div className="flex-grow p-1">
-              {commentBoxOpen === true ? (
-                <div className="flex justify-between items-center w-full">
-                  <input
-                    autoFocus
-                    type="text"
-                    value={comment}
-                    onChange={(e) => setComment(e.target.value)}
-                    placeholder="Add a comment"
-                    className="flex-grow px-3 h-full outline-none"
-                    maxLength={255}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault();
-                        handleCommentSubmit();
-                      }
-                      if (e.key === "Escape") {
-                        setCommentBoxOpen(false);
-                        setComment("");
-                      }
-                    }}
+      <motion.div layout className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full md:max-w-fit">
+        <AnimatePresence initial={false} mode="popLayout">
+          {commentBoxOpen ? (
+            <motion.div
+              layout
+              key="comment-box"
+              initial={{ scale: 0.90 }}
+              animate={{ scale: 1 }}
+              className="flex justify-between items-center w-full"
+            >
+              <motion.input
+                layout
+                autoFocus
+                type="text"
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                placeholder="Add a comment"
+                className="flex-grow px-3 h-full outline-none"
+                maxLength={255}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleCommentSubmit();
+                  }
+                  if (e.key === "Escape") {
+                    setCommentBoxOpen(false);
+                    setComment("");
+                  }
+                }}
+              />
+              <motion.div layout="position" className="flex items-center space-x-2">
+                <MotionButton
+                  disabled={comment.length === 0}
+                  variant="primary"
+                  size="sm"
+                  layout="position"
+                  onClick={() => {
+                    handleCommentSubmit();
+                  }}
+                >
+                  {videoElement && getTimestamp() > 0
+                    ? `Comment at ${getTimestamp().toFixed(2)}`
+                    : "Comment"}
+                </MotionButton>
+                <MotionButton
+                  variant="gray"
+                  size="sm"
+                  layout="position"
+                  onClick={() => {
+                    setCommentBoxOpen(false);
+                    setComment("");
+                  }}
+                >
+                  Cancel
+                </MotionButton>
+              </motion.div>
+            </motion.div>
+          ) : (
+            <motion.div
+              layout
+              key="toolbar"
+              initial={{ scale: 0.90 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.90 }}
+              transition={{ duration: 0.2, ease: "easeInOut" }}
+              className="flex flex-col gap-2 items-center mx-auto w-full md:justify-center sm:grid sm:grid-flow-col md:w-fit min-h-[28px]"
+            >
+              {/* Emoji reactions row */}
+              <div className="flex gap-2 justify-evenly items-center w-full md:w-fit md:justify-center">
+                {REACTIONS.map((reaction) => (
+                  <Emoji
+                    key={reaction.emoji}
+                    emoji={reaction.emoji}
+                    label={reaction.label}
                   />
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      className="min-w-[160px]"
-                      disabled={comment.length === 0}
-                      variant="primary"
-                      size="sm"
-                      onClick={() => {
-                        handleCommentSubmit();
-                      }}
-                    >
-                      {videoElement && getTimestamp() > 0
-                        ? `Comment at ${getTimestamp().toFixed(2)}`
-                        : "Comment"}
-                    </Button>
-                    <Button
-                      className="min-w-[100px]"
-                      variant="white"
-                      size="sm"
-                      onClick={() => {
-                        setCommentBoxOpen(false);
-                        setComment("");
-                      }}
-                    >
-                      Cancel
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <div className="grid grid-flow-col justify-center items-center">
-                  {REACTIONS.map((reaction) => (
-                    <Emoji
-                      key={reaction.emoji}
-                      emoji={reaction.emoji}
-                      label={reaction.label}
-                    />
-                  ))}
-                  <div className="w-[1px] bg-gray-200 h-[16px] mx-4"></div>
-                  <div className="flex items-center">
-                    <button
-                      onClick={handleCommentClick}
-                      className="flex relative justify-center items-center px-3 py-1 font-medium bg-gray-200 rounded-full ease-in-out transition-bg-color duration-600 hover:bg-gray-200 active:bg-gray-400 active:duration-0"
-                    >
-                      <span className="text-sm font-medium text-gray-12">
-                        Comment (c)
-                      </span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+                ))}
+              </div>
+
+              {/* Separator - hidden on mobile, visible on desktop */}
+              <motion.div className="hidden sm:block w-px bg-gray-200 h-[16px] mx-4" />
+
+              {/* Comment button - full width on mobile, normal on desktop */}
+              <div className="ml-auto w-full sm:w-auto">
+                <MotionButton
+                  onClick={handleCommentClick}
+                  variant="dark"
+                  layout="position"
+                  kbd="c"
+                  size="sm"
+                  className="mx-auto w-fit"
+                >
+                  Comment
+                </MotionButton>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </motion.div>
 
       <AuthOverlay
         isOpen={showAuthOverlay}

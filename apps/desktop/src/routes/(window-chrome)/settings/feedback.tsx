@@ -25,10 +25,10 @@ export default function FeedbackTab() {
   return (
     <div class="flex flex-col w-full h-full">
       <div class="flex-1 custom-scroll">
-        <div class="p-4 space-y-2">
-          <div class="py-2 mb-4">
-            <h2 class="text-gray-12 text-lg font-medium">Send Feedback</h2>
-            <p class="text-gray-11 text-sm">
+        <div class="p-4 space-y-4">
+          <div class="flex flex-col pb-4 border-b border-gray-2">
+            <h2 class="text-lg font-medium text-gray-12">Send Feedback</h2>
+            <p class="text-sm text-gray-10">
               Help us improve Cap by submitting feedback or reporting bugs.
               We'll get right on it.
             </p>
@@ -48,7 +48,7 @@ export default function FeedbackTab() {
                   placeholder="Tell us what you think about Cap..."
                   required
                   minLength={10}
-                  class="p-2 w-full h-32 bg-gray-2 rounded-md border transition-shadow duration-200 resize-none placeholder:text-zinc-400 border-gray-6 text-primary focus:outline-none focus:ring-2 focus:ring-blue-9"
+                  class="p-2 w-full h-32 text-[13px] rounded-md border transition-colors duration-200 resize-none bg-gray-2 placeholder:text-gray-10 border-gray-3 text-primary focus:outline-none focus:ring-1 focus:ring-gray-8 hover:border-gray-6"
                 />
               </div>
 
@@ -64,8 +64,9 @@ export default function FeedbackTab() {
 
               <Button
                 type="submit"
+                size="md"
                 disabled={!feedback().trim() || feedback().trim().length < 0}
-                class="mt-2 w-full bg-primary text-primary"
+                class="mt-2 bg-primary text-primary"
               >
                 {submission.pending ? "Submitting..." : "Submit Feedback"}
               </Button>

@@ -47,8 +47,8 @@ export default function Page() {
   let fadeIn = changelog.isLoading;
 
   return (
-    <div class="h-full flex flex-col">
-      <div class="flex-1 overflow-y-auto relative">
+    <div class="flex flex-col h-full">
+      <div class="relative flex-1 custom-scroll">
         <Suspense fallback={<AbsoluteInsetLoader />}>
           <div
             class={cx(

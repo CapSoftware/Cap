@@ -8,7 +8,7 @@ import {
   ComponentProps,
   ForwardedRef,
   forwardRef,
-  PropsWithChildren,
+  PropsWithChildren
 } from "react";
 
 interface CapCardAnalyticsProps {
@@ -23,7 +23,7 @@ export const CapCardAnalytics = Object.assign(
     <Shell>
       <Tooltip content={`${displayCount} unique views`}>
         <IconItem icon={faEye}>
-          <span className="text-sm text-gray-12">{displayCount ?? "-"}</span>
+          <span className="text-sm text-gray-12">{displayCount}</span>
         </IconItem>
       </Tooltip>
       <Tooltip content={`${totalComments} comments`}>
@@ -72,6 +72,6 @@ const IconItem = forwardRef(
 
 const SkeletonItem = ({ icon }: { icon: FontAwesomeIconProps["icon"] }) => (
   <IconItem icon={icon}>
-    <div className="h-1.5 w-3 -mx-0.5 bg-gray-300 rounded-full animate-pulse" />
+    <div className="h-1.5 w-3 -mx-0.5 bg-gray-5 rounded-full animate-pulse" />
   </IconItem>
 );

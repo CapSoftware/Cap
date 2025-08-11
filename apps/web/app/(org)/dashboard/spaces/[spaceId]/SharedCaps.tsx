@@ -1,9 +1,8 @@
 "use client";
 
-import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { VideoMetadata } from "@cap/database/types";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { CapPagination } from "../../caps/components/CapPagination";
 import { SharedCapCard } from "./components/SharedCapCard";
 import { MembersIndicator } from "./components/MembersIndicator";
@@ -22,6 +21,7 @@ import { NewFolderDialog } from "../../caps/components/NewFolderDialog";
 import { Button } from "@cap/ui";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import Folder from "../../caps/components/Folder";
+import { useSuspenseQuery } from "@tanstack/react-query";
 
 type SharedVideoData = {
   id: string;
@@ -49,10 +49,12 @@ export const SharedCaps = ({
   organizationMembers,
   currentUserId,
   folders,
+  dubApiKeyEnabled,
   organizationData,
 }: {
   data: SharedVideoData;
   count: number;
+  dubApiKeyEnabled: boolean;
   spaceData?: SpaceData;
   hideSharedWith?: boolean;
   spaceMembers?: SpaceMemberData[];
@@ -68,7 +70,6 @@ export const SharedCaps = ({
   const params = useSearchParams();
   const router = useRouter();
   const page = Number(params.get("page")) || 1;
-  const [analytics, setAnalytics] = useState<Record<string, number>>({});
   const { activeOrganization } = useDashboardContext();
   const limit = 15;
   const [openNewFolderDialog, setOpenNewFolderDialog] = useState(false);
@@ -90,20 +91,49 @@ export const SharedCaps = ({
 
   const organizationMemberCount = organizationMembers?.length || 0;
 
-  useEffect(() => {
-    const fetchAnalytics = async () => {
+  const { data: analyticsData } = useSuspenseQuery({
+    queryKey: ['analytics', data.map(video => video.id)],
+    queryFn: async () => {
+      if (!dubApiKeyEnabled || data.length === 0) {
+        return {};
+      }
+
+      const analyticsPromises = data.map(async (video) => {
+        try {
+          const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (response.ok) {
+            const responseData = await response.json();
+            return { videoId: video.id, count: responseData.count || 0 };
+          }
+          return { videoId: video.id, count: 0 };
+        } catch (error) {
+          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          return { videoId: video.id, count: 0 };
+        }
+      });
+
+      const results = await Promise.allSettled(analyticsPromises);
       const analyticsData: Record<string, number> = {};
 
-      for (const video of data) {
-        const result = await getVideoAnalytics(video.id);
-        analyticsData[video.id] = result.count || 0;
-      }
-      setAnalytics(analyticsData);
-    };
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value) {
+          analyticsData[result.value.videoId] = result.value.count;
+        }
+      });
 
-    fetchAnalytics();
-  }, [data]);
+      return analyticsData;
+    },
+    staleTime: 30000, // 30 seconds
+    refetchOnWindowFocus: false,
+  });
 
+  const analytics = analyticsData || {};
 
   const handleVideosAdded = () => {
     router.refresh();

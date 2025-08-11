@@ -1,6 +1,7 @@
 import { events } from "~/utils/tauri";
 import toast, { Toaster } from "solid-toast";
 import { onCleanup, onMount } from "solid-js";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 export default function Page() {
   let unlisten: (() => void) | undefined;
@@ -31,35 +32,29 @@ export default function Page() {
     </svg>
   );
 
-  onMount(async () => {
-    unlisten = await events.newNotification.listen((e) => {
-      if (e.payload.is_error) {
-        toast.error(e.payload.body, {
-          style: {
-            background: "#FEE2E2",
-            color: "#991B1B",
-            border: "1px solid #F87171",
-          },
-          iconTheme: {
-            primary: "#991B1B",
-            secondary: "#FEE2E2",
-          },
-        });
-      } else {
-        toast.success(e.payload.body, {
-          icon: <SuccessIcon />,
-          style: {
-            background: "#FFFFFF",
-            color: "#000000",
-            border: "1px solid #FFFFFF",
-          },
-        });
-      }
-    });
-  });
-
-  onCleanup(() => {
-    unlisten?.();
+  createTauriEventListener(events.newNotification, (payload) => {
+    if (payload.is_error) {
+      toast.error(payload.body, {
+        style: {
+          background: "#FEE2E2",
+          color: "#991B1B",
+          border: "1px solid #F87171",
+        },
+        iconTheme: {
+          primary: "#991B1B",
+          secondary: "#FEE2E2",
+        },
+      });
+    } else {
+      toast.success(payload.body, {
+        icon: <SuccessIcon />,
+        style: {
+          background: "#FFFFFF",
+          color: "#000000",
+          border: "1px solid #FFFFFF",
+        },
+      });
+    }
   });
 
   return (

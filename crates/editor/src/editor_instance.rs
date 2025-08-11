@@ -1,20 +1,19 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
-use cap_media::data::RawVideoFormat;
-use cap_media::data::VideoInfo;
 // use cap_media::feeds::AudioData;
 use cap_media::frame_ws::create_frame_ws;
+use cap_project::StudioRecordingMeta;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
-use cap_project::{RecordingConfig, StudioRecordingMeta};
 use cap_rendering::{
-    get_duration, ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderOptions,
-    RenderVideoConstants, SegmentVideoPaths,
+    ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
+    SegmentVideoPaths, get_duration,
 };
 use std::ops::Deref;
-use std::sync::Mutex as StdMutex;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{Mutex, watch};
+use tokio_util::sync::CancellationToken;
+use tracing::trace;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
@@ -29,7 +28,7 @@ pub struct EditorInstance {
         watch::Sender<ProjectConfiguration>,
         watch::Receiver<ProjectConfiguration>,
     ),
-    ws_shutdown: Arc<StdMutex<Option<mpsc::Sender<()>>>>,
+    ws_shutdown_token: CancellationToken,
     pub segments: Arc<Vec<Segment>>,
     meta: RecordingMeta,
 }
@@ -62,10 +61,10 @@ impl EditorInstance {
 
         let (frame_tx, frame_rx) = flume::bounded(4);
 
-        let (ws_port, ws_shutdown) = create_frame_ws(frame_rx).await;
+        let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
 
         let render_constants = Arc::new(
-            RenderVideoConstants::new(&recordings.segments, &recording_meta, meta)
+            RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
                 .unwrap(),
         );
@@ -93,7 +92,7 @@ impl EditorInstance {
             on_state_change: Box::new(on_state_change),
             preview_tx,
             project_config: watch::channel(project),
-            ws_shutdown: Arc::new(StdMutex::new(Some(ws_shutdown))),
+            ws_shutdown_token,
             segments: Arc::new(segments),
             meta: recording_meta,
         });
@@ -109,31 +108,29 @@ impl EditorInstance {
     }
 
     pub async fn dispose(&self) {
-        println!("Disposing EditorInstance");
+        trace!("Disposing EditorInstance");
 
         let mut state = self.state.lock().await;
 
         // Stop playback
         if let Some(handle) = state.playback_task.take() {
-            println!("Stopping playback");
+            trace!("Stopping playback");
             handle.stop();
         }
 
         // Stop preview
         if let Some(task) = state.preview_task.take() {
-            println!("Stopping preview");
+            trace!("Stopping preview");
             task.abort();
             task.await.ok(); // Await the task to ensure it's fully stopped
         }
 
         // Stop WebSocket server
-        if let Some(ws_shutdown) = self.ws_shutdown.lock().unwrap().take() {
-            println!("Shutting down WebSocket server");
-            let _ = ws_shutdown.send(());
-        }
+        trace!("Shutting down WebSocket server");
+        self.ws_shutdown_token.cancel();
 
         // Stop renderer
-        println!("Stopping renderer");
+        trace!("Stopping renderer");
         self.renderer.stop().await;
 
         // // Clear audio data
@@ -251,7 +248,7 @@ impl EditorInstance {
 
     fn get_studio_meta(&self) -> &StudioRecordingMeta {
         match &self.meta.inner {
-            RecordingMetaInner::Studio(meta) => &meta,
+            RecordingMetaInner::Studio(meta) => meta,
             _ => panic!("Not a studio recording"),
         }
     }
@@ -312,7 +309,7 @@ pub async fn create_segments(
                 .map(Arc::new);
 
             let decoders = RecordingSegmentDecoders::new(
-                &recording_meta,
+                recording_meta,
                 meta,
                 SegmentVideoPaths {
                     display: recording_meta.path(&s.display.path),
@@ -354,10 +351,10 @@ pub async fn create_segments(
                     .transpose()?
                     .map(Arc::new);
 
-                let cursor = Arc::new(s.cursor_events(&recording_meta));
+                let cursor = Arc::new(s.cursor_events(recording_meta));
 
                 let decoders = RecordingSegmentDecoders::new(
-                    &recording_meta,
+                    recording_meta,
                     meta,
                     SegmentVideoPaths {
                         display: recording_meta.path(&s.display.path),

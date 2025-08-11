@@ -14,6 +14,7 @@ export const ProCard = () => {
   const [users, setUsers] = useState(1);
   const [isAnnually, setIsAnnually] = useState(true);
   const [proLoading, setProLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
   const proArtRef = useRef<ProArtRef>(null);
   const { push } = useRouter();
 
@@ -33,6 +34,31 @@ export const ProCard = () => {
   const incrementUsers = () => setUsers((prev) => prev + 1);
   const decrementUsers = () => setUsers((prev) => (prev > 1 ? prev - 1 : 1));
 
+  const guestCheckout = async (planId: string) => {
+    setGuestLoading(true);
+
+    try {
+      const response = await fetch(`/api/settings/billing/guest-checkout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ priceId: planId, quantity: users }),
+      });
+      const data = await response.json();
+
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        toast.error("Failed to create checkout session");
+      }
+    } catch (error) {
+      toast.error("An error occurred. Please try again.");
+    } finally {
+      setGuestLoading(false);
+    }
+  };
+
   const planCheckout = async (planId?: string) => {
     setProLoading(true);
 
@@ -50,9 +76,9 @@ export const ProCard = () => {
     const data = await response.json();
 
     if (data.auth === false) {
-      localStorage.setItem("pendingPriceId", planId);
-      localStorage.setItem("pendingQuantity", users.toString());
-      push(`/login?next=/pricing`);
+      // User not authenticated, do guest checkout
+      setProLoading(false);
+      await guestCheckout(planId);
       return;
     }
 
@@ -226,11 +252,11 @@ export const ProCard = () => {
         variant="blue"
         size="lg"
         onClick={() => planCheckout()}
-        disabled={proLoading}
+        disabled={proLoading || guestLoading}
         className="w-full font-medium"
         aria-label="Purchase Cap Pro License"
       >
-        {proLoading ? "Loading..." : homepageCopy.pricing.pro.cta}
+        {proLoading || guestLoading ? "Loading..." : homepageCopy.pricing.pro.cta}
       </Button>
     </div>
   );

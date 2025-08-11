@@ -1,6 +1,6 @@
-import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import {
+  For,
   Index,
   Match,
   Show,
@@ -71,20 +71,24 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
     }
   });
 
+  const actions = [
+    "startRecording",
+    "stopRecording",
+    "restartRecording",
+    // "takeScreenshot",
+  ] as Array<HotkeyAction>;
+
   return (
-    <div class="flex flex-col w-full h-full divide-y divide-gray-200">
-      <ul class="flex-1 p-[0.625rem] flex flex-col gap-[0.5rem] w-full">
-        <Index
-          each={
-            [
-              "startRecording",
-              "stopRecording",
-              "restartRecording",
-              // "takeScreenshot",
-            ] as Array<HotkeyAction>
-          }
-        >
-          {(item) => {
+    <div class="flex flex-col p-4 w-full h-fit">
+      <div class="flex flex-col pb-4 border-b border-gray-2">
+        <h2 class="text-lg font-medium text-gray-12">Hotkeys</h2>
+        <p class="text-sm text-gray-10">
+          Configure keyboard shortcuts for common actions.
+        </p>
+      </div>
+      <div class="flex flex-col flex-1 gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">
+        <Index each={actions}>
+          {(item, idx) => {
             createEventListener(window, "click", () => {
               if (listening()?.action !== item()) return;
 
@@ -95,18 +99,21 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
             });
 
             return (
-              <li class="w-full flex flex-row justify-between items-center text-[--text-primary]">
-                <span>{ACTION_TEXT[item()]}</span>
-                <div class="w-[9rem] h-[2rem] ">
+              <>
+                <div class="flex flex-row justify-between items-center w-full h-8">
+                  <p class="text-sm text-gray-12">{ACTION_TEXT[item()]}</p>
                   <Switch>
                     <Match when={listening()?.action === item()}>
-                      <div class="border border-[--gray-300] rounded-lg text-[--text-tertiary] w-full h-full bg-[--gray-100] flex flex-row items-center justify-between px-[0.375rem]">
-                        <Show when={hotkeys[item()]} fallback="Listening">
+                      <div class="flex flex-row-reverse gap-2 justify-between items-center h-full text-sm rounded-lg w-fit">
+                        <Show when={hotkeys[item()]} fallback={(
+                          <p class="text-[13px] text-gray-11">Set hotkeys...</p>
+                        )}>
                           {(binding) => <HotkeyText binding={binding()} />}
                         </Show>
-                        <div class="flex flex-row items-center gap-[0.125rem] text-[--text-tertiary]">
+                        <div class="flex flex-row items-center gap-[0.125rem]">
                           <Show when={hotkeys[item()]}>
                             <button
+                              class="w-fit"
                               type="button"
                               onBlur={(e) => console.log(e)}
                               onClick={(e) => {
@@ -119,7 +126,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                                 );
                               }}
                             >
-                              <IconCapCircleCheck class="size-[1.25rem] text-[--blue-400]" />
+                              <IconCapCircleCheck class="transition-colors text-gray-12 hover:text-gray-10 size-5" />
                             </button>
                           </Show>
                           <button
@@ -134,7 +141,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                               });
                             }}
                           >
-                            <IconCapCircleX class="size-[1.25rem] text-[--gray-400]" />
+                            <IconCapCircleX class="text-red-500 transition-colors hover:text-red-700 size-5" />
                           </button>
                         </div>
                       </div>
@@ -142,7 +149,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                     <Match when={listening()?.action !== item()}>
                       <button
                         type="button"
-                        class="border border-[--gray-200] rounded-lg text-[--text-tertiary] w-full h-full"
+                        class="text-sm bg-transparent rounded-lg"
                         onClick={() => {
                           // ensures that previously selected hotkey is cleared by letting the event propagate before listening to the new hotkey
                           setTimeout(() => {
@@ -153,39 +160,52 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
                           }, 1);
                         }}
                       >
-                        <Show when={hotkeys[item()]} fallback="None">
+                        <Show when={hotkeys[item()]} fallback={(
+                          <p class="flex items-center text-[11px] uppercase transition-colors hover:bg-gray-6 hover:border-gray-7 
+                        cursor-pointer py-3 px-2.5 h-5 bg-gray-4 border border-gray-5 rounded-lg text-gray-11 hover:text-gray-12">None</p>
+                        )}>
                           {(binding) => <HotkeyText binding={binding()} />}
                         </Show>
                       </button>
                     </Match>
                   </Switch>
                 </div>
-              </li>
+                {idx !== actions.length - 1 && <div class="w-full h-px bg-gray-3" />}
+              </>
             );
           }}
         </Index>
-      </ul>
-      <div class="flex flex-row-reverse p-[1rem] text-[--text-primary]">
-        <Button disabled variant="secondary">
-          Restore Defaults
-        </Button>
       </div>
     </div>
   );
 }
 
 function HotkeyText(props: { binding: Hotkey }) {
+  const keys = [];
+
+  // Add modifier keys
+  if (props.binding.meta) keys.push("⌘");
+  if (props.binding.ctrl) keys.push("⌃");
+  if (props.binding.alt) keys.push("⌥");
+  if (props.binding.shift) keys.push("⇧");
+
+  // Add the main key
+  const mainKey = props.binding.code.startsWith("Key")
+    ? props.binding.code[3]
+    : props.binding.code;
+  keys.push(mainKey);
+
   return (
-    <span class="space-x-0.5 text-[--text-tertiary]">
-      {props.binding.meta && <span>⌘</span>}
-      {props.binding.ctrl && <span>⌃</span>}
-      {props.binding.alt && <span>⌥</span>}
-      {props.binding.shift && <span>⇧</span>}
-      <span>
-        {props.binding.code.startsWith("Key")
-          ? props.binding.code[3]
-          : props.binding.code}
-      </span>
-    </span>
+    <div class="flex gap-1 items-center w-fit group">
+      <For each={keys}>
+        {(key) => (
+          <kbd
+            class="inline-flex justify-center w-fit text-xs items-center p-2 text-[13px] font-medium rounded border size-6 text-gray-11 bg-gray-5 border-gray-6 group-hover:border-gray-8 transition-colors duration-200 group-hover:bg-gray-7"
+          >
+            {key}
+          </kbd>
+        )}
+      </For>
+    </div>
   );
 }

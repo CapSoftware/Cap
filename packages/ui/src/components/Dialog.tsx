@@ -15,7 +15,7 @@ const DialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
     ref={ref}
-    className={classNames("fixed inset-0 z-[100000] bg-black/60", className)}
+    className={classNames("fixed inset-0 z-[500] bg-black/60", className)}
     {...props}
   />
 ));
@@ -27,7 +27,7 @@ const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay className="animate-fadeIn" />
-    <div className="flex fixed inset-0 z-[10000000] justify-center items-center">
+    <div className="flex fixed inset-0 z-[501] justify-center items-center">
       <DialogPrimitive.Content
         ref={ref}
         className={classNames(
@@ -73,7 +73,7 @@ const DialogHeader = ({
     {...props}
   >
     {icon && (
-      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 size-10">
+      <div className="flex justify-center items-center rounded-full border md:mb-0 text-gray-12 border-gray-5 bg-gray-3 min-w-10 min-h-10 size-10">
         {icon}
       </div>
     )}
