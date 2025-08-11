@@ -2,7 +2,6 @@ import { newComment } from "@/actions/videos/new-comment";
 import { deleteComment } from "@/actions/videos/delete-comment";
 import { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import { AnimatePresence } from "framer-motion";
 import React, {
   ComponentProps,
   PropsWithChildren, useEffect, useRef,
@@ -13,6 +12,7 @@ import Comment from "./Comment";
 import { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
+import { useSearchParams } from "next/navigation";
 
 export const Comments = Object.assign(
   forwardRef<{ scrollToBottom: () => void }, {
@@ -28,6 +28,8 @@ export const Comments = Object.assign(
     (props, ref) => {
 
       const { optimisticComments, setOptimisticComments, setComments, handleCommentSuccess } = props;
+      const commentParams = useSearchParams().get("comment");
+      const replyParams = useSearchParams().get("reply");
 
       const { user } = props;
       const [replyingTo, setReplyingTo] = useState<string | null>(null);
@@ -35,6 +37,7 @@ export const Comments = Object.assign(
       const commentsContainerRef = useRef<HTMLDivElement>(null);
 
       useEffect(() => {
+        if (commentParams || replyParams) return;
         if (commentsContainerRef.current) {
           commentsContainerRef.current.scrollTop =
             commentsContainerRef.current.scrollHeight;
@@ -140,10 +143,11 @@ export const Comments = Object.assign(
         setReplyingTo(null);
       };
 
-      const handleDeleteComment = async (commentId: string) => {
+      const handleDeleteComment = async (commentId: string, parentId?: string) => {
         try {
           await deleteComment({
             commentId,
+            parentId,
             videoId: props.videoId,
           });
           setComments((prev) => prev.filter((c) => c.id !== commentId));
@@ -163,38 +167,27 @@ export const Comments = Object.assign(
             <EmptyState />
           ) : (
             <div className="p-4 space-y-6">
-              <AnimatePresence>
-                {rootComments
-                  .sort(
-                    (a, b) =>
-                      new Date(a.createdAt).getTime() -
-                      new Date(b.createdAt).getTime()
-                  )
-                  .map((comment) => (
-                    <Comment
-                      key={comment.id}
-                      comment={comment}
-                      replies={optimisticComments.sort(
-                        (a, b) =>
-                          new Date(a.createdAt).getTime() -
-                          new Date(b.createdAt).getTime()
-                      )}
-                      onReply={(id) => {
-                        if (!user) {
-                          props.setShowAuthOverlay(true);
-                        } else {
-                          setReplyingTo(id);
-                        }
-                      }}
-                      replyingToId={replyingTo}
-                      handleReply={handleReply}
-                      onCancelReply={handleCancelReply}
-                      onDelete={handleDeleteComment}
-                      user={user}
-                      onSeek={props.onSeek}
-                    />
-                  ))}
-              </AnimatePresence>
+              {rootComments
+                .map((comment) => (
+                  <Comment
+                    key={comment.id}
+                    comment={comment}
+                    replies={optimisticComments}
+                    onReply={(id) => {
+                      if (!user) {
+                        props.setShowAuthOverlay(true);
+                      } else {
+                        setReplyingTo(id);
+                      }
+                    }}
+                    replyingToId={replyingTo}
+                    handleReply={handleReply}
+                    onCancelReply={handleCancelReply}
+                    onDelete={handleDeleteComment}
+                    user={user}
+                    onSeek={props.onSeek}
+                  />
+                ))}
             </div>
           )}
         </Comments.Shell>

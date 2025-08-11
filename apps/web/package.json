@@ -57,6 +57,7 @@
     "@virtual-grid/react": "^2.0.3",
     "@workos-inc/node": "^7.34.0",
     "aws-sdk": "^2.1530.0",
+    "canvas-confetti": "^1.9.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cookies-next": "^4.1.0",
@@ -103,10 +104,11 @@
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^9.0.1",
-    "zod": "^3.24.4"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@smithy/types": "^4.3.1",
+    "@types/canvas-confetti": "^1.9.0",
     "@types/file-saver": "^2.0.7",
     "@types/js-cookie": "^3.0.6",
     "@types/jsdom": "^21.1.7",

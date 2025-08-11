@@ -11,14 +11,14 @@ use crate::{
 };
 
 #[derive(PartialEq, Debug, Clone, Copy, Serialize, Deserialize, Type)]
-struct Gradient {
+pub struct Gradient {
     start: [f32; 4],
     end: [f32; 4],
     angle: f32,
 }
 
 #[derive(PartialEq)]
-enum ColorOrGradient {
+pub enum ColorOrGradient {
     Color([f32; 4]),
     Gradient(Gradient),
 }
@@ -55,16 +55,16 @@ impl From<BackgroundSource> for Background {
                 angle: angle as f32,
             }),
             BackgroundSource::Image { path } | BackgroundSource::Wallpaper { path } => {
-                if let Some(path) = path {
-                    if !path.is_empty() {
-                        let clean_path = path
-                            .replace("asset://localhost/", "/")
-                            .replace("asset://", "")
-                            .replace("localhost//", "/");
+                if let Some(path) = path
+                    && !path.is_empty()
+                {
+                    let clean_path = path
+                        .replace("asset://localhost/", "/")
+                        .replace("asset://", "")
+                        .replace("localhost//", "/");
 
-                        if std::path::Path::new(&clean_path).exists() {
-                            return Background::Image { path: clean_path };
-                        }
+                    if std::path::Path::new(&clean_path).exists() {
+                        return Background::Image { path: clean_path };
                     }
                 }
                 Background::Color([1.0, 1.0, 1.0, 1.0])
@@ -80,6 +80,7 @@ pub enum Inner {
     },
     ColorOrGradient {
         value: ColorOrGradient,
+        #[allow(unused)]
         buffer: wgpu::Buffer,
         bind_group: wgpu::BindGroup,
     },
@@ -208,7 +209,7 @@ impl BackgroundLayer {
                         self.inner = Some(Inner::Image {
                             path,
                             bind_group: self.image_pipeline.bind_group(
-                                &device,
+                                device,
                                 &uniform_buffer,
                                 &texture_view,
                             ),
@@ -483,15 +484,13 @@ impl GradientOrColorPipeline {
     }
 
     pub fn bind_group(&self, device: &wgpu::Device, uniforms: &wgpu::Buffer) -> wgpu::BindGroup {
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniforms.as_entire_binding(),
             }],
             label: Some("bind_group"),
-        });
-
-        bind_group
+        })
     }
 }

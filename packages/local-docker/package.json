@@ -9,8 +9,6 @@
     "docker:stop": "docker compose stop",
     "docker:clean": "docker compose down -v"
   },
-  "devDependencies": {},
-  "dependencies": {},
   "engines": {
     "node": "20"
   }
