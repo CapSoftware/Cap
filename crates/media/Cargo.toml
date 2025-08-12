@@ -34,7 +34,7 @@ specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
 tracing = { workspace = true }
-futures = "0.3.31"
+futures = { workspace = true }
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
 image = { version = "0.25.2", features = ["gif"] }

@@ -10,5 +10,12 @@ ffmpeg = { workspace = true }
 scap-direct3d = { path = "../scap-direct3d" }
 windows = { workspace = true, features = [] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+scap-screencapturekit = { path = "../scap-screencapturekit" }
+cidre = { workspace = true }
+
+[dev-dependencies]
+futures = { workspace = true }
+
 [lints]
 workspace = true

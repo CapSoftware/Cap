@@ -32,7 +32,7 @@ image = "0.25.2"
 either = "1.13.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 relative-path = "1.9.3"
-futures = "0.3.31"
+futures = { workspace = true }
 tokio-util = "0.7.15"
 sha2 = "0.10.9"
 hex = "0.4.3"

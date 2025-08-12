@@ -1,12 +1,12 @@
 #[cfg(target_os = "macos")]
-mod macos;
+mod screencapturekit;
 #[cfg(target_os = "macos")]
-pub use macos::*;
+pub use screencapturekit::*;
 
 #[cfg(windows)]
-mod windows;
+mod direct3d;
 #[cfg(windows)]
-pub use windows::*;
+pub use direct3d::*;
 
 pub trait AsFFmpeg {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError>;

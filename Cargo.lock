@@ -6681,6 +6681,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "scap-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "ffmpeg-next",
+ "futures",
+ "scap-direct3d",
+ "scap-screencapturekit",
+ "windows 0.60.0",
+]
+
+[[package]]
 name = "scap-screencapturekit"
 version = "0.1.0"
 dependencies = [
@@ -6691,6 +6703,7 @@ dependencies = [
  "objc2 0.6.1",
  "objc2-app-kit",
  "objc2-foundation 0.3.1",
+ "tracing",
 ]
 
 [[package]]

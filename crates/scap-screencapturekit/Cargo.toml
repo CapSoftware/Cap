@@ -5,7 +5,8 @@ edition = "2024"
 
 
 [dependencies]
-futures = "0.3.31"
+futures = { workspace = true }
+tracing = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
