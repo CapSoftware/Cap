@@ -19,7 +19,8 @@ export function isEmailAllowedForSignup(
 }
 
 function extractDomainFromEmail(email: string): string | null {
-  const emailValidation = z.email().safeParse(email);
+  // TODO: replace with zod v4's z.email()
+  const emailValidation = z.string().email().safeParse(email);
   if (!emailValidation.success) {
     return null;
   }
@@ -37,5 +38,9 @@ function parseAllowedDomains(allowedDomainsConfig: string): string[] {
 }
 
 function isValidDomain(domain: string): boolean {
-  return z.hostname().safeParse(domain).success;
+  // TODO: replace this polyfill with zod v4's z.hostname()
+  const hostnameRegex = /^(?=.{1,253}$)(^((?!-)[a-zA-Z0-9-]{1,63}(?<!-)\.)+[a-zA-Z]{2,63}$|localhost)$/;
+  return z.string().refine((val) => hostnameRegex.test(val), {
+    message: "Invalid hostname",
+  }).safeParse(domain).success;
 }
