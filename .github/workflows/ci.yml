@@ -11,6 +11,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            rust:
+            	- '.cargo/**'
+            	- ''
+              - 'crates/**'
+              - 'desktop/src-tauri/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
@@ -38,6 +60,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
