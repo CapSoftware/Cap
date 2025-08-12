@@ -6790,6 +6790,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "scap-direct3d"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+]
+
+[[package]]
+name = "scap-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "ffmpeg-next",
+ "futures",
+ "scap-direct3d",
+ "scap-screencapturekit",
+ "windows 0.60.0",
+]
+
+[[package]]
+name = "scap-screencapturekit"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "clap",
+ "futures",
+ "inquire",
+ "objc2 0.6.1",
+ "objc2-app-kit",
+ "objc2-foundation 0.3.1",
+ "tracing",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
