@@ -1,3 +1,11 @@
+use std::{
+    os::windows::io::AsRawHandle,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
+
 use windows::{
     Foundation::TypedEventHandler,
     Graphics::{
@@ -5,21 +13,25 @@ use windows::{
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
     },
     Win32::{
-        Foundation::{HMODULE, POINT, S_FALSE},
+        Foundation::{HANDLE, HMODULE, LPARAM, POINT, S_FALSE, WPARAM},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
             Dxgi::IDXGIDevice,
             Gdi::{HMONITOR, MONITOR_DEFAULTTONULL, MonitorFromPoint},
         },
-        System::WinRT::{
-            CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-            Direct3D11::CreateDirect3D11DeviceFromDXGIDevice,
-            DispatcherQueueOptions,
-            Graphics::Capture::{self, IGraphicsCaptureItemInterop},
-            RO_INIT_MULTITHREADED, RoInitialize,
+        System::{
+            Threading::GetThreadId,
+            WinRT::{
+                CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
+                Direct3D11::CreateDirect3D11DeviceFromDXGIDevice, DispatcherQueueOptions,
+                Graphics::Capture::IGraphicsCaptureItemInterop, RO_INIT_MULTITHREADED,
+                RoInitialize,
+            },
         },
-        UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, TranslateMessage},
+        UI::WindowsAndMessaging::{
+            DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_QUIT,
+        },
     },
     core::{IInspectable, Interface},
 };
@@ -69,10 +81,47 @@ impl Capturer {
     pub fn start(
         self,
         callback: impl FnMut(Direct3D11CaptureFrame) -> windows::core::Result<()> + Send + 'static,
-    ) {
-        std::thread::spawn(|| {
-            let _ = dbg!(run(self.item, self.settings, callback));
+    ) -> CaptureHandle {
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let thread_handle = std::thread::spawn({
+            let stop_flag = stop_flag.clone();
+            move || {
+                let _ = dbg!(run(self.item, self.settings, callback, stop_flag));
+            }
         });
+
+        CaptureHandle {
+            stop_flag,
+            thread_handle,
+        }
+    }
+}
+
+pub struct CaptureHandle {
+    stop_flag: Arc<AtomicBool>,
+    thread_handle: std::thread::JoinHandle<()>,
+}
+
+impl CaptureHandle {
+    pub fn stop(self) -> Result<(), &'static str> {
+        self.stop_flag.store(true, Ordering::Relaxed);
+
+        let handle = HANDLE(self.thread_handle.as_raw_handle());
+        let thread_id = unsafe { GetThreadId(handle) };
+
+        while let Err(e) =
+            unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
+        {
+            if self.thread_handle.is_finished() {
+                break;
+            }
+
+            if e.code().0 != -2147023452 {
+                return Err("Failed to post message");
+            }
+        }
+
+        self.thread_handle.join().map_err(|_| "Join failed")
     }
 }
 
@@ -80,6 +129,7 @@ fn run(
     item: CaptureItem,
     settings: Settings,
     mut callback: impl FnMut(Direct3D11CaptureFrame) -> windows::core::Result<()> + Send + 'static,
+    stop_flag: Arc<AtomicBool>,
 ) -> Result<(), &'static str> {
     if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
         && e.code() != S_FALSE
@@ -152,6 +202,10 @@ fn run(
         .FrameArrived(
             &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
                 move |frame_pool, _| {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+
                     let frame = frame_pool
                         .as_ref()
                         .expect("FrameArrived parameter was None")
