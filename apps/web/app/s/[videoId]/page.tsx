@@ -19,7 +19,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { transcribeVideo } from "@/actions/videos/transcribe";
+import { transcribeVideo } from "@/lib/transcribe";
 import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled } from "@/utils/flags";

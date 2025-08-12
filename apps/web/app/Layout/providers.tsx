@@ -35,7 +35,7 @@ export function PostHogProvider({
         console.error("Failed to initialize PostHog:", error);
       }
     } else {
-      console.error(
+      console.warn(
         "Missing PostHog environment variables. Events will not be tracked."
       );
     }

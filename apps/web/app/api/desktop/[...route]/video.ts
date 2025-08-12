@@ -141,7 +141,7 @@ app.get(
             react: FirstShareableLink({
               email: user.email,
               url: videoUrl,
-              videoName: videoData.name,
+              videoName: videoName,
             }),
             marketing: true,
             scheduledAt: "in 5 min",

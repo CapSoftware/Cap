@@ -1,14 +1,20 @@
-import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "./components";
-import Folder from "../../caps/components/Folder";
-import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
-import { getChildFolders } from "@/actions/folders/getChildFolders";
-import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
+import {
+  ClientMyCapsLink,
+  NewSubfolderButton,
+  BreadcrumbItem,
+} from "./components";
+import FolderCard from "../../caps/components/Folder";
 import { serverEnv } from "@cap/env";
 import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
 import FolderVideosSection from "./components/FolderVideosSection";
+import {
+  getChildFolders,
+  getFolderBreadcrumb,
+  getVideosByFolderId,
+} from "@/lib/folder";
+import { Folder } from "@cap/web-domain";
 
-
-const FolderPage = async ({ params }: { params: { id: string } }) => {
+const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
   const [childFolders, breadcrumb, videosData] = await Promise.all([
     getChildFolders(params.id),
     getFolderBreadcrumb(params.id),
@@ -16,7 +22,6 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
   ]);
 
   return (
-
     <div>
       <div className="flex gap-2 items-center mb-10">
         <NewSubfolderButton parentFolderId={params.id} />
@@ -46,7 +51,7 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
           <h1 className="mb-6 text-xl font-medium text-gray-12">Subfolders</h1>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {childFolders.map((folder) => (
-              <Folder
+              <FolderCard
                 key={folder.id}
                 name={folder.name}
                 color={folder.color}
@@ -65,7 +70,6 @@ const FolderPage = async ({ params }: { params: { id: string } }) => {
         dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
       />
     </div>
-
   );
 };
 

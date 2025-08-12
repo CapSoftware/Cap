@@ -1,19 +1,32 @@
-import { ClientMyCapsLink, NewSubfolderButton, BreadcrumbItem } from "../../../../folder/[id]/components";
-import Folder from "@/app/(org)/dashboard/caps/components/Folder";
-import { getFolderBreadcrumb } from "@/actions/folders/getFolderBreadcrumb";
-import { getChildFolders } from "@/actions/folders/getChildFolders";
-import { getVideosByFolderId } from "@/actions/folders/getVideosByFolderId";
+import {
+  ClientMyCapsLink,
+  NewSubfolderButton,
+  BreadcrumbItem,
+} from "../../../../folder/[id]/components";
+import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";
 import { serverEnv } from "@cap/env";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
 import { getCurrentUser } from "@cap/database/auth/session";
+import {
+  getChildFolders,
+  getFolderBreadcrumb,
+  getVideosByFolderId,
+} from "@/lib/folder";
+import { Folder } from "@cap/web-domain";
 
-const FolderPage = async ({ params }: { params: { spaceId: string; folderId: string } }) => {
+const FolderPage = async ({
+  params,
+}: {
+  params: { spaceId: string; folderId: Folder.FolderId };
+}) => {
+  const user = await getCurrentUser();
+  if (!user) return;
+
   const [childFolders, breadcrumb, videosData] = await Promise.all([
     getChildFolders(params.folderId),
     getFolderBreadcrumb(params.folderId),
     getVideosByFolderId(params.folderId),
   ]);
-  const user = await getCurrentUser();
   const userId = user?.id as string;
 
   return (
@@ -43,7 +56,7 @@ const FolderPage = async ({ params }: { params: { spaceId: string; folderId: str
           <h1 className="mb-6 text-xl font-medium text-gray-12">Subfolders</h1>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(250px,1fr))] gap-4 mb-10">
             {childFolders.map((folder) => (
-              <Folder
+              <FolderCard
                 key={folder.id}
                 name={folder.name}
                 color={folder.color}

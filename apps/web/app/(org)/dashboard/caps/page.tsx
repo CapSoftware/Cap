@@ -2,15 +2,20 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
   comments,
-  folders, organizations,
-  sharedVideos, spaceVideos, spaces, users,
-  videos
+  folders,
+  organizations,
+  sharedVideos,
+  spaceVideos,
+  spaces,
+  users,
+  videos,
 } from "@cap/database/schema";
-import { and, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { Caps } from "./Caps";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 
 export const metadata: Metadata = {
   title: "My Caps — Cap",
@@ -32,7 +37,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     .from(spaceVideos)
     .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
     .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-    .where(sql`${spaceVideos.videoId} IN (${sql.join(videoIds.map(id => sql`${id}`), sql`, `)})`);
+    .where(inArray(spaceVideos.videoId, videoIds));
 
   // Fetch organization-level sharing
   const orgSharing = await db()
@@ -45,19 +50,22 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
     })
     .from(sharedVideos)
     .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-    .where(sql`${sharedVideos.videoId} IN (${sql.join(videoIds.map(id => sql`${id}`), sql`, `)})`);
+    .where(inArray(sharedVideos.videoId, videoIds));
 
   // Combine and group by videoId
-  const sharedSpacesMap: Record<string, Array<{
-    id: string;
-    name: string;
-    organizationId: string;
-    iconUrl: string;
-    isOrg: boolean;
-  }>> = {};
+  const sharedSpacesMap: Record<
+    string,
+    Array<{
+      id: string;
+      name: string;
+      organizationId: string;
+      iconUrl: string;
+      isOrg: boolean;
+    }>
+  > = {};
 
   // Add space-level sharing
-  spaceSharing.forEach(space => {
+  spaceSharing.forEach((space) => {
     if (!sharedSpacesMap[space.videoId]) {
       sharedSpacesMap[space.videoId] = [];
     }
@@ -65,13 +73,13 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
       id: space.id,
       name: space.name,
       organizationId: space.organizationId,
-      iconUrl: space.iconUrl || '',
+      iconUrl: space.iconUrl || "",
       isOrg: false,
     });
   });
 
   // Add organization-level sharing
-  orgSharing.forEach(org => {
+  orgSharing.forEach((org) => {
     if (!sharedSpacesMap[org.videoId]) {
       sharedSpacesMap[org.videoId] = [];
     }
@@ -79,7 +87,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
       id: org.id,
       name: org.name,
       organizationId: org.organizationId,
-      iconUrl: org.iconUrl || '',
+      iconUrl: org.iconUrl || "",
       isOrg: true,
     });
   });
@@ -160,7 +168,6 @@ export default async function CapsPage({
           JSON_ARRAY()
         )
       `,
-
       ownerName: users.name,
       effectiveDate: sql<string>`
         COALESCE(
@@ -213,7 +220,7 @@ export default async function CapsPage({
     );
 
   // Fetch shared spaces data for all videos
-  const videoIds = videoData.map(video => video.id);
+  const videoIds = videoData.map((video) => video.id);
   const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
 
   const processedVideoData = videoData.map((video) => {
@@ -221,9 +228,12 @@ export default async function CapsPage({
 
     return {
       ...videoWithoutEffectiveDate,
+      id: Video.VideoId.make(video.id),
       foldersData,
       sharedOrganizations: Array.isArray(video.sharedOrganizations)
-        ? video.sharedOrganizations.filter((organization) => organization.id !== null)
+        ? video.sharedOrganizations.filter(
+            (organization) => organization.id !== null
+          )
         : [],
       sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
         ? sharedSpacesMap[video.id]
@@ -231,9 +241,9 @@ export default async function CapsPage({
       ownerName: video.ownerName ?? "",
       metadata: video.metadata as
         | {
-          customCreatedAt?: string;
-          [key: string]: any;
-        }
+            customCreatedAt?: string;
+            [key: string]: any;
+          }
         | undefined,
       hasPassword: video.hasPassword === 1,
     };

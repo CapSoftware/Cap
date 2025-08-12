@@ -22,9 +22,10 @@ import { Button } from "@cap/ui";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import Folder from "../../caps/components/Folder";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { Video } from "@cap/web-domain";
 
 type SharedVideoData = {
-  id: string;
+  id: Video.VideoId;
   ownerId: string;
   name: string;
   createdAt: Date;
@@ -92,7 +93,7 @@ export const SharedCaps = ({
   const organizationMemberCount = organizationMembers?.length || 0;
 
   const { data: analyticsData } = useSuspenseQuery({
-    queryKey: ['analytics', data.map(video => video.id)],
+    queryKey: ["analytics", data.map((video) => video.id)],
     queryFn: async () => {
       if (!dubApiKeyEnabled || data.length === 0) {
         return {};
@@ -101,9 +102,9 @@ export const SharedCaps = ({
       const analyticsPromises = data.map(async (video) => {
         try {
           const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-            method: 'GET',
+            method: "GET",
             headers: {
-              'Content-Type': 'application/json',
+              "Content-Type": "application/json",
             },
           });
 
@@ -113,7 +114,10 @@ export const SharedCaps = ({
           }
           return { videoId: video.id, count: 0 };
         } catch (error) {
-          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
+          console.warn(
+            `Failed to fetch analytics for video ${video.id}:`,
+            error
+          );
           return { videoId: video.id, count: 0 };
         }
       });
@@ -122,7 +126,7 @@ export const SharedCaps = ({
       const analyticsData: Record<string, number> = {};
 
       results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value) {
+        if (result.status === "fulfilled" && result.value) {
           analyticsData[result.value.videoId] = result.value.count;
         }
       });
@@ -205,7 +209,9 @@ export const SharedCaps = ({
                 icon={faInfoCircle}
               />
               <p className="text-white">
-                {isDraggingCap.isOwner ? " Drag to a space to share or folder to move" : "Only the video owner can drag and move the video"}
+                {isDraggingCap.isOwner
+                  ? " Drag to a space to share or folder to move"
+                  : "Only the video owner can drag and move the video"}
               </p>
             </div>
           </div>
@@ -288,7 +294,9 @@ export const SharedCaps = ({
               organizationName={activeOrganization?.organization.name || ""}
               spaceName={spaceData?.name || ""}
               userId={currentUserId}
-              onDragStart={() => setIsDraggingCap({ isOwner, isDragging: true })}
+              onDragStart={() =>
+                setIsDraggingCap({ isOwner, isDragging: true })
+              }
               onDragEnd={() => setIsDraggingCap({ isOwner, isDragging: false })}
             />
           );

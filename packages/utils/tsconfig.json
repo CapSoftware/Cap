@@ -6,6 +6,10 @@
     "rootDir": "src",
     "baseUrl": ".",
     "moduleResolution": "bundler",
+    "composite": true,
+    "outDir": "dist",
+    "noEmit": false,
+    "emitDeclarationOnly": true,
     "paths": {
       "@/*": ["./src/*"]
     }

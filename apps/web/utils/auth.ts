@@ -13,7 +13,10 @@ async function verifyPasswordCookie(videoPassword: string) {
 
 export async function userHasAccessToVideo(
   user: MaybePromise<{ id: string } | undefined | null>,
-  video: Omit<InferSelectModel<typeof videos>, "folderId">
+  video: Pick<
+    InferSelectModel<typeof videos>,
+    "public" | "password" | "ownerId"
+  >
 ): Promise<"has-access" | "private" | "needs-password" | "not-org-email"> {
   if (video.public && video.password === null) return "has-access";
 

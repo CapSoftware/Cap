@@ -1,0 +1,13 @@
+{
+  "extends": "../config/base.tsconfig.json",
+  "exclude": ["node_modules", "dist"],
+  "include": ["**/*.ts", "**/*.tsx"],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "moduleResolution": "bundler",
+    "composite": true,
+    "outDir": "dist",
+    "noEmit": false,
+    "emitDeclarationOnly": true
+  }
+}

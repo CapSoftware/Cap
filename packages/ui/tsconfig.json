@@ -5,6 +5,10 @@
   "compilerOptions": {
     "rootDir": "src",
     "baseUrl": ".",
+    "composite": true,
+    "outDir": "dist",
+    "noEmit": false,
+    "emitDeclarationOnly": true,
     "paths": {
       "@/*": ["./src/*"],
       "@/utils/*": ["src/utils/*"]

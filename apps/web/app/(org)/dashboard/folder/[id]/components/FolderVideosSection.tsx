@@ -5,13 +5,16 @@ import { ClientCapCard } from "./index";
 import { useRouter } from "next/navigation";
 import { useState, useRef } from "react";
 import { toast } from "sonner";
-import { deleteVideo } from "@/actions/videos/delete";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { useUploadingContext } from "../../../caps/UploadingContext";
 import { type VideoData } from "../../../caps/Caps";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { Effect, Exit } from "effect";
+import { Video } from "@cap/web-domain";
+import { Rpc } from "@/lib/Rpcs";
 
 interface FolderVideosSectionProps {
   initialVideos: VideoData;
@@ -30,64 +33,67 @@ export default function FolderVideosSection({
   const { isUploading } = useUploadingContext();
   const { activeOrganization } = useDashboardContext();
 
-  const [selectedCaps, setSelectedCaps] = useState<string[]>([]);
+  const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
   const previousCountRef = useRef<number>(0);
-  const [isDeleting, setIsDeleting] = useState(false);
 
-  const deleteSelectedCaps = async () => {
-    if (selectedCaps.length === 0) return;
+  const deleteCaps = useEffectMutation({
+    mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
+      if (ids.length === 0) return;
 
-    setIsDeleting(true);
+      const rpc = yield* Rpc;
 
-    try {
-      toast.promise(
-        async () => {
-          const results = await Promise.allSettled(
-            selectedCaps.map((capId) => deleteVideo(capId))
-          );
+      const fiber = yield* Effect.gen(function* () {
+        const results = yield* Effect.all(
+          ids.map((id) => rpc.VideoDelete(id).pipe(Effect.exit)),
+          { concurrency: 10 }
+        );
 
-          const successCount = results.filter(
-            (result) => result.status === "fulfilled" && result.value.success
-          ).length;
+        const successCount = results.filter(Exit.isSuccess).length;
 
-          const errorCount = selectedCaps.length - successCount;
+        const errorCount = ids.length - successCount;
 
-          if (successCount > 0 && errorCount > 0) {
-            return { success: successCount, error: errorCount };
-          } else if (successCount > 0) {
-            return { success: successCount };
-          } else {
-            throw new Error(
+        if (successCount > 0 && errorCount > 0) {
+          return { success: successCount, error: errorCount };
+        } else if (successCount > 0) {
+          return { success: successCount };
+        } else {
+          return yield* Effect.fail(
+            new Error(
               `Failed to delete ${errorCount} cap${errorCount === 1 ? "" : "s"}`
-            );
-          }
-        },
-        {
-          loading: `Deleting ${selectedCaps.length} cap${selectedCaps.length === 1 ? "" : "s"
-            }...`,
-          success: (data) => {
-            if (data.error) {
-              return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
-                }, but failed to delete ${data.error} cap${data.error === 1 ? "" : "s"
-                }`;
-            }
-            return `Successfully deleted ${data.success} cap${data.success === 1 ? "" : "s"
-              }`;
-          },
-          error: (error) =>
-            error.message || "An error occurred while deleting caps",
+            )
+          );
         }
-      );
+      }).pipe(Effect.fork);
 
+      toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
+        loading: `Deleting ${selectedCaps.length} cap${
+          selectedCaps.length === 1 ? "" : "s"
+        }...`,
+        success: (data) => {
+          if (data.error) {
+            return `Successfully deleted ${data.success} cap${
+              data.success === 1 ? "" : "s"
+            }, but failed to delete ${data.error} cap${
+              data.error === 1 ? "" : "s"
+            }`;
+          }
+          return `Successfully deleted ${data.success} cap${
+            data.success === 1 ? "" : "s"
+          }`;
+        },
+        error: (error) =>
+          error.message || "An error occurred while deleting caps",
+      });
+
+      return yield* fiber.await.pipe(Effect.flatten);
+    }),
+    onSuccess: Effect.fn(function* () {
       setSelectedCaps([]);
       router.refresh();
-    } catch (error) {
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+    }),
+  });
 
-  const handleCapSelection = (capId: string) => {
+  const handleCapSelection = (capId: Video.VideoId) => {
     setSelectedCaps((prev) => {
       const newSelection = prev.includes(capId)
         ? prev.filter((id) => id !== capId)
@@ -99,47 +105,50 @@ export default function FolderVideosSection({
     });
   };
 
-  const { data: analyticsData, isLoading: isLoadingAnalytics } = useSuspenseQuery({
-    queryKey: ['analytics', initialVideos.map(video => video.id)],
-    queryFn: async () => {
-      if (!dubApiKeyEnabled || initialVideos.length === 0) {
-        return {};
-      }
+  const { data: analyticsData, isLoading: isLoadingAnalytics } =
+    useSuspenseQuery({
+      queryKey: ["analytics", initialVideos.map((video) => video.id)],
+      queryFn: async () => {
+        if (!dubApiKeyEnabled || initialVideos.length === 0) {
+          return {};
+        }
 
-      const analyticsPromises = initialVideos.map(async (video) => {
-        try {
-          const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          });
+        const analyticsPromises = initialVideos.map(async (video) => {
+          try {
+            const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+              method: "GET",
+              headers: {
+                "Content-Type": "application/json",
+              },
+            });
 
-          if (response.ok) {
-            const responseData = await response.json();
-            return { videoId: video.id, count: responseData.count || 0 };
+            if (response.ok) {
+              const responseData = await response.json();
+              return { videoId: video.id, count: responseData.count || 0 };
+            }
+            return { videoId: video.id, count: 0 };
+          } catch (error) {
+            console.warn(
+              `Failed to fetch analytics for video ${video.id}:`,
+              error
+            );
+            return { videoId: video.id, count: 0 };
           }
-          return { videoId: video.id, count: 0 };
-        } catch (error) {
-          console.warn(`Failed to fetch analytics for video ${video.id}:`, error);
-          return { videoId: video.id, count: 0 };
-        }
-      });
+        });
 
-      const results = await Promise.allSettled(analyticsPromises);
-      const analyticsData: Record<string, number> = {};
+        const results = await Promise.allSettled(analyticsPromises);
+        const analyticsData: Record<string, number> = {};
 
-
-      results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value) {
-          analyticsData[result.value.videoId] = result.value.count;
-        }
-      });
-      return analyticsData;
-    },
-    staleTime: 30000, // 30 seconds
-    refetchOnWindowFocus: false,
-  });
+        results.forEach((result) => {
+          if (result.status === "fulfilled" && result.value) {
+            analyticsData[result.value.videoId] = result.value.count;
+          }
+        });
+        return analyticsData;
+      },
+      staleTime: 30000, // 30 seconds
+      refetchOnWindowFocus: false,
+    });
 
   const analytics = analyticsData || {};
 
@@ -160,41 +169,41 @@ export default function FolderVideosSection({
               <UploadPlaceholderCard key={"upload-placeholder"} />
             )}
 
-            {cardType === "shared" ? (
-              initialVideos.map((video) => (
-                <SharedCapCard
-                  key={video.id}
-                  cap={video}
-                  hideSharedStatus
-                  analytics={analytics[video.id] || 0}
-                  organizationName={activeOrganization?.organization.name || ""}
-                  userId={userId}
-                />
-              ))
-            ) : (
-              initialVideos.map((video) => (
-                <ClientCapCard
-                  key={video.id}
-                  videoId={video.id}
-                  cap={video}
-                  analytics={analytics[video.id] || 0}
-                  isLoadingAnalytics={isLoadingAnalytics}
-                  isSelected={selectedCaps.includes(video.id)}
-                  anyCapSelected={selectedCaps.length > 0}
-                  isDeleting={isDeleting}
-                  onSelectToggle={() => handleCapSelection(video.id)}
-                  onDelete={deleteSelectedCaps}
-                />
-              ))
-            )}
+            {cardType === "shared"
+              ? initialVideos.map((video) => (
+                  <SharedCapCard
+                    key={video.id}
+                    cap={video}
+                    hideSharedStatus
+                    analytics={analytics[video.id] || 0}
+                    organizationName={
+                      activeOrganization?.organization.name || ""
+                    }
+                    userId={userId}
+                  />
+                ))
+              : initialVideos.map((video) => (
+                  <ClientCapCard
+                    key={video.id}
+                    videoId={video.id}
+                    cap={video}
+                    analytics={analytics[video.id] || 0}
+                    isLoadingAnalytics={isLoadingAnalytics}
+                    isSelected={selectedCaps.includes(video.id)}
+                    anyCapSelected={selectedCaps.length > 0}
+                    isDeleting={deleteCaps.isPending}
+                    onSelectToggle={() => handleCapSelection(video.id)}
+                    onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
+                  />
+                ))}
           </>
         )}
       </div>
       <SelectedCapsBar
         selectedCaps={selectedCaps}
         setSelectedCaps={setSelectedCaps}
-        deleteSelectedCaps={deleteSelectedCaps}
-        isDeleting={isDeleting}
+        deleteSelectedCaps={() => deleteCaps.mutateAsync(selectedCaps)}
+        isDeleting={deleteCaps.isPending}
       />
     </>
   );

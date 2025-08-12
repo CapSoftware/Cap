@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { organizations } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 
-export async function getOrganization(organizationId: string) {
+export async function getOrganizationSSOData(organizationId: string) {
   if (!organizationId) {
     throw new Error("Organization ID is required");
   }
@@ -18,7 +18,11 @@ export async function getOrganization(organizationId: string) {
     .from(organizations)
     .where(eq(organizations.id, organizationId));
 
-  if (!organization || !organization.workosOrganizationId || !organization.workosConnectionId) {
+  if (
+    !organization ||
+    !organization.workosOrganizationId ||
+    !organization.workosConnectionId
+  ) {
     throw new Error("Organization not found or SSO not configured");
   }
 
@@ -27,4 +31,4 @@ export async function getOrganization(organizationId: string) {
     connectionId: organization.workosConnectionId,
     name: organization.name,
   };
-} 
+}

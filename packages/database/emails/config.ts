@@ -1,19 +1,9 @@
 import { buildEnv, serverEnv } from "@cap/env";
-import { render, renderAsync } from "@react-email/render";
 import { JSXElementConstructor, ReactElement } from "react";
 import { Resend } from "resend";
 
 export const resend = () =>
   serverEnv().RESEND_API_KEY ? new Resend(serverEnv().RESEND_API_KEY) : null;
-
-// Augment the CreateEmailOptions type to include scheduledAt
-type EmailOptions = {
-  from: string;
-  to: string | string[];
-  subject: string;
-  react: ReactElement<any, string | JSXElementConstructor<any>>;
-  scheduledAt?: string;
-};
 
 export const sendEmail = async ({
   email,

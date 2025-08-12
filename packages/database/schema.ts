@@ -13,6 +13,7 @@ import {
   float,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
+import { Folder } from "@cap/web-domain";
 import { nanoIdLength } from "./helpers";
 import { VideoMetadata } from "./types";
 
@@ -204,7 +205,7 @@ export const organizationInvites = mysqlTable(
 export const folders = mysqlTable(
   "folders",
   {
-    id: nanoId("id").notNull().primaryKey().unique(),
+    id: nanoId("id").notNull().primaryKey().unique().$type<Folder.FolderId>(),
     name: varchar("name", { length: 255 }).notNull(),
     color: varchar("color", {
       length: 16,
@@ -214,7 +215,7 @@ export const folders = mysqlTable(
       .default("normal"),
     organizationId: nanoId("organizationId").notNull(),
     createdById: nanoId("createdById").notNull(),
-    parentId: nanoIdNullable("parentId"),
+    parentId: nanoIdNullable("parentId").$type<Folder.FolderId | null>(),
     spaceId: nanoIdNullable("spaceId"),
     createdAt: timestamp("createdAt").notNull().defaultNow(),
     updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -233,23 +234,12 @@ export const videos = mysqlTable(
     id: nanoId("id").notNull().primaryKey().unique(),
     ownerId: nanoId("ownerId").notNull(),
     name: varchar("name", { length: 255 }).notNull().default("My Video"),
-    // DEPRECATED
-    awsRegion: varchar("awsRegion", { length: 255 }),
-    awsBucket: varchar("awsBucket", { length: 255 }),
     bucket: nanoIdNullable("bucket"),
     metadata: json("metadata").$type<VideoMetadata>(),
     public: boolean("public").notNull().default(true),
-    password: encryptedTextNullable("password"),
-    videoStartTime: varchar("videoStartTime", { length: 255 }),
-    audioStartTime: varchar("audioStartTime", { length: 255 }),
-    xStreamInfo: text("xStreamInfo"),
-    jobId: varchar("jobId", { length: 255 }),
-    jobStatus: varchar("jobStatus", { length: 255 }),
-    isScreenshot: boolean("isScreenshot").notNull().default(false),
-    skipProcessing: boolean("skipProcessing").notNull().default(false),
-    transcriptionStatus: varchar("transcriptionStatus", { length: 255 }),
-    createdAt: timestamp("createdAt").notNull().defaultNow(),
-    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
+      "PROCESSING" | "COMPLETE" | "ERROR"
+    >(),
     source: json("source")
       .$type<
         { type: "MediaConvert" } | { type: "local" } | { type: "desktopMP4" }
@@ -257,6 +247,21 @@ export const videos = mysqlTable(
       .notNull()
       .default({ type: "MediaConvert" }),
     folderId: nanoIdNullable("folderId"),
+    createdAt: timestamp("createdAt").notNull().defaultNow(),
+    updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
+    // PRIVATE
+    password: encryptedTextNullable("password"),
+    // LEGACY
+    xStreamInfo: text("xStreamInfo"),
+    isScreenshot: boolean("isScreenshot").notNull().default(false),
+    // DEPRECATED
+    awsRegion: varchar("awsRegion", { length: 255 }),
+    awsBucket: varchar("awsBucket", { length: 255 }),
+    videoStartTime: varchar("videoStartTime", { length: 255 }),
+    audioStartTime: varchar("audioStartTime", { length: 255 }),
+    jobId: varchar("jobId", { length: 255 }),
+    jobStatus: varchar("jobStatus", { length: 255 }),
+    skipProcessing: boolean("skipProcessing").notNull().default(false),
   },
   (table) => ({
     idIndex: index("id_idx").on(table.id),

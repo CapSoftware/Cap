@@ -17,6 +17,7 @@ const nextConfig = {
     "@cap/ui",
     "@cap/utils",
     "@cap/web-api-contract",
+    "@cap/web-domain",
     "next-mdx-remote",
   ],
   eslint: {
@@ -27,7 +28,12 @@ const nextConfig = {
   },
   experimental: {
     instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
-    optimizePackageImports: ["@cap/ui", "@cap/utils", "@cap/web-api-contract"],
+    optimizePackageImports: [
+      "@cap/ui",
+      "@cap/utils",
+      "@cap/web-api-contract",
+      "@cap/web-domain",
+    ],
   },
   images: {
     remotePatterns: [
