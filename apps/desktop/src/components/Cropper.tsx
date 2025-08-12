@@ -1,11 +1,7 @@
-import {
-  createEventListener,
-  createEventListenerMap,
-} from "@solid-primitives/event-listener";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
 import {
   type ParentProps,
   Accessor,
-  batch,
   children,
   createEffect,
   createMemo,
@@ -14,9 +10,8 @@ import {
   For,
   onMount,
   Show,
-  Switch,
 } from "solid-js";
-import { createStore, SetStoreFunction } from "solid-js/store";
+import { createStore } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import { commands } from "~/utils/tauri";
 import { createResizeObserver } from "@solid-primitives/resize-observer";
@@ -90,7 +85,7 @@ function ratioToValue(ratio: Ratio): number {
 }
 
 function triggerHaptic() {
-  commands.performHapticFeedback("Alignment", "DrawCompleted");
+  commands.performHapticFeedback("Alignment", null);
 }
 
 function findClosestRatio(

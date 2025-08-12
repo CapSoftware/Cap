@@ -51,10 +51,6 @@ pub struct GeneralSettingsStore {
     pub upload_individual_files: bool,
     #[serde(default)]
     pub hide_dock_icon: bool,
-    #[serde(default = "true_b")]
-    pub haptics_enabled: bool,
-    #[serde(default)]
-    pub active_recording_border_color_hex: Option<String>,
     #[serde(default)]
     pub auto_create_shareable_link: bool,
     #[serde(default = "true_b")]
@@ -115,8 +111,6 @@ impl Default for GeneralSettingsStore {
             instance_id: uuid::Uuid::new_v4(),
             upload_individual_files: false,
             hide_dock_icon: false,
-            haptics_enabled: true,
-            active_recording_border_color_hex: None,
             auto_create_shareable_link: false,
             enable_notifications: true,
             disable_auto_open_links: false,
