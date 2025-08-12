@@ -1,20 +1,20 @@
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
+import { RpcAuthMiddleware } from "./Authentication";
 import { InternalError } from "./Errors";
 import { PolicyDeniedError } from "./Policy";
-import { RpcAuthMiddleware } from "./Authentication";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
-  "FolderNotFoundError",
-  {}
+	"FolderNotFoundError",
+	{},
 ) {}
 
 export class FolderRpcs extends RpcGroup.make(
-  Rpc.make("FolderDelete", {
-    payload: FolderId,
-    error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
-  }).middleware(RpcAuthMiddleware)
+	Rpc.make("FolderDelete", {
+		payload: FolderId,
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
 ) {}

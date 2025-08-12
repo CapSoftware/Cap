@@ -1,36 +1,35 @@
-import { Option, Context, Effect, Schema } from "effect";
 import { Rpc, RpcGroup } from "@effect/rpc";
-
-import { PolicyDeniedError as PolicyDeniedError } from "./Policy";
-import { S3BucketId } from "./S3Bucket";
-import { InternalError } from "./Errors";
+import { Context, Effect, Option, Schema } from "effect";
 import { RpcAuthMiddleware } from "./Authentication";
+import { InternalError } from "./Errors";
 import { FolderId } from "./Folder";
+import { PolicyDeniedError } from "./Policy";
+import { S3BucketId } from "./S3Bucket";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
 
 // Purposefully doesn't include password as this is a public class
 export class Video extends Schema.Class<Video>("Video")({
-  id: VideoId,
-  ownerId: Schema.String,
-  name: Schema.String,
-  public: Schema.Boolean,
-  metadata: Schema.Record({ key: Schema.String, value: Schema.Any }),
-  source: Schema.Struct({
-    type: Schema.Literal("MediaConvert", "local", "desktopMP4"),
-  }),
-  bucketId: Schema.OptionFromNullOr(S3BucketId),
-  folderId: Schema.OptionFromNullOr(FolderId),
-  transcriptionStatus: Schema.OptionFromNullOr(
-    Schema.Literal("PROCESSING", "COMPLETE", "ERROR")
-  ),
-  createdAt: Schema.Date,
-  updatedAt: Schema.Date,
+	id: VideoId,
+	ownerId: Schema.String,
+	name: Schema.String,
+	public: Schema.Boolean,
+	metadata: Schema.Record({ key: Schema.String, value: Schema.Any }),
+	source: Schema.Struct({
+		type: Schema.Literal("MediaConvert", "local", "desktopMP4"),
+	}),
+	bucketId: Schema.OptionFromNullOr(S3BucketId),
+	folderId: Schema.OptionFromNullOr(FolderId),
+	transcriptionStatus: Schema.OptionFromNullOr(
+		Schema.Literal("PROCESSING", "COMPLETE", "ERROR"),
+	),
+	createdAt: Schema.Date,
+	updatedAt: Schema.Date,
 }) {
-  static decodeSync = Schema.decodeSync(Video);
+	static decodeSync = Schema.decodeSync(Video);
 
-  toJS = () => Schema.encode(Video)(this).pipe(Effect.orDie);
+	toJS = () => Schema.encode(Video)(this).pipe(Effect.orDie);
 }
 
 /**
@@ -39,50 +38,50 @@ export class Video extends Schema.Class<Video>("Video")({
  * or via query params for the API.
  */
 export class VideoPasswordAttachment extends Context.Tag(
-  "VideoPasswordAttachment"
+	"VideoPasswordAttachment",
 )<VideoPasswordAttachment, { password: string }>() {}
 
 export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPasswordError>()(
-  "VerifyVideoPasswordError",
-  {
-    id: VideoId,
-    cause: Schema.Literal("not-provided", "wrong-password"),
-  }
+	"VerifyVideoPasswordError",
+	{
+		id: VideoId,
+		cause: Schema.Literal("not-provided", "wrong-password"),
+	},
 ) {}
 
 export const verifyPassword = (video: Video, password: Option.Option<string>) =>
-  Effect.gen(function* () {
-    const passwordAttachment = yield* Effect.serviceOption(
-      VideoPasswordAttachment
-    );
+	Effect.gen(function* () {
+		const passwordAttachment = yield* Effect.serviceOption(
+			VideoPasswordAttachment,
+		);
 
-    if (Option.isNone(password)) return;
+		if (Option.isNone(password)) return;
 
-    if (Option.isNone(passwordAttachment))
-      return yield* new VerifyVideoPasswordError({
-        id: video.id,
-        cause: "not-provided",
-      });
+		if (Option.isNone(passwordAttachment))
+			return yield* new VerifyVideoPasswordError({
+				id: video.id,
+				cause: "not-provided",
+			});
 
-    if (passwordAttachment.value.password !== password.value)
-      return yield* new VerifyVideoPasswordError({
-        id: video.id,
-        cause: "wrong-password",
-      });
-  });
+		if (passwordAttachment.value.password !== password.value)
+			return yield* new VerifyVideoPasswordError({
+				id: video.id,
+				cause: "wrong-password",
+			});
+	});
 
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
-  "VideoNotFoundError",
-  {}
+	"VideoNotFoundError",
+	{},
 ) {}
 
 export class VideoRpcs extends RpcGroup.make(
-  Rpc.make("VideoDelete", {
-    payload: VideoId,
-    error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
-  }).middleware(RpcAuthMiddleware),
-  Rpc.make("VideoDuplicate", {
-    payload: VideoId,
-    error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
-  }).middleware(RpcAuthMiddleware)
+	Rpc.make("VideoDelete", {
+		payload: VideoId,
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
+	Rpc.make("VideoDuplicate", {
+		payload: VideoId,
+		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
+	}).middleware(RpcAuthMiddleware),
 ) {}

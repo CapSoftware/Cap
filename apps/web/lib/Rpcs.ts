@@ -4,14 +4,14 @@ import { RpcClient, RpcSerialization } from "@effect/rpc";
 import { Effect, Layer } from "effect";
 
 const RpcProtocol = RpcClient.layerProtocolHttp({ url: "/api/erpc" }).pipe(
-  Layer.provideMerge(FetchHttpClient.layer),
-  Layer.provideMerge(RpcSerialization.layerJson)
+	Layer.provideMerge(FetchHttpClient.layer),
+	Layer.provideMerge(RpcSerialization.layerJson),
 );
 
 export class Rpc extends Effect.Service<Rpc>()("Rpc", {
-  scoped: RpcClient.make(Rpcs),
-  dependencies: [RpcProtocol],
+	scoped: RpcClient.make(Rpcs),
+	dependencies: [RpcProtocol],
 }) {}
 
 export const withRpc = <A, E, R>(cb: (rpc: Rpc) => Effect.Effect<A, E, R>) =>
-  Effect.flatMap(Rpc, cb);
+	Effect.flatMap(Rpc, cb);

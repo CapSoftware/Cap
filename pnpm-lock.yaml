@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@biomejs/biome':
+        specifier: 2.1.4
+        version: 2.1.4
       '@clack/prompts':
         specifier: ^0.10.0
         version: 0.10.1
@@ -17,9 +20,6 @@ importers:
       dotenv-cli:
         specifier: latest
         version: 10.0.0
-      prettier:
-        specifier: ^2.5.1
-        version: 2.8.8
       turbo:
         specifier: ^2.3.4
         version: 2.5.3
@@ -1664,6 +1664,59 @@ packages:
 
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
+
+  '@biomejs/biome@2.1.4':
+    resolution: {integrity: sha512-QWlrqyxsU0FCebuMnkvBIkxvPqH89afiJzjMl+z67ybutse590jgeaFdDurE9XYtzpjRGTI1tlUZPGWmbKsElA==}
+    engines: {node: '>=14.21.3'}
+    hasBin: true
+
+  '@biomejs/cli-darwin-arm64@2.1.4':
+    resolution: {integrity: sha512-sCrNENE74I9MV090Wq/9Dg7EhPudx3+5OiSoQOkIe3DLPzFARuL1dOwCWhKCpA3I5RHmbrsbNSRfZwCabwd8Qg==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@biomejs/cli-darwin-x64@2.1.4':
+    resolution: {integrity: sha512-gOEICJbTCy6iruBywBDcG4X5rHMbqCPs3clh3UQ+hRKlgvJTk4NHWQAyHOXvaLe+AxD1/TNX1jbZeffBJzcrOw==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@biomejs/cli-linux-arm64-musl@2.1.4':
+    resolution: {integrity: sha512-nYr7H0CyAJPaLupFE2cH16KZmRC5Z9PEftiA2vWxk+CsFkPZQ6dBRdcC6RuS+zJlPc/JOd8xw3uCCt9Pv41WvQ==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@biomejs/cli-linux-arm64@2.1.4':
+    resolution: {integrity: sha512-juhEkdkKR4nbUi5k/KRp1ocGPNWLgFRD4NrHZSveYrD6i98pyvuzmS9yFYgOZa5JhaVqo0HPnci0+YuzSwT2fw==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@biomejs/cli-linux-x64-musl@2.1.4':
+    resolution: {integrity: sha512-lvwvb2SQQHctHUKvBKptR6PLFCM7JfRjpCCrDaTmvB7EeZ5/dQJPhTYBf36BE/B4CRWR2ZiBLRYhK7hhXBCZAg==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [linux]
+
+  '@biomejs/cli-linux-x64@2.1.4':
+    resolution: {integrity: sha512-Eoy9ycbhpJVYuR+LskV9s3uyaIkp89+qqgqhGQsWnp/I02Uqg2fXFblHJOpGZR8AxdB9ADy87oFVxn9MpFKUrw==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [linux]
+
+  '@biomejs/cli-win32-arm64@2.1.4':
+    resolution: {integrity: sha512-3WRYte7orvyi6TRfIZkDN9Jzoogbv+gSvR+b9VOXUg1We1XrjBg6WljADeVEaKTvOcpVdH0a90TwyOQ6ue4fGw==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@biomejs/cli-win32-x64@2.1.4':
+    resolution: {integrity: sha512-tBc+W7anBPSFXGAoQW+f/+svkpt8/uXfRwDzN1DvnatkRMt16KIYpEi/iw8u9GahJlFv98kgHcIrSsZHZTR0sw==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [win32]
 
   '@chromatic-com/storybook@1.9.0':
     resolution: {integrity: sha512-vYQ+TcfktEE3GHnLZXHCzXF/sN9dw+KivH8a5cmPyd9YtQs7fZtHrEgsIjWpYycXiweKMo1Lm1RZsjxk8DH3rA==}
@@ -5743,10 +5796,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@9.2.0-alpha.2':
-    resolution: {integrity: sha512-1olE/xZI98CXu1WMS4zi725+jyrU3DCYYBgxpZVG7cNJtXQmkNwSzUhw4EDSBcNZE7ugO4/Ff4ud3VtlB4Bntw==}
+  '@storybook/builder-vite@9.2.0-alpha.3':
+    resolution: {integrity: sha512-QkZA/9pOmcbES9COYQLPzgqPBPjEeoFNnwoz1uAYa9k8rqCGHDKi2nnGDYFbikvpJs3BougV0vrd/vY37CmL5Q==}
     peerDependencies:
-      storybook: ^9.2.0-alpha.2
+      storybook: ^9.2.0-alpha.3
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -5762,10 +5815,10 @@ packages:
     peerDependencies:
       storybook: ^8.6.12
 
-  '@storybook/csf-plugin@9.2.0-alpha.2':
-    resolution: {integrity: sha512-RoxwOkwprpxP8dtGy2riADxURcy5uxSO3+W4nf/ewVIQPKEKC97N9Nc8YuPMxLtMZ06zRY91/QBF7eq0TvXWSQ==}
+  '@storybook/csf-plugin@9.2.0-alpha.3':
+    resolution: {integrity: sha512-pAoSleGEUkl2Hx2l17GkA+DZMRdrUAn/oiTrig5dGJaVRlEvTsd4c/e/wkiEPBxLnTXsJTdcEANxTMBByhybCA==}
     peerDependencies:
-      storybook: ^9.2.0-alpha.2
+      storybook: ^9.2.0-alpha.3
 
   '@storybook/docs-tools@8.6.12':
     resolution: {integrity: sha512-bOmTNJE4FM6+3/1hPQVgha8cLxX2Nyi/4Z+tYq0pCDEyQqGRTD2KXre9XsSCnziRaGxiW80OrKkmqWY8Otuu4A==}
@@ -11375,11 +11428,6 @@ packages:
     resolution: {integrity: sha512-GbK2cP9nraSSUF9N2XwUwqfzlAFlMNYYl+ShE/V+H8a9uNl/oUqB1w2EL54Jh0OlyRSd8RfWYJ3coVS4TROP2w==}
     engines: {node: '>=6.0.0'}
 
-  prettier@2.8.8:
-    resolution: {integrity: sha512-tdN8qQGvNjw4CHbY+XXk0JgCXn9QiF21a55rBe5LJAU+kDyC4WQn4+awm2Xfk2lQMk5fKup9XgzTZtGkjBdP9Q==}
-    engines: {node: '>=10.13.0'}
-    hasBin: true
-
   prettier@3.5.3:
     resolution: {integrity: sha512-QQtaxnoDJeAkDvDKWCLiwIXkTgRhwYDEQCghU9Z6q03iyek/rxRh/2lC3HB7P8sWT2xC/y5JDctPLBIGzHKbhw==}
     engines: {node: '>=14'}
@@ -12496,11 +12544,12 @@ packages:
   superagent@8.1.2:
     resolution: {integrity: sha512-6WTxW1EB6yCxV5VFOIPQruWGHqc3yI7hEmZK6h+pyk69Lk/Ut7rLUY6W/ONF2MjBuGjvmMiIpsrVJ2vjrHlslA==}
     engines: {node: '>=6.4.0 <13 || >=14'}
-    deprecated: Please upgrade to v9.0.0+ as we have fixed a public vulnerability with formidable dependency. Note that v9.0.0+ requires Node.js v14.18.0+. See https://github.com/ladjs/superagent/pull/1800 for insight. This project is supported and maintained by the team at Forward Email @ https://forwardemail.net
+    deprecated: Please upgrade to superagent v10.2.2+, see release notes at https://github.com/forwardemail/superagent/releases/tag/v10.2.2 - maintenance is supported by Forward Email @ https://forwardemail.net
 
   supertest@6.3.4:
     resolution: {integrity: sha512-erY3HFDG0dPnhw4U+udPfrzXa4xhSG+n4rxfRuZWCUvjFWwKl+OxWf/7zk50s84/fAAs7vf5QAb9uRa0cCykxw==}
     engines: {node: '>=6.4.0'}
+    deprecated: Please upgrade to supertest v7.1.3+, see release notes at https://github.com/forwardemail/supertest/releases/tag/v7.1.3 - maintenance is supported by Forward Email @ https://forwardemail.net
 
   supports-color@10.0.0:
     resolution: {integrity: sha512-HRVVSbCCMbj7/kdWF9Q+bbckjBHLtHMEoJWlkmYzzdwhYMkjkOwubLM6t7NbWKjgKamGDrWL1++KrjUO1t9oAQ==}
@@ -14635,6 +14684,41 @@ snapshots:
       '@babel/helper-validator-identifier': 7.27.1
 
   '@bcoe/v8-coverage@0.2.3': {}
+
+  '@biomejs/biome@2.1.4':
+    optionalDependencies:
+      '@biomejs/cli-darwin-arm64': 2.1.4
+      '@biomejs/cli-darwin-x64': 2.1.4
+      '@biomejs/cli-linux-arm64': 2.1.4
+      '@biomejs/cli-linux-arm64-musl': 2.1.4
+      '@biomejs/cli-linux-x64': 2.1.4
+      '@biomejs/cli-linux-x64-musl': 2.1.4
+      '@biomejs/cli-win32-arm64': 2.1.4
+      '@biomejs/cli-win32-x64': 2.1.4
+
+  '@biomejs/cli-darwin-arm64@2.1.4':
+    optional: true
+
+  '@biomejs/cli-darwin-x64@2.1.4':
+    optional: true
+
+  '@biomejs/cli-linux-arm64-musl@2.1.4':
+    optional: true
+
+  '@biomejs/cli-linux-arm64@2.1.4':
+    optional: true
+
+  '@biomejs/cli-linux-x64-musl@2.1.4':
+    optional: true
+
+  '@biomejs/cli-linux-x64@2.1.4':
+    optional: true
+
+  '@biomejs/cli-win32-arm64@2.1.4':
+    optional: true
+
+  '@biomejs/cli-win32-x64@2.1.4':
+    optional: true
 
   '@chromatic-com/storybook@1.9.0(react@19.1.0)':
     dependencies:
@@ -19082,9 +19166,9 @@ snapshots:
       react: 19.1.0
       react-dom: 19.1.0(react@19.1.0)
 
-  '@storybook/builder-vite@9.2.0-alpha.2(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
+  '@storybook/builder-vite@9.2.0-alpha.3(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
     dependencies:
-      '@storybook/csf-plugin': 9.2.0-alpha.2(storybook@8.6.12(prettier@3.5.3))
+      '@storybook/csf-plugin': 9.2.0-alpha.3(storybook@8.6.12(prettier@3.5.3))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)
@@ -19115,7 +19199,7 @@ snapshots:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 1.16.1
 
-  '@storybook/csf-plugin@9.2.0-alpha.2(storybook@8.6.12(prettier@3.5.3))':
+  '@storybook/csf-plugin@9.2.0-alpha.3(storybook@8.6.12(prettier@3.5.3))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 1.16.1
@@ -26141,8 +26225,6 @@ snapshots:
     dependencies:
       fast-diff: 1.3.0
 
-  prettier@2.8.8: {}
-
   prettier@3.5.3: {}
 
   pretty-bytes@6.1.1: {}
@@ -27297,7 +27379,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)):
     dependencies:
-      '@storybook/builder-vite': 9.2.0-alpha.2(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
+      '@storybook/builder-vite': 9.2.0-alpha.3(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6
