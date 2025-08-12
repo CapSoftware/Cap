@@ -171,7 +171,7 @@ function Page() {
 
   // if target is window and no windows are available, switch to screen capture
   createEffect(() => {
-    const screen = options.screen();
+    const screen = _screens()?.[0];
     if (
       rawOptions.captureTarget.variant === "window" &&
       !windows.isPending &&
