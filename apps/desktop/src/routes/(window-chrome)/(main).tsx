@@ -580,7 +580,6 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
-    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {
@@ -725,6 +724,11 @@ function CameraSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("camera");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_CAMERA,
@@ -826,6 +830,11 @@ function MicrophoneSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("microphone");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
@@ -936,7 +945,6 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       disabled={props.disabled}
       onClick={() => {
         if (props.options.length > 1) {
-          console.log({ options: props.options, value: props.value });
           Promise.all(
             props.options.map((o) =>
               CheckMenuItem.new({
@@ -982,6 +990,7 @@ function TargetSelectInfoPill<T>(props: {
       onClick={(e) => {
         if (!props.permissionGranted) {
           props.requestPermission();
+          e.stopPropagation();
           return;
         }
 

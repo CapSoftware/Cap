@@ -55,8 +55,8 @@ pub struct CursorData {
 
 impl CursorData {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
-        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
-        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
+        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 }
 
@@ -68,13 +68,13 @@ pub struct CursorEvents {
 
 impl CursorEvents {
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
-        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {}", e))?;
-        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {}", e))
+        let file = File::open(path).map_err(|e| format!("Failed to open cursor file: {e}"))?;
+        serde_json::from_reader(file).map_err(|e| format!("Failed to parse cursor data: {e}"))
     }
 
     pub fn cursor_position_at(&self, time: f64) -> Option<XY<f64>> {
         // Debug print to understand what we're looking for
-        println!("Looking for cursor position at time: {}", time);
+        println!("Looking for cursor position at time: {time}");
         println!("Total cursor events: {}", self.moves.len());
 
         // Check if we have any move events at all

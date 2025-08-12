@@ -113,25 +113,25 @@ impl AudioInfo {
         frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
 
-        match self.channels {
-            0 => unreachable!(),
-            1 | _ if frame.is_packed() => frame.data_mut(0)[0..data.len()].copy_from_slice(data),
+        if self.channels == 0 {
+            unreachable!()
+        } else if self.channels == 1 || frame.is_packed() {
+            frame.data_mut(0)[0..data.len()].copy_from_slice(data)
+        } else {
             // cpal *always* returns interleaved data (i.e. the first sample from every channel, followed
             // by the second sample from every channel, et cetera). Many audio codecs work better/primarily
             // with planar data, so we de-interleave it here if there is more than one channel.
-            channel_count => {
-                for (chunk_index, interleaved_chunk) in
-                    data.chunks(interleaved_chunk_size).enumerate()
-                {
-                    let start = chunk_index * sample_size;
-                    let end = start + sample_size;
 
-                    for channel in 0..channel_count {
-                        let channel_start = channel * sample_size;
-                        let channel_end = channel_start + sample_size;
-                        frame.plane_data_mut(channel)[start..end]
-                            .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
-                    }
+            for (chunk_index, interleaved_chunk) in data.chunks(interleaved_chunk_size).enumerate()
+            {
+                let start = chunk_index * sample_size;
+                let end = start + sample_size;
+
+                for channel in 0..self.channels {
+                    let channel_start = channel * sample_size;
+                    let channel_end = channel_start + sample_size;
+                    frame.plane_data_mut(channel)[start..end]
+                        .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
                 }
             }
         }
@@ -219,7 +219,7 @@ impl VideoInfo {
         let mut frame = frame::Video::new(self.pixel_format, self.width, self.height);
         frame.set_pts(Some(timestamp));
 
-        let frame_stride = frame.stride(0) as usize;
+        let frame_stride = frame.stride(0);
         let frame_height = self.height as usize;
 
         // Ensure we don't try to copy more data than we have

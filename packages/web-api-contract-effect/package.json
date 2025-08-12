@@ -6,6 +6,7 @@
   "type": "module",
   "dependencies": {
     "@effect/platform": "^0.87.1",
-    "effect": "^3.16.10"
+    "effect": "^3.16.10",
+    "zod": "^3"
   }
 }

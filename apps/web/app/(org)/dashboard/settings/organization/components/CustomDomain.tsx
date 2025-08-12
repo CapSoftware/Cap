@@ -1,221 +1,42 @@
-import { checkOrganizationDomain } from "@/actions/organization/check-domain";
-import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
-import { updateDomain } from "@/actions/organization/update-domain";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { Button, Input, Label } from "@cap/ui";
-import { faRefresh, faTrash } from "@fortawesome/free-solid-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import clsx from "clsx";
-import { Check, CheckCircle, Copy, XCircle } from "lucide-react";
+import { Button } from "@cap/ui";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { useState } from "react";
 import { useDashboardContext } from "../../../Contexts";
-
-type DomainVerification = {
-  type: string;
-  domain: string;
-  value: string;
-  reason: string;
-};
-
-type DomainConfig = {
-  name: string;
-  apexName: string;
-  verification: DomainVerification[];
-  verified: boolean;
-  misconfigured?: boolean;
-  aValues?: string[];
-  currentAValues?: string[];
-  requiredAValue?: string;
-};
+import CustomDomainDialog from "./CustomDomainDialog/CustomDomainDialog";
+import { removeOrganizationDomain } from "@/actions/organization/remove-domain";
+import { toast } from "sonner";
+import { CheckCircle, XCircle } from "lucide-react";
+import clsx from "clsx";
+import { Tooltip } from "@/components/Tooltip";
+import { ConfirmationDialog } from "../../../_components/ConfirmationDialog";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faExclamationCircle, faGlobe } from "@fortawesome/free-solid-svg-icons";
 
 export function CustomDomain() {
   const router = useRouter();
   const { activeOrganization, isSubscribed } = useDashboardContext();
-  const [domain, setDomain] = useState(
-    activeOrganization?.organization.customDomain || ""
-  );
-  const [loading, setLoading] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [showCustomDomainDialog, setShowCustomDomainDialog] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const [isVerified, setIsVerified] = useState(
     !!activeOrganization?.organization.domainVerified
   );
-  const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
-  const [copiedField, setCopiedField] = useState<"name" | "value" | null>(null);
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
-  const initialCheckDone = useRef(false);
-  const pollInterval = useRef<NodeJS.Timeout>();
-  const POLL_INTERVAL = 5000;
+  const [loading, setLoading] = useState(false);
 
-  const cleanDomain = (input: string) => {
-    if (!input) return "";
-
-    if (input === "cap.so" || input === "cap.link") {
-      return "";
-    }
-
-    const withoutProtocol = input.replace(/^(https?:\/\/)?(www\.)?/i, "");
-    const parts = withoutProtocol.split("/");
-    const domain = parts[0] || "";
-    const withoutQuery = domain.split("?")[0] || "";
-    const withoutHash = withoutQuery.split("#")[0] || "";
-    const cleanedDomain = withoutHash.trim();
-
-    const hasTLD =
-      /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/.test(
-        cleanedDomain
-      );
-
-    return hasTLD ? cleanedDomain : "";
-  };
-
-  const handleCopy = async (text: string, field: "name" | "value") => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
-      toast.success("Copied to clipboard");
-    } catch (err) {
-      toast.error("Failed to copy to clipboard");
-    }
-  };
-
-  const checkVerification = async (showToasts = true) => {
-    if (
-      !activeOrganization?.organization.id ||
-      !activeOrganization?.organization.customDomain
-    )
-      return;
-    setVerifying(true);
-    try {
-      const data = await checkOrganizationDomain(
-        activeOrganization.organization.id
-      );
-
-      setIsVerified(data.verified);
-      setDomainConfig(data.config);
-
-      if (showToasts) {
-        if (data.verified) {
-          toast.success("Domain is verified!");
-
-          if (pollInterval.current) {
-            clearInterval(pollInterval.current);
-            pollInterval.current = undefined;
-          }
-        } else {
-          toast.error(
-            "Domain is not verified. Please check your DNS settings."
-          );
-        }
-      }
-    } catch (error) {
-      if (showToasts) {
-        toast.error("Failed to check domain verification");
-      }
-    } finally {
-      setVerifying(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeOrganization?.organization.customDomain && !isVerified) {
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-      }
-
-      checkVerification(false);
-
-      pollInterval.current = setInterval(() => {
-        checkVerification(false);
-      }, POLL_INTERVAL);
-    }
-
-    return () => {
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-        pollInterval.current = undefined;
-      }
-    };
-  }, [activeOrganization?.organization.customDomain, isVerified]);
-
-  useEffect(() => {
-    if (
-      !initialCheckDone.current &&
-      activeOrganization?.organization.customDomain
-    ) {
-      initialCheckDone.current = true;
-      checkVerification(false);
-    }
-  }, [activeOrganization?.organization.customDomain]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!isSubscribed) {
-      setShowUpgradeModal(true);
-      return;
-    }
-
-    const cleanedDomain = cleanDomain(domain);
-    if (!cleanedDomain) {
-      toast.error("Please enter a valid domain");
-      return;
-    }
-
-    setLoading(true);
-    setDomain(cleanedDomain);
-
-    try {
-      const data = await updateDomain(
-        cleanedDomain,
-        activeOrganization?.organization.id as string
-      );
-
-      toast.success("Domain settings updated");
-      router.refresh();
-
-      setDomainConfig(data.status);
-      setIsVerified(data.verified);
-
-      setTimeout(() => {
-        checkVerification(false);
-      }, 1000);
-
-      pollInterval.current = setInterval(() => {
-        checkVerification(false);
-      }, POLL_INTERVAL);
-    } catch (error) {
-      console.error("Error updating domain:", error);
-      toast.error(
-        error instanceof Error ? error.message : "Failed to update domain settings"
-      );
-    } finally {
-      setLoading(false);
-    }
-  };
+  const orgCustomDomain = activeOrganization?.organization.customDomain;
 
   const handleRemoveDomain = async () => {
     if (!isSubscribed) {
       setShowUpgradeModal(true);
       return;
     }
-
-    if (!confirm("Are you sure you want to remove this custom domain?")) return;
-
     setLoading(true);
     try {
       await removeOrganizationDomain(
         activeOrganization?.organization.id as string
       );
 
-      if (pollInterval.current) {
-        clearInterval(pollInterval.current);
-        pollInterval.current = undefined;
-      }
-
-      setDomain("");
       setIsVerified(false);
       toast.success("Custom domain removed");
       router.refresh();
@@ -223,289 +44,119 @@ export function CustomDomain() {
       toast.error("Failed to remove domain");
     } finally {
       setLoading(false);
+      setConfirmOpen(false);
     }
   };
 
-
   return (
-    <div className="space-y-4">
-      <div className="space-y-1">
-        <Label htmlFor="customDomain">Custom Domain</Label>
-        <p className="text-sm text-gray-10">
-          Set up a custom domain for your organization's shared caps and make
-          it unique.
-        </p>
-      </div>
-      <div className="flex flex-col gap-3 items-start">
-        <div className="flex gap-3 items-center w-full h-fit">
-          <Input
-            type="text"
-            id="customDomain"
-            placeholder="your-domain.com"
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            className="flex-1 min-h-[44px]"
-          />
-          <Button
-            type="submit"
-            size="sm"
-            className="min-w-fit"
-            variant="dark"
-            onClick={handleSubmit}
-            spinner={loading}
-            disabled={loading || domain === activeOrganization?.organization.customDomain || domain === ""}
-          >
-            {loading ? "Saving..." : "Save"}
-          </Button>
-        </div>
-
-        {activeOrganization?.organization.customDomain &&
-          <div className="flex gap-2 justify-between items-center mt-4">
-            {isVerified ? (
-              <>
-                <div className="flex items-center gap-1 text-white bg-green-600 px-2.5 py-1.5 rounded-full text-sm">
-                  <CheckCircle className="size-3" />
-                  <span className="text-xs font-medium text-white">
-                    Domain verified
-                  </span>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center gap-1 text-white bg-red-500 px-2.5 py-1.5 rounded-full text-sm">
-                  <XCircle className="size-3" />
-                  <span className="text-xs font-medium text-white">
-                    Domain not verified
-                  </span>
-                </div>
-              </>
+    <>
+      {showCustomDomainDialog && (
+        <CustomDomainDialog
+          isVerified={isVerified}
+          setIsVerified={setIsVerified}
+          open={showCustomDomainDialog}
+          setShowUpgradeModal={(arg) => setShowUpgradeModal(arg)}
+          onClose={() => setShowCustomDomainDialog(false)}
+        />
+      )}
+      <ConfirmationDialog
+        open={confirmOpen}
+        title="Remove custom domain"
+        icon={<FontAwesomeIcon icon={faGlobe} />}
+        description={`Are you sure you want to remove this custom domain: ${orgCustomDomain}?`}
+        onConfirm={handleRemoveDomain}
+        confirmLabel="Remove"
+        cancelLabel="Cancel"
+        loading={loading}
+        onCancel={() => setConfirmOpen(false)}
+      />
+      <div className="flex gap-3 justify-between items-center w-full h-fit">
+        <div className="space-y-1">
+          <div
+            className={clsx(
+              "flex gap-3 items-center",
+              (isVerified && orgCustomDomain) ||
+                (!isVerified && orgCustomDomain)
+                ? "mb-3"
+                : "mb-0"
             )}
-          </div>
-        }
-
-        {activeOrganization?.organization.customDomain && (
-          <div className="flex gap-3 justify-between items-center w-full">
-            <div className="flex gap-3 items-center">
-              <Button
-                type="button"
-                variant="gray"
-                size="sm"
-                onClick={() => checkVerification(true)}
-                disabled={verifying}
-                className="w-[105px]"
-              >
-                {verifying ? (
-                  <FontAwesomeIcon
-                    className="animate-spin size-4 mr-0.5"
-                    icon={faRefresh}
-                  />
-                ) : (
-                  <FontAwesomeIcon className="size-4 mr-0.5" icon={faRefresh} />
-                )}
-                Refresh
-              </Button>
-              {activeOrganization?.organization.customDomain && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="gray"
-                  onClick={handleRemoveDomain}
-                  disabled={loading}
-                >
-                  <FontAwesomeIcon className="size-3 mr-0.5" icon={faTrash} />
-                  Remove
-                </Button>
-              )}
-            </div>
-          </div>
-        )}
-
-
-      </div>
-      {activeOrganization?.organization.customDomain && (
-        <div className="mt-4 space-y-4">
-          {!isVerified && domainConfig?.verification?.[0] && (
-            <div className="overflow-hidden rounded-lg border border-gray-4">
-              <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
-                <p className="font-medium text-md text-gray-12">
-                  DNS Configuration Required
-                </p>
-                <p className="mt-1 text-sm text-gray-10">
-                  To verify your domain ownership, add the following TXT
-                  record to your DNS configuration:
-                </p>
-              </div>
-              <div className="px-4 py-3">
-                <dl className="grid gap-4">
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Type</dt>
-                    <dd className="text-sm text-gray-10">
-                      {domainConfig?.verification?.[0]?.type}
-                    </dd>
-                  </div>
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Name</dt>
-                    <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex items-center justify-between gap-1.5
-                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
-                        <code className="text-xs truncate">
-                          {domainConfig?.verification?.[0]?.domain}
-                        </code>
-                        {domainConfig?.verification?.[0]?.domain && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const domain =
-                                domainConfig?.verification?.[0]?.domain;
-                              if (domain) handleCopy(domain, "name");
-                            }}
-                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                            title="Copy to clipboard"
-                          >
-                            {copiedField === "name" ? (
-                              <Check className="size-3.5 text-green-500" />
-                            ) : (
-                              <Copy className="size-3.5 text-gray-10" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </dd>
-                  </div>
-                  <div className="grid grid-cols-[100px,1fr] items-center">
-                    <dt className="text-sm font-medium text-gray-12">Value</dt>
-                    <dd className="flex gap-2 items-center text-sm text-gray-10">
-                      <div className="flex flex-1 gap-1 justify-between items-center px-2 py-1 min-w-0 rounded-lg border bg-gray-4 border-gray-6">
-                        <code className="font-mono text-xs break-all">
-                          {domainConfig?.verification?.[0]?.value}
-                        </code>
-                        {domainConfig?.verification?.[0]?.value && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const value =
-                                domainConfig?.verification?.[0]?.value;
-                              if (value) handleCopy(value, "value");
-                            }}
-                            className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                            title="Copy to clipboard"
-                          >
-                            {copiedField === "value" ? (
-                              <Check className="size-3.5 text-green-500" />
-                            ) : (
-                              <Copy className="size-3.5 text-gray-10" />
-                            )}
-                          </button>
-                        )}
-                      </div>
-                    </dd>
-                  </div>
-                </dl>
-              </div>
+          >
+            <h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>
+            {process.env.NODE_ENV === "development" && (
+           <div className="flex gap-2 items-center p-2 text-xs bg-red-900 rounded-full w-fit text-gray-10">
+              <FontAwesomeIcon className="text-red-200 size-3" icon={faExclamationCircle} />
+             <p className="text-white text-xs">Custom domains are not available in development mode</p>
             </div>
           )}
-
-
-
-          {!isVerified &&
-            !domainConfig?.verification?.[0] &&
-            domainConfig?.requiredAValue && (
-              <div className="overflow-hidden rounded-lg border border-gray-4">
-                <div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
-                  <p className="font-medium text-md text-gray-12">
-                    DNS Configuration Required
-                  </p>
-                  <p className="mt-1 text-sm text-gray-10">
-                    To verify your domain ownership, add the following A
-                    record to your DNS configuration:
+            {isVerified && orgCustomDomain ? (
+              <>
+                <Tooltip
+               content="Remove custom domain"
+               > 
+                <div 
+                onClick={() => setConfirmOpen(true)}
+                className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit">
+                  <CheckCircle className="text-green-200 size-2.5" />
+                  <p className="text-[11px] italic font-medium text-white">
+                    {orgCustomDomain}
+                    <span className="ml-1 not-italic text-white/60">
+                      verified
+                    </span>
                   </p>
                 </div>
-                <div className="px-4 py-3">
-                  <dl className="grid gap-4">
-                    {domainConfig.currentAValues &&
-                      domainConfig.currentAValues.length > 0 && (
-                        <div className="grid grid-cols-[100px,1fr] items-center">
-                          <dt className="text-sm font-medium text-gray-12">
-                            Current
-                          </dt>
-                          <dd className="space-y-1.5 text-sm text-gray-10">
-                            {domainConfig.currentAValues.map(
-                              (value, index) => (
-                                <div
-                                  key={index}
-                                  className={clsx(
-                                    value === domainConfig.requiredAValue
-                                      ? "flex items-center gap-2 text-green-300"
-                                      : "flex items-center gap-2 text-red-200"
-                                  )}
-                                >
-                                  <code
-                                    className={clsx(
-                                      value === domainConfig.requiredAValue
-                                        ? "px-2 py-1 rounded-lg bg-green-900"
-                                        : "px-2 py-1 rounded-lg bg-red-900",
-                                      "text-xs"
-                                    )
-                                    }
-                                  >
-                                    {value}
-                                  </code>
-                                  {value === domainConfig.requiredAValue && (
-                                    <span className="text-xs text-green-600">
-                                      (Correct)
-                                    </span>
-                                  )}
-                                </div>
-                              )
-                            )}
-                          </dd>
-                        </div>
-                      )}
-                    <div className="grid grid-cols-[100px,1fr] items-center">
-                      <dt className="text-sm font-medium text-gray-12">
-                        Required
-                      </dt>
-                      <dd className="flex gap-2 items-center text-sm text-gray-10">
-                        <div className="flex items-center justify-between gap-1.5
-                       bg-gray-4 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-6">
-                          <code className="text-xs text-gray-10">
-                            {domainConfig.requiredAValue || "Loading..."}
-                          </code>
-                          {domainConfig.requiredAValue && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                domainConfig.requiredAValue &&
-                                handleCopy(
-                                  domainConfig.requiredAValue,
-                                  "value"
-                                )
-                              }
-                              className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
-                              title="Copy to clipboard"
-                            >
-                              {copiedField === "value" ? (
-                                <Check className="size-3.5 text-green-500" />
-                              ) : (
-                                <Copy className="size-3.5 text-gray-10" />
-                              )}
-                            </button>
-                          )}
-                        </div>
-                      </dd>
-                    </div>
-                  </dl>
+              </Tooltip>
+              </>
+            ) : orgCustomDomain ? (
+              <>
+              <Tooltip
+               content="Remove custom domain"
+              > 
+                <div
+                onClick={() => setConfirmOpen(true)}
+                className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit">
+                  <XCircle className="text-red-200 size-2.5" />
+                  <p className="text-[11px] italic font-medium text-white">
+                    {orgCustomDomain}
+                    <span className="ml-1 not-italic text-white/60">
+                      not verified
+                    </span>
+                  </p>
                 </div>
-              </div>
-            )}
+              </Tooltip>
+              </>
+            ) : null}
+          </div>
+          <p className="text-sm w-full max-w-[375px] text-gray-10">
+            Set up a custom domain for your organization's shared caps and make
+            it unique.
+          </p>
         </div>
-      )}
+        <Button
+          type="submit"
+          size="sm"
+          className="min-w-fit"
+          spinner={loading}
+          disabled={loading}
+          variant="dark"
+          onClick={async (e) => {
+            e.preventDefault();
+            if (isVerified) {
+              setConfirmOpen(true);
+            } else {
+              setShowCustomDomainDialog(true);
+            }
+          }}
+        >
+          {isVerified ? "Remove" : "Setup"}
+        </Button>
+      </div>
+
       {showUpgradeModal && (
         <UpgradeModal
           open={showUpgradeModal}
           onOpenChange={setShowUpgradeModal}
         />
       )}
-    </div>
+    </>
   );
 }

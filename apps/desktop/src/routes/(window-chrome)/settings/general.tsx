@@ -16,6 +16,7 @@ import {
   type GeneralSettingsStore,
   type MainWindowRecordingStartBehaviour,
   type PostStudioRecordingBehaviour,
+  type PostDeletionBehaviour,
 } from "~/utils/tauri";
 import { CheckMenuItem, Menu } from "@tauri-apps/api/menu";
 import { confirm } from "@tauri-apps/plugin-dialog";
@@ -148,9 +149,14 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     value:
       | MainWindowRecordingStartBehaviour
       | PostStudioRecordingBehaviour
+      | PostDeletionBehaviour
       | number;
     onChange: (
-      value: MainWindowRecordingStartBehaviour | PostStudioRecordingBehaviour
+      value:
+        | MainWindowRecordingStartBehaviour
+        | PostStudioRecordingBehaviour
+        | PostDeletionBehaviour
+        | number
     ) => void | Promise<void>;
   };
 
@@ -253,6 +259,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
               | number
           ) => handleChange("recordingCountdown", value as number),
         },
@@ -267,6 +274,8 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
           ) =>
             handleChange(
               "mainWindowRecordingStartBehaviour",
@@ -284,10 +293,31 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
             value:
               | MainWindowRecordingStartBehaviour
               | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
           ) =>
             handleChange(
               "postStudioRecordingBehaviour",
               value as PostStudioRecordingBehaviour
+            ),
+        },
+        {
+          label: "After deleting recording",
+          description: "What happens to the window after deleting a recording",
+          type: "select",
+          get value() {
+            return settings.postDeletionBehaviour ?? "doNothing";
+          },
+          onChange: (
+            value:
+              | MainWindowRecordingStartBehaviour
+              | PostStudioRecordingBehaviour
+              | PostDeletionBehaviour
+              | number
+          ) =>
+            handleChange(
+              "postDeletionBehaviour",
+              value as PostDeletionBehaviour
             ),
         },
       ],
@@ -301,6 +331,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
     getValue: () =>
       | MainWindowRecordingStartBehaviour
       | PostStudioRecordingBehaviour
+      | PostDeletionBehaviour
       | number,
     onChange: (value: any) => void,
     options: { text: string; value: any }[]
@@ -419,6 +450,20 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                               { text: "3 seconds", value: 3 },
                               { text: "5 seconds", value: 5 },
                               { text: "10 seconds", value: 10 },
+                            ]
+                          );
+                        } else if (item.label === "After deleting recording") {
+                          return renderRecordingSelect(
+                            item.label,
+                            item.description,
+                            () => item.value,
+                            item.onChange,
+                            [
+                              { text: "Do Nothing", value: "exit" },
+                              {
+                                text: "Reopen Recording Window",
+                                value: "reopenRecordingWindow",
+                              },
                             ]
                           );
                         }

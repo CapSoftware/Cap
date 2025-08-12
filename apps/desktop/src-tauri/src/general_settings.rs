@@ -3,6 +3,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -19,6 +20,14 @@ pub enum MainWindowRecordingStartBehaviour {
     #[default]
     Close,
     Minimise,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum PostDeletionBehaviour {
+    #[default]
+    DoNothing,
+    ReopenRecordingWindow,
 }
 
 impl MainWindowRecordingStartBehaviour {
@@ -85,6 +94,8 @@ pub struct GeneralSettingsStore {
         skip_serializing_if = "no"
     )]
     pub enable_new_recording_flow: bool,
+    #[serde(default)]
+    pub post_deletion_behaviour: PostDeletionBehaviour,
 }
 
 fn default_enable_native_camera_preview() -> bool {
@@ -139,6 +150,7 @@ impl Default for GeneralSettingsStore {
             enable_native_camera_preview: default_enable_native_camera_preview(),
             auto_zoom_on_clicks: false,
             enable_new_recording_flow: default_enable_new_recording_flow(),
+            post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
         }
     }
 }
@@ -198,9 +210,9 @@ pub fn init(app: &AppHandle) {
     let store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
-        e => {
-            e.unwrap();
-            return;
+        Err(e) => {
+            error!("Failed to deserialize general settings store: {}", e);
+            GeneralSettingsStore::default()
         }
     };
 

@@ -29,7 +29,7 @@ impl CameraLayer {
             }),
         );
 
-        let bind_group = Some(pipeline.bind_group(&device, &uniforms_buffer, &frame_texture_view));
+        let bind_group = Some(pipeline.bind_group(device, &uniforms_buffer, &frame_texture_view));
 
         Self {
             frame_texture,
@@ -45,13 +45,11 @@ impl CameraLayer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        uniforms: Option<CompositeVideoFrameUniforms>,
-        frame_size: XY<u32>,
-        camera_frame: &DecodedFrame,
+        data: Option<(CompositeVideoFrameUniforms, XY<u32>, &DecodedFrame)>,
     ) {
-        self.hidden = uniforms.is_none();
+        self.hidden = data.is_none();
 
-        let Some(uniforms) = uniforms else {
+        let Some((uniforms, frame_size, camera_frame)) = data else {
             return;
         };
 
@@ -65,7 +63,7 @@ impl CameraLayer {
             self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
             self.bind_group = Some(self.pipeline.bind_group(
-                &device,
+                device,
                 &self.uniforms_buffer,
                 &self.frame_texture_view,
             ));

@@ -1,6 +1,5 @@
 import { userSelectProps } from "@cap/database/auth/session";
 import { Avatar, Button } from "@cap/ui";
-import { motion } from "framer-motion";
 import React from "react";
 import { Tooltip } from "@/components/Tooltip";
 
@@ -10,6 +9,8 @@ import { faReply, faTrash } from "@fortawesome/free-solid-svg-icons";
 import { CommentType } from "../../../Share";
 import CommentInput from "./CommentInput";
 import { formatTimeAgo, formatTimestamp } from "./utils";
+import { useSearchParams } from "next/navigation";
+import { motion } from "framer-motion";
 
 const Comment: React.FC<{
   comment: CommentType;
@@ -18,7 +19,7 @@ const Comment: React.FC<{
   replyingToId: string | null;
   handleReply: (content: string) => void;
   onCancelReply: () => void;
-  onDelete: (commentId: string) => void;
+  onDelete: (commentId: string, parentId?: string) => void;
   user: typeof userSelectProps | null;
   level?: number;
   onSeek?: (time: number) => void;
@@ -36,6 +37,8 @@ const Comment: React.FC<{
 }) => {
     const isReplying = replyingToId === comment.id;
     const isOwnComment = user?.id === comment.authorId;
+    const commentParams = useSearchParams().get("comment");
+    const replyParams = useSearchParams().get("reply");
     const nestedReplies =
       level === 0
         ? replies.filter((reply) => {
@@ -49,7 +52,7 @@ const Comment: React.FC<{
 
     const handleDelete = () => {
       if (window.confirm("Are you sure you want to delete this comment?")) {
-        onDelete(comment.id);
+        onDelete(comment.id, comment.parentCommentId);
       }
     };
 
@@ -57,13 +60,24 @@ const Comment: React.FC<{
     const commentDate = new Date(comment.createdAt);
 
     return (
-      <motion.div
+      <div
+        id={`comment-${comment.id}`}
         key={`comment-${comment.id}`}
         className={clsx(`space-y-3`, level > 0 ? "ml-8 border-l-2 border-gray-100 pl-4" : "", comment.sending ? "opacity-20" : "opacity-100")}
       >
         <div className="flex items-start space-x-2.5">
           <Avatar className="size-6" letterClass="text-sm" name={comment.authorName} />
-          <div className="flex-1 p-3 rounded-xl border bg-gray-2 border-gray-3">
+          <motion.div
+            viewport={{
+              once: true,
+            }}
+            whileInView={{
+              scale: (commentParams || replyParams) === comment.id ? [1, 1.08, 1] : 1,
+              borderColor: (commentParams || replyParams) === comment.id ? ["#EEEEEE", "#1696e0"] : "#EEEEEE",
+              backgroundColor: (commentParams || replyParams) === comment.id ? ["#F9F9F9", "#EDF6FF"] : " #F9F9F9",
+            }}
+            transition={{ duration: 0.75, ease: "easeInOut", delay: 0.15 }}
+            className={"flex-1 p-3 rounded-xl border border-gray-3 bg-gray-2"}>
             <div className="flex items-center space-x-2">
               <p className="text-base font-medium text-gray-12">
                 {comment.authorName || "Anonymous"}
@@ -109,7 +123,7 @@ const Comment: React.FC<{
                 </Tooltip>
               )}
             </div>
-          </div>
+          </motion.div>
         </div>
 
         {isReplying && canReply && (
@@ -144,7 +158,7 @@ const Comment: React.FC<{
             ))}
           </div>
         )}
-      </motion.div>
+      </div>
     );
   };
 

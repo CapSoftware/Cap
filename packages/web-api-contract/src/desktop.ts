@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { c } from "./util";
+import { AppRoute } from "@ts-rest/core";
 
 const CHANGELOG = z.object({
   metadata: z.object({
@@ -37,6 +38,11 @@ const publicContract = c.router({
     },
   },
 });
+
+const a = publicContract.getChangelogPosts;
+type A = typeof a;
+
+type B = A extends AppRoute ? number : string;
 
 const protectedContract = c.router(
   {

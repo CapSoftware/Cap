@@ -42,7 +42,7 @@ use windows::{
             },
         },
     },
-    core::{BOOL, PCWSTR, PWSTR},
+    core::BOOL,
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};

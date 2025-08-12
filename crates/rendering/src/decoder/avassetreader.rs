@@ -39,7 +39,7 @@ impl CachedFrame {
                 );
 
                 let data = if matches!(format, format::Pixel::RGBA) {
-                    let _lock = unsafe {
+                    unsafe {
                         image_buf
                             .lock_base_addr(LockFlags::READ_ONLY)
                             .result()
@@ -47,7 +47,7 @@ impl CachedFrame {
                     };
 
                     let bytes_per_row = image_buf.plane_bytes_per_row(0);
-                    let width = image_buf.width() as usize;
+                    let width = image_buf.width();
                     let height = image_buf.height();
 
                     let slice = unsafe {
@@ -78,7 +78,7 @@ impl CachedFrame {
                         image_buf.height() as u32,
                     );
 
-                    let _lock = unsafe {
+                    unsafe {
                         image_buf
                             .lock_base_addr(LockFlags::READ_ONLY)
                             .result()
@@ -215,7 +215,7 @@ impl AVAssetReaderDecoder {
     }
 
     fn run(
-        name: &'static str,
+        _name: &'static str,
         path: PathBuf,
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
@@ -235,6 +235,7 @@ impl AVAssetReaderDecoder {
 
         let mut cache = BTreeMap::<u32, CachedFrame>::new();
 
+        #[allow(unused)]
         let mut last_active_frame = None::<u32>;
         let last_sent_frame = Rc::new(RefCell::new(None::<ProcessedFrame>));
 
@@ -307,25 +308,24 @@ impl AVAssetReaderDecoder {
                         // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
                             cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                            && let Some(sender) = sender.take()
                         {
-                            if let Some(sender) = sender.take() {
-                                (sender)(most_recent_prev_frame.1.process());
-                            }
+                            (sender)(most_recent_prev_frame.1.process());
                         }
 
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
                         if !too_small_for_cache_bounds {
-                            if current_frame == requested_frame {
-                                if let Some(sender) = sender.take() {
-                                    let data = cache_frame.process();
-                                    // info!("sending frame {requested_frame}");
+                            if current_frame == requested_frame
+                                && let Some(sender) = sender.take()
+                            {
+                                let data = cache_frame.process();
+                                // info!("sending frame {requested_frame}");
 
-                                    (sender)(data);
+                                (sender)(data);
 
-                                    break;
-                                }
+                                break;
                             }
 
                             if cache.len() >= FRAME_CACHE_SIZE {

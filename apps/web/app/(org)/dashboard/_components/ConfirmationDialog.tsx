@@ -10,7 +10,7 @@ interface ConfirmationDialogProps {
   icon?: React.JSX.Element;
   confirmLabel?: string;
   cancelLabel?: string;
-  confirmVariant?: "destructive" | "primary" | "secondary" | "dark" | "gray";
+  confirmVariant?: "destructive" | "primary" | "dark" | "gray" | "outline";
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;

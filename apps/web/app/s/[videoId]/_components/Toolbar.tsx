@@ -7,7 +7,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { CommentType } from "../Share";
 import { newComment } from "@/actions/videos/new-comment";
 
-const MotionButton = motion(Button);
+const MotionButton = motion.create(Button);
 
 // million-ignore
 interface ToolbarProps {
