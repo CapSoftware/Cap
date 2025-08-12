@@ -144,9 +144,15 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-															{record.domain?.startsWith('_') 
-																? record.domain.replace(`.${domain}`, '')
-																: record.domain?.replace(`.${domain}`, '') || "@"}
+														{(() => {
+															if (!record.domain) return "@";
+															if (record.domain === domain) return "@";
+															const suffix = `.${domain}`;
+															if (record.domain.endsWith(suffix)) {
+																return record.domain.replace(suffix, '') || "@";
+															}
+															return record.domain;
+														})()}
 														</code>
 													</dd>
 												</div>
