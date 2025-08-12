@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import type { DomainConfig } from "./types";
+import type { DomainConfig, DomainVerification } from "./types";
 
 interface VerifyStepProps {
 	domain: string;
@@ -94,6 +94,16 @@ const VerifyStep = ({
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
 
+	const TXTDomainValueHandler = (record: DomainVerification) => {
+		if (!record.domain) return "@";
+		if (record.domain === domain) return "@";
+		const suffix = `.${domain}`;
+		if (record.domain.endsWith(suffix)) {
+			return record.domain.replace(suffix, '') || "@";
+		}
+		return record.domain;
+	}
+
 	return (
 		<div className="space-y-6">
 			<div className="text-center">
@@ -144,15 +154,7 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-														{(() => {
-															if (!record.domain) return "@";
-															if (record.domain === domain) return "@";
-															const suffix = `.${domain}`;
-															if (record.domain.endsWith(suffix)) {
-																return record.domain.replace(suffix, '') || "@";
-															}
-															return record.domain;
-														})()}
+														{TXTDomainValueHandler(record)}
 														</code>
 													</dd>
 												</div>
