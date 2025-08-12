@@ -137,9 +137,9 @@ jobs:
       matrix:
         settings:
           - target: x86_64-apple-darwin
-            runner: macos-latest
+            runner: macos-latest-large
           - target: aarch64-apple-darwin
-            runner: macos-latest
+            runner: macos-latest-large
           - target: x86_64-pc-windows-msvc
             runner: windows-latest-l
     runs-on: ${{ matrix.settings.runner }}
