@@ -27,12 +27,8 @@ resource "random_password" "db_password" {
 }
 
 resource "google_secret_manager_secret" "db_password_secret" {
-  project_id = var.project_id
   secret_id  = "db-password"
 
-  replication {
-    automatic = true
-  }
 }
 
 resource "google_secret_manager_secret_version" "db_password_secret_version" {
@@ -41,12 +37,7 @@ resource "google_secret_manager_secret_version" "db_password_secret_version" {
 }
 
 resource "google_secret_manager_secret" "db_user_secret" {
-  project_id = var.project_id
   secret_id  = "db-user"
-
-  replication {
-    automatic = true
-  }
 }
 
 resource "google_secret_manager_secret_version" "db_user_secret_version" {

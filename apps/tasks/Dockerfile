@@ -1,23 +1,28 @@
-# Use an official Node runtime as the base image
-FROM node:20
+# 1. Base image
+FROM node:20-alpine AS base
+RUN corepack enable
 
-# Declaring env
-ENV NODE_ENV=production
-
-# Set the working directory in the container to /app
+# 2. Builder image
+FROM base AS builder
 WORKDIR /app
-
-# Copy all the files from the project’s root to the working directory in the container
 COPY . .
 
-# Install all the dependencies
-RUN npm install
+RUN corepack enable pnpm
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm i --frozen-lockfile
 
-# Build the app
-RUN npm run build
+RUN pnpm run --filter=@cap/tasks build
 
-# Install ffmpeg
-RUN apt-get update && apt-get install -y ffmpeg
+# 3. Production image
+FROM base AS runner
+WORKDIR /app
 
-# Start the app
-CMD ["npm", "start"]
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S tasks -u 1001
+
+COPY --from=builder /app/apps/tasks/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/tasks/package.json .
+
+USER tasks
+
+CMD ["node", "dist/src/index.js"]

@@ -1,4 +1,5 @@
 terraform {
+  experiments = [module_variable_optional_attrs]
   required_providers {
     google = {
       source  = "hashicorp/google"
@@ -22,7 +23,6 @@ resource "google_project_service" "project_services" {
     "vpcaccess.googleapis.com"
   ])
   service                    = each.key
-  disable_dependency_handling = false
 }
 
 module "vpc" {
