@@ -11,6 +11,7 @@ import {
 } from "@cap/ui";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { motion } from "framer-motion";
 import { Check, Globe2, Search } from "lucide-react";
@@ -55,60 +56,28 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 	const [initialSelectedSpaces, setInitialSelectedSpaces] = useState<
 		Set<string>
 	>(new Set());
-	const [loading, setLoading] = useState(false);
 	const [publicToggle, setPublicToggle] = useState(isPublic);
 	const [initialPublicState, setInitialPublicState] = useState(isPublic);
 	const tabs = ["Share", "Embed"] as const;
 	const [activeTab, setActiveTab] = useState<(typeof tabs)[number]>("Share");
 
-	const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
-
-	useEffect(() => {
-		if (isOpen && sharedSpaces) {
-			const spaceIds = new Set(sharedSpaces.map((space) => space.id));
-			setSelectedSpaces(spaceIds);
-			setInitialSelectedSpaces(spaceIds);
-			setPublicToggle(isPublic);
-			setInitialPublicState(isPublic);
-			setSearchTerm("");
-			setActiveTab(tabs[0]);
-		}
-	}, [isOpen, sharedSpaces, isPublic]);
-
-	const isSpaceSharedViaOrganization = useCallback(
-		(spaceId: string) => {
-			const space = spacesData?.find((s) => s.id === spaceId);
-			if (!space) return false;
-			return sharedSpaceIds.has(space.id);
-		},
-		[spacesData, sharedSpaceIds],
-	);
-
-	const handleToggleSpace = (spaceId: string) => {
-		setSelectedSpaces((prev) => {
-			const newSet = new Set(prev);
-			if (newSet.has(spaceId)) {
-				newSet.delete(spaceId);
-			} else {
-				newSet.add(spaceId);
-			}
-			return newSet;
-		});
-	};
-
-	const handleSave = async () => {
-		try {
-			setLoading(true);
-			const result = await shareCap({
-				capId,
-				spaceIds: Array.from(selectedSpaces),
-				public: publicToggle,
-			});
+	const updateSharing = useMutation({
+		mutationFn: async ({
+			capId,
+			spaceIds,
+			public: isPublic,
+		}: {
+			capId: string;
+			spaceIds: string[];
+			public: boolean;
+		}) => {
+			const result = await shareCap({ capId, spaceIds, public: isPublic });
 
 			if (!result.success) {
 				throw new Error(result.error || "Failed to update sharing settings");
 			}
-
+		},
+		onSuccess: () => {
 			const newSelectedSpaces = Array.from(selectedSpaces);
 			const initialSpaces = Array.from(initialSelectedSpaces);
 
@@ -171,11 +140,45 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			}
 			onSharingUpdated(newSelectedSpaces);
 			onClose();
-		} catch (error) {
+		},
+		onError: () => {
 			toast.error("Failed to update sharing settings");
-		} finally {
-			setLoading(false);
+		},
+	});
+
+	const sharedSpaceIds = new Set(sharedSpaces?.map((space) => space.id) || []);
+
+	useEffect(() => {
+		if (isOpen && sharedSpaces) {
+			const spaceIds = new Set(sharedSpaces.map((space) => space.id));
+			setSelectedSpaces(spaceIds);
+			setInitialSelectedSpaces(spaceIds);
+			setPublicToggle(isPublic);
+			setInitialPublicState(isPublic);
+			setSearchTerm("");
+			setActiveTab(tabs[0]);
 		}
+	}, [isOpen, sharedSpaces, isPublic]);
+
+	const isSpaceSharedViaOrganization = useCallback(
+		(spaceId: string) => {
+			const space = spacesData?.find((s) => s.id === spaceId);
+			if (!space) return false;
+			return sharedSpaceIds.has(space.id);
+		},
+		[spacesData, sharedSpaceIds],
+	);
+
+	const handleToggleSpace = (spaceId: string) => {
+		setSelectedSpaces((prev) => {
+			const newSet = new Set(prev);
+			if (newSet.has(spaceId)) {
+				newSet.delete(spaceId);
+			} else {
+				newSet.add(spaceId);
+			}
+			return newSet;
+		});
 	};
 
 	const handleCopyEmbedCode = async () => {
@@ -347,13 +350,19 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 								Cancel
 							</Button>
 							<Button
-								spinner={loading}
-								disabled={loading}
+								spinner={updateSharing.isPending}
+								disabled={updateSharing.isPending}
 								size="sm"
 								variant="dark"
-								onClick={handleSave}
+								onClick={() =>
+									updateSharing.mutate({
+										capId,
+										spaceIds: Array.from(selectedSpaces),
+										public: publicToggle,
+									})
+								}
 							>
-								{loading ? "Saving..." : "Save"}
+								{updateSharing.isPending ? "Saving..." : "Save"}
 							</Button>
 						</>
 					) : (

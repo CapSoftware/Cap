@@ -244,21 +244,21 @@ export const Caps = ({
 
 			return yield* fiber.await.pipe(Effect.flatten);
 		}),
-		onSuccess: Effect.fn(function* () {
+		onSuccess: () => {
 			setSelectedCaps([]);
 			router.refresh();
-		}),
+		},
 	});
 
 	const deleteCap = useEffectMutation({
 		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
-		onSuccess: Effect.fn(function* () {
+		onSuccess: () => {
 			toast.success("Cap deleted successfully");
 			router.refresh();
-		}),
-		onError: Effect.fn(function* () {
+		},
+		onError: () => {
 			toast.error("Failed to delete cap");
-		}),
+		},
 	});
 
 	if (count === 0) return <EmptyCapState />;

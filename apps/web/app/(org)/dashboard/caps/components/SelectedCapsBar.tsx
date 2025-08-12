@@ -25,10 +25,6 @@ export const SelectedCapsBar = ({
 }: SelectedCapsBarProps) => {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
-	const handleDeleteClick = () => {
-		setConfirmOpen(true);
-	};
-
 	const handleConfirmDelete = async () => {
 		await deleteSelectedCaps();
 		setConfirmOpen(false);
@@ -71,7 +67,7 @@ export const SelectedCapsBar = ({
 						</Button>
 						<Button
 							variant="destructive"
-							onClick={handleDeleteClick}
+							onClick={() => setConfirmOpen(true)}
 							disabled={isDeleting}
 							className="size-[40px] min-w-[unset] p-0"
 							spinner={isDeleting}

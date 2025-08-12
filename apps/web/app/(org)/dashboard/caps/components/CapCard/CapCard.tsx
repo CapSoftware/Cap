@@ -17,6 +17,7 @@ import {
 	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -27,7 +28,7 @@ import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/Confirmati
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import { EffectRuntime } from "@/lib/EffectRuntime";
+import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
 import { SharingDialog } from "../SharingDialog";
@@ -97,31 +98,50 @@ export const CapCard = ({
 	);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
-	const [isDownloading, setIsDownloading] = useState(false);
 	const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
-	const [removing, setRemoving] = useState(false);
 
 	const router = useRouter();
 
-	const handleDeleteClick = (e: React.MouseEvent) => {
-		e.stopPropagation();
-		setConfirmOpen(true);
-	};
+	const downloadMutation = useMutation({
+		mutationFn: async () => {
+			const response = await downloadVideo(cap.id);
+			if (response.success && response.downloadUrl) {
+				const link = document.createElement("a");
+				link.href = response.downloadUrl;
+				link.download = response.filename;
+				link.style.display = "none";
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			} else {
+				throw new Error("Failed to get download URL");
+			}
+		},
+	});
 
-	const confirmRemoveCap = async () => {
-		if (!onDelete) return;
-		try {
-			setRemoving(true);
-			await onDelete();
-		} catch (error) {
+	const deleteMutation = useMutation({
+		mutationFn: async () => {
+			await onDelete?.();
+		},
+		onError: (error) => {
 			console.error("Error deleting cap:", error);
-		} finally {
-			setRemoving(false);
+		},
+		onSettled: () => {
 			setConfirmOpen(false);
-		}
-	};
+		},
+	});
+
+	const duplicateMutation = useEffectMutation({
+		mutationFn: () => withRpc((r) => r.VideoDuplicate(cap.id)),
+		onSuccess: () => {
+			toast.success("Cap duplicated successfully");
+		},
+		onError: () => {
+			toast.error("Failed to duplicate cap");
+		},
+	});
 
 	const handleSharingUpdated = () => {
 		router.refresh();
@@ -197,45 +217,18 @@ export const CapCard = ({
 	};
 
 	const handleDownload = async () => {
-		if (isDownloading) return;
+		if (downloadMutation.isPending) return;
 
-		setIsDownloading(true);
-
-		try {
-			toast.promise(
-				downloadVideo(cap.id).then(async (response) => {
-					if (response.success && response.downloadUrl) {
-						const fetchResponse = await fetch(response.downloadUrl);
-						const blob = await fetchResponse.blob();
-
-						const blobUrl = window.URL.createObjectURL(blob);
-						const link = document.createElement("a");
-						link.href = blobUrl;
-						link.download = response.filename;
-						link.style.display = "none";
-						document.body.appendChild(link);
-						link.click();
-						document.body.removeChild(link);
-
-						window.URL.revokeObjectURL(blobUrl);
-					}
-				}),
-				{
-					loading: "Preparing download...",
-					success: "Download started successfully",
-					error: (error) => {
-						if (error instanceof Error) {
-							return error.message;
-						}
-						return "Failed to download video - please try again.";
-					},
-				},
-			);
-		} catch (error) {
-			console.error("Download error:", error);
-		} finally {
-			setIsDownloading(false);
-		}
+		toast.promise(downloadMutation.mutateAsync(), {
+			loading: "Preparing download...",
+			success: "Download started successfully",
+			error: (error) => {
+				if (error instanceof Error) {
+					return error.message;
+				}
+				return "Failed to download video - please try again.";
+			},
+		});
 	};
 
 	const handleCardClick = (e: React.MouseEvent) => {
@@ -308,7 +301,7 @@ export const CapCard = ({
 						<CapCardButtons
 							capId={cap.id}
 							copyPressed={copyPressed}
-							isDownloading={isDownloading}
+							isDownloading={downloadMutation.isPending}
 							customDomain={customDomain}
 							domainVerified={domainVerified}
 							handleCopy={handleCopy}
@@ -340,21 +333,16 @@ export const CapCard = ({
 
 							<DropdownMenuContent align="end" sideOffset={5}>
 								<DropdownMenuItem
-									onClick={async () => {
-										try {
-											await EffectRuntime.runPromise(
-												withRpc((r) => r.VideoDuplicate(cap.id)),
-											);
-											toast.success("Cap duplicated successfully");
-											router.refresh();
-										} catch (error) {
-											toast.error("Failed to duplicate cap");
-										}
-									}}
+									onClick={() => duplicateMutation.mutate()}
+									disabled={duplicateMutation.isPending}
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faCopy} />
-									<p className="text-sm text-gray-12">Duplicate</p>
+									<p className="text-sm text-gray-12">
+										{duplicateMutation.isPending
+											? "Duplicating..."
+											: "Duplicate"}
+									</p>
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
@@ -376,7 +364,8 @@ export const CapCard = ({
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={(e) => {
-										handleDeleteClick(e);
+										e.stopPropagation();
+										setConfirmOpen(true);
 									}}
 									className="flex gap-2 items-center rounded-lg"
 								>
@@ -392,8 +381,8 @@ export const CapCard = ({
 							description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
 							confirmLabel="Delete"
 							cancelLabel="Cancel"
-							loading={removing}
-							onConfirm={confirmRemoveCap}
+							loading={deleteMutation.isPending}
+							onConfirm={() => deleteMutation.mutate()}
 							onCancel={() => setConfirmOpen(false)}
 						/>
 					</div>
