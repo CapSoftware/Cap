@@ -68,7 +68,6 @@ use std::{
 };
 use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
-use tauri_nspanel::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
