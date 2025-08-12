@@ -67,6 +67,7 @@ use std::{
 };
 use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri_nspanel::ManagerExt;
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -1776,16 +1777,6 @@ async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String
     Ok(())
 }
 
-#[tauri::command]
-#[specta::specta]
-async fn close_window(app: AppHandle, window: CapWindowId) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window(&window.label()) {
-        let _ = window.close();
-    }
-
-    Ok(())
-}
-
 #[tauri::command(async)]
 #[specta::specta]
 fn list_fails() -> Result<BTreeMap<String, bool>, ()> {
@@ -1957,7 +1948,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             windows::set_theme,
             global_message_dialog,
             show_window,
-            close_window,
             write_clipboard_string,
             platform::perform_haptic_feedback,
             list_fails,

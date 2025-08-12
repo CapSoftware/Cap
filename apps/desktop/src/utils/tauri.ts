@@ -164,9 +164,6 @@ async globalMessageDialog(message: string) : Promise<void> {
 async showWindow(window: ShowCapWindow) : Promise<null> {
     return await TAURI_INVOKE("show_window", { window });
 },
-async closeWindow(window: CapWindowId) : Promise<null> {
-    return await TAURI_INVOKE("close_window", { window });
-},
 async writeClipboardString(text: string) : Promise<null> {
     return await TAURI_INVOKE("write_clipboard_string", { text });
 },
@@ -340,7 +337,6 @@ export type CameraShape = "square" | "source"
 export type CameraWindowState = { size: CameraPreviewSize; shape: CameraPreviewShape; mirrored: boolean }
 export type CameraXPosition = "left" | "center" | "right"
 export type CameraYPosition = "top" | "bottom"
-export type CapWindowId = "Setup" | "Main" | "Settings" | { Editor: { id: number } } | "RecordingsOverlay" | { WindowCaptureOccluder: { screen_id: number } } | { TargetSelectOverlay: { display_id: DisplayId } } | "CaptureArea" | "Camera" | "InProgressRecording" | "Upgrade" | "ModeSelect" | "Debug"
 export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSettings | null }
 export type CaptionSegment = { id: string; start: number; end: number; text: string }
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
