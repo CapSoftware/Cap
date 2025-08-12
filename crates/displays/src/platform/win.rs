@@ -1072,7 +1072,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_internal(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
+    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
