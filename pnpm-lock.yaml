@@ -884,7 +884,7 @@ importers:
         version: 0.43.1(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.14.1)
       dub:
         specifier: ^0.64.0
-        version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@4.0.15)
+        version: 0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@3.25.76)
       nanoid:
         specifier: ^5.0.4
         version: 5.1.5
@@ -901,8 +901,8 @@ importers:
         specifier: 4.6.0
         version: 4.6.0(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
       zod:
-        specifier: ^4.0.15
-        version: 4.0.15
+        specifier: ^3
+        version: 3.25.76
     devDependencies:
       '@cap/ui':
         specifier: workspace:*
@@ -13824,9 +13824,6 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
-  zod@4.0.15:
-    resolution: {integrity: sha512-2IVHb9h4Mt6+UXkyMs0XbfICUh1eUrlJJAOupBHUhLRnKkruawyDddYRCs0Eizt900ntIMk9/4RksYl+FgSpcQ==}
-
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -21773,12 +21770,6 @@ snapshots:
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.6.1
 
-  dub@0.64.0(@modelcontextprotocol/sdk@1.6.1)(zod@4.0.15):
-    dependencies:
-      zod: 4.0.15
-    optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.6.1
-
   dunder-proto@1.0.1:
     dependencies:
       call-bind-apply-helpers: 1.0.2
@@ -29056,7 +29047,5 @@ snapshots:
   zod@3.24.2: {}
 
   zod@3.25.76: {}
-
-  zod@4.0.15: {}
 
   zwitch@2.0.4: {}
