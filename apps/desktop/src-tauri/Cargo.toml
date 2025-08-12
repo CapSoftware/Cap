@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.64"
+version = "0.3.65"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -37,7 +37,7 @@ tauri-plugin-process = "2.2.0"
 tauri-plugin-shell = "2.2.0"
 tauri-plugin-single-instance = { version = "2.2.0", features = ["deep-link"] }
 tauri-plugin-store = "2.2.0"
-tauri-plugin-updater = "2.3.1"
+tauri-plugin-updater = "2.9.0"
 tauri-plugin-oauth = { git = "https://github.com/FabianLars/tauri-plugin-oauth", branch = "v2" }
 tauri-plugin-window-state = "2.2.0"
 tauri-plugin-positioner = "2.2.0"
