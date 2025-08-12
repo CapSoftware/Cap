@@ -31,8 +31,10 @@ const VerifyStep = ({
 	const recommendedARecord = domainConfig?.requiredAValue;
 	const currentCnames = domainConfig?.cnames || [];
 	const currentAValues = domainConfig?.currentAValues || [];
+	const verificationRecords = domainConfig?.verification || [];
 
 	const hasRecommendedCNAME = recommendedCnames.length > 0;
+	const hasTXTVerification = verificationRecords.length > 0;
 
 	const getRecommendedAValues = () => {
 		if (recommendedARecord) return [recommendedARecord];
@@ -64,6 +66,7 @@ const VerifyStep = ({
 
 	const showARecord = recommendedARecord && !aRecordConfigured;
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
+	const showTXTRecord = hasTXTVerification && !isVerified;
 
 	const handleCopy = async (text: string, fieldId: string) => {
 		try {
@@ -95,7 +98,7 @@ const VerifyStep = ({
 		customDomain: activeOrganization?.organization.customDomain,
 		isVerified,
 		domainConfig,
-	})
+	});
 
 	return (
 		<div className="space-y-6">
@@ -118,6 +121,84 @@ const VerifyStep = ({
 				!isVerified &&
 				domainConfig && (
 					<div className="space-y-4">
+						{/* TXT Record Configuration for Verification */}
+						{showTXTRecord && (
+							<div className="overflow-hidden rounded-lg border border-gray-4">
+								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+									<p className="font-medium text-md text-gray-12">
+										TXT Record Configuration
+									</p>
+									<p className="mt-1 text-sm text-gray-10">
+										Add this TXT record to verify domain ownership:
+									</p>
+								</div>
+								<div className="px-4 py-3">
+									<dl className="grid gap-4">
+										{verificationRecords.map((record, index) => (
+											<div key={index} className="space-y-4">
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Type
+													</dt>
+													<dd className="text-sm text-gray-10">
+														{record.type || "TXT"}
+													</dd>
+												</div>
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Name
+													</dt>
+													<dd className="text-sm text-gray-10">
+														<code className="px-2 py-1 text-xs rounded bg-gray-4">
+															{record.domain?.replace(`.${domain}`, '') || "@"}
+														</code>
+													</dd>
+												</div>
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Value
+													</dt>
+													<dd className="text-sm text-gray-10">
+														<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
+															<code className="text-xs break-all text-gray-10">
+																{record.value}
+															</code>
+															<button
+																type="button"
+																onClick={() =>
+																	handleCopy(record.value, `txt-record-${index}`)
+																}
+																className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+																title="Copy to clipboard"
+															>
+																{copiedField === `txt-record-${index}` ? (
+																	<Check className="size-3.5 text-green-500" />
+																) : (
+																	<Copy className="size-3.5 text-gray-10" />
+																)}
+															</button>
+														</div>
+													</dd>
+												</div>
+												{record.reason && (
+													<div className="grid grid-cols-[100px,1fr] items-center">
+														<dt className="text-sm font-medium text-gray-12">
+															Purpose
+														</dt>
+														<dd className="text-sm text-gray-10">
+															{record.reason === "pending_domain_verification" 
+																? "Domain verification"
+																: record.reason}
+														</dd>
+													</div>
+												)}
+											</div>
+										))}
+									</dl>
+								</div>
+							</div>
+						)}
+
 						{/* A Record Configuration */}
 						{showARecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
