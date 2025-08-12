@@ -1,13 +1,13 @@
 {
-  "name": "@cap/env",
-  "private": true,
-  "main": "./index.ts",
-  "types": "./index.ts",
-  "dependencies": {
-    "@t3-oss/env-nextjs": "^0.12.0",
-    "zod": "^3.25.76"
-  },
-  "devDependencies": {
-    "@types/node": "^22.12.0"
-  }
+	"name": "@cap/env",
+	"private": true,
+	"main": "./index.ts",
+	"types": "./index.ts",
+	"dependencies": {
+		"@t3-oss/env-nextjs": "^0.12.0",
+		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@types/node": "^22.15.14"
+	}
 }

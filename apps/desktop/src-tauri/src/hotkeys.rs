@@ -65,6 +65,9 @@ impl HotkeysStore {
     }
 }
 
+#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+pub struct OnEscapePress;
+
 pub type HotkeysState = Mutex<HotkeysStore>;
 pub fn init(app: &AppHandle) {
     app.plugin(
@@ -72,6 +75,10 @@ pub fn init(app: &AppHandle) {
             .with_handler(|app, shortcut, event| {
                 if !matches!(event.state(), HotKeyState::Pressed) {
                     return;
+                }
+
+                if shortcut.key == Code::Escape {
+                    OnEscapePress.emit(app).ok();
                 }
 
                 let state = app.state::<HotkeysState>();
@@ -90,7 +97,6 @@ pub fn init(app: &AppHandle) {
     let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
 
     let global_shortcut = app.global_shortcut();
-
     for hotkey in store.hotkeys.values() {
         global_shortcut.register(Shortcut::from(*hotkey)).ok();
     }
