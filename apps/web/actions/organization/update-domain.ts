@@ -14,6 +14,13 @@ export async function updateDomain(domain: string, organizationId: string) {
     throw new Error("Unauthorized");
   }
 
+  //check user subscription to prevent abuse
+  const isSubscribed = user.stripeSubscriptionStatus === "active";
+
+  if (!isSubscribed) {
+    throw new Error("User is not subscribed");
+  }
+
   const [organization] = await db()
     .select()
     .from(organizations)
@@ -67,6 +74,5 @@ export async function updateDomain(domain: string, organizationId: string) {
     if (error instanceof Error) {
       throw new Error(error.message);
     }
-    throw new Error("Failed to update domain");
   }
 }

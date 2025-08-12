@@ -102,6 +102,7 @@ app.get(
               : undefined,
           isScreenshot,
           bucket: customBucket?.id,
+          public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
           metadata: {
             duration,
           },
@@ -140,7 +141,7 @@ app.get(
             react: FirstShareableLink({
               email: user.email,
               url: videoUrl,
-              videoName: videoData.name,
+              videoName: videoName,
             }),
             marketing: true,
             scheduledAt: "in 5 min",

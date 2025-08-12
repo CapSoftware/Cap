@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
 import { useTheme } from "../../Contexts";
-import { deleteFolder } from "@/actions/folders/deleteFolder";
 import { updateFolder } from "@/actions/folders/updateFolder";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { registerDropTarget } from "../../folder/[id]/components/ClientCapCard";
@@ -14,20 +13,32 @@ import { ConfirmationDialog } from "../../_components/ConfirmationDialog";
 import { FoldersDropdown } from "./FoldersDropdown";
 import clsx from "clsx";
 import { useDashboardContext } from "../../Contexts";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { Folder } from "@cap/web-domain";
+import { Effect } from "effect";
+import { useRouter } from "next/navigation";
 
 export type FolderDataType = {
   name: string;
-  id: string;
+  id: Folder.FolderId;
   color: "normal" | "blue" | "red" | "yellow";
   videoCount: number;
   spaceId?: string | null;
   parentId?: string | null;
 };
 
-const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataType) => {
+const FolderCard = ({
+  name,
+  color,
+  id,
+  parentId,
+  videoCount,
+  spaceId,
+}: FolderDataType) => {
+  const router = useRouter();
   const { theme } = useTheme();
   const [confirmDeleteFolderOpen, setConfirmDeleteFolderOpen] = useState(false);
-  const [deleteFolderLoading, setDeleteFolderLoading] = useState(false);
   const [isRenaming, setIsRenaming] = useState(false);
   const [updateName, setUpdateName] = useState(name);
   const nameRef = useRef<HTMLTextAreaElement>(null);
@@ -38,7 +49,7 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
   // Use a ref to track drag state to avoid re-renders during animation
   const dragStateRef = useRef({
     isDragging: false,
-    isAnimating: false
+    isAnimating: false,
   });
 
   // Add a debounce timer ref to prevent animation stuttering
@@ -48,8 +59,8 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
     theme === "dark" && color === "normal"
       ? "folder"
       : color === "normal"
-        ? "folder-dark"
-        : `folder-${color}`;
+      ? "folder-dark"
+      : `folder-${color}`;
 
   const { rive, RiveComponent: FolderRive } = useRive({
     src: "/rive/dashboard.riv",
@@ -61,18 +72,19 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
     }),
   });
 
-  const deleteFolderHandler = async () => {
-    try {
-      setDeleteFolderLoading(true);
-      await deleteFolder(id, spaceId);
+  const deleteFolder = useEffectMutation({
+    mutationFn: (id: Folder.FolderId) => withRpc((r) => r.FolderDelete(id)),
+    onSuccess: Effect.fn(function* () {
+      router.refresh();
       toast.success("Folder deleted successfully");
-    } catch (error) {
+    }),
+    onError: Effect.fn(function* () {
       toast.error("Failed to delete folder");
-    } finally {
-      setDeleteFolderLoading(false);
+    }),
+    onSettled: Effect.fn(function* () {
       setConfirmDeleteFolderOpen(false);
-    }
-  };
+    }),
+  });
 
   useEffect(() => {
     if (isRenaming && nameRef.current) {
@@ -93,7 +105,11 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
 
         try {
           setIsMovingVideo(true);
-          await moveVideoToFolder({ videoId: data.id, folderId: id, spaceId: spaceId ?? activeOrganization?.organization.id });
+          await moveVideoToFolder({
+            videoId: data.id,
+            folderId: id,
+            spaceId: spaceId ?? activeOrganization?.organization.id,
+          });
           toast.success(`"${data.name}" moved to "${name}" folder`);
         } catch (error) {
           console.error("Error moving video to folder:", error);
@@ -155,15 +171,13 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
       }
     };
 
-    document.addEventListener('dragend', handleDragEnd);
+    document.addEventListener("dragend", handleDragEnd);
 
     return () => {
       unregister();
-      document.removeEventListener('dragend', handleDragEnd);
+      document.removeEventListener("dragend", handleDragEnd);
     };
   }, [id, name, rive, isDragOver]);
-
-
 
   const updateFolderNameHandler = async () => {
     try {
@@ -197,7 +211,6 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
           rive.stop();
           rive.play("folder-open");
         }
-
       }
     }
   };
@@ -221,7 +234,6 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
         rive.stop();
         rive.play("folder-close");
       }
-
     }
   };
 
@@ -261,11 +273,15 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
     }
   };
 
-
   return (
-    <Link legacyBehavior prefetch={false} href={
-      spaceId ? `/dashboard/spaces/${spaceId}/folder/${id}` : `/dashboard/folder/${id}`
-    }>
+    <Link
+      prefetch={false}
+      href={
+        spaceId
+          ? `/dashboard/spaces/${spaceId}/folder/${id}`
+          : `/dashboard/folder/${id}`
+      }
+    >
       <div
         ref={folderRef}
         onMouseEnter={() => {
@@ -311,15 +327,17 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
           isMovingVideo && "opacity-70"
         )}
       >
-        <div
-          className="flex flex-1 gap-3 items-center">
+        <div className="flex flex-1 gap-3 items-center">
           <FolderRive
             key={theme + "folder" + id}
             className="w-[50px] h-[50px]"
           />
-          <div onClick={(e) => {
-            e.stopPropagation();
-          }} className="flex flex-col justify-center h-10">
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+            }}
+            className="flex flex-col justify-center h-10"
+          >
             {isRenaming ? (
               <textarea
                 ref={nameRef}
@@ -344,20 +362,26 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
                  focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
               />
             ) : (
-              <p onClick={(e) => {
-                e.stopPropagation()
-                setIsRenaming(true)
-              }} className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">{updateName}</p>
+              <p
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsRenaming(true);
+                }}
+                className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal"
+              >
+                {updateName}
+              </p>
             )}
-            <p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${videoCount === 1 ? "video" : "videos"
-              }`}</p>
+            <p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
+              videoCount === 1 ? "video" : "videos"
+            }`}</p>
           </div>
         </div>
         <ConfirmationDialog
-          loading={deleteFolderLoading}
+          loading={deleteFolder.isPending}
           open={confirmDeleteFolderOpen}
           icon={<FontAwesomeIcon icon={faTrash} />}
-          onConfirm={deleteFolderHandler}
+          onConfirm={() => deleteFolder.mutate(id)}
           onCancel={() => setConfirmDeleteFolderOpen(false)}
           title="Delete Folder"
           description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
@@ -370,8 +394,8 @@ const Folder = ({ name, color, id, parentId, videoCount, spaceId }: FolderDataTy
           nameRef={nameRef}
         />
       </div>
-    </Link >
+    </Link>
   );
 };
 
-export default Folder;
+export default FolderCard;

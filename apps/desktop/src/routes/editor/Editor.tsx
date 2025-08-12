@@ -35,6 +35,7 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { createTauriEventListener } from "~/utils/createEventListener";
 
 export function Editor() {
   return (
@@ -75,12 +76,10 @@ export function Editor() {
 function Inner() {
   const { project, editorState, setEditorState } = useEditorContext();
 
-  onMount(() =>
-    events.editorStateChanged.listen((e) => {
-      renderFrame.clear();
-      setEditorState("playbackTime", e.payload.playhead_position / FPS);
-    })
-  );
+  createTauriEventListener(events.editorStateChanged, (payload) => {
+    renderFrame.clear();
+    setEditorState("playbackTime", payload.playhead_position / FPS);
+  });
 
   const renderFrame = throttle((time: number) => {
     if (!editorState.playing) {
@@ -399,7 +398,14 @@ function Dialogs() {
                                 setCropOptions("showGrid", (s) => !s)
                               }
                             >
-                              <IconCapPadding class={cx("w-4", cropOptions.showGrid ? "text-blue-9" : "text-gray-12")} />
+                              <IconCapPadding
+                                class={cx(
+                                  "w-4",
+                                  cropOptions.showGrid
+                                    ? "text-blue-9"
+                                    : "text-gray-12"
+                                )}
+                              />
                             </Button>
                           </Tooltip>
                         </div>

@@ -8,8 +8,9 @@ import {
   spaces,
   sharedVideos,
   spaceMembers,
+  notifications,
 } from "@cap/database/schema";
-import { and, count, eq, inArray, or, sql } from "drizzle-orm";
+import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 export type Organization = {
   organization: typeof organizations.$inferSelect;
@@ -31,6 +32,8 @@ export type Spaces = Omit<
   memberCount: number;
   videoCount: number;
 };
+
+export type UserPreferences = (typeof users.$inferSelect)["preferences"];
 
 export async function getDashboardData(user: typeof userSelectProps) {
   try {
@@ -73,6 +76,7 @@ export async function getDashboardData(user: typeof userSelectProps) {
         .where(inArray(organizationInvites.organizationId, organizationIds));
     }
 
+    let anyNewNotifications = false;
     let spacesData: Spaces[] = [];
 
     // Find active organization ID
@@ -87,6 +91,20 @@ export async function getDashboardData(user: typeof userSelectProps) {
     // Only fetch spaces for the active organization
 
     if (activeOrganizationId) {
+      const [notification] = await db()
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.recipientId, user.id),
+            eq(notifications.orgId, activeOrganizationId),
+            isNull(notifications.readAt)
+          )
+        )
+        .limit(1);
+
+      anyNewNotifications = !!notification;
+
       spacesData = await db()
         .select({
           id: spaces.id,
@@ -165,6 +183,14 @@ export async function getDashboardData(user: typeof userSelectProps) {
       }
     }
 
+    const [userPreferences] = await db()
+      .select({
+        preferences: users.preferences,
+      })
+      .from(users)
+      .where(eq(users.id, user.id))
+      .limit(1);
+
     const organizationSelect: Organization[] = await Promise.all(
       organizationsWithMembers
         .reduce((acc: (typeof organizations.$inferSelect)[], row) => {
@@ -236,12 +262,16 @@ export async function getDashboardData(user: typeof userSelectProps) {
     return {
       organizationSelect,
       spacesData,
+      anyNewNotifications,
+      userPreferences,
     };
   } catch (error) {
     console.error("Failed to fetch dashboard data", error);
     return {
       organizationSelect: [],
       spacesData: [],
+      anyNewNotifications: false,
+      userPreferences: null,
     };
   }
 }

@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ctx
         }
         Err(e) => {
-            println!("   ✗ Failed to create Skia context: {}", e);
+            println!("   ✗ Failed to create Skia context: {e}");
             return Err(e.into());
         }
     };
@@ -35,10 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (width, height) in test_sizes {
         match context.create_surface(width, height) {
             Ok(_) => {
-                println!("   ✓ Created {}x{} surface", width, height);
+                println!("   ✓ Created {width}x{height} surface");
             }
             Err(e) => {
-                println!("   ✗ Failed to create {}x{} surface: {}", width, height, e);
+                println!("   ✗ Failed to create {width}x{height} surface: {e}");
             }
         }
     }
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("   ✓ Correctly rejected invalid dimensions");
         }
         Err(e) => {
-            println!("   ✗ Wrong error type: {}", e);
+            println!("   ✗ Wrong error type: {e}");
         }
     }
 
@@ -74,14 +74,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Save as PPM for easy verification
             let output_path = "test_render.ppm";
             save_as_ppm(&pixels, render_width, render_height, output_path)?;
-            println!("   ✓ Saved test render to: {}", output_path);
+            println!("   ✓ Saved test render to: {output_path}");
 
             // Verify some pixels
             println!("\n5. Verifying pixel data...");
             let center_idx =
                 (((render_height / 2) * render_width + (render_width / 2)) * 4) as usize;
             let center_pixel = &pixels[center_idx..center_idx + 4];
-            println!("   - Center pixel RGBA: {:?}", center_pixel);
+            println!("   - Center pixel RGBA: {center_pixel:?}");
 
             // The center should be greenish (from the circle)
             if center_pixel[1] > center_pixel[0] && center_pixel[1] > center_pixel[2] {
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Err(e) => {
-            println!("   ✗ Rendering failed: {}", e);
+            println!("   ✗ Rendering failed: {e}");
             return Err(e.into());
         }
     }
@@ -109,7 +109,7 @@ fn save_as_ppm(pixels: &[u8], width: u32, height: u32, path: &str) -> std::io::R
 
     // PPM header
     writeln!(file, "P3")?;
-    writeln!(file, "{} {}", width, height)?;
+    writeln!(file, "{width} {height}")?;
     writeln!(file, "255")?;
 
     // Write pixels (PPM is RGB, our data is RGBA)
@@ -119,7 +119,7 @@ fn save_as_ppm(pixels: &[u8], width: u32, height: u32, path: &str) -> std::io::R
             let r = pixels[idx];
             let g = pixels[idx + 1];
             let b = pixels[idx + 2];
-            write!(file, "{} {} {} ", r, g, b)?;
+            write!(file, "{r} {g} {b} ")?;
         }
         writeln!(file)?;
     }

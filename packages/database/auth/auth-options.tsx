@@ -9,6 +9,7 @@ import { serverEnv } from "@cap/env";
 import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
 import { cookies } from "next/headers";
+import { getServerSession as _getServerSession } from "next-auth";
 import { dub } from "../dub";
 import crypto from "crypto";
 
@@ -154,9 +155,12 @@ export const authOptions = (): NextAuthOptions => {
           .from(users)
           .where(eq(users.id, user.id))
           .limit(1);
-        
-        const needsOrganizationSetup = isNewUser || (!dbUser?.activeOrganizationId || dbUser.activeOrganizationId === "");
-        
+
+        const needsOrganizationSetup =
+          isNewUser ||
+          !dbUser?.activeOrganizationId ||
+          dbUser.activeOrganizationId === "";
+
         if (needsOrganizationSetup) {
           const dubId = cookies().get("dub_id")?.value;
           const dubPartnerData = cookies().get("dub_partner_data")?.value;
@@ -184,7 +188,9 @@ export const authOptions = (): NextAuthOptions => {
               console.error("Error details:", JSON.stringify(error, null, 2));
             }
           } else if (!isNewUser) {
-            console.log("Guest checkout user signing in for the first time - setting up organization");
+            console.log(
+              "Guest checkout user signing in for the first time - setting up organization"
+            );
           }
 
           const organizationId = nanoId();
@@ -247,3 +253,5 @@ export const authOptions = (): NextAuthOptions => {
     },
   };
 };
+
+export const getServerSession = () => _getServerSession(authOptions());

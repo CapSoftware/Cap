@@ -9,12 +9,13 @@ import { AnimatePresence, motion } from "framer-motion";
 
 interface SelectedCapsBarProps {
   selectedCaps: string[];
-  setSelectedCaps: (caps: string[]) => void;
+  setSelectedCaps: (caps: Video.VideoId[]) => void;
   deleteSelectedCaps: () => void;
   isDeleting: boolean;
 }
 
 import { useState } from "react";
+import { Video } from "@cap/web-domain";
 
 export const SelectedCapsBar = ({
   selectedCaps,
@@ -82,7 +83,11 @@ export const SelectedCapsBar = ({
               open={confirmOpen}
               icon={<FontAwesomeIcon icon={faFilm} />}
               title="Delete selected Caps"
-              description={`Are you sure you want to delete ${selectedCaps.length} cap${selectedCaps.length === 1 ? '' : 's'}? This action cannot be undone.`}
+              description={`Are you sure you want to delete ${
+                selectedCaps.length
+              } cap${
+                selectedCaps.length === 1 ? "" : "s"
+              }? This action cannot be undone.`}
               confirmLabel="Delete"
               cancelLabel="Cancel"
               confirmVariant="dark"

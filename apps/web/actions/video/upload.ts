@@ -224,6 +224,7 @@ export async function createVideoAndGetUploadUrl({
       source: { type: "desktopMP4" as const },
       isScreenshot,
       bucket: customBucket?.id,
+      public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
       ...(folderId ? { folderId } : {}),
     };
 

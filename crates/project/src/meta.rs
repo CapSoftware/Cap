@@ -91,10 +91,10 @@ impl RecordingMeta {
     pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
         relative.to_path(&self.project_path)
     }
-    pub fn load_for_project(project_path: &PathBuf) -> Result<Self, Box<dyn Error>> {
+    pub fn load_for_project(project_path: &Path) -> Result<Self, Box<dyn Error>> {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
-        meta.project_path = project_path.clone();
+        meta.project_path = project_path.to_path_buf();
 
         Ok(meta)
     }
@@ -140,7 +140,7 @@ impl RecordingMeta {
 
     pub fn studio_meta(&self) -> Option<&StudioRecordingMeta> {
         match &self.inner {
-            RecordingMetaInner::Studio(meta) => Some(&meta),
+            RecordingMetaInner::Studio(meta) => Some(meta),
             _ => None,
         }
     }
@@ -244,7 +244,7 @@ pub struct CursorMeta {
     pub image_path: RelativePathBuf,
     pub hotspot: XY<f64>,
     #[serde(default)]
-    pub hash: Option<String>,
+    pub shape: Option<cap_cursor_info::CursorShape>,
 }
 
 impl MultipleSegments {
@@ -296,7 +296,7 @@ impl MultipleSegment {
         match CursorEvents::load_from_file(&full_path) {
             Ok(data) => data,
             Err(e) => {
-                eprintln!("Failed to load cursor data: {}", e);
+                eprintln!("Failed to load cursor data: {e}");
                 CursorEvents::default()
             }
         }

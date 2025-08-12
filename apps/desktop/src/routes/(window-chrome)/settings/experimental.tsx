@@ -19,11 +19,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const [settings, setSettings] = createStore<GeneralSettingsStore>(
     props.initialStore ?? {
       uploadIndividualFiles: false,
-      openEditorAfterRecording: false,
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
       enableNativeCameraPreview: false,
+      enableNewRecordingFlow: false,
+      autoZoomOnClicks: false,
     }
   );
 
@@ -67,6 +68,34 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                   handleChange("enableNativeCameraPreview", value)
                 }
               />
+              <ToggleSetting
+                label="Auto zoom on clicks"
+                description="Automatically generate zoom segments around mouse clicks during Studio Mode recordings. This helps highlight important interactions in your recordings."
+                value={!!settings.autoZoomOnClicks}
+                onChange={(value) => {
+                  handleChange("autoZoomOnClicks", value);
+                  // This is bad code, but I just want the UI to not jank and can't seem to find the issue.
+                  setTimeout(
+                    () => window.scrollTo({ top: 0, behavior: "instant" }),
+                    5
+                  );
+                }}
+              />
+              {import.meta.env.DEV && (
+                <ToggleSetting
+                  label="New recording flow"
+                  description="New and improved flow for starting a recording! You may need to restart the app for this to take effect."
+                  value={!!settings.enableNewRecordingFlow}
+                  onChange={(value) => {
+                    handleChange("enableNewRecordingFlow", value);
+                    // This is bad code, but I just want the UI to not jank and can't seem to find the issue.
+                    setTimeout(
+                      () => window.scrollTo({ top: 0, behavior: "instant" }),
+                      5
+                    );
+                  }}
+                />
+              )}
             </div>
           </div>
         </div>

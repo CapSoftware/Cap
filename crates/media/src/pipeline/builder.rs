@@ -8,10 +8,10 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::pipeline::{
+    MediaError, Pipeline, PipelineClock,
     clock::CloneFrom,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
-    MediaError, Pipeline, PipelineClock,
 };
 
 struct Task {
@@ -45,8 +45,7 @@ impl<T> PipelineBuilder<T> {
         let control_signal = self.control.add_listener(name.clone());
 
         self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal);
-            Ok(())
+            task.run(clock, ready_signal, control_signal)
         });
     }
 
@@ -86,7 +85,7 @@ impl<T> PipelineBuilder<T> {
                                 } else if let Some(s) = e.downcast_ref::<String>() {
                                     format!("Panicked: {s}")
                                 } else {
-                                    format!("Panicked: Unknown error")
+                                    "Panicked: Unknown error".to_string()
                                 }
                             })
                         })
@@ -172,7 +171,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
     }
 }
 
-pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
-    pipeline: PipelineBuilder<Clock>,
-    next_input: Receiver<PreviousOutput>,
-}
+// pub struct PipelinePathBuilder<Clock, PreviousOutput: Send> {
+//     pipeline: PipelineBuilder<Clock>,
+//     next_input: Receiver<PreviousOutput>,
+// }

@@ -64,6 +64,13 @@ function Page() {
   const currentRecording = createCurrentRecordingQuery();
   const generalSettings = generalSettingsStore.createQuery();
 
+  // We do this on focus so the window doesn't get revealed when toggling the setting
+  const navigate = useNavigate();
+  createEventListener(window, "focus", () => {
+    if (generalSettings.data?.enableNewRecordingFlow === true)
+      navigate("/new-main");
+  });
+
   const isRecording = () => !!currentRecording.data;
 
   const license = createLicenseQuery();
@@ -167,31 +174,20 @@ function Page() {
           return c;
       }),
     micName: () => mics.data?.find((name) => name === rawOptions.micName),
-    target: (): ScreenCaptureTarget => {
-      switch (rawOptions.captureTarget.variant) {
-        case "screen":
-          return { variant: "screen", id: options.screen()?.id ?? -1 };
-        case "window":
-          return { variant: "window", id: options.window()?.id ?? -1 };
-        case "area":
-          return {
-            variant: "area",
-            bounds: rawOptions.captureTarget.bounds,
-            screen: options.screen()?.id ?? -1,
-          };
-      }
-    },
   };
 
   // if target is window and no windows are available, switch to screen capture
   createEffect(() => {
-    if (options.target().variant === "window" && _windows()?.length === 0) {
+    const screen = _screens()?.[0];
+    if (
+      rawOptions.captureTarget.variant === "window" &&
+      !windows.isPending &&
+      _windows()?.length === 0 &&
+      screen
+    ) {
       setOptions(
         "captureTarget",
-        reconcile({
-          variant: "screen",
-          id: options.screen()?.id ?? -1,
-        })
+        reconcile({ variant: "screen", id: screen.id })
       );
     }
   });
@@ -199,8 +195,47 @@ function Page() {
   const toggleRecording = createMutation(() => ({
     mutationFn: async () => {
       if (!isRecording()) {
+        const capture_target = ((): ScreenCaptureTarget => {
+          switch (rawOptions.captureTarget.variant) {
+            case "screen": {
+              const screen = options.screen();
+              if (!screen)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _screens()?.length
+                  }`
+                );
+              return { variant: "screen", id: screen.id };
+            }
+            case "window": {
+              const win = options.window();
+              if (!win)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _windows()?.length
+                  }`
+                );
+              return { variant: "window", id: win.id };
+            }
+            case "area": {
+              const screen = options.screen();
+              if (!screen)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _screens()?.length
+                  }`
+                );
+              return {
+                variant: "area",
+                bounds: rawOptions.captureTarget.bounds,
+                screen: screen.id,
+              };
+            }
+          }
+        })();
+
         await commands.startRecording({
-          capture_target: rawOptions.captureTarget,
+          capture_target,
           mode: rawOptions.mode,
           capture_system_audio: rawOptions.captureSystemAudio,
         });
@@ -422,7 +457,6 @@ function Page() {
         options={cameras}
         value={options.cameraID() ?? null}
         onChange={(v) => {
-          console.log({ v });
           if (!v) setCamera.mutate(null);
           else if (v.model_id) setCamera.mutate({ ModelID: v.model_id });
           else setCamera.mutate({ DeviceID: v.device_id });
@@ -438,11 +472,13 @@ function Page() {
       <SystemAudio />
       <div class="flex items-center space-x-1 w-full">
         {rawOptions.mode === "instant" && !auth.data ? (
-          <SignInButton>
-            Sign In for{" "}
-            <IconCapInstant class="size-[0.8rem] ml-[0.14rem] mr-0.5" />
-            Instant Mode
-          </SignInButton>
+          <>
+            <SignInButton>
+              Sign In for{" "}
+              <IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+              Instant Mode
+            </SignInButton>
+          </>
         ) : (
           <Button
             disabled={toggleRecording.isPending}
@@ -488,7 +524,6 @@ function useRequestPermission() {
       if (type === "camera") {
         await commands.resetCameraPermissions();
       } else if (type === "microphone") {
-        console.log("wowzers");
         await commands.resetMicrophonePermissions();
       }
       await commands.requestPermission(type);
@@ -520,6 +555,8 @@ import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
+import { createTauriEventListener } from "~/utils/createEventListener";
+import { createEventListener } from "@solid-primitives/event-listener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -571,7 +608,6 @@ function AreaSelectButton(props: {
     }
 
     const { screen } = props;
-    console.log({ screen });
     if (!screen) return;
 
     trackEvent("crop_area_enabled", {
@@ -716,6 +752,11 @@ function CameraSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("camera");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_CAMERA,
@@ -794,22 +835,9 @@ function MicrophoneSelect(props: {
     });
   };
 
-  // Create a single event listener using onMount
-  onMount(() => {
-    const listener = (event: Event) => {
-      const dbs = (event as CustomEvent<number>).detail;
-      if (!props.value) setDbs();
-      else setDbs(dbs);
-    };
-
-    events.audioInputLevelChange.listen((dbs) => {
-      if (!props.value) setDbs();
-      else setDbs(dbs.payload);
-    });
-
-    return () => {
-      window.removeEventListener("audioLevelChange", listener);
-    };
+  createTauriEventListener(events.audioInputLevelChange, (dbs) => {
+    if (!props.value) setDbs();
+    else setDbs(dbs);
   });
 
   // visual audio level from 0 -> 1
@@ -830,6 +858,11 @@ function MicrophoneSelect(props: {
         disabled={!!currentRecording.data || props.disabled}
         class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
         onClick={() => {
+          if (!permissionGranted()) {
+            requestPermission("microphone");
+            return;
+          }
+
           Promise.all([
             CheckMenuItem.new({
               text: NO_MICROPHONE,
@@ -940,7 +973,6 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
       disabled={props.disabled}
       onClick={() => {
         if (props.options.length > 1) {
-          console.log({ options: props.options, value: props.value });
           Promise.all(
             props.options.map((o) =>
               CheckMenuItem.new({
@@ -986,6 +1018,7 @@ function TargetSelectInfoPill<T>(props: {
       onClick={(e) => {
         if (!props.permissionGranted) {
           props.requestPermission();
+          e.stopPropagation();
           return;
         }
 

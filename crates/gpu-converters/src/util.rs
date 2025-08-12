@@ -1,14 +1,17 @@
-pub fn read_buffer_to_vec(buffer: &wgpu::Buffer, device: &wgpu::Device) -> Vec<u8> {
+pub fn read_buffer_to_vec(
+    buffer: &wgpu::Buffer,
+    device: &wgpu::Device,
+) -> Result<Vec<u8>, wgpu::PollError> {
     let buffer_slice = buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         tx.send(result).unwrap();
     });
-    device.poll(wgpu::PollType::Wait);
+    device.poll(wgpu::PollType::Wait)?;
     rx.recv().unwrap().unwrap();
 
     let data = buffer_slice.get_mapped_range();
-    data.to_vec()
+    Ok(data.to_vec())
 }
 
 pub fn copy_texture_to_buffer_command(

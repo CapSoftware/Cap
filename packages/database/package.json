@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@cap/env": "workspace:*",
+    "@cap/web-domain": "workspace:*",
     "@mattrax/mysql-planetscale": "^0.0.3",
     "@paralleldrive/cuid2": "^2.2.2",
     "@planetscale/database": "^1.13.0",
@@ -27,7 +28,8 @@
     "next": "14.2.9",
     "next-auth": "^4.24.5",
     "react-email": "^4.0.16",
-    "resend": "4.6.0"
+    "resend": "4.6.0",
+    "zod": "^3"
   },
   "devDependencies": {
     "@cap/ui": "workspace:*",

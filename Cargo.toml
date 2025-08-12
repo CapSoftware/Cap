@@ -26,7 +26,7 @@ specta = { version = "=2.0.0-rc.20", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 
-scap = { git = "https://github.com/CapSoftware/scap", rev = "6ec1fad428c0" }
+scap = { git = "https://github.com/CapSoftware/scap", rev = "3cefe71561ff" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
 	"input-native",
 	"serialize",
@@ -59,6 +59,11 @@ windows-sys = "0.59.0"
 windows-capture = "1.5.0"
 percent-encoding = "2.3.1"
 
+# TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859
+[workspace.lints.rust]
+deprecated = "allow"
+unexpected_cfgs = "allow"
+
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
@@ -75,4 +80,4 @@ debug = true
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
 # https://github.com/gfx-rs/wgpu/pull/7550
-wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
+# wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

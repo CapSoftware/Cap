@@ -55,7 +55,7 @@ impl VideoDeviceInfo {
     }
 
     pub fn model_id(&self) -> Option<&str> {
-        self.model_id.as_ref().map(|s| s.as_str())
+        self.model_id.as_deref()
     }
 
     pub fn is_mf(&self) -> bool {
@@ -83,7 +83,7 @@ impl VideoDeviceInfo {
                 let format = VideoFormat::new_mf(mf_format.clone())?;
 
                 let handle = device.start_capturing(
-                    &mf_format,
+                    mf_format,
                     Box::new(move |data| {
                         let sample = &data.sample;
                         let len = unsafe { sample.GetBufferCount() }.unwrap();
@@ -118,7 +118,7 @@ impl VideoDeviceInfo {
                             &*(media_type.pbFormat as *const _ as *const KS_VIDEOINFOHEADER)
                         };
 
-                        let Some(format) = DSPixelFormat::new(&media_type).map(|v| v.format) else {
+                        let Some(format) = DSPixelFormat::new(media_type).map(|v| v.format) else {
                             return;
                         };
 
@@ -325,7 +325,7 @@ pub fn get_devices() -> Result<Vec<VideoDeviceInfo>, GetDevicesError> {
 
         match mf_device {
             Some((i, mf_device)) => {
-                if mf_device.formats().len() == 0 {
+                if mf_device.formats().is_empty() {
                     devices.push(mf_device.clone());
                     devices.swap_remove(i);
                 }
@@ -372,7 +372,7 @@ pub enum VideoFormatInner {
 
 impl Debug for VideoFormatInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&match self {
+        f.write_str(match self {
             VideoFormatInner::MediaFoundation(_) => "MediaFoundation",
             VideoFormatInner::DirectShow(_) => "DirectShow",
         })
@@ -449,6 +449,7 @@ impl Display for VideoFormat {
 
 struct MFPixelFormat {
     format: PixelFormat,
+    #[allow(unused)]
     mf: GUID,
 }
 
@@ -484,6 +485,7 @@ impl Deref for MFPixelFormat {
 
 struct DSPixelFormat {
     format: PixelFormat,
+    #[allow(unused)]
     ds: GUID,
 }
 

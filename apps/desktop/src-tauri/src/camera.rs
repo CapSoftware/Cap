@@ -56,6 +56,7 @@ pub struct CameraWindowState {
 }
 
 pub struct CameraPreview {
+    #[allow(clippy::type_complexity)]
     reconfigure: (
         broadcast::Sender<Option<(u32, u32)>>,
         broadcast::Receiver<Option<(u32, u32)>>,
@@ -205,13 +206,13 @@ impl CameraPreview {
                     let output_height = (1280.0 / camera_aspect_ratio) as u32;
 
                     let new_texture_value = if let Some(frame) = frame {
-                        if loading == true {
+                        if loading {
                             loading_state.store(false, Ordering::Relaxed);
                             loading = false;
                         }
 
                         let resampler_frame = resampler_frame
-                            .get_or_init((output_width, output_height), || frame::Video::empty());
+                            .get_or_init((output_width, output_height), frame::Video::empty);
 
                         scaler.cached(
                             frame.format(),
@@ -268,7 +269,7 @@ impl CameraPreview {
 
     /// Save the current state of the camera window.
     pub fn save(&self, state: &CameraWindowState) -> tauri_plugin_store::Result<()> {
-        self.store.set("state", serde_json::to_value(&state)?);
+        self.store.set("state", serde_json::to_value(state)?);
         self.store.save()?;
         self.reconfigure.0.send(None).ok();
         Ok(())
@@ -509,11 +510,6 @@ impl Renderer {
             .contains(&CompositeAlphaMode::PostMultiplied)
         {
             CompositeAlphaMode::PostMultiplied
-        } else if surface_capabilities
-            .alpha_modes
-            .contains(&CompositeAlphaMode::PostMultiplied)
-        {
-            CompositeAlphaMode::PostMultiplied
         } else {
             CompositeAlphaMode::Inherit
         };
@@ -598,7 +594,7 @@ impl Renderer {
             _,
         ) = if let Some(monitor) = self.window.current_monitor()? {
             let size = monitor.position().to_logical(monitor.scale_factor());
-            (monitor.size().clone(), size, monitor.scale_factor())
+            (*monitor.size(), size, monitor.scale_factor())
         } else {
             (PhysicalSize::new(640, 360), LogicalPosition::new(0, 0), 1.0)
         };
@@ -701,8 +697,8 @@ impl Renderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let surface_width = surface.texture.width();
-        let surface_height = surface.texture.height();
+        // let surface_width = surface.texture.width();
+        // let surface_height = surface.texture.height();
 
         let mut encoder = self
             .device
@@ -713,7 +709,7 @@ impl Renderer {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
-                    depth_slice: None,
+                    // depth_slice: None,
                     resolve_target: None, // Some(&surface_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -775,7 +771,7 @@ impl Renderer {
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &buffer,
+                    buffer,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
                         bytes_per_row: Some(stride),
@@ -823,7 +819,7 @@ impl<K, V> Default for Cached<K, V> {
 }
 
 impl<K: PartialEq, V> Cached<K, V> {
-    pub fn get_or_init<'a>(&'a mut self, key: K, init: impl FnOnce() -> V) -> &'a mut V {
+    pub fn get_or_init(&mut self, key: K, init: impl FnOnce() -> V) -> &mut V {
         if self.value.as_ref().is_none_or(|(k, _)| *k != key) {
             self.value = Some((key, init()));
         }

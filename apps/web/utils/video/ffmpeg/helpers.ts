@@ -27,12 +27,12 @@ export function generateM3U8Playlist(
   return m3u8Content;
 }
 
-export async function generateMasterPlaylist(
+export function generateMasterPlaylist(
   resolution: string,
   bandwidth: string,
   videoPlaylistUrl: string,
   audioPlaylistUrl: string | null,
-  xStreamInfo: string
+  xStreamInfo?: string
 ) {
   const streamInfo = xStreamInfo
     ? xStreamInfo + ',AUDIO="audio"'

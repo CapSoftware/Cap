@@ -2,10 +2,11 @@ import { VideoMetadata } from "@cap/database/types";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
+import { Video } from "@cap/web-domain";
 
 interface SharedCapCardProps {
   cap: {
-    id: string;
+    id: Video.VideoId;
     ownerId: string;
     name: string;
     createdAt: Date;
@@ -40,10 +41,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
   const isOwner = userId === cap.ownerId;
 
   return (
-    <div
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-    >
+    <div onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <CapCard
         hideSharedStatus={hideSharedStatus}
         cap={cap}

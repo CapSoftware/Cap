@@ -28,6 +28,7 @@
     "@solid-primitives/event-listener": "^2.3.3",
     "@solid-primitives/history": "^0.1.5",
     "@solid-primitives/memo": "^1.4.2",
+    "@solid-primitives/mouse": "^2.1.2",
     "@solid-primitives/refs": "^1.0.8",
     "@solid-primitives/resize-observer": "^2.0.26",
     "@solid-primitives/scheduled": "^1.4.3",
@@ -53,7 +54,7 @@
     "@ts-rest/core": "^3.52.1",
     "@types/react-tooltip": "^4.2.4",
     "cva": "npm:class-variance-authority@^0.7.0",
-    "effect": "^3.7.2",
+    "effect": "^3.17.7",
     "mp4box": "^0.5.2",
     "posthog-js": "^1.215.3",
     "solid-js": "^1.9.3",
@@ -66,7 +67,7 @@
     "uuid": "^9.0.1",
     "vinxi": "^0.5.6",
     "webcodecs": "^0.1.0",
-    "zod": "^3.24.2"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@fontsource/geist-sans": "^5.0.3",

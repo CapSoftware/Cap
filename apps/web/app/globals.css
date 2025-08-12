@@ -77,10 +77,6 @@ html {
   color: #ffffff;
 }
 
-input:-webkit-autofill {
-  transition: all 5000s ease-in-out 0s;
-}
-
 .wrapper {
   @apply mx-auto w-[92%] max-w-screen-2xl;
 }
@@ -549,9 +545,13 @@ slot:not(.dashboard-layout slot) {
   @apply bg-gray-50;
 }
 
+.hide-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Custom scrollbar */
 .custom-scroll {
-  overflow-y: scroll;
+  overflow-y: auto;
 }
 
 .custom-scroll::-webkit-scrollbar {

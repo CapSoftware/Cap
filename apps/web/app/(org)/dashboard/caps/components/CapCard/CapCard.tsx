@@ -4,14 +4,21 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { VideoMetadata } from "@cap/database/types";
-import { Button, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@cap/ui";
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@cap/ui";
 import {
   faCheck,
   faCopy,
-  faEllipsis, faLock,
+  faEllipsis,
+  faLock,
   faTrash,
   faUnlock,
-  faVideo
+  faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
@@ -24,16 +31,17 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
 import { CapCardContent } from "./CapCardContent";
-import { duplicateVideo } from "@/actions/videos/duplicate";
-
-
+import { EffectRuntime } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import { Video } from "@cap/web-domain";
 
 export interface CapCardProps extends PropsWithChildren {
   cap: {
-    id: string;
+    id: Video.VideoId;
     ownerId: string;
     name: string;
     createdAt: Date;
+    public?: boolean;
     totalComments: number;
     totalReactions: number;
     sharedOrganizations?: {
@@ -52,7 +60,7 @@ export interface CapCardProps extends PropsWithChildren {
     hasPassword?: boolean;
   };
   analytics: number;
-  onDelete?: () => Promise<void>;
+  onDelete?: () => Promise<any>;
   userId?: string;
   sharedCapCard?: boolean;
   isSelected?: boolean;
@@ -90,11 +98,12 @@ export const CapCard = ({
   const [copyPressed, setCopyPressed] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const router = useRouter();
   const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [removing, setRemoving] = useState(false);
+
+  const router = useRouter();
 
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -128,18 +137,19 @@ export const CapCard = ({
   // Helper function to create a drag preview element
   const createDragPreview = (text: string): HTMLElement => {
     // Create the element
-    const element = document.createElement('div');
+    const element = document.createElement("div");
 
     // Add text content
     element.textContent = text;
 
     // Apply Tailwind-like styles directly
-    element.className = 'px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12';
+    element.className =
+      "px-2 py-1.5 text-sm font-medium rounded-lg shadow-md text-gray-1 bg-gray-12";
 
     // Position off-screen
-    element.style.position = 'absolute';
-    element.style.top = '-9999px';
-    element.style.left = '-9999px';
+    element.style.position = "absolute";
+    element.style.top = "-9999px";
+    element.style.left = "-9999px";
 
     return element;
   };
@@ -157,7 +167,7 @@ export const CapCard = ({
     );
 
     // Set drag effect to 'move' to avoid showing the + icon
-    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.effectAllowed = "move";
 
     // Set the drag image using the helper function
     try {
@@ -168,7 +178,7 @@ export const CapCard = ({
       // Clean up after a short delay
       setTimeout(() => document.body.removeChild(dragPreview), 100);
     } catch (error) {
-      console.error('Error setting drag image:', error);
+      console.error("Error setting drag image:", error);
     }
 
     setIsDragging(true);
@@ -228,7 +238,6 @@ export const CapCard = ({
     }
   };
 
-
   const handleCardClick = (e: React.MouseEvent) => {
     if (anyCapSelected) {
       e.preventDefault();
@@ -256,6 +265,7 @@ export const CapCard = ({
         capName={cap.name}
         sharedSpaces={cap.sharedSpaces || []}
         onSharingUpdated={handleSharingUpdated}
+        isPublic={cap.public}
       />
       <PasswordDialog
         isOpen={isPasswordDialogOpen}
@@ -274,17 +284,14 @@ export const CapCard = ({
           isSelected
             ? "!border-blue-10 border-px"
             : anyCapSelected
-              ? "border-blue-10 border-px hover:border-blue-10"
-              : "hover:border-blue-10",
+            ? "border-blue-10 border-px hover:border-blue-10"
+            : "hover:border-blue-10",
           isDragging && "opacity-50",
           isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing"
         )}
       >
         {anyCapSelected && !sharedCapCard && (
-          <div
-            className="absolute inset-0 z-10"
-            onClick={handleCardClick}
-          />
+          <div className="absolute inset-0 z-10" onClick={handleCardClick} />
         )}
         {!sharedCapCard && (
           <div
@@ -293,8 +300,8 @@ export const CapCard = ({
               anyCapSelected
                 ? "opacity-0"
                 : isDropdownOpen
-                  ? "opacity-100"
-                  : "opacity-0 group-hover:opacity-100",
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100",
               "top-2 right-2 flex-col gap-2 z-[20]"
             )}
           >
@@ -315,37 +322,38 @@ export const CapCard = ({
                     onClick={(e) => {
                       e.stopPropagation();
                     }}
-                    className={clsx("!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75",
+                    className={clsx(
+                      "!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75",
                       isDropdownOpen ? "bg-gray-5 border-gray-7" : ""
                     )}
                     variant="white"
                     size="sm"
                     aria-label="More options"
                   >
-                    <FontAwesomeIcon className="text-gray-12 size-4" icon={faEllipsis} />
+                    <FontAwesomeIcon
+                      className="text-gray-12 size-4"
+                      icon={faEllipsis}
+                    />
                   </Button>
                 </DropdownMenuTrigger>
               </Tooltip>
 
-              <DropdownMenuContent
-                align="end"
-                sideOffset={5}
-              >
+              <DropdownMenuContent align="end" sideOffset={5}>
                 <DropdownMenuItem
                   onClick={async () => {
                     try {
-                      await duplicateVideo(cap.id)
+                      await EffectRuntime.runPromise(
+                        withRpc((r) => r.VideoDuplicate(cap.id))
+                      );
                       toast.success("Cap duplicated successfully");
+                      router.refresh();
                     } catch (error) {
                       toast.error("Failed to duplicate cap");
                     }
                   }}
                   className="flex gap-2 items-center rounded-lg"
                 >
-                  <FontAwesomeIcon
-                    className="size-3"
-                    icon={faCopy}
-                  />
+                  <FontAwesomeIcon className="size-3" icon={faCopy} />
                   <p className="text-sm text-gray-12">Duplicate</p>
                 </DropdownMenuItem>
                 <DropdownMenuItem
@@ -362,7 +370,9 @@ export const CapCard = ({
                     className="size-3"
                     icon={passwordProtected ? faLock : faUnlock}
                   />
-                  <p className="text-sm text-gray-12">{passwordProtected ? "Edit password" : "Add password"}</p>
+                  <p className="text-sm text-gray-12">
+                    {passwordProtected ? "Edit password" : "Add password"}
+                  </p>
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -429,7 +439,11 @@ export const CapCard = ({
         >
           <VideoThumbnail
             imageClass={clsx(
-              anyCapSelected ? "opacity-50" : isDropdownOpen ? "opacity-30" : "group-hover:opacity-30",
+              anyCapSelected
+                ? "opacity-50"
+                : isDropdownOpen
+                ? "opacity-30"
+                : "group-hover:opacity-30",
               "transition-opacity duration-200"
             )}
             userId={cap.ownerId}

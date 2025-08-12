@@ -18,7 +18,7 @@ import { Button } from "@cap/ui-solid";
 import CaptionControlsWindows11 from "~/components/titlebar/controls/CaptionControlsWindows11";
 import Tooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
-import { commands } from "~/utils/tauri";
+import { commands, events } from "~/utils/tauri";
 import { initializeTitlebar } from "~/utils/titlebar-state";
 import { useEditorContext } from "./context";
 import PresetsDropdown from "./PresetsDropdown";
@@ -80,6 +80,7 @@ export function Header() {
             await remove(editorInstance.path, {
               recursive: true,
             });
+            events.recordingDeleted.emit({ path: editorInstance.path });
             await currentWindow.close();
           }}
           tooltipText="Delete recording"

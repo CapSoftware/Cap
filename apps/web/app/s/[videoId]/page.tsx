@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { eq, InferSelectModel } from "drizzle-orm";
+import { eq, InferSelectModel, sql } from "drizzle-orm";
 import { Logo } from "@cap/ui";
 
 import {
@@ -9,14 +9,17 @@ import {
   sharedVideos,
   organizationMembers,
   organizations,
+  spaces,
+  spaceVideos,
 } from "@cap/database/schema";
 import { VideoMetadata } from "@cap/database/types";
 import { getCurrentUser } from "@cap/database/auth/session";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { buildEnv } from "@cap/env";
 import { getVideoAnalytics } from "@/actions/videos/get-analytics";
-import { transcribeVideo } from "@/actions/videos/transcribe";
+import { transcribeVideo } from "@/lib/transcribe";
 import { headers } from "next/headers";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -25,13 +28,73 @@ import { Share } from "./Share";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { userHasAccessToVideo } from "@/utils/auth";
+import { createNotification } from "@/lib/Notification";
+import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
 export const revalidate = 30;
 
+// Helper function to fetch shared spaces data for a video
+async function getSharedSpacesForVideo(videoId: string) {
+  // Fetch space-level sharing
+  const spaceSharing = await db()
+    .select({
+      id: spaces.id,
+      name: spaces.name,
+      organizationId: spaces.organizationId,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(spaceVideos)
+    .innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+    .innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+    .where(eq(spaceVideos.videoId, videoId));
+
+  // Fetch organization-level sharing
+  const orgSharing = await db()
+    .select({
+      id: organizations.id,
+      name: organizations.name,
+      organizationId: organizations.id,
+      iconUrl: organizations.iconUrl,
+    })
+    .from(sharedVideos)
+    .innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
+    .where(eq(sharedVideos.videoId, videoId));
+
+  const sharedSpaces: Array<{
+    id: string;
+    name: string;
+    organizationId: string;
+    iconUrl?: string;
+  }> = [];
+
+  // Add space-level sharing
+  spaceSharing.forEach((space) => {
+    sharedSpaces.push({
+      id: space.id,
+      name: space.name,
+      organizationId: space.organizationId,
+      iconUrl: space.iconUrl || undefined,
+    });
+  });
+
+  // Add organization-level sharing
+  orgSharing.forEach((org) => {
+    sharedSpaces.push({
+      id: org.id,
+      name: org.name,
+      organizationId: org.organizationId,
+      iconUrl: org.iconUrl || undefined,
+    });
+  });
+
+  return sharedSpaces;
+}
+
 type Props = {
   params: { [key: string]: string | string[] | undefined };
+  searchParams: { [key: string]: string | string[] | undefined };
 };
 
 type CommentWithAuthor = typeof comments.$inferSelect & {
@@ -51,6 +114,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const videoId = params.videoId as string;
+
   console.log(
     "[generateMetadata] Fetching video metadata for videoId:",
     videoId
@@ -67,6 +131,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   if (!video) {
     return notFound();
   }
+
+  const userPromise = getCurrentUser();
+  const userAccess = await userHasAccessToVideo(userPromise, video);
 
   const headersList = headers();
   const referrer = headersList.get("x-referrer") || "";
@@ -89,7 +156,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     ? "index, follow"
     : "noindex, nofollow";
 
-  if (video.public === false) {
+  if (video.public === false && userAccess !== "has-access") {
     return {
       title: "Cap: This video is private",
       description: "This video is private and cannot be shared.",
@@ -120,7 +187,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     };
   }
 
-  if (video.password !== null) {
+  if (video.password !== null && userAccess !== "has-access") {
     return {
       title: "Cap: Password Protected Video",
       description: "This video is password protected.",
@@ -206,10 +273,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function ShareVideoPage(props: Props) {
   const params = props.params;
+  const searchParams = props.searchParams;
   const videoId = params.videoId as string;
-  console.log("[ShareVideoPage] Starting page load for videoId:", videoId);
 
-  const userPromise = getCurrentUser();
+  const user = await getCurrentUser();
 
   const [video] = await db()
     .select({
@@ -241,14 +308,32 @@ export default async function ShareVideoPage(props: Props) {
     .leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
     .where(eq(videos.id, videoId));
 
+  if (user && video && user.id !== video.ownerId) {
+    try {
+      await createNotification({ type: "view", videoId, authorId: user.id });
+    } catch (error) {
+      console.error("Failed to create view notification:", error);
+    }
+  }
+
   if (!video) {
     console.log("[ShareVideoPage] No video found for videoId:", videoId);
     return <p>No video found</p>;
   }
 
-  const userAccess = await userHasAccessToVideo(userPromise, video);
+  const userAccess = await userHasAccessToVideo(user, video);
 
-  if (userAccess === "private") return <p>This video is private</p>;
+  if (userAccess === "private") {
+    return (
+      <div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+        <h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+        <p className="text-gray-400">
+          If you own this video, please <Link href="/login">sign in</Link> to
+          manage sharing.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-[#F7F8FA]">
@@ -257,7 +342,11 @@ export default async function ShareVideoPage(props: Props) {
         videoId={video.id}
       />
       {userAccess === "has-access" && (
-        <AuthorizedContent video={video} user={userPromise} />
+        <AuthorizedContent
+          video={video}
+          user={user}
+          searchParams={searchParams}
+        />
       )}
     </div>
   );
@@ -266,15 +355,34 @@ export default async function ShareVideoPage(props: Props) {
 async function AuthorizedContent({
   video,
   user: _user,
+  searchParams,
 }: {
-  video: InferSelectModel<typeof videos> & {
+  video: Omit<InferSelectModel<typeof videos>, "folderId"> & {
     sharedOrganization: { organizationId: string } | null;
   };
   user: MaybePromise<InferSelectModel<typeof users> | null>;
+  searchParams: { [key: string]: string | string[] | undefined };
 }) {
   const user = await _user;
   const videoId = video.id;
   const userId = user?.id;
+  const commentId = searchParams.comment as string | undefined;
+  const replyId = searchParams.reply as string | undefined;
+
+  // Fetch spaces data for the sharing dialog
+  let spacesData = null;
+  if (user) {
+    try {
+      const dashboardData = await getDashboardData(user);
+      spacesData = dashboardData.spacesData;
+    } catch (error) {
+      console.error("Failed to fetch spaces data for sharing dialog:", error);
+      spacesData = [];
+    }
+  }
+
+  // Fetch shared spaces data for this video
+  const sharedSpaces = await getSharedSpacesForVideo(videoId);
 
   let aiGenerationEnabled = false;
   const videoOwnerQuery = await db()
@@ -479,33 +587,56 @@ async function AuthorizedContent({
 
   const membersListPromise = video.sharedOrganization?.organizationId
     ? db()
-      .select({ userId: organizationMembers.userId })
-      .from(organizationMembers)
-      .where(
-        eq(
-          organizationMembers.organizationId,
-          video.sharedOrganization.organizationId
+        .select({ userId: organizationMembers.userId })
+        .from(organizationMembers)
+        .where(
+          eq(
+            organizationMembers.organizationId,
+            video.sharedOrganization.organizationId
+          )
         )
-      )
     : Promise.resolve([]);
 
-  const commentsPromise = db()
-    .select({
-      id: comments.id,
-      content: comments.content,
-      timestamp: comments.timestamp,
-      type: comments.type,
-      authorId: comments.authorId,
-      videoId: comments.videoId,
-      createdAt: comments.createdAt,
-      updatedAt: comments.updatedAt,
-      parentCommentId: comments.parentCommentId,
-      authorName: users.name,
-    })
-    .from(comments)
-    .leftJoin(users, eq(comments.authorId, users.id))
-    .where(eq(comments.videoId, videoId))
-    .execute();
+  const commentsPromise = (async () => {
+
+    let toplLevelCommentId: string | undefined;
+
+     if (replyId) {
+      const [parentComment] = await db()
+      .select({ parentCommentId: comments.parentCommentId })
+      .from(comments)
+      .where(eq(comments.id, replyId))
+      .limit(1);
+      toplLevelCommentId = parentComment?.parentCommentId;
+    }
+
+    const commentToBringToTheTop = toplLevelCommentId ?? commentId;
+    
+    
+    const allComments = await db()
+      .select({
+        id: comments.id,
+        content: comments.content,
+        timestamp: comments.timestamp,
+        type: comments.type,
+        authorId: comments.authorId,
+        videoId: comments.videoId,
+        createdAt: comments.createdAt,
+        updatedAt: comments.updatedAt,
+        parentCommentId: comments.parentCommentId,
+        authorName: users.name,
+      })
+      .from(comments)
+      .leftJoin(users, eq(comments.authorId, users.id))
+      .where(eq(comments.videoId, videoId))
+      .orderBy(
+        commentToBringToTheTop
+          ? sql`CASE WHEN ${comments.id} = ${commentToBringToTheTop} THEN 0 ELSE 1 END, ${comments.createdAt}`
+          : comments.createdAt
+      );
+
+    return allComments;
+  })();
 
   const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
 
@@ -528,8 +659,8 @@ async function AuthorizedContent({
     sharedOrganizations: sharedOrganizations,
     password: null,
     hasPassword: video.password !== null,
+    folderId: null,
   };
-
 
   return (
     <>
@@ -547,7 +678,9 @@ async function AuthorizedContent({
           sharedOrganizations={
             videoWithOrganizationInfo.sharedOrganizations || []
           }
+          sharedSpaces={sharedSpaces}
           userOrganizations={userOrganizations}
+          spacesData={spacesData}
           NODE_ENV={process.env.NODE_ENV}
         />
 
