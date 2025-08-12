@@ -82,7 +82,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                   );
                 }}
               />
-              {import.meta.env.DEV && (
+              {/*{import.meta.env.DEV && (
                 <ToggleSetting
                   label="New recording flow"
                   description="New and improved flow for starting a recording! You may need to restart the app for this to take effect."
@@ -96,7 +96,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
                     );
                   }}
                 />
-              )}
+              )}*/}
             </div>
           </div>
         </div>
