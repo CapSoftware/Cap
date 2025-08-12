@@ -70,17 +70,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						).pipe(Effect.provide(S3ProviderLayer));
 					}).pipe(
 						provideOptionalAuth,
+						Effect.tapErrorCause(Effect.logError),
 						Effect.catchTags({
 							VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
 							PolicyDenied: () => new HttpApiError.Unauthorized(),
-							DatabaseError: (e) =>
-								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
-								),
-							S3Error: (e) =>
-								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
-								),
+							DatabaseError: () => new HttpApiError.InternalServerError(),
+							S3Error: () => new HttpApiError.InternalServerError(),
 						}),
 					),
 				);
