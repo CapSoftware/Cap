@@ -150,7 +150,9 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-															{record.domain?.replace(`.${domain}`, '') || "@"}
+															{record.domain?.startsWith('_') 
+																? record.domain.replace(`.${domain}`, '')
+																: record.domain?.replace(`.${domain}`, '') || "@"}
 														</code>
 													</dd>
 												</div>
@@ -180,18 +182,6 @@ const VerifyStep = ({
 														</div>
 													</dd>
 												</div>
-												{record.reason && (
-													<div className="grid grid-cols-[100px,1fr] items-center">
-														<dt className="text-sm font-medium text-gray-12">
-															Purpose
-														</dt>
-														<dd className="text-sm text-gray-10">
-															{record.reason === "pending_domain_verification" 
-																? "Domain verification"
-																: record.reason}
-														</dd>
-													</div>
-												)}
 											</div>
 										))}
 									</dl>
