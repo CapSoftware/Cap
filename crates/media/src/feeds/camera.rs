@@ -90,7 +90,7 @@ impl CameraFeed {
             SetupCameraError::Initialisation
         );
 
-        let camera_info = find_camera(&selected_camera).unwrap();
+        let camera_info = find_camera(&selected_camera).ok_or(SetupCameraError::CameraNotFound)?;
         let (control, control_receiver) = flume::bounded(1);
 
         let (ready_tx, ready_rx) = oneshot::channel();

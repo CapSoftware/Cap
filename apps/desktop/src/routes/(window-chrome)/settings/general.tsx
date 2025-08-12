@@ -112,11 +112,11 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
   const [settings, setSettings] = createStore<GeneralSettingsStore>(
     props.initialStore ?? {
       uploadIndividualFiles: false,
-      openEditorAfterRecording: false,
       hideDockIcon: false,
       autoCreateShareableLink: false,
       enableNotifications: true,
       enableNativeCameraPreview: false,
+      enableNewRecordingFlow: false,
       autoZoomOnClicks: false,
     }
   );
