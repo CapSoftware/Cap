@@ -87,10 +87,10 @@ export default function FolderVideosSection({
 
 			return yield* fiber.await.pipe(Effect.flatten);
 		}),
-		onSuccess: Effect.fn(function* () {
+		onSuccess: () => {
 			setSelectedCaps([]);
 			router.refresh();
-		}),
+		},
 	});
 
 	const handleCapSelection = (capId: Video.VideoId) => {

@@ -8,6 +8,7 @@ import {
 } from "@cap/ui";
 import { faGlobe, faRefresh } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useEffect, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -133,15 +134,84 @@ const CustomDomainDialog = ({
 	const [domain, setDomain] = useState(
 		activeOrganization?.organization.customDomain || "",
 	);
-	const [verifying, setVerifying] = useState(false);
 	const [domainConfig, setDomainConfig] = useState<DomainConfig | null>(null);
-	const [initialConfigLoading, setInitialConfigLoading] = useState(false);
-	const [loading, setLoading] = useState(false);
 	const router = useRouter();
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	const confettiRef = useRef<ConfettiRef>(null);
 
 	const pollInterval = useRef<NodeJS.Timeout>();
+
+	// Mutation for updating domain
+	const updateDomainMutation = useMutation({
+		mutationFn: async ({
+			domain,
+			orgId,
+		}: {
+			domain: string;
+			orgId: string;
+		}) => {
+			if (activeOrganization?.organization.customDomain) {
+				await removeOrganizationDomain(orgId);
+			}
+			return await updateDomain(domain, orgId);
+		},
+		onSuccess: (data) => {
+			handleNext();
+			toast.success("Domain settings updated");
+			router.refresh();
+			if (data) {
+				setIsVerified(data.verified);
+			}
+		},
+		onError: (error) => {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: "Failed to update domain settings",
+			);
+		},
+	});
+
+	// Mutation for checking domain verification
+	const checkDomainMutation = useMutation({
+		mutationFn: async ({
+			orgId,
+			showToasts,
+		}: {
+			orgId: string;
+			showToasts: boolean;
+		}) => {
+			return { data: await checkOrganizationDomain(orgId), showToasts };
+		},
+		onSuccess: ({ data, showToasts }) => {
+			setIsVerified(data.verified);
+			setDomainConfig(data.config);
+
+			if (data.verified) {
+				handleNext();
+			}
+
+			// Only show toasts if explicitly requested
+			if (showToasts) {
+				if (data.verified) {
+					toast.success("Domain is verified!");
+					if (pollInterval.current) {
+						clearInterval(pollInterval.current);
+						pollInterval.current = undefined;
+					}
+				} else {
+					toast.error(
+						"Domain is not verified. Please check your DNS settings.",
+					);
+				}
+			}
+		},
+		onError: (error, { showToasts }) => {
+			if (showToasts) {
+				toast.error("Failed to check domain verification");
+			}
+		},
+	});
 
 	const [stepState, dispatch] = useReducer(stepReducer, {
 		currentIndex: 0,
@@ -233,39 +303,12 @@ const CustomDomainDialog = ({
 		}
 
 		dispatch({ type: "CLEAR_ERROR", payload: "domain" });
-
-		setLoading(true);
 		setDomain(cleanedDomain);
 
-		try {
-			if (activeOrganization?.organization.customDomain) {
-				await removeOrganizationDomain(
-					activeOrganization?.organization.id as string,
-				);
-			}
-
-			const data = await updateDomain(
-				cleanedDomain,
-				activeOrganization?.organization.id as string,
-			);
-
-			handleNext();
-
-			toast.success("Domain settings updated");
-			router.refresh();
-
-			if (data) {
-				setIsVerified(data.verified);
-			}
-		} catch (error) {
-			toast.error(
-				error instanceof Error
-					? error.message
-					: "Failed to update domain settings",
-			);
-		} finally {
-			setLoading(false);
-		}
+		updateDomainMutation.mutate({
+			domain: cleanedDomain,
+			orgId: activeOrganization?.organization.id as string,
+		});
 	};
 
 	const checkVerification = async (showToasts = true) => {
@@ -275,46 +318,10 @@ const CustomDomainDialog = ({
 		)
 			return;
 
-		setVerifying(true);
-
-		try {
-			if (domainConfig === null) {
-				setInitialConfigLoading(true);
-			}
-
-			const data = await checkOrganizationDomain(
-				activeOrganization.organization.id,
-			);
-
-			setIsVerified(data.verified);
-			setDomainConfig(data.config);
-
-			if (data.verified) {
-				handleNext();
-			}
-
-			if (showToasts) {
-				if (data.verified) {
-					toast.success("Domain is verified!");
-
-					if (pollInterval.current) {
-						clearInterval(pollInterval.current);
-						pollInterval.current = undefined;
-					}
-				} else {
-					toast.error(
-						"Domain is not verified. Please check your DNS settings.",
-					);
-				}
-			}
-		} catch (error) {
-			if (showToasts) {
-				toast.error("Failed to check domain verification");
-			}
-		} finally {
-			setVerifying(false);
-			setInitialConfigLoading(false);
-		}
+		checkDomainMutation.mutate({
+			orgId: activeOrganization.organization.id,
+			showToasts,
+		});
 	};
 
 	const handleClose = () => {
@@ -371,7 +378,7 @@ const CustomDomainDialog = ({
 								<DomainStep
 									domain={domain}
 									setDomain={setDomain}
-									submitLoading={loading}
+									submitLoading={updateDomainMutation.isPending}
 									onSubmit={handleDomainSubmit}
 									error={stepState.errors.domain}
 									onClearError={() =>
@@ -384,7 +391,9 @@ const CustomDomainDialog = ({
 							{currentStep.id === "verify" && (
 								<VerifyStep
 									domain={domain}
-									initialConfigLoading={initialConfigLoading}
+									initialConfigLoading={
+										checkDomainMutation.isPending && domainConfig === null
+									}
 									domainConfig={domainConfig}
 									checkVerification={checkVerification}
 									isVerified={isVerified}
@@ -404,10 +413,10 @@ const CustomDomainDialog = ({
 									variant="gray"
 									size="sm"
 									onClick={() => checkVerification(false)}
-									disabled={verifying}
+									disabled={checkDomainMutation.isPending}
 									className="min-w-[100px]"
 								>
-									{verifying ? (
+									{checkDomainMutation.isPending ? (
 										<FontAwesomeIcon
 											className="mr-1 opacity-70 animate-spin size-3.5"
 											icon={faRefresh}
@@ -428,8 +437,10 @@ const CustomDomainDialog = ({
 										<Button
 											onClick={handleDomainSubmit}
 											size="sm"
-											spinner={loading}
-											disabled={loading || !domain.trim()}
+											spinner={updateDomainMutation.isPending}
+											disabled={
+												updateDomainMutation.isPending || !domain.trim()
+											}
 											variant="dark"
 											className="min-w-[100px]"
 										>

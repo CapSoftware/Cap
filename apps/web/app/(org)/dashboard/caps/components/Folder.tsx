@@ -3,6 +3,7 @@ import type { Folder } from "@cap/web-domain";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { Effect } from "effect";
 import Link from "next/link";
@@ -45,6 +46,7 @@ const FolderCard = ({
 	const [isDragOver, setIsDragOver] = useState(false);
 	const [isMovingVideo, setIsMovingVideo] = useState(false);
 	const { activeOrganization } = useDashboardContext();
+
 	// Use a ref to track drag state to avoid re-renders during animation
 	const dragStateRef = useRef({
 		isDragging: false,
@@ -73,16 +75,14 @@ const FolderCard = ({
 
 	const deleteFolder = useEffectMutation({
 		mutationFn: (id: Folder.FolderId) => withRpc((r) => r.FolderDelete(id)),
-		onSuccess: Effect.fn(function* () {
+		onSuccess: () => {
 			router.refresh();
 			toast.success("Folder deleted successfully");
-		}),
-		onError: Effect.fn(function* () {
-			toast.error("Failed to delete folder");
-		}),
-		onSettled: Effect.fn(function* () {
 			setConfirmDeleteFolderOpen(false);
-		}),
+		},
+		onError: () => {
+			toast.error("Failed to delete folder");
+		},
 	});
 
 	useEffect(() => {

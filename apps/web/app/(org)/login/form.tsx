@@ -8,6 +8,7 @@ import {
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
@@ -29,13 +30,43 @@ export function LoginForm() {
 	const searchParams = useSearchParams();
 	const next = searchParams?.get("next");
 	const [email, setEmail] = useState("");
-	const [loading, setLoading] = useState(false);
-	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
 	const [showOrgInput, setShowOrgInput] = useState(false);
 	const [organizationId, setOrganizationId] = useState("");
 	const [organizationName, setOrganizationName] = useState<string | null>(null);
 	const theme = Cookies.get("theme") || "light";
+
+	const emailSignInMutation = useMutation({
+		mutationFn: async (email: string) => {
+			trackEvent("auth_started", {
+				method: "email",
+				is_signup: !oauthError,
+			});
+
+			const result = await signIn("email", {
+				email,
+				redirect: false,
+				...(next && next.length > 0 ? { callbackUrl: next } : {}),
+			});
+
+			if (!result?.ok || result?.error) {
+				throw new Error("Failed to send email");
+			}
+
+			return result;
+		},
+		onSuccess: () => {
+			trackEvent("auth_email_sent", {
+				email_domain: email.split("@")[1],
+			});
+			toast.success("Email sent - check your inbox!");
+		},
+		onError: () => {
+			toast.error("Error sending email - try again?");
+		},
+	});
+
+	const emailSent = emailSignInMutation.isSuccess;
 
 	useEffect(() => {
 		theme === "dark"
@@ -243,35 +274,7 @@ export function LoginForm() {
 											e.preventDefault();
 											if (!email) return;
 
-											setLoading(true);
-											trackEvent("auth_started", {
-												method: "email",
-												is_signup: !oauthError,
-											});
-											signIn("email", {
-												email,
-												redirect: false,
-												...(next && next.length > 0
-													? { callbackUrl: next }
-													: {}),
-											})
-												.then((res) => {
-													setLoading(false);
-													if (res?.ok && !res?.error) {
-														setEmailSent(true);
-														trackEvent("auth_email_sent", {
-															email_domain: email.split("@")[1],
-														});
-														toast.success("Email sent - check your inbox!");
-													} else {
-														toast.error("Error sending email - try again?");
-													}
-												})
-												.catch(() => {
-													setEmailSent(false);
-													setLoading(false);
-													toast.error("Error sending email - try again?");
-												});
+											emailSignInMutation.mutate(email);
 										}}
 										className="flex flex-col space-y-3"
 									>
@@ -280,7 +283,7 @@ export function LoginForm() {
 											email={email}
 											emailSent={emailSent}
 											setEmail={setEmail}
-											loading={loading}
+											loading={emailSignInMutation.isPending}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
 										/>
@@ -317,9 +320,8 @@ export function LoginForm() {
 							layout
 							className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
 							onClick={() => {
-								setEmailSent(false);
 								setEmail("");
-								setLoading(false);
+								emailSignInMutation.reset();
 							}}
 						>
 							Click to restart sign in process

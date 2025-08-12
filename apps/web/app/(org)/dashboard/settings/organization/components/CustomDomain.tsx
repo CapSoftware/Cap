@@ -4,6 +4,7 @@ import {
 	faGlobe,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import { CheckCircle, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -25,29 +26,32 @@ export function CustomDomain() {
 	const [isVerified, setIsVerified] = useState(
 		!!activeOrganization?.organization.domainVerified,
 	);
-	const [loading, setLoading] = useState(false);
 
 	const orgCustomDomain = activeOrganization?.organization.customDomain;
 
-	const handleRemoveDomain = async () => {
+	const removeDomainMutation = useMutation({
+		mutationFn: (organizationId: string) =>
+			removeOrganizationDomain(organizationId),
+		onSuccess: () => {
+			setIsVerified(false);
+			toast.success("Custom domain removed");
+			router.refresh();
+			setConfirmOpen(false);
+		},
+		onError: () => {
+			toast.error("Failed to remove domain");
+			setConfirmOpen(false);
+		},
+	});
+
+	const handleRemoveDomain = () => {
 		if (!isSubscribed) {
 			setShowUpgradeModal(true);
 			return;
 		}
-		setLoading(true);
-		try {
-			await removeOrganizationDomain(
-				activeOrganization?.organization.id as string,
-			);
 
-			setIsVerified(false);
-			toast.success("Custom domain removed");
-			router.refresh();
-		} catch (error) {
-			toast.error("Failed to remove domain");
-		} finally {
-			setLoading(false);
-			setConfirmOpen(false);
+		if (activeOrganization?.organization.id) {
+			removeDomainMutation.mutate(activeOrganization.organization.id);
 		}
 	};
 
@@ -70,7 +74,7 @@ export function CustomDomain() {
 				onConfirm={handleRemoveDomain}
 				confirmLabel="Remove"
 				cancelLabel="Cancel"
-				loading={loading}
+				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
 			/>
 			<div className="flex gap-3 justify-between items-center w-full h-fit">
@@ -141,8 +145,8 @@ export function CustomDomain() {
 					type="submit"
 					size="sm"
 					className="min-w-fit"
-					spinner={loading}
-					disabled={loading}
+					spinner={removeDomainMutation.isPending}
+					disabled={removeDomainMutation.isPending}
 					variant="dark"
 					onClick={async (e) => {
 						e.preventDefault();
