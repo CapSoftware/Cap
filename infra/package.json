@@ -1,13 +1,14 @@
 {
-  "name": "@cap/infra",
-  "devDependencies": {
-    "sst": "3.10.13"
-  },
-  "scripts": {
-    "sst": "sst"
-  },
-  "dependencies": {
-    "@pulumi/github": "^6.7.0",
-    "@pulumiverse/vercel": "^1.14.3"
-  }
+	"name": "@cap/infra",
+	"devDependencies": {
+		"sst": "3.10.13"
+	},
+	"scripts": {
+		"sst": "sst"
+	},
+	"dependencies": {
+		"@pulumi/github": "^6.7.0",
+		"@pulumiverse/vercel": "^1.14.3",
+		"zod": "^3"
+	}
 }

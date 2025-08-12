@@ -2,8 +2,7 @@
 name = "cap-media"
 version = "0.1.0"
 description = "A modular multimedia processing library"
-edition = "2021"
-rust-version = "1.80"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -40,6 +39,7 @@ tokio.workspace = true
 image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
 tokio-util = "0.7.15"
+kameo = "0.17.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

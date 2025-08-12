@@ -5,7 +5,7 @@ use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use tracing::{debug, warn};
 
-use crate::pipeline::{task::PipelineSourceTask, RawNanoseconds, RealTimeClock};
+use crate::pipeline::{RawNanoseconds, RealTimeClock, task::PipelineSourceTask};
 
 pub struct AudioMixer {
     sources: Vec<AudioMixerSource>,
@@ -45,7 +45,7 @@ impl AudioMixer {
         .unwrap()
     }
 
-    pub fn run(&mut self, mut get_is_stopped: impl FnMut() -> bool, on_ready: impl FnOnce() -> ()) {
+    pub fn run(&mut self, mut get_is_stopped: impl FnMut() -> bool, on_ready: impl FnOnce()) {
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
         let mut abuffers = self
@@ -132,7 +132,7 @@ impl AudioMixer {
                     };
                     let frame = &value.0;
 
-                    abuffers[i].source().add(&frame).unwrap();
+                    abuffers[i].source().add(frame).unwrap();
                 }
             }
 
@@ -166,10 +166,10 @@ impl PipelineSourceTask for AudioMixer {
 
     fn run(
         &mut self,
-        clock: Self::Clock,
+        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) {
+    ) -> Result<(), String> {
         self.run(
             || {
                 control_signal
@@ -180,6 +180,8 @@ impl PipelineSourceTask for AudioMixer {
             || {
                 let _ = ready_signal.send(Ok(()));
             },
-        )
+        );
+
+        Ok(())
     }
 }

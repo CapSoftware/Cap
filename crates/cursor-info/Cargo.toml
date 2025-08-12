@@ -4,20 +4,25 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-[dev-dependencies]
-hex = "0.4.3"
-image = "0.25.6"
-sha2 = "0.10.9"
+[dependencies]
+serde = { version = "1.0.219", features = ["derive"] }
+specta = { workspace = true, features = ["derive"] }
+strum = { version = "0.27.2", features = ["derive"] }
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2-app-kit = "0.3.1"
-objc2 = "0.6.1"
-
-[target.'cfg(target_os= "windows")'.dev-dependencies]
+[target.'cfg(target_os= "windows")'.dependencies]
 windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+hex = "0.4"
+sha2 = "0.10"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.0", features = ["NSCursor", "NSApplication"] }
+
 
 [lints]
 workspace = true

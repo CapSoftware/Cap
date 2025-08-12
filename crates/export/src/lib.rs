@@ -70,8 +70,8 @@ impl ExporterBuilder {
         )
         .map_err(|v| Error::ConfigLoad(v.into()))?;
 
-        let recording_meta = RecordingMeta::load_for_project(&self.project_path)
-            .map_err(|v| Error::MetaLoad(v.into()))?;
+        let recording_meta =
+            RecordingMeta::load_for_project(&self.project_path).map_err(Error::MetaLoad)?;
         let studio_meta = recording_meta
             .studio_meta()
             .ok_or(Error::NotStudioRecording)?;

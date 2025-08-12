@@ -98,7 +98,6 @@ impl Debug for Format {
                 }
                 #[cfg(windows)]
                 {
-                    use crate::windows::NativeFormat;
                     use cap_camera_windows::VideoFormatInner;
 
                     match &self.native {
@@ -122,6 +121,7 @@ pub struct ModelID {
 
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "specta", specta(remote = ModelID))]
+#[allow(dead_code)] // It's never constructed but it's a remote impl
 struct ModelIDType(String);
 
 #[cfg(feature = "serde")]
@@ -231,7 +231,7 @@ pub struct RecordingHandle {
 }
 
 impl RecordingHandle {
-    pub fn stop_capturing(self) {
-        let _ = self.native.stop_capturing();
+    pub fn stop_capturing(self) -> Result<(), String> {
+        self.native.stop_capturing()
     }
 }

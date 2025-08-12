@@ -3,6 +3,7 @@ use serde_json::json;
 use specta::Type;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
+use tracing::error;
 use uuid::Uuid;
 
 #[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
@@ -19,6 +20,14 @@ pub enum MainWindowRecordingStartBehaviour {
     #[default]
     Close,
     Minimise,
+}
+
+#[derive(Default, Serialize, Deserialize, Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
+pub enum PostDeletionBehaviour {
+    #[default]
+    DoNothing,
+    ReopenRecordingWindow,
 }
 
 impl MainWindowRecordingStartBehaviour {
@@ -71,16 +80,37 @@ pub struct GeneralSettingsStore {
     pub server_url: String,
     #[serde(default)]
     pub recording_countdown: Option<u32>,
-    #[serde(default, alias = "open_editor_after_recording")]
-    #[deprecated]
-    _open_editor_after_recording: bool,
-    #[deprecated = "can be removed when native camera preview is ready"]
-    #[serde(default, skip_serializing_if = "yes")]
+    // #[deprecated = "can be removed when native camera preview is ready"]
+    #[serde(
+        default = "default_enable_native_camera_preview",
+        skip_serializing_if = "no"
+    )]
     pub enable_native_camera_preview: bool,
+    #[serde(default)]
+    pub auto_zoom_on_clicks: bool,
+    // #[deprecated = "can be removed when new recording flow is the default"]
+    #[serde(
+        default = "default_enable_new_recording_flow",
+        skip_serializing_if = "no"
+    )]
+    pub enable_new_recording_flow: bool,
+    #[serde(default)]
+    pub post_deletion_behaviour: PostDeletionBehaviour,
 }
 
-fn yes(_: &bool) -> bool {
-    true
+fn default_enable_native_camera_preview() -> bool {
+    // TODO:
+    // cfg!(target_os = "macos")
+    false
+}
+
+fn default_enable_new_recording_flow() -> bool {
+    false
+    // cfg!(debug_assertions)
+}
+
+fn no(_: &bool) -> bool {
+    false
 }
 
 fn default_server_url() -> String {
@@ -118,8 +148,10 @@ impl Default for GeneralSettingsStore {
             custom_cursor_capture: false,
             server_url: default_server_url(),
             recording_countdown: Some(3),
-            _open_editor_after_recording: false,
-            enable_native_camera_preview: false,
+            enable_native_camera_preview: default_enable_native_camera_preview(),
+            auto_zoom_on_clicks: false,
+            enable_new_recording_flow: default_enable_new_recording_flow(),
+            post_deletion_behaviour: PostDeletionBehaviour::DoNothing,
         }
     }
 }
@@ -179,9 +211,9 @@ pub fn init(app: &AppHandle) {
     let store = match GeneralSettingsStore::get(app) {
         Ok(Some(store)) => store,
         Ok(None) => GeneralSettingsStore::default(),
-        e => {
-            e.unwrap();
-            return;
+        Err(e) => {
+            error!("Failed to deserialize general settings store: {}", e);
+            GeneralSettingsStore::default()
         }
     };
 

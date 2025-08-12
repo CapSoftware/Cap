@@ -1,37 +1,38 @@
 {
-  "name": "@cap/ui-solid",
-  "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "exports": {
-    ".": "./src/index.tsx",
-    "./tailwind": "./tailwind.config.js",
-    "./main.css": "./src/main.css",
-    "./vite": "./vite.js",
-    "./types": "./src/types.d.ts"
-  },
-  "dependencies": {
-    "@kobalte/core": "^0.13.7",
-    "cva": "npm:class-variance-authority@^0.7.0",
-    "solid-js": "^1.9.3",
-    "tailwindcss": "^3.4.10"
-  },
-  "devDependencies": {
-    "@fontsource/geist-sans": "^5.0.3",
-    "@iconify/json": "^2.2.239",
-    "@kobalte/tailwindcss": "^0.9.0",
-    "@tailwindcss/typography": "^0.5.9",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.41",
-    "storybook-solidjs": "^1.0.0-beta.2",
-    "tailwind-scrollbar": "^3.1.0",
-    "tailwindcss": "^3.4.10",
-    "tailwindcss-animate": "^1.0.6",
-    "unplugin-auto-import": "^0.18.2",
-    "unplugin-fonts": "^1.1.1",
-    "unplugin-icons": "^0.19.2"
-  },
-  "peerDependencies": {
-    "@fontsource/geist-sans": "^5.0.3"
-  }
+	"name": "@cap/ui-solid",
+	"type": "module",
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.tsx",
+		"./tailwind": "./tailwind.config.js",
+		"./main.css": "./src/main.css",
+		"./vite": "./vite.js",
+		"./types": "./src/types.d.ts"
+	},
+	"dependencies": {
+		"@kobalte/core": "^0.13.7",
+		"cva": "npm:class-variance-authority@^0.7.0",
+		"solid-js": "^1.9.3",
+		"tailwindcss": "^3.4.10",
+		"zod": "^3"
+	},
+	"devDependencies": {
+		"@fontsource/geist-sans": "^5.0.3",
+		"@iconify/json": "^2.2.239",
+		"@kobalte/tailwindcss": "^0.9.0",
+		"@tailwindcss/typography": "^0.5.9",
+		"autoprefixer": "^10.4.20",
+		"postcss": "^8.4.41",
+		"storybook-solidjs": "^1.0.0-beta.2",
+		"tailwind-scrollbar": "^3.1.0",
+		"tailwindcss": "^3.4.10",
+		"tailwindcss-animate": "^1.0.6",
+		"unplugin-auto-import": "^0.18.2",
+		"unplugin-fonts": "^1.1.1",
+		"unplugin-icons": "^0.19.2"
+	},
+	"peerDependencies": {
+		"@fontsource/geist-sans": "^5.0.3"
+	}
 }

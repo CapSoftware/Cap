@@ -1,16 +1,16 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use cap_media::{
+    MediaError,
     feeds::{AudioInputFeed, CameraFeed},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
-    MediaError,
 };
 use cap_media_encoders::{H264Encoder, MP4File, OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
@@ -18,15 +18,16 @@ use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
 use flume::Receiver;
 use relative_path::RelativePathBuf;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, trace};
 
 use crate::{
-    capture_pipeline::{create_screen_capture, MakeCapturePipeline, ScreenCaptureMethod},
-    cursor::{spawn_cursor_recorder, CursorActor, Cursors},
     ActorError, RecordingBaseInputs, RecordingError,
+    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
+    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
 };
 
+#[allow(clippy::large_enum_variant)]
 enum StudioRecordingActorState {
     Recording {
         pipeline: StudioRecordingPipeline,
@@ -54,6 +55,7 @@ pub struct StudioRecordingActor {
     recording_dir: PathBuf,
     fps: u32,
     segments: Vec<StudioRecordingSegment>,
+    #[allow(unused)]
     start_instant: Instant,
 }
 
@@ -162,7 +164,7 @@ pub async fn spawn_studio_recording_actor<'a>(
     let mut segment_pipeline_factory = SegmentPipelineFactory::new(
         segments_dir,
         cursors_dir,
-        base_inputs.capture_target.clone(),
+        base_inputs.capture_target,
         audio_input_feed,
         base_inputs.capture_system_audio,
         camera_feed,
@@ -319,11 +321,10 @@ async fn run_actor_iteration(
                 result = &mut pipeline_done_rx => {
                     return match result {
                         Ok(Ok(())) => {
-                            if let Some(cursor) = &mut pipeline.cursor {
-                                if let Some(actor) = cursor.actor.take() {
+                            if let Some(cursor) = &mut pipeline.cursor
+                                && let Some(actor) = cursor.actor.take() {
                                     actor.stop().await;
                                 }
-                            }
 
                             Ok(None)
                         },
@@ -374,7 +375,7 @@ async fn run_actor_iteration(
                     Err(e) => (Err(e), HashMap::new(), 0),
                 };
 
-            send_response!(tx, res.map_err(Into::into));
+            send_response!(tx, res);
 
             Some((
                 State::Paused {
@@ -440,7 +441,7 @@ async fn run_actor_iteration(
                     ))
                 }
                 Err(e) => {
-                    send_response!(tx, Err(e.into()));
+                    send_response!(tx, Err(e));
                     None
                 }
             }
@@ -449,7 +450,15 @@ async fn run_actor_iteration(
         // Cancel from any state
         (Msg::Cancel(tx), state) => {
             let result = match state {
-                State::Recording { mut pipeline, .. } => pipeline.inner.shutdown().await,
+                State::Recording { mut pipeline, .. } => {
+                    if let Some(cursor) = &mut pipeline.cursor
+                        && let Some(actor) = cursor.actor.take()
+                    {
+                        actor.stop().await;
+                    }
+
+                    pipeline.inner.shutdown().await
+                }
                 State::Paused { .. } => Ok(()),
             };
 
@@ -476,8 +485,7 @@ async fn stop_recording(
     use cap_project::*;
 
     let make_relative = |path: &PathBuf| {
-        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap().to_owned())
-            .unwrap()
+        RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap()).unwrap()
     };
 
     let recv_timestamp = |pipeline: &PipelineOutput| pipeline.first_timestamp_rx.try_recv().ok();
@@ -501,7 +509,7 @@ async fn stop_recording(
                         }),
                         mic: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
                             path: make_relative(&mic.path),
-                            start_time: recv_timestamp(&mic),
+                            start_time: recv_timestamp(mic),
                         }),
                         cursor: s
                             .pipeline
@@ -525,7 +533,7 @@ async fn stop_recording(
                                 image_path: RelativePathBuf::from("content/cursors")
                                     .join(&cursor.file_name),
                                 hotspot: cursor.hotspot,
-                                hash: Some(cursor.hash),
+                                shape: cursor.shape,
                             },
                         )
                     })
@@ -563,6 +571,7 @@ struct SegmentPipelineFactory {
 }
 
 impl SegmentPipelineFactory {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         segments_dir: PathBuf,
         cursors_dir: PathBuf,
@@ -622,9 +631,10 @@ impl SegmentPipelineFactory {
 }
 
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
+#[allow(clippy::too_many_arguments)]
 async fn create_segment_pipeline(
     segments_dir: &PathBuf,
-    cursors_dir: &PathBuf,
+    cursors_dir: &Path,
     index: u32,
     capture_target: ScreenCaptureTarget,
     mic_feed: &Option<AudioInputFeed>,
@@ -658,6 +668,7 @@ async fn create_segment_pipeline(
         start_time,
     )
     .await?;
+    #[cfg(target_os = "macos")]
     let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
@@ -676,7 +687,7 @@ async fn create_segment_pipeline(
     trace!("preparing segment pipeline {index}");
 
     let screen = {
-        let bounds = screen_source.get_bounds().clone();
+        let bounds = *screen_source.get_bounds();
         let video_info = screen_source.info();
 
         let (pipeline_builder_, screen_timestamp_rx) =
@@ -690,7 +701,7 @@ async fn create_segment_pipeline(
         info!(
             r#"screen pipeline prepared, will output to "{}""#,
             screen_output_path
-                .strip_prefix(&segments_dir)
+                .strip_prefix(segments_dir)
                 .unwrap()
                 .display()
         );
@@ -740,7 +751,7 @@ async fn create_segment_pipeline(
 
         info!(
             "mic pipeline prepared, will output to {}",
-            output_path.strip_prefix(&segments_dir).unwrap().display()
+            output_path.strip_prefix(segments_dir).unwrap().display()
         );
 
         Some(PipelineOutput {
@@ -835,7 +846,7 @@ async fn create_segment_pipeline(
 
         info!(
             "camera pipeline prepared, will output to {}",
-            output_path.strip_prefix(&segments_dir).unwrap().display()
+            output_path.strip_prefix(segments_dir).unwrap().display()
         );
 
         Some(CameraPipelineInfo {
@@ -851,7 +862,7 @@ async fn create_segment_pipeline(
 
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
-            screen.bounds.clone(),
+            screen.bounds,
             #[cfg(target_os = "macos")]
             cap_displays::Display::list()
                 .into_iter()
@@ -868,7 +879,7 @@ async fn create_segment_pipeline(
                 .unwrap(),
             #[cfg(target_os = "macos")]
             screen_crop_ratio,
-            cursors_dir.clone(),
+            cursors_dir.to_path_buf(),
             prev_cursors,
             next_cursors_id,
             start_time,
@@ -905,7 +916,7 @@ struct CameraPipelineInfo {
 }
 
 fn ensure_dir(path: &PathBuf) -> Result<PathBuf, MediaError> {
-    std::fs::create_dir_all(&path)?;
+    std::fs::create_dir_all(path)?;
     Ok(path.clone())
 }
 

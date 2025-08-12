@@ -90,7 +90,7 @@ impl CameraFeed {
             SetupCameraError::Initialisation
         );
 
-        let camera_info = find_camera(&selected_camera).unwrap();
+        let camera_info = find_camera(&selected_camera).ok_or(SetupCameraError::CameraNotFound)?;
         let (control, control_receiver) = flume::bounded(1);
 
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -205,7 +205,7 @@ fn run_camera_feed(
         Ok(state) => {
             let _ = ready_tx.send(Ok(CameraFeedInfo {
                 camera: state.camera_info.clone(),
-                video_info: state.video_info.clone(),
+                video_info: state.video_info,
                 reference_time: state.reference_time,
             }));
             state
@@ -226,7 +226,11 @@ fn run_camera_feed(
                     break 'outer;
                 }
                 Ok(CameraControl::Shutdown) => {
-                    state.handle.stop_capturing();
+                    state
+                        .handle
+                        .stop_capturing()
+                        .map_err(|err| error!("Error stopping capture: {err:?}"))
+                        .ok();
                     println!("Deliberate shutdown");
                     break 'outer;
                 }
@@ -238,7 +242,7 @@ fn run_camera_feed(
                     Ok(new_state) => {
                         let _ = switch_result.send(Ok(CameraFeedInfo {
                             camera: new_state.camera_info.clone(),
-                            video_info: new_state.video_info.clone(),
+                            video_info: new_state.video_info,
                             reference_time: new_state.reference_time,
                         }));
                         state = new_state;
@@ -357,7 +361,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
 
         ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 
-        ready_signal.take().map(|signal| {
+        if let Some(signal) = ready_signal.take() {
             let video_info = VideoInfo::from_raw_ffmpeg(
                 ff_frame.format(),
                 ff_frame.width(),
@@ -366,7 +370,7 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
             );
 
             let _ = signal.send((video_info, frame.reference_time));
-        });
+        }
 
         let _ = frame_tx.send(RawCameraFrame {
             frame: ff_frame,

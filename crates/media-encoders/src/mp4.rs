@@ -11,6 +11,7 @@ use crate::H264EncoderError;
 use super::{AudioEncoder, H264Encoder};
 
 pub struct MP4File {
+    #[allow(unused)]
     tag: &'static str,
     output: format::context::Output,
     video: H264Encoder,
