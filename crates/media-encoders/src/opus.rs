@@ -53,7 +53,7 @@ pub struct OpusEncoder {
 
 #[derive(thiserror::Error, Debug)]
 pub enum OpusEncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Opus codec not found")]
     CodecNotFound,
