@@ -94,12 +94,6 @@ const VerifyStep = ({
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
 
-	console.log({
-		customDomain: activeOrganization?.organization.customDomain,
-		isVerified,
-		domainConfig,
-	});
-
 	return (
 		<div className="space-y-6">
 			<div className="text-center">
