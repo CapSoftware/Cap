@@ -21,7 +21,7 @@ futures = "0.3.30"
 futures-intrusive = "0.5.0"
 image = "0.25.2"
 log = "0.4"
-serde = { workspace = true }
+serde.workspace = true
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true

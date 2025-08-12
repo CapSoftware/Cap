@@ -28,11 +28,11 @@ indexmap = "2.5.0"
 num-traits = "0.2.19"
 ringbuf = "0.4.7"
 scap.workspace = true
-serde = { workspace = true }
+serde.workspace = true
 specta.workspace = true
 tempfile = "3.12.0"
 thiserror.workspace = true
-tracing = { workspace = true }
+tracing.workspace = true
 futures = "0.3.31"
 axum = { version = "0.7.9", features = ["macros", "ws"] }
 tokio.workspace = true
@@ -42,13 +42,13 @@ tokio-util = "0.7.15"
 kameo = "0.17.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true
 cocoa = "0.26.0"
 core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 objc = "0.2.7"
 objc-foundation = "0.1.1"
-objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
+objc2-foundation.workspace = true
 screencapturekit = "0.3.5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
@@ -62,7 +62,7 @@ windows = { workspace = true, features = [
 	"Win32_UI_HiDpi",
 	"Win32_Media_MediaFoundation",
 ] }
-windows-capture = { workspace = true }
+windows-capture.workspace = true
 cap-camera-windows = { path = "../camera-windows" }
 
 [dev-dependencies]

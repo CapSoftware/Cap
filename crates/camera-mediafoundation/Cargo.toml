@@ -9,7 +9,7 @@ thiserror.workspace = true
 windows-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-core = { workspace = true }
+windows-core.workspace = true
 windows = { workspace = true, features = [
 	"Win32_Media_MediaFoundation",
 	"Win32_Media_DirectShow",
@@ -18,8 +18,8 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 inquire = "0.7.5"
-windows-core = { workspace = true }
-windows = { workspace = true }
+windows-core.workspace = true
+windows.workspace = true
 
 [lints]
 workspace = true

@@ -21,10 +21,10 @@ specta.workspace = true
 tokio.workspace = true
 flume.workspace = true
 thiserror.workspace = true
-ffmpeg = { workspace = true }
+ffmpeg.workspace = true
 scap.workspace = true
 
-serde = { workspace = true }
+serde.workspace = true
 serde_json = "1"
 chrono = "0.4.38"
 tracing.workspace = true
@@ -42,8 +42,8 @@ hex = "0.4.3"
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
-cidre = { workspace = true }
-objc2-app-kit = "0.3.1"
+cidre.workspace = true
+objc2-app-kit.workspace = true
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [

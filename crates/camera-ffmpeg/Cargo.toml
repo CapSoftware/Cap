@@ -4,17 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ffmpeg = { workspace = true }
+ffmpeg.workspace = true
 thiserror.workspace = true
 cap-camera = { path = "../camera" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true
 cap-camera-avfoundation = { path = "../camera-avfoundation" }
 
 [target.'cfg(windows)'.dependencies]
-windows = { workspace = true }
-windows-core = { workspace = true }
+windows.workspace = true
+windows-core.workspace = true
 cap-camera-windows = { path = "../camera-windows" }
 
 [dev-dependencies]

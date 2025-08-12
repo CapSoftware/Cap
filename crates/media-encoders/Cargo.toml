@@ -16,7 +16,7 @@ tracing.workspace = true
 gif = "0.13.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true
 
 [lints]
 workspace = true

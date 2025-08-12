@@ -14,4 +14,4 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true

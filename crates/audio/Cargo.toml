@@ -5,12 +5,12 @@ edition = "2024"
 
 
 [dependencies]
-ffmpeg = { workspace = true }
-cpal = { workspace = true }
+ffmpeg.workspace = true
+cpal.workspace = true
 tokio.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true
 
 [lints]
 workspace = true

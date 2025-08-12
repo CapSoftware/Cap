@@ -11,8 +11,8 @@ inquire = "0.7.5"
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 
-windows = { workspace = true }
-windows-core = { workspace = true }
+windows.workspace = true
+windows-core.workspace = true
 
 [lints]
 workspace = true
@@ -23,5 +23,5 @@ inquire = "0.7.5"
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 
-windows = { workspace = true }
-windows-core = { workspace = true }
+windows.workspace = true
+windows-core.workspace = true

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
+cidre.workspace = true
 
 [lints]
 workspace = true

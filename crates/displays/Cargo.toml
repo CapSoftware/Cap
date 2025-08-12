@@ -32,4 +32,4 @@ windows = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_Devices_Display",
 ] }
-windows-sys = { workspace = true }
+windows-sys.workspace = true

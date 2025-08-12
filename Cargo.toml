@@ -59,6 +59,17 @@ windows-sys = "0.59.0"
 windows-capture = "1.5.0"
 percent-encoding = "2.3.1"
 
+objc2-app-kit = { version = "0.3.0", default-features = false, features = [
+    "std",
+    "NSWindow",
+	"NSResponder",
+	"NSHapticFeedback",
+	"NSCursor",
+	"NSApplication"
+] }
+objc2-foundation = { version = "0.2.2", default-features = false, features = ["std", "NSValue"] }
+objc2-av-foundation = { version = "0.3.1", default-features = false, features = ["objc2-core-media", "AVCaptureDevice"] }
+
 # TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859
 [workspace.lints.rust]
 deprecated = "allow"

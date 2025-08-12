@@ -18,7 +18,7 @@ cpal.workspace = true
 axum = { version = "0.7.5", features = ["ws"] }
 ffmpeg.workspace = true
 specta.workspace = true
-serde = { workspace = true }
+serde.workspace = true
 sentry.workspace = true
 futures = "0.3.31"
 tracing.workspace = true
