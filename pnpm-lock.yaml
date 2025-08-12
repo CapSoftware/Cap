@@ -7,10 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      '@biomejs/biome':
-        specifier: ^2.1.4
-        version: 2.1.4
     devDependencies:
       '@biomejs/biome':
         specifier: 2.1.4
@@ -89,7 +85,7 @@ importers:
         version: 1.4.2(solid-js@1.9.6)
       '@solid-primitives/mouse':
         specifier: ^2.1.2
-        version: 2.1.2(solid-js@1.9.6)
+        version: 2.1.4(solid-js@1.9.6)
       '@solid-primitives/refs':
         specifier: ^1.0.8
         version: 1.1.1(solid-js@1.9.6)
@@ -474,13 +470,13 @@ importers:
         version: 0.0.27
       '@effect/opentelemetry':
         specifier: ^0.56.1
-        version: 0.56.1(@effect/platform@0.90.1(effect@3.17.7))(@opentelemetry/api@1.9.0)(@opentelemetry/resources@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-logs@0.203.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-node@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-web@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/semantic-conventions@1.36.0)(effect@3.17.7)
+        version: 0.56.1(@effect/platform@0.90.2(effect@3.17.7))(@opentelemetry/api@1.9.0)(@opentelemetry/resources@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-logs@0.203.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-node@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-web@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/semantic-conventions@1.36.0)(effect@3.17.7)
       '@effect/platform':
         specifier: ^0.90.1
-        version: 0.90.1(effect@3.17.7)
+        version: 0.90.2(effect@3.17.7)
       '@effect/rpc':
         specifier: ^0.68.3
-        version: 0.68.3(@effect/platform@0.90.1(effect@3.17.7))(effect@3.17.7)
+        version: 0.68.4(@effect/platform@0.90.2(effect@3.17.7))(effect@3.17.7)
       '@fortawesome/free-brands-svg-icons':
         specifier: ^6.7.2
         version: 6.7.2
@@ -1188,7 +1184,7 @@ importers:
     dependencies:
       '@effect/platform':
         specifier: ^0.90.1
-        version: 0.90.1(effect@3.17.7)
+        version: 0.90.2(effect@3.17.7)
       effect:
         specifier: ^3.17.7
         version: 3.17.7
@@ -1218,10 +1214,10 @@ importers:
         version: link:../web-domain
       '@effect/platform':
         specifier: ^0.90.1
-        version: 0.90.1(effect@3.17.7)
+        version: 0.90.2(effect@3.17.7)
       '@effect/rpc':
         specifier: ^0.68.3
-        version: 0.68.3(@effect/platform@0.90.1(effect@3.17.7))(effect@3.17.7)
+        version: 0.68.4(@effect/platform@0.90.2(effect@3.17.7))(effect@3.17.7)
       '@smithy/types':
         specifier: ^4.3.1
         version: 4.3.1
@@ -1242,10 +1238,10 @@ importers:
     dependencies:
       '@effect/platform':
         specifier: ^0.90.1
-        version: 0.90.1(effect@3.17.7)
+        version: 0.90.2(effect@3.17.7)
       '@effect/rpc':
         specifier: ^0.68.3
-        version: 0.68.3(@effect/platform@0.90.1(effect@3.17.7))(effect@3.17.7)
+        version: 0.68.4(@effect/platform@0.90.2(effect@3.17.7))(effect@3.17.7)
       effect:
         specifier: ^3.17.7
         version: 3.17.7
@@ -1979,16 +1975,16 @@ packages:
       '@opentelemetry/sdk-trace-web':
         optional: true
 
-  '@effect/platform@0.90.1':
-    resolution: {integrity: sha512-PpYq+ws+mmQG07jUhvUM49/+gZBEN3MVB1+71UpML+9t67ljn64hBaqd4qAhQHs4gJWdXw4Tobo5/vE/ZJkS6g==}
+  '@effect/platform@0.90.2':
+    resolution: {integrity: sha512-xf8odJ7vsHITlOJIragdwqu14jla9+FLefPIHbtwAXt+8ZEknbNmo8YXvmudLjLgK4mewqNuwPd6ktjBboaNXQ==}
     peerDependencies:
       effect: ^3.17.7
 
-  '@effect/rpc@0.68.3':
-    resolution: {integrity: sha512-vTMfXvvzPTdWwytCLPWg36KOCLcDaytXgma338uH0DmvNaYhdiseqX6G6Rqfxu1m2541GF4D0x6ByRgY0UIKSA==}
+  '@effect/rpc@0.68.4':
+    resolution: {integrity: sha512-iFGqBtZjjatNWwgDCCajYZvQSHc55XyZEdmHGqrKS6UfdRsV7qUSPgnplMf++tIIyGme7IbAjD/3VJdbHI5Gzg==}
     peerDependencies:
-      '@effect/platform': ^0.90.0
-      effect: ^3.17.6
+      '@effect/platform': ^0.90.2
+      effect: ^3.17.7
 
   '@emnapi/core@1.4.3':
     resolution: {integrity: sha512-4m62DuCE07lw01soJwPiBGC0nAww0Q+RY70VZ+n49yDIO13yyinhbWCeNnaob0lakDtWQzSdtNWzJeOJt2ma+g==}
@@ -5606,6 +5602,11 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
+  '@solid-primitives/event-listener@2.4.3':
+    resolution: {integrity: sha512-h4VqkYFv6Gf+L7SQj+Y6puigL/5DIi7x5q07VZET7AWcS+9/G3WfIE9WheniHWJs51OEkRB43w6lDys5YeFceg==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
   '@solid-primitives/history@0.1.5':
     resolution: {integrity: sha512-Hu6WiA6KBdNIpczUMNOHiBNVnuMrNqOjW98M7X9GSIPoHG2W0A1CwGyNJa838QVWbnoXmo8QI1Za2bAc83/BEA==}
     peerDependencies:
@@ -5631,8 +5632,8 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
-  '@solid-primitives/mouse@2.1.2':
-    resolution: {integrity: sha512-ov4K3eQCybN0bN4ZzBA3mFGuj2AJmgP9kOJaGZtTtjJ6uvI6LYd8pfv+Tm6gb3BlaIlVurLMuOU30mapSaJjhA==}
+  '@solid-primitives/mouse@2.1.4':
+    resolution: {integrity: sha512-qZNh7FedzJMSrUX/BSd5Pjkv+Ct7vDr9TXVbXSdAKa4xMri0mwNi1eCbNbcEsq/FOsPVQLyt2d5oR7cQHBOg0A==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -5656,6 +5657,11 @@ packages:
     peerDependencies:
       solid-js: ^1.6.12
 
+  '@solid-primitives/rootless@1.5.2':
+    resolution: {integrity: sha512-9HULb0QAzL2r47CCad0M+NKFtQ+LrGGNHZfteX/ThdGvKIg2o2GYhBooZubTCd/RTu2l2+Nw4s+dEfiDGvdrrQ==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
   '@solid-primitives/scheduled@1.5.1':
     resolution: {integrity: sha512-WKg/zvAyDIgQ/Xo48YaUY7ISaPyWTZNDzIVWP2R84CuLH+nZN/2O0aFn/gQlWY6y/Bfi/LdDt6Og2/PRzPY7mA==}
     peerDependencies:
@@ -5668,6 +5674,11 @@ packages:
 
   '@solid-primitives/static-store@0.1.1':
     resolution: {integrity: sha512-daXWvpLjd+4hbYdGaaEJ2kKFuFhshvfIBFLveW7mfk2BWHl9lGQVwUuExp3qllkK9ONA9p+5D2cpwBQosv8odQ==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
+  '@solid-primitives/static-store@0.1.2':
+    resolution: {integrity: sha512-ReK+5O38lJ7fT+L6mUFvUr6igFwHBESZF+2Ug842s7fvlVeBdIVEdTCErygff6w7uR6+jrr7J8jQo+cYrEq4Iw==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -5700,6 +5711,11 @@ packages:
 
   '@solid-primitives/utils@6.3.1':
     resolution: {integrity: sha512-4/Z59nnwu4MPR//zWZmZm2yftx24jMqQ8CSd/JobL26TPfbn4Ph8GKNVJfGJWShg1QB98qObJSskqizbTvcLLA==}
+    peerDependencies:
+      solid-js: ^1.6.12
+
+  '@solid-primitives/utils@6.3.2':
+    resolution: {integrity: sha512-hZ/M/qr25QOCcwDPOHtGjxTD8w2mNyVAYvcfgwzBHq2RwNqHNdDNsMZYap20+ruRwW4A3Cdkczyoz0TSxLCAPQ==}
     peerDependencies:
       solid-js: ^1.6.12
 
@@ -8883,7 +8899,6 @@ packages:
   fluent-ffmpeg@2.1.3:
     resolution: {integrity: sha512-Be3narBNt2s6bsaqP6Jzq91heDgOEaDCJAXcE3qcma/EJBSy5FB4cvO31XBInuAuKBx8Kptf8dkhjK0IOru39Q==}
     engines: {node: '>=18'}
-    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
 
   fn.name@1.1.0:
     resolution: {integrity: sha512-GRnmB5gPyJpAhTQdSZTSp9uaPSvl09KoYcMQtsB9rQoOmzs9dH6ffeccH+Z+cv6P68Hu5bC6JjRh4Ah/mHSNRw==}
@@ -10655,8 +10670,8 @@ packages:
     resolution: {integrity: sha512-P0efT1C9jIdVRefqjzOQ9Xml57zpOXnIuS+csaB4MdZbTdmGDLo8XhzBG1N7aO11gKDDkJvBLULeFTo46wwreA==}
     hasBin: true
 
-  msgpackr@1.11.5:
-    resolution: {integrity: sha512-UjkUHN0yqp9RWKy0Lplhh+wlpdt9oQBYgULZOiFhV3VclSF1JnSQWZ5r9gORQlNYaUKQoR8itv7g7z1xDDuACA==}
+  msgpackr@1.11.4:
+    resolution: {integrity: sha512-uaff7RG9VIC4jacFW9xzL3jc0iM32DNHe4jYVycBcjUePT/Klnfj7pqtWJt9khvDFizmjN2TlYniYmSS2LIaZg==}
 
   multipasta@0.2.7:
     resolution: {integrity: sha512-KPA58d68KgGil15oDqXjkUBEBYc00XvbPj5/X+dyzeo/lWm9Nc25pQRlf1D+gv4OpK7NM0J1odrbu9JNNGvynA==}
@@ -10828,7 +10843,6 @@ packages:
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
-    deprecated: Use your platform's native DOMException instead
 
   node-fetch-native@1.6.6:
     resolution: {integrity: sha512-8Mc2HhqPdlIfedsuZoc3yioPuzp6b+L5jRCRY1QzuWZh2EGJVQrGppC6V6cF0bLdbW0+O2YpqCA25aF/1lvipQ==}
@@ -12380,7 +12394,6 @@ packages:
   storybook-solidjs@1.0.0-beta.7:
     resolution: {integrity: sha512-PgquZC4FiNPCDOIXuXYOco01vMHCXBBAr3Y/a9ylF4+0vOTcL2RAqieUmTbZhBxVWZIm+nPIyOlz8UqhwcgLtQ==}
     engines: {node: '>=18.0.0'}
-    deprecated: 'This package is deprecated. Use storybook-solidjs-vite instead: https://www.npmjs.com/package/storybook-solidjs-vite'
     peerDependencies:
       '@storybook/test': '*'
       solid-js: ~1.9.0
@@ -12548,12 +12561,11 @@ packages:
   superagent@8.1.2:
     resolution: {integrity: sha512-6WTxW1EB6yCxV5VFOIPQruWGHqc3yI7hEmZK6h+pyk69Lk/Ut7rLUY6W/ONF2MjBuGjvmMiIpsrVJ2vjrHlslA==}
     engines: {node: '>=6.4.0 <13 || >=14'}
-    deprecated: Please upgrade to superagent v10.2.2+, see release notes at https://github.com/forwardemail/superagent/releases/tag/v10.2.2 - maintenance is supported by Forward Email @ https://forwardemail.net
+    deprecated: Please upgrade to v9.0.0+ as we have fixed a public vulnerability with formidable dependency. Note that v9.0.0+ requires Node.js v14.18.0+. See https://github.com/ladjs/superagent/pull/1800 for insight. This project is supported and maintained by the team at Forward Email @ https://forwardemail.net
 
   supertest@6.3.4:
     resolution: {integrity: sha512-erY3HFDG0dPnhw4U+udPfrzXa4xhSG+n4rxfRuZWCUvjFWwKl+OxWf/7zk50s84/fAAs7vf5QAb9uRa0cCykxw==}
     engines: {node: '>=6.4.0'}
-    deprecated: Please upgrade to supertest v7.1.3+, see release notes at https://github.com/forwardemail/supertest/releases/tag/v7.1.3 - maintenance is supported by Forward Email @ https://forwardemail.net
 
   supports-color@10.0.0:
     resolution: {integrity: sha512-HRVVSbCCMbj7/kdWF9Q+bbckjBHLtHMEoJWlkmYzzdwhYMkjkOwubLM6t7NbWKjgKamGDrWL1++KrjUO1t9oAQ==}
@@ -15012,9 +15024,9 @@ snapshots:
 
   '@effect/language-service@0.34.0': {}
 
-  '@effect/opentelemetry@0.56.1(@effect/platform@0.90.1(effect@3.17.7))(@opentelemetry/api@1.9.0)(@opentelemetry/resources@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-logs@0.203.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-node@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-web@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/semantic-conventions@1.36.0)(effect@3.17.7)':
+  '@effect/opentelemetry@0.56.1(@effect/platform@0.90.2(effect@3.17.7))(@opentelemetry/api@1.9.0)(@opentelemetry/resources@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-logs@0.203.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-node@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-web@2.0.1(@opentelemetry/api@1.9.0))(@opentelemetry/semantic-conventions@1.36.0)(effect@3.17.7)':
     dependencies:
-      '@effect/platform': 0.90.1(effect@3.17.7)
+      '@effect/platform': 0.90.2(effect@3.17.7)
       '@opentelemetry/semantic-conventions': 1.36.0
       effect: 3.17.7
     optionalDependencies:
@@ -15026,17 +15038,17 @@ snapshots:
       '@opentelemetry/sdk-trace-node': 2.0.1(@opentelemetry/api@1.9.0)
       '@opentelemetry/sdk-trace-web': 2.0.1(@opentelemetry/api@1.9.0)
 
-  '@effect/platform@0.90.1(effect@3.17.7)':
+  '@effect/platform@0.90.2(effect@3.17.7)':
     dependencies:
       '@opentelemetry/semantic-conventions': 1.36.0
       effect: 3.17.7
       find-my-way-ts: 0.1.6
-      msgpackr: 1.11.5
+      msgpackr: 1.11.4
       multipasta: 0.2.7
 
-  '@effect/rpc@0.68.3(@effect/platform@0.90.1(effect@3.17.7))(effect@3.17.7)':
+  '@effect/rpc@0.68.4(@effect/platform@0.90.2(effect@3.17.7))(effect@3.17.7)':
     dependencies:
-      '@effect/platform': 0.90.1(effect@3.17.7)
+      '@effect/platform': 0.90.2(effect@3.17.7)
       effect: 3.17.7
 
   '@emnapi/core@1.4.3':
@@ -16180,7 +16192,7 @@ snapshots:
       nopt: 5.0.0
       npmlog: 5.0.1
       rimraf: 3.0.2
-      semver: 7.7.2
+      semver: 7.7.1
       tar: 6.2.1
     transitivePeerDependencies:
       - encoding
@@ -18922,6 +18934,11 @@ snapshots:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
       solid-js: 1.9.6
 
+  '@solid-primitives/event-listener@2.4.3(solid-js@1.9.6)':
+    dependencies:
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
+      solid-js: 1.9.6
+
   '@solid-primitives/history@0.1.5(solid-js@1.9.6)':
     dependencies:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
@@ -18950,12 +18967,12 @@ snapshots:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
       solid-js: 1.9.6
 
-  '@solid-primitives/mouse@2.1.2(solid-js@1.9.6)':
+  '@solid-primitives/mouse@2.1.4(solid-js@1.9.6)':
     dependencies:
-      '@solid-primitives/event-listener': 2.4.1(solid-js@1.9.6)
-      '@solid-primitives/rootless': 1.5.1(solid-js@1.9.6)
-      '@solid-primitives/static-store': 0.1.1(solid-js@1.9.6)
-      '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      '@solid-primitives/event-listener': 2.4.3(solid-js@1.9.6)
+      '@solid-primitives/rootless': 1.5.2(solid-js@1.9.6)
+      '@solid-primitives/static-store': 0.1.2(solid-js@1.9.6)
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@solid-primitives/props@3.2.1(solid-js@1.9.6)':
@@ -18981,6 +18998,11 @@ snapshots:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
       solid-js: 1.9.6
 
+  '@solid-primitives/rootless@1.5.2(solid-js@1.9.6)':
+    dependencies:
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
+      solid-js: 1.9.6
+
   '@solid-primitives/scheduled@1.5.1(solid-js@1.9.6)':
     dependencies:
       solid-js: 1.9.6
@@ -18993,6 +19015,11 @@ snapshots:
   '@solid-primitives/static-store@0.1.1(solid-js@1.9.6)':
     dependencies:
       '@solid-primitives/utils': 6.3.1(solid-js@1.9.6)
+      solid-js: 1.9.6
+
+  '@solid-primitives/static-store@0.1.2(solid-js@1.9.6)':
+    dependencies:
+      '@solid-primitives/utils': 6.3.2(solid-js@1.9.6)
       solid-js: 1.9.6
 
   '@solid-primitives/storage@4.3.2(@tauri-apps/plugin-store@2.1.0)(solid-js@1.9.6)':
@@ -19016,6 +19043,10 @@ snapshots:
       solid-js: 1.9.6
 
   '@solid-primitives/utils@6.3.1(solid-js@1.9.6)':
+    dependencies:
+      solid-js: 1.9.6
+
+  '@solid-primitives/utils@6.3.2(solid-js@1.9.6)':
     dependencies:
       solid-js: 1.9.6
 
@@ -22185,7 +22216,7 @@ snapshots:
       eslint: 9.30.1(jiti@2.4.2)
       eslint-import-resolver-node: 0.3.9
       eslint-import-resolver-typescript: 3.10.1(eslint-plugin-import@2.31.0(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2))
-      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.30.1(jiti@2.4.2))
+      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.31.0(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-jsx-a11y: 6.10.2(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-react: 7.37.5(eslint@9.30.1(jiti@2.4.2))
       eslint-plugin-react-hooks: 4.6.2(eslint@9.30.1(jiti@2.4.2))
@@ -22224,7 +22255,7 @@ snapshots:
       tinyglobby: 0.2.13
       unrs-resolver: 1.7.2
     optionalDependencies:
-      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.30.1(jiti@2.4.2))
+      eslint-plugin-import: 2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.31.0(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2))
     transitivePeerDependencies:
       - supports-color
 
@@ -22305,7 +22336,7 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  eslint-plugin-import@2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1)(eslint@9.30.1(jiti@2.4.2)):
+  eslint-plugin-import@2.31.0(@typescript-eslint/parser@5.62.0(eslint@9.30.1(jiti@2.4.2))(typescript@5.8.3))(eslint-import-resolver-typescript@3.10.1(eslint-plugin-import@2.31.0(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2)))(eslint@9.30.1(jiti@2.4.2)):
     dependencies:
       '@rtsao/scc': 1.1.0
       array-includes: 3.1.8
@@ -25242,7 +25273,7 @@ snapshots:
       '@msgpackr-extract/msgpackr-extract-win32-x64': 3.0.3
     optional: true
 
-  msgpackr@1.11.5:
+  msgpackr@1.11.4:
     optionalDependencies:
       msgpackr-extract: 3.0.3
 
@@ -25369,7 +25400,7 @@ snapshots:
       '@next/env': 14.2.3
       '@swc/helpers': 0.5.5
       busboy: 1.6.0
-      caniuse-lite: 1.0.30001723
+      caniuse-lite: 1.0.30001717
       graceful-fs: 4.2.11
       postcss: 8.4.31
       react: 19.1.0
@@ -26918,7 +26949,8 @@ snapshots:
 
   semver@7.7.1: {}
 
-  semver@7.7.2: {}
+  semver@7.7.2:
+    optional: true
 
   send@0.19.0:
     dependencies:

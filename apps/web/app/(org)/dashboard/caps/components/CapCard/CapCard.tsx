@@ -108,13 +108,19 @@ export const CapCard = ({
 		mutationFn: async () => {
 			const response = await downloadVideo(cap.id);
 			if (response.success && response.downloadUrl) {
+				const fetchResponse = await fetch(response.downloadUrl);
+				const blob = await fetchResponse.blob();
+
+				const blobUrl = window.URL.createObjectURL(blob);
 				const link = document.createElement("a");
-				link.href = response.downloadUrl;
+				link.href = blobUrl;
 				link.download = response.filename;
 				link.style.display = "none";
 				document.body.appendChild(link);
 				link.click();
 				document.body.removeChild(link);
+
+				window.URL.revokeObjectURL(blobUrl);
 			} else {
 				throw new Error("Failed to get download URL");
 			}
@@ -135,12 +141,6 @@ export const CapCard = ({
 
 	const duplicateMutation = useEffectMutation({
 		mutationFn: () => withRpc((r) => r.VideoDuplicate(cap.id)),
-		onSuccess: () => {
-			toast.success("Cap duplicated successfully");
-		},
-		onError: () => {
-			toast.error("Failed to duplicate cap");
-		},
 	});
 
 	const handleSharingUpdated = () => {
@@ -333,16 +333,18 @@ export const CapCard = ({
 
 							<DropdownMenuContent align="end" sideOffset={5}>
 								<DropdownMenuItem
-									onClick={() => duplicateMutation.mutate()}
+									onClick={() =>
+										toast.promise(duplicateMutation.mutateAsync(), {
+											loading: "Duplicating cap...",
+											success: "Cap duplicated successfully",
+											error: "Failed to duplicate cap",
+										})
+									}
 									disabled={duplicateMutation.isPending}
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faCopy} />
-									<p className="text-sm text-gray-12">
-										{duplicateMutation.isPending
-											? "Duplicating..."
-											: "Duplicate"}
-									</p>
+									<p className="text-sm text-gray-12">Duplicate</p>
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
