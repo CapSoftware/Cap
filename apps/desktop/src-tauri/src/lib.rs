@@ -79,6 +79,7 @@ use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::EditorWindowIds;
@@ -2004,6 +2005,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     #[allow(unused_mut)]
     let mut builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            trace!("Single instance invoked with args {args:?}");
+
+            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
             let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))
