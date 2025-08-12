@@ -74,7 +74,7 @@ const VerifyStep = ({
 			setCopiedField(fieldId);
 			setTimeout(() => setCopiedField(null), 2000);
 			toast.success("Copied to clipboard");
-		} catch (err) {
+		} catch {
 			toast.error("Failed to copy to clipboard");
 		}
 	};
@@ -99,10 +99,10 @@ const VerifyStep = ({
 		if (record.domain === domain) return "@";
 		const suffix = `.${domain}`;
 		if (record.domain.endsWith(suffix)) {
-			return record.domain.replace(suffix, '') || "@";
+			return record.domain.replace(suffix, "") || "@";
 		}
 		return record.domain;
-	}
+	};
 
 	return (
 		<div className="space-y-6">
@@ -139,7 +139,7 @@ const VerifyStep = ({
 								<div className="px-4 py-3">
 									<dl className="grid gap-4">
 										{verificationRecords.map((record, index) => (
-											<div key={index} className="space-y-4">
+											<div key={index.toString()} className="space-y-4">
 												<div className="grid grid-cols-[100px,1fr] items-center">
 													<dt className="text-sm font-medium text-gray-12">
 														Type
@@ -154,7 +154,7 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-														{TXTDomainValueHandler(record)}
+															{TXTDomainValueHandler(record)}
 														</code>
 													</dd>
 												</div>
@@ -170,7 +170,10 @@ const VerifyStep = ({
 															<button
 																type="button"
 																onClick={() =>
-																	handleCopy(record.value, `txt-record-${index}`)
+																	handleCopy(
+																		record.value,
+																		`txt-record-${index}`,
+																	)
 																}
 																className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
 																title="Copy to clipboard"
@@ -213,7 +216,7 @@ const VerifyStep = ({
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentAValues.map((value, index) => (
 														<div
-															key={`a-${index}`}
+															key={`a-${index.toString()}`}
 															className={clsx(
 																recommendedAValues.includes(value)
 																	? "flex items-center gap-2 text-green-300"
@@ -257,7 +260,7 @@ const VerifyStep = ({
 											<dd className="space-y-2 text-sm text-gray-10">
 												{recommendedAValues.map((ipAddress, index) => (
 													<div
-														key={`ip-${index}`}
+														key={`ip-${index.toString()}`}
 														className="flex gap-2 items-center"
 													>
 														<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
@@ -315,7 +318,7 @@ const VerifyStep = ({
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentCnames.map((value, index) => (
 														<div
-															key={`cname-${index}`}
+															key={`cname-${index.toString()}`}
 															className={clsx(
 																recommendedCnames.some(
 																	(rec) => rec.value === value,
