@@ -1,4 +1,4 @@
-use std::{io, mem, str::FromStr};
+use std::{mem, str::FromStr};
 
 use windows::{
     Win32::{
@@ -42,11 +42,10 @@ use windows::{
             },
         },
     },
-    core::BOOL,
+    core::{BOOL, PCWSTR, PWSTR},
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
-use image::{ImageFormat, RgbaImage};
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
