@@ -77,9 +77,9 @@ impl Default for CapturerCallbacksInner {
 pub struct Capturer {
     target: arc::R<sc::ContentFilter>,
     config: arc::R<sc::StreamCfg>,
-    queue: arc::R<dispatch::Queue>,
+    _queue: arc::R<dispatch::Queue>,
     stream: arc::R<sc::Stream>,
-    callbacks: arc::R<CapturerCallbacks>,
+    _callbacks: arc::R<CapturerCallbacks>,
 }
 
 impl Capturer {
@@ -96,6 +96,10 @@ impl Capturer {
 
     pub fn config(&self) -> &sc::StreamCfg {
         &self.config
+    }
+
+    pub fn target(&self) -> &sc::ContentFilter {
+        &self.target
     }
 
     pub async fn start(&self) -> Result<(), arc::R<ns::Error>> {
@@ -220,9 +224,9 @@ impl CapturerBuilder {
         Ok(Capturer {
             target: self.target,
             config: self.config,
-            queue,
+            _queue: queue,
             stream,
-            callbacks,
+            _callbacks: callbacks,
         })
     }
 }

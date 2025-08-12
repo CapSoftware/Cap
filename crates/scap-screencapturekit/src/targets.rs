@@ -182,31 +182,14 @@ impl Window {
     }
 }
 
-pub enum Target {
-    Display(Display),
-    Window(Window),
-}
-
-impl From<Display> for Target {
-    fn from(display: Display) -> Self {
-        Self::Display(display)
-    }
-}
-
-impl From<Window> for Target {
-    fn from(window: Window) -> Self {
-        Self::Window(window)
-    }
-}
-
-#[cfg(test)]
+#[cfg(debug_assertions)]
 mod test {
     use super::*;
 
     fn assert_send<T: Send>() {}
     fn assert_send_val<T: Send>(_: T) {}
 
-    #[test]
+    #[allow(dead_code)]
     fn ensure_send() {
         assert_send::<Display>();
         assert_send_val(Display::list());
