@@ -112,7 +112,7 @@ pub async fn open_target_select_overlays(
 #[tauri::command]
 pub async fn close_target_select_overlays(
     app: AppHandle,
-    state: tauri::State<'_, WindowFocusManager>,
+    // state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {

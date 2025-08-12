@@ -2,8 +2,6 @@ use crate::windows::ShowCapWindow;
 use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings, recording,
 };
-use cap_fail::fail;
-use cap_flags::FLAGS;
 
 use std::sync::{
     Arc,

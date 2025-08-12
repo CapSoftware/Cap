@@ -8,7 +8,6 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_store::StoreExt;
 use tauri_specta::Event;
-use tracing::error;
 
 #[derive(Serialize, Deserialize, Type, PartialEq, Clone, Copy)]
 pub struct Hotkey {
