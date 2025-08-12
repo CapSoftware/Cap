@@ -25,7 +25,8 @@
 		"strict": true,
 		"paths": {
 			"~/*": ["./src/*"]
-		}
+		},
+		"plugins": [{ "name": "@effect/language-service" }]
 	},
 	"include": ["src"]
 }

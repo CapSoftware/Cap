@@ -1,6 +1,7 @@
 export * from "./Authentication";
 export * from "./Errors";
 export * as Folder from "./Folder";
+export * as LicenseApi from "./LicenseApi";
 export * from "./Organisation";
 export * as Policy from "./Policy";
 export { Rpcs } from "./Rpcs";

@@ -1,10 +1,9 @@
-import {
-	contract,
-	licenseContract,
-	orgCustomDomainContract,
-} from "@cap/web-api-contract";
+import { contract, orgCustomDomainContract } from "@cap/web-api-contract";
+import { LicenseApi } from "@cap/web-domain";
+import { FetchHttpClient, HttpApiClient } from "@effect/platform";
 import { fetch } from "@tauri-apps/plugin-http";
 import { type ApiFetcher, initClient } from "@ts-rest/core";
+import { Effect } from "effect";
 
 import { authStore } from "~/store";
 import { clientEnv } from "./env";
@@ -35,15 +34,22 @@ export const apiClient = initClient(contract, {
 	baseUrl: `${clientEnv.VITE_SERVER_URL}/api`,
 	api,
 });
-export const licenseApiClient = initClient(licenseContract, {
-	baseUrl: `https://l.cap.so/api`,
-	api,
-});
 
 export const orgCustomDomainClient = initClient(orgCustomDomainContract, {
 	baseUrl: `${clientEnv.VITE_SERVER_URL}/api/desktop`,
 	api,
 });
+
+export class LicenseApiClient extends Effect.Service<LicenseApiClient>()(
+	"LicenseApiClient",
+	{
+		accessors: true,
+		scoped: HttpApiClient.make(LicenseApi.HttpContract, {
+			baseUrl: `https://l.cap.so/api`,
+		}),
+		dependencies: [FetchHttpClient.layer],
+	},
+) { }
 
 export async function maybeProtectedHeaders() {
 	const store = await authStore.get();

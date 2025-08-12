@@ -1,8 +1,9 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
 import type { licenseContract } from "@cap/web-api-contract";
-import { createMutation, useQueryClient } from "@tanstack/solid-query";
+import { useMutation, useQueryClient } from "@tanstack/solid-query";
 import type { ClientInferResponseBody } from "@ts-rest/core";
+import { Effect } from "effect";
 import {
 	createResource,
 	createSignal,
@@ -12,9 +13,10 @@ import {
 	Switch,
 } from "solid-js";
 import { generalSettingsStore } from "~/store";
+import { effectRuntime } from "~/utils/effect";
 import { createLicenseQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
-import { licenseApiClient } from "~/utils/web-api";
+import { LicenseApiClient } from "~/utils/web-api";
 import PricingRive from "../../../assets/rive/pricing.riv";
 import { Input } from "../../editor/ui";
 
@@ -109,25 +111,30 @@ function LicenseKeyActivate(props: {
 				{(generalSettings) => {
 					const [licenseKey, setLicenseKey] = createSignal("");
 
-					const activateLicenseKey = createMutation(() => ({
-						mutationFn: async (vars: { licenseKey: string }) => {
-							const resp = await licenseApiClient.activateCommercialLicense({
-								headers: {
-									licensekey: vars.licenseKey,
-									instanceid: generalSettings().instanceId!,
-								},
-								body: { reset: false },
-							});
-
-							if (resp.status === 200) return resp.body;
-							if (
-								typeof resp.body === "object" &&
-								resp.body &&
-								"message" in resp.body
-							)
-								throw resp.body.message;
-							throw new Error((resp.body as any).toString());
-						},
+					const activateLicenseKey = useMutation(() => ({
+						mutationFn: (vars: { licenseKey: string }) =>
+							Effect.flatMap(LicenseApiClient, (c) =>
+								c.license.activateCommercialLicense({
+									headers: {
+										licensekey: vars.licenseKey,
+										instanceid: generalSettings().instanceId!,
+									},
+									payload: { reset: false },
+								}),
+							).pipe(
+								Effect.catchTags({
+									HttpApiDecodeError: (e) => Effect.fail(e.toString()),
+									ParseError: (e) => Effect.fail(e.toString()),
+									RequestError: (e) => Effect.fail(e.toString()),
+									ResponseError: (e) => Effect.fail(e.toString()),
+								}),
+								Effect.catchAll((e) => {
+									if (typeof e === "object" && "message" in e)
+										return Effect.fail(e.message);
+									return Effect.fail(e);
+								}),
+								effectRuntime.runPromise,
+							),
 						onSuccess: (value, { licenseKey }) => {
 							props.onActivated({ ...value, licenseKey });
 							queryClient.refetchQueries({ queryKey: ["bruh"] });

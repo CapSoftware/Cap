@@ -44,9 +44,15 @@ importers:
       '@cap/web-api-contract':
         specifier: workspace:*
         version: link:../../packages/web-api-contract
+      '@cap/web-domain':
+        specifier: workspace:*
+        version: link:../../packages/web-domain
       '@corvu/tooltip':
         specifier: ^0.2.1
         version: 0.2.2(solid-js@1.9.6)
+      '@effect/platform':
+        specifier: ^0.90.1
+        version: 0.90.2(effect@3.17.7)
       '@intercom/messenger-js-sdk':
         specifier: ^0.0.14
         version: 0.0.14
@@ -8899,6 +8905,7 @@ packages:
   fluent-ffmpeg@2.1.3:
     resolution: {integrity: sha512-Be3narBNt2s6bsaqP6Jzq91heDgOEaDCJAXcE3qcma/EJBSy5FB4cvO31XBInuAuKBx8Kptf8dkhjK0IOru39Q==}
     engines: {node: '>=18'}
+    deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
 
   fn.name@1.1.0:
     resolution: {integrity: sha512-GRnmB5gPyJpAhTQdSZTSp9uaPSvl09KoYcMQtsB9rQoOmzs9dH6ffeccH+Z+cv6P68Hu5bC6JjRh4Ah/mHSNRw==}
@@ -10843,6 +10850,7 @@ packages:
   node-domexception@1.0.0:
     resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
     engines: {node: '>=10.5.0'}
+    deprecated: Use your platform's native DOMException instead
 
   node-fetch-native@1.6.6:
     resolution: {integrity: sha512-8Mc2HhqPdlIfedsuZoc3yioPuzp6b+L5jRCRY1QzuWZh2EGJVQrGppC6V6cF0bLdbW0+O2YpqCA25aF/1lvipQ==}
@@ -12394,6 +12402,7 @@ packages:
   storybook-solidjs@1.0.0-beta.7:
     resolution: {integrity: sha512-PgquZC4FiNPCDOIXuXYOco01vMHCXBBAr3Y/a9ylF4+0vOTcL2RAqieUmTbZhBxVWZIm+nPIyOlz8UqhwcgLtQ==}
     engines: {node: '>=18.0.0'}
+    deprecated: 'This package is deprecated. Use storybook-solidjs-vite instead: https://www.npmjs.com/package/storybook-solidjs-vite'
     peerDependencies:
       '@storybook/test': '*'
       solid-js: ~1.9.0
