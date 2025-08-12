@@ -27,7 +27,7 @@ jobs:
           filters: |
             rust:
             	- '.cargo/**'
-            	- ''
+            	- '.github/**'
               - 'crates/**'
               - 'desktop/src-tauri/**'
               - 'Cargo.toml'
