@@ -1,4 +1,4 @@
-use scap_direct3d::{Capturer, Display, Settings};
+use scap_direct3d::{Capturer, Display, PixelFormat, Settings};
 use std::time::Duration;
 
 fn main() {
@@ -7,8 +7,9 @@ fn main() {
     let capturer = Capturer::new(
         display.try_as_capture_item().unwrap(),
         Settings {
-            is_border_required: Some(false),
+            is_border_required: Some(true),
             is_cursor_capture_enabled: Some(true),
+            pixel_format: PixelFormat::R8G8B8A8Unorm,
         },
     );
 

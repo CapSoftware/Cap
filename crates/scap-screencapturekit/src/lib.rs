@@ -1,3 +1,5 @@
+#![cfg(target_os = "macos")]
+
 mod capture;
 mod config;
 mod targets;

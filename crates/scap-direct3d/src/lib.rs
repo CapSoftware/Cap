@@ -1,3 +1,7 @@
+// a whole bunch of credit to https://github.com/NiiightmareXD/windows-capture
+
+#![cfg(windows)]
+
 use std::{
     os::windows::io::AsRawHandle,
     sync::{
@@ -16,17 +20,26 @@ use windows::{
         Foundation::{HANDLE, HMODULE, LPARAM, POINT, S_FALSE, WPARAM},
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
-            Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
-            Dxgi::IDXGIDevice,
+            Direct3D11::{
+                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ_WRITE,
+                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+                ID3D11Texture2D,
+            },
+            Dxgi::{
+                Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC},
+                IDXGIDevice,
+            },
             Gdi::{HMONITOR, MONITOR_DEFAULTTONULL, MonitorFromPoint},
         },
         System::{
             Threading::GetThreadId,
             WinRT::{
                 CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-                Direct3D11::CreateDirect3D11DeviceFromDXGIDevice, DispatcherQueueOptions,
-                Graphics::Capture::IGraphicsCaptureItemInterop, RO_INIT_MULTITHREADED,
-                RoInitialize,
+                Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
+                DispatcherQueueOptions,
+                Graphics::Capture::IGraphicsCaptureItemInterop,
+                RO_INIT_MULTITHREADED, RoInitialize,
             },
         },
         UI::WindowsAndMessaging::{
@@ -35,6 +48,21 @@ use windows::{
     },
     core::{IInspectable, Interface},
 };
+
+#[derive(Default, Clone, Copy)]
+#[repr(i32)]
+pub enum PixelFormat {
+    #[default]
+    R8G8B8A8Unorm = 28,
+}
+
+impl PixelFormat {
+    pub fn as_directx(&self) -> DirectXPixelFormat {
+        match self {
+            PixelFormat::R8G8B8A8Unorm => DirectXPixelFormat::R8G8B8A8UIntNormalized,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct CaptureItem {
@@ -66,6 +94,7 @@ impl Display {
 pub struct Settings {
     pub is_border_required: Option<bool>,
     pub is_cursor_capture_enabled: Option<bool>,
+    pub pixel_format: PixelFormat,
 }
 
 pub struct Capturer {
@@ -80,7 +109,7 @@ impl Capturer {
 
     pub fn start(
         self,
-        callback: impl FnMut(Direct3D11CaptureFrame) -> windows::core::Result<()> + Send + 'static,
+        callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
     ) -> CaptureHandle {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thread_handle = std::thread::spawn({
@@ -125,10 +154,143 @@ impl CaptureHandle {
     }
 }
 
+pub struct Frame<'a> {
+    width: u32,
+    height: u32,
+    pixel_format: PixelFormat,
+    inner: Direct3D11CaptureFrame,
+    texture: ID3D11Texture2D,
+    d3d_device: &'a ID3D11Device,
+    d3d_context: &'a ID3D11DeviceContext,
+}
+
+impl<'a> std::fmt::Debug for Frame<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
+}
+
+impl<'a> Frame<'a> {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn pixel_format(&self) -> PixelFormat {
+        self.pixel_format
+    }
+
+    pub fn inner(&self) -> &Direct3D11CaptureFrame {
+        &self.inner
+    }
+
+    pub fn texture(&self) -> &ID3D11Texture2D {
+        &self.texture
+    }
+
+    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'a>> {
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: self.width,
+            Height: self.height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT(DirectXPixelFormat::R8G8B8A8UIntNormalized.0), // (self.color_format as i32),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32 | D3D11_CPU_ACCESS_WRITE.0 as u32,
+            MiscFlags: 0,
+        };
+
+        let mut texture = None;
+        unsafe {
+            self.d3d_device
+                .CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+        };
+
+        let texture = texture.unwrap();
+
+        unsafe {
+            self.d3d_context.CopyResource(&texture, &self.texture);
+        };
+
+        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            self.d3d_context.Map(
+                &texture,
+                0,
+                D3D11_MAP_READ_WRITE,
+                0,
+                Some(&mut mapped_resource),
+            )?;
+        };
+
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(
+                mapped_resource.pData.cast(),
+                (self.height * mapped_resource.RowPitch) as usize,
+            )
+        };
+
+        Ok(FrameBuffer {
+            data,
+            width: self.width,
+            height: self.height,
+            stride: mapped_resource.RowPitch,
+            pixel_format: self.pixel_format,
+            resource: mapped_resource,
+        })
+    }
+}
+
+pub struct FrameBuffer<'a> {
+    data: &'a mut [u8],
+    width: u32,
+    height: u32,
+    stride: u32,
+    resource: D3D11_MAPPED_SUBRESOURCE,
+    pixel_format: PixelFormat,
+}
+
+impl<'a> FrameBuffer<'a> {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn stride(&self) -> u32 {
+        self.stride
+    }
+
+    pub fn data(&self) -> &[u8] {
+        self.data
+    }
+
+    pub fn inner(&self) -> &D3D11_MAPPED_SUBRESOURCE {
+        &self.resource
+    }
+
+    pub fn pixel_format(&self) -> PixelFormat {
+        self.pixel_format
+    }
+}
+
 fn run(
     item: CaptureItem,
     settings: Settings,
-    mut callback: impl FnMut(Direct3D11CaptureFrame) -> windows::core::Result<()> + Send + 'static,
+    mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<(), &'static str> {
     if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
@@ -165,7 +327,7 @@ fn run(
     .map_err(|_| "Failed to create d3d11 device")?;
 
     let d3d_device = d3d_device.unwrap();
-    let _d3d_context = d3d_context.unwrap();
+    let d3d_context = d3d_context.unwrap();
 
     let direct3d_device = (|| {
         let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
@@ -176,7 +338,7 @@ fn run(
 
     let frame_pool = Direct3D11CaptureFramePool::Create(
         &direct3d_device,
-        DirectXPixelFormat::R8G8B8A8UIntNormalized,
+        PixelFormat::R8G8B8A8Unorm.as_directx(),
         1,
         item.inner.Size().map_err(|_| "Item size")?,
     )
@@ -211,7 +373,21 @@ fn run(
                         .expect("FrameArrived parameter was None")
                         .TryGetNextFrame()?;
 
-                    (callback)(frame)
+                    let size = frame.ContentSize()?;
+
+                    let surface = frame.Surface()?;
+                    let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
+                    let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
+
+                    (callback)(Frame {
+                        width: size.Width as u32,
+                        height: size.Height as u32,
+                        pixel_format: settings.pixel_format,
+                        inner: frame,
+                        texture,
+                        d3d_context: &d3d_context,
+                        d3d_device: &d3d_device,
+                    })
                 },
             ),
         )

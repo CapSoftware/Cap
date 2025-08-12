@@ -1,0 +1,14 @@
+[package]
+name = "scap-ffmpeg"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ffmpeg = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+scap-direct3d = { path = "../scap-direct3d" }
+windows = { workspace = true, features = [] }
+
+[lints]
+workspace = true
