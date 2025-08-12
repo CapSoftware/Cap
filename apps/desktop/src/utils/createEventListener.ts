@@ -2,7 +2,7 @@ import { onCleanup } from "solid-js";
 import { events } from "./tauri";
 
 type EventListener<T> = {
-  listen: (cb: (event: { payload: T }) => void) => Promise<() => void>;
+	listen: (cb: (event: { payload: T }) => void) => Promise<() => void>;
 };
 
 type EventKey = keyof typeof events;
@@ -28,16 +28,16 @@ type EventKey = keyof typeof events;
  * ```
  */
 export function createTauriEventListener<T>(
-  eventListener: EventListener<T>,
-  callback: (payload: T) => void
+	eventListener: EventListener<T>,
+	callback: (payload: T) => void,
 ): void {
-  const unlisten = eventListener.listen((event) => {
-    callback(event.payload);
-  });
+	const unlisten = eventListener.listen((event) => {
+		callback(event.payload);
+	});
 
-  onCleanup(() => {
-    unlisten.then((cleanup) => cleanup());
-  });
+	onCleanup(() => {
+		unlisten.then((cleanup) => cleanup());
+	});
 }
 
 /**
@@ -54,11 +54,11 @@ export function createTauriEventListener<T>(
  * ```
  */
 export function createEventListenerByKey<K extends EventKey>(
-  eventKey: K,
-  callback: (
-    payload: (typeof events)[K] extends EventListener<infer T> ? T : never
-  ) => void
+	eventKey: K,
+	callback: (
+		payload: (typeof events)[K] extends EventListener<infer T> ? T : never,
+	) => void,
 ): void {
-  const eventListener = events[eventKey] as EventListener<any>;
-  createTauriEventListener(eventListener, callback);
+	const eventListener = events[eventKey] as EventListener<any>;
+	createTauriEventListener(eventListener, callback);
 }

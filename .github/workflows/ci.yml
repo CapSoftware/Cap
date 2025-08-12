@@ -45,6 +45,21 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+  format-biome:
+    name: Format (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome
+        run: biome ci . --linter-enabled=false
+
   format-rust:
     name: Format (Cargo)
     runs-on: ubuntu-latest
@@ -104,6 +119,21 @@ jobs:
         uses: actions-rs-plus/clippy-check@v2
         with:
           args: --workspace --all-features --locked
+
+  lint-biome:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome
+        run: biome ci .
 
   build-desktop:
     name: Build Desktop

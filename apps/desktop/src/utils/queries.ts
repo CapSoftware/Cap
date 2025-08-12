@@ -1,197 +1,197 @@
+import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-  createMutation,
-  createQuery,
-  queryOptions,
-  useQuery,
+	createMutation,
+	createQuery,
+	queryOptions,
+	useQuery,
 } from "@tanstack/solid-query";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-
-import { createEventListener } from "@solid-primitives/event-listener";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
 import { authStore, generalSettingsStore } from "~/store";
 import { createQueryInvalidate } from "./events";
 import {
-  CameraInfo,
-  commands,
-  DeviceOrModelID,
-  ModelIDType,
-  RecordingMode,
-  ScreenCaptureTarget,
+	type CameraInfo,
+	commands,
+	type DeviceOrModelID,
+	ModelIDType,
+	type RecordingMode,
+	type ScreenCaptureTarget,
 } from "./tauri";
 import { orgCustomDomainClient, protectedHeaders } from "./web-api";
 
 export const listWindows = queryOptions({
-  queryKey: ["capture", "windows"] as const,
-  queryFn: async () => {
-    const w = await commands.listCaptureWindows();
+	queryKey: ["capture", "windows"] as const,
+	queryFn: async () => {
+		const w = await commands.listCaptureWindows();
 
-    w.sort(
-      (a, b) =>
-        a.owner_name.localeCompare(b.owner_name) || a.name.localeCompare(b.name)
-    );
+		w.sort(
+			(a, b) =>
+				a.owner_name.localeCompare(b.owner_name) ||
+				a.name.localeCompare(b.name),
+		);
 
-    return w;
-  },
-  reconcile: "id",
-  refetchInterval: 1000,
+		return w;
+	},
+	reconcile: "id",
+	refetchInterval: 1000,
 });
 
 export const listScreens = queryOptions({
-  queryKey: ["capture", "screens"] as const,
-  queryFn: () => commands.listCaptureScreens(),
-  reconcile: "id",
-  refetchInterval: 1000,
+	queryKey: ["capture", "screens"] as const,
+	queryFn: () => commands.listCaptureScreens(),
+	reconcile: "id",
+	refetchInterval: 1000,
 });
 
 const getCurrentRecording = queryOptions({
-  queryKey: ["currentRecording"] as const,
-  queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
+	queryKey: ["currentRecording"] as const,
+	queryFn: () => commands.getCurrentRecording().then((d) => d[0]),
 });
 
 export const listVideoDevices = queryOptions({
-  queryKey: ["videoDevices"] as const,
-  queryFn: () => commands.listCameras(),
-  refetchInterval: 1000,
-  initialData: [],
+	queryKey: ["videoDevices"] as const,
+	queryFn: () => commands.listCameras(),
+	refetchInterval: 1000,
+	initialData: [],
 });
 
 export function createVideoDevicesQuery() {
-  const query = createQuery(() => listVideoDevices);
+	const query = createQuery(() => listVideoDevices);
 
-  const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
+	const [videoDevicesStore, setVideoDevices] = createStore<CameraInfo[]>([]);
 
-  createMemo(() => {
-    setVideoDevices(reconcile(query.data ?? []));
-  });
+	createMemo(() => {
+		setVideoDevices(reconcile(query.data ?? []));
+	});
 
-  return videoDevicesStore;
+	return videoDevicesStore;
 }
 
 export const listAudioDevices = queryOptions({
-  queryKey: ["audioDevices"] as const,
-  queryFn: () => commands.listAudioDevices(),
-  reconcile: "name",
-  refetchInterval: 1000,
-  gcTime: 0,
-  staleTime: 0,
+	queryKey: ["audioDevices"] as const,
+	queryFn: () => commands.listAudioDevices(),
+	reconcile: "name",
+	refetchInterval: 1000,
+	gcTime: 0,
+	staleTime: 0,
 });
 
 export const getPermissions = queryOptions({
-  queryKey: ["permissionsOS"] as const,
-  queryFn: () => commands.doPermissionsCheck(true),
-  refetchInterval: 1000,
+	queryKey: ["permissionsOS"] as const,
+	queryFn: () => commands.doPermissionsCheck(true),
+	refetchInterval: 1000,
 });
 
 export function createOptionsQuery() {
-  const PERSIST_KEY = "recording-options-query";
-  const [_state, _setState] = createStore<{
-    captureTarget: ScreenCaptureTarget;
-    micName: string | null;
-    mode: RecordingMode;
-    captureSystemAudio?: boolean;
-    targetMode?: "screen" | "window" | "area" | null;
-    cameraID?: DeviceOrModelID | null;
-    /** @deprecated */
-    cameraLabel: string | null;
-  }>({
-    captureTarget: { variant: "screen", id: 0 },
-    micName: null,
-    cameraLabel: null,
-    mode: "studio",
-  });
+	const PERSIST_KEY = "recording-options-query";
+	const [_state, _setState] = createStore<{
+		captureTarget: ScreenCaptureTarget;
+		micName: string | null;
+		mode: RecordingMode;
+		captureSystemAudio?: boolean;
+		targetMode?: "screen" | "window" | "area" | null;
+		cameraID?: DeviceOrModelID | null;
+		/** @deprecated */
+		cameraLabel: string | null;
+	}>({
+		captureTarget: { variant: "screen", id: 0 },
+		micName: null,
+		cameraLabel: null,
+		mode: "studio",
+	});
 
-  createEventListener(window, "storage", (e) => {
-    if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
-  });
+	createEventListener(window, "storage", (e) => {
+		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
+	});
 
-  const [state, setState] = makePersisted([_state, _setState], {
-    name: PERSIST_KEY,
-  });
+	const [state, setState] = makePersisted([_state, _setState], {
+		name: PERSIST_KEY,
+	});
 
-  createEventListener(window, "storage", (e) => {
-    if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
-  });
+	createEventListener(window, "storage", (e) => {
+		if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
+	});
 
-  return { rawOptions: state, setOptions: setState };
+	return { rawOptions: state, setOptions: setState };
 }
 
 export function createCurrentRecordingQuery() {
-  const currentRecording = createQuery(() => getCurrentRecording);
+	const currentRecording = createQuery(() => getCurrentRecording);
 
-  createQueryInvalidate(currentRecording, "currentRecordingChanged");
+	createQueryInvalidate(currentRecording, "currentRecordingChanged");
 
-  return currentRecording;
+	return currentRecording;
 }
 
 export function createLicenseQuery() {
-  const query = createQuery(() => ({
-    queryKey: ["licenseQuery"],
-    queryFn: async () => {
-      const settings = await generalSettingsStore.get();
-      const auth = await authStore.get();
+	const query = createQuery(() => ({
+		queryKey: ["licenseQuery"],
+		queryFn: async () => {
+			const settings = await generalSettingsStore.get();
+			const auth = await authStore.get();
 
-      if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
-      if (settings?.commercialLicense)
-        return {
-          type: "commercial" as const,
-          ...settings.commercialLicense,
-          instanceId: settings.instanceId,
-        };
-      return { type: "personal" as const };
-    },
-  }));
+			if (auth?.plan?.upgraded) return { type: "pro" as const, ...auth.plan };
+			if (settings?.commercialLicense)
+				return {
+					type: "commercial" as const,
+					...settings.commercialLicense,
+					instanceId: settings.instanceId,
+				};
+			return { type: "personal" as const };
+		},
+	}));
 
-  generalSettingsStore.listen(() => query.refetch());
-  authStore.listen(() => query.refetch());
+	generalSettingsStore.listen(() => query.refetch());
+	authStore.listen(() => query.refetch());
 
-  return query;
+	return query;
 }
 
 export function createCameraMutation() {
-  const { setOptions, rawOptions } = useRecordingOptions();
+	const { setOptions, rawOptions } = useRecordingOptions();
 
-  const setCameraInput = createMutation(() => ({
-    mutationFn: async (model: DeviceOrModelID | null) => {
-      const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
-      setOptions("cameraID", reconcile(model));
-      if (model) {
-        await commands.showWindow("Camera");
-        getCurrentWindow().setFocus();
-      }
+	const setCameraInput = createMutation(() => ({
+		mutationFn: async (model: DeviceOrModelID | null) => {
+			const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
+			setOptions("cameraID", reconcile(model));
+			if (model) {
+				await commands.showWindow("Camera");
+				getCurrentWindow().setFocus();
+			}
 
-      await commands.setCameraInput(model).catch(async (e) => {
-        if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-          setOptions("cameraID", null);
-        } else setOptions("cameraID", reconcile(before));
+			await commands.setCameraInput(model).catch(async (e) => {
+				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+					setOptions("cameraID", null);
+				} else setOptions("cameraID", reconcile(before));
 
-        throw e;
-      });
-    },
-  }));
+				throw e;
+			});
+		},
+	}));
 
-  return setCameraInput;
+	return setCameraInput;
 }
 
 export function createCustomDomainQuery() {
-  return useQuery(() => ({
-    queryKey: ["customDomain"] as const,
-    queryFn: async () => {
-      try {
-        const auth = await authStore.get();
-        if (!auth) return { custom_domain: null, domain_verified: null };
-        const response = await orgCustomDomainClient.getOrgCustomDomain({
-          headers: await protectedHeaders(),
-        });
-        if (response.status === 200) return response.body;
-      } catch (error) {
-        console.error("Error fetching custom domain:", error);
-        return { custom_domain: null, domain_verified: null };
-      }
-    },
-    refetchOnMount: true,
-    refetchOnWindowFocus: true,
-  }));
+	return useQuery(() => ({
+		queryKey: ["customDomain"] as const,
+		queryFn: async () => {
+			try {
+				const auth = await authStore.get();
+				if (!auth) return { custom_domain: null, domain_verified: null };
+				const response = await orgCustomDomainClient.getOrgCustomDomain({
+					headers: await protectedHeaders(),
+				});
+				if (response.status === 200) return response.body;
+			} catch (error) {
+				console.error("Error fetching custom domain:", error);
+				return { custom_domain: null, domain_verified: null };
+			}
+		},
+		refetchOnMount: true,
+		refetchOnWindowFocus: true,
+	}));
 }
