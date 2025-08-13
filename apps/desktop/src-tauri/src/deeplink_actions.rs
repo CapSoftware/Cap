@@ -1,8 +1,9 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cap_recording::RecordingMode;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
+use tracing::trace;
 
 use crate::{
     App, ArcLock, camera::CameraPreview, recording::StartRecordingInputs, windows::ShowCapWindow,
@@ -27,7 +28,7 @@ pub enum DeepLinkAction {
     },
     StopRecording,
     OpenEditor {
-        project_path: String,
+        project_path: PathBuf,
     },
     OpenSettings {
         page: Option<String>,
@@ -35,8 +36,7 @@ pub enum DeepLinkAction {
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
-    #[cfg(debug_assertions)]
-    println!("Handling deep actions for: {:?}", &urls);
+    trace!("Handling deep actions for: {:?}", &urls);
 
     let actions: Vec<_> = urls
         .into_iter()
@@ -81,9 +81,10 @@ impl TryFrom<&Url> for DeepLinkAction {
     type Error = ActionParseFromUrlError;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
+        #[cfg(target_os = "macos")]
         if url.scheme() == "file" {
             return Ok(Self::OpenEditor {
-                project_path: url.path().into(),
+                project_path: url.to_file_path().unwrap(),
             });
         }
 
