@@ -12,9 +12,9 @@ import { db } from "../";
 import { dub } from "../dub";
 import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
-import { isEmailAllowedForSignup } from "./domain-utils";
 import { nanoId } from "../helpers";
 import { organizationMembers, organizations, users } from "../schema";
+import { isEmailAllowedForSignup } from "./domain-utils";
 import { DrizzleAdapter } from "./drizzle-adapter";
 
 export const config = {
