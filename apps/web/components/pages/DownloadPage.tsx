@@ -17,7 +17,6 @@ export const DownloadPage = () => {
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
 			<div className="space-y-4 text-center">
-
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
 					Download Cap
 				</h1>
