@@ -14,6 +14,7 @@ import { sendEmail } from "../emails/config";
 import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
 import { organizationMembers, organizations, users } from "../schema";
+import { isEmailAllowedForSignup } from "./domain-utils";
 import { DrizzleAdapter } from "./drizzle-adapter";
 
 export const config = {
@@ -174,6 +175,29 @@ export const authOptions = (): NextAuthOptions => {
 			},
 		},
 		callbacks: {
+			async signIn({ user }) {
+				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+				if (!allowedDomains) return true;
+
+				if (user.email) {
+					const [existingUser] = await db()
+						.select()
+						.from(users)
+						.where(eq(users.email, user.email))
+						.limit(1);
+
+					// Only apply domain restrictions for new users, existing ones can always sign in
+					if (
+						!existingUser &&
+						!isEmailAllowedForSignup(user.email, allowedDomains)
+					) {
+						console.warn(`Signup blocked for email domain: ${user.email}`);
+						return false;
+					}
+				}
+
+				return true;
+			},
 			async session({ token, session }) {
 				if (!session.user) return session;
 
