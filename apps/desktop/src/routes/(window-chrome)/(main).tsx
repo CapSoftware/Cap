@@ -163,76 +163,85 @@ function Page() {
 				win = _windows()?.find((s) => s.id === windowId) ?? _windows()?.[0];
 			}
 
-			return win;
-		},
-		cameraID: () =>
-			cameras.find((c) => {
-				const { cameraID } = rawOptions;
-				if (!cameraID) return;
-				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
-				if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
-					return c;
-			}),
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
-	};
+      return win;
+    },
+    cameraID: () =>
+      cameras.find((c) => {
+        const { cameraID } = rawOptions;
+        if (!cameraID) return;
+        if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
+        if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
+          return c;
+      }),
+    micName: () => mics.data?.find((name) => name === rawOptions.micName),
+  };
 
-	// if target is window and no windows are available, switch to screen capture
-	createEffect(() => {
-		const screen = _screens()?.[0];
-		if (
-			rawOptions.captureTarget.variant === "window" &&
-			!windows.isPending &&
-			_windows()?.length === 0 &&
-			screen
-		) {
-			setOptions(
-				"captureTarget",
-				reconcile({ variant: "screen", id: screen.id }),
-			);
-		}
-	});
+  // if target is window and no windows are available, switch to screen capture
+  createEffect(() => {
+    const screen = _screens()?.[0];
+    if (
+      rawOptions.captureTarget.variant === "window" &&
+      !windows.isPending &&
+      _windows()?.length === 0 &&
+      screen
+    ) {
+      setOptions(
+        "captureTarget",
+        reconcile({ variant: "screen", id: screen.id })
+      );
+    }
+  });
 
-	const toggleRecording = createMutation(() => ({
-		mutationFn: async () => {
-			if (!isRecording()) {
-				const capture_target = ((): ScreenCaptureTarget => {
-					switch (rawOptions.captureTarget.variant) {
-						case "screen": {
-							const screen = options.screen();
-							if (!screen)
-								throw new Error(
-									`No screen found. Number of available screens: ${
-										_screens()?.length
-									}`,
-								);
-							return { variant: "screen", id: screen.id };
-						}
-						case "window": {
-							const win = options.window();
-							if (!win)
-								throw new Error(
-									`No window found. Number of available windows: ${
-										_windows()?.length
-									}`,
-								);
-							return { variant: "window", id: win.id };
-						}
-						case "area": {
-							const screen = options.screen();
-							if (!screen)
-								throw new Error(
-									`No screen found. Number of available screens: ${
-										_screens()?.length
-									}`,
-								);
-							return {
-								variant: "area",
-								bounds: rawOptions.captureTarget.bounds,
-								screen: screen.id,
-							};
-						}
-					}
-				})();
+  const toggleRecording = createMutation(() => ({
+    mutationFn: async () => {
+      if (!isRecording()) {
+        const capture_target = ((): ScreenCaptureTarget => {
+          switch (rawOptions.captureTarget.variant) {
+            case "screen": {
+              const screen = options.screen();
+              if (!screen)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _screens()?.length
+                  }`
+                );
+              return { variant: "screen", id: screen.id };
+            }
+            case "window": {
+              const win = options.window();
+              if (!win)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _windows()?.length
+                  }`
+                );
+              return { variant: "window", id: win.id };
+            }
+            case "area": {
+              const screen = options.screen();
+              if (!screen)
+                throw new Error(
+                  `No screen found. Number of available screens: ${
+                    _screens()?.length
+                  }`
+                );
+              return {
+                variant: "area",
+                bounds: rawOptions.captureTarget.bounds,
+                screen: screen.id,
+              };
+            }
+          }
+        })();
+
+        await commands.startRecording({
+          capture_target,
+          mode: rawOptions.mode,
+          capture_system_audio: rawOptions.captureSystemAudio,
+        });
+      } else await commands.stopRecording();
+    },
+  }));
 
 				await commands.startRecording({
 					capture_target,

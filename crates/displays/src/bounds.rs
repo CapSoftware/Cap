@@ -71,6 +71,10 @@ pub struct LogicalPosition {
 }
 
 impl LogicalPosition {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
     pub fn x(&self) -> f64 {
         self.x
     }

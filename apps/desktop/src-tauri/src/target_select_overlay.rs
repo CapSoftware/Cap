@@ -9,8 +9,8 @@ use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
-    DisplayId, WindowId,
-    bounds::{LogicalBounds, PhysicalSize},
+    Display, DisplayId, WindowId,
+    bounds::{LogicalBounds, LogicalPosition, PhysicalSize},
 };
 use serde::Serialize;
 use specta::Type;
@@ -24,7 +24,6 @@ use tracing::error;
 pub struct TargetUnderCursor {
     display_id: Option<DisplayId>,
     window: Option<WindowUnderCursor>,
-    screen: Option<ScreenUnderCursor>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -36,7 +35,7 @@ pub struct WindowUnderCursor {
 }
 
 #[derive(Serialize, Type, Clone)]
-pub struct ScreenUnderCursor {
+pub struct DisplayInformation {
     name: String,
     physical_size: PhysicalSize,
     refresh_rate: String,
@@ -62,29 +61,52 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
         async move {
             loop {
-                let display = cap_displays::Display::get_containing_cursor();
-                let window = cap_displays::Window::get_topmost_at_cursor();
+                {
+                    let display = cap_displays::Display::get_containing_cursor();
+                    let window = cap_displays::Window::get_topmost_at_cursor();
 
-                let _ = TargetUnderCursor {
+                    let _ = TargetUnderCursor {
                     display_id: display.map(|d| d.id()),
                     window: window.and_then(|w| {
+                        let bounds = w.bounds()?;
+
+                        // Convert global window bounds to display-relative coordinates
+                        let display_relative_bounds = if let Some(current_display) = &display {
+                            let display_position = current_display.raw_handle().logical_position();
+                            let relative_position = LogicalPosition::new(
+                                bounds.position().x() - display_position.x(),
+                                bounds.position().y() - display_position.y(),
+                            );
+                            let converted_bounds = LogicalBounds::new(relative_position, bounds.size());
+
+                            // Debug logging for multi-monitor coordinate conversion
+                            tracing::debug!(
+                                "Window bounds conversion - Display: {} | Original: ({:.0}, {:.0}) {}x{} | Display offset: ({:.0}, {:.0}) | Converted: ({:.0}, {:.0}) {}x{}",
+                                current_display.name(),
+                                bounds.position().x(), bounds.position().y(),
+                                bounds.size().width(), bounds.size().height(),
+                                display_position.x(), display_position.y(),
+                                converted_bounds.position().x(), converted_bounds.position().y(),
+                                converted_bounds.size().width(), converted_bounds.size().height()
+                            );
+
+                            converted_bounds
+                        } else {
+                            bounds
+                        };
+
                         Some(WindowUnderCursor {
                             id: w.id(),
-                            bounds: w.bounds()?,
+                            bounds: display_relative_bounds,
                             app_name: w.owner_name()?,
                             icon: w.app_icon().map(|bytes| {
                                 format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))
                             }),
                         })
                     }),
-                    screen: display.map(|d| ScreenUnderCursor {
-                        name: d.name(),
-                        physical_size: d.physical_size(),
-                        refresh_rate: d.refresh_rate().to_string(),
-                    }),
                 }
                 .emit(&app);
-
+                }
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
@@ -110,10 +132,7 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
-pub async fn close_target_select_overlays(
-    app: AppHandle,
-    // state: tauri::State<'_, WindowFocusManager>,
-) -> Result<(), String> {
+pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
             let _ = window.close();
@@ -121,6 +140,24 @@ pub async fn close_target_select_overlays(
     }
 
     Ok(())
+}
+
+#[specta::specta]
+#[tauri::command]
+pub async fn display_information(display_id: &str) -> Result<DisplayInformation, String> {
+    let display_id = display_id
+        .parse::<DisplayId>()
+        .map_err(|err| format!("Invalid display ID: {}", err))?;
+    let display = Display::from_id(display_id).ok_or("Display not found")?;
+
+    let physical_size = display.physical_size();
+    let refresh_rate = display.refresh_rate().to_string();
+
+    Ok(DisplayInformation {
+        name: display.name().to_string(),
+        physical_size,
+        refresh_rate,
+    })
 }
 
 // Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
@@ -178,7 +215,7 @@ impl WindowFocusManager {
     pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.remove(&id.to_string()) {
-            let _ = task.abort();
+            task.abort();
         }
 
         // When all overlay windows are closed cleanup shared resources.
