@@ -8,6 +8,7 @@ import {
   createRoot,
   createSignal,
   For,
+  on,
   onMount,
   Show,
 } from "solid-js";
@@ -169,12 +170,18 @@ export default function Cropper(
 
   const [aspectState, setAspectState] = createStore({
     snapped: null as Ratio | null,
-    selected: null as Ratio | null,
+    value: null as number | null,
   });
 
-  createEffect(() => {
-    if (state.resizing) setAspectState("snapped", null);
-  });
+  createEffect(
+    on(
+      () => props.aspectRatio,
+      (v) => {
+        setAspectState("value", v ? ratioToValue(v) : null);
+        setRawBoundsConstraining(Box.fromBounds(rawBounds()));
+      }
+    )
+  );
 
   const [containerSize, setContainerSize] = createSignal<Vec2>({ x: 1, y: 1 });
   const targetSize = createMemo(() => props.targetSize || containerSize());
@@ -206,7 +213,7 @@ export default function Cropper(
     const containerRect = containerRef!.getBoundingClientRect();
     const labelWidth = 80; // Approximate
     const labelHeight = 25; // Approximate
-    const margin = 20; // Margin from viewport edges and handle
+    const margin = 25; // Margin from viewport edges and handle
 
     const handleScreenX =
       containerRect.left +
@@ -274,12 +281,6 @@ export default function Cropper(
     };
   }
 
-  const selectedAspectRatio = createMemo(() => {
-    if (props.aspectRatio) return ratioToValue(props.aspectRatio);
-    if (aspectState.selected) return ratioToValue(aspectState.selected);
-    return null;
-  });
-
   function rawSizeConstraint() {
     const scale = logicalScale();
     return {
@@ -299,7 +300,7 @@ export default function Cropper(
   }
 
   function setRawBoundsConstraining(box: Box, origin = ORIGIN_CENTER) {
-    const ratioValue = selectedAspectRatio();
+    const ratioValue = aspectState.value;
     const container = containerSize();
     const { min, max } = rawSizeConstraint();
 
@@ -370,7 +371,7 @@ export default function Cropper(
         )
       );
 
-      const ratioValue = selectedAspectRatio();
+      const ratioValue = aspectState.value;
       if (ratioValue) box.constrainToRatio(ratioValue, ORIGIN_CENTER);
       const container = containerSize();
 
@@ -381,18 +382,20 @@ export default function Cropper(
           container.y / 2 - box.height / 2
         );
 
-      setRawBounds(box.toBounds());
+      setRawBoundsConstraining(box);
     }
 
     if (props.ref) {
       const fill = () => {
         const container = containerSize();
-        setRawBounds({
-          x: 0,
-          y: 0,
-          width: container.x,
-          height: container.y,
-        });
+        setRawBoundsConstraining(
+          Box.fromBounds({
+            x: 0,
+            y: 0,
+            width: container.x,
+            height: container.y,
+          })
+        );
         setSelectionClear(false);
         setAspectState("snapped", null);
       };
@@ -482,7 +485,7 @@ export default function Cropper(
 
     const container = containerSize();
     const { min, max } = rawSizeConstraint();
-    const ratioValue = selectedAspectRatio();
+    const ratioValue = aspectState.value;
 
     if (ratioValue !== null) {
       return handleResizeWithAspectRatio(
@@ -1101,8 +1104,6 @@ export default function Cropper(
       originalHandle: handle,
     };
 
-    setRawBoundsConstraining(Box.fromBounds(startBounds));
-
     createRoot((dispose) => {
       createEventListenerMap(window, {
         mouseup: () => {
@@ -1126,76 +1127,68 @@ export default function Cropper(
 
   return (
     <div
-      aria-label="Crop area"
       ref={containerRef}
-      // prettier-ignore
-      class={`relative inline-block top-0 left-0 h-full w-full overscroll-contain *:overscroll-none ${props.class ?? ""}`}
-      style={{ cursor: state.cursorStyle ?? "crosshair" }}
-      // onTouchStart={handleTouchStart}
-      // onTouchMove={handleTouchMove}
-      // onTouchEnd={handleTouchEnd}
-      // onKeyDown={handleKeyDown}
-      // onKeyUp={handleKeyUp}
+      class="relative w-full h-full select-none overscroll-contain"
       onMouseDown={onOverlayMouseDown}
-      tabIndex={0}
-      onContextMenu={async (e) => {
+      style={{
+        cursor: state.cursorStyle ?? "crosshair",
+        "--crop-x": `${Math.round(rawBounds().x)}px`,
+        "--crop-y": `${Math.round(rawBounds().y)}px`,
+        "--crop-width": `${Math.round(rawBounds().width)}px`,
+        "--crop-height": `${Math.round(rawBounds().height)}px`,
+      }}
+      onContextMenu={(e) => {
         e.preventDefault();
-        e.stopPropagation();
-        // menu();
+        e.stopImmediatePropagation();
       }}
     >
-      {/* <Show when={selectionClear()}>
-        <div class="size-full flex items-center justify-center bg-black/30">
-          <span class="animate-bounce text-2xl">Drag to select</span>
-        </div>
-      </Show> */}
-      {/* <Show when={selectionClear()}> */}
+      <Transition
+        appear
+        enterClass="opacity-0"
+        enterActiveClass="transition-opacity duration-200"
+        enterToClass="opacity-100"
+        exitClass="opacity-100"
+        exitActiveClass="transition-opacity duration-200"
+        exitToClass="opacity-0"
+      >
+        <Show when={props.showBounds && labelTransform()}>
+          {(transform) => (
+            <div
+              class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono scale-50"
+              // prettier-ignore
+              style={{
+                transform: `translate(${transform().x}px, ${transform().y}px)`,
+              }}
+            >
+              {realBounds().width} x {realBounds().height}
+            </div>
+          )}
+        </Show>
+      </Transition>
 
-      <Show when={true}>
-        <div class="*:absolute *:bg-black/50 *:pointer-events-none">
-          <div
-            class="top-0 left-0"
-            style={{
-              width: "100%",
-              height: `${rawBounds().y}px`,
-            }}
-          />
-          <div
-            class="left-0 bottom-0"
-            style={{
-              top: `${rawBounds().y + rawBounds().height}px`,
-              width: "100%",
-            }}
-          />
-          <div
-            class="left-0"
-            style={{
-              top: `${rawBounds().y}px`,
-              width: `${rawBounds().x}px`,
-              height: `${rawBounds().height}px`,
-            }}
-          />
-          <div
-            class="right-0"
-            style={{
-              top: `${rawBounds().y}px`,
-              left: `${rawBounds().x + rawBounds().width}px`,
-              height: `${rawBounds().height}px`,
-            }}
-          />
-        </div>
+      {resolvedChildren()}
+
+      {/* Occluder */}
+      <div class="absolute inset-0 *:absolute *:bg-black/50 *:pointer-events-none">
+        {/* Top blind */}
+        <div class="top-0 left-0 w-full h-[--crop-y]" />
+        {/* Bottom blind */}
+        <div class="left-0 bottom-0 w-full top-[calc(var(--crop-y)+var(--crop-height))]" />
+        {/* Left blind */}
+        <div class="left-0 top-[--crop-y] w-[--crop-x] h-[--crop-height]" />
+        {/* Right blind */}
+        <div class="right-0 top-[--crop-y] left-[calc(var(--crop-x)+var(--crop-width))] h-[--crop-height]" />
+      </div>
+
+      <div aria-label="Crop area" class="size-full" tabIndex={0}>
+        {/* Selection region */}
         <div
           ref={regionRef}
-          class="absolute border border-white/50"
-          // prettier-ignore
-          style={{
-            cursor: state.cursorStyle ?? "grab",
-            transform: `translate3d(${Math.round(rawBounds().x)}px,${Math.round(rawBounds().y)}px, 0)`,
-            width: `${rawBounds().width}px`,
-            height: `${rawBounds().height}px`,
-          }}
+          class="absolute top-0 left-0 z-30 w-[--crop-width] h-[--crop-height] translate-x-[--crop-x] translate-y-[--crop-y] border border-white/50"
+          style={{ cursor: state.cursorStyle ?? "grab" }}
           onMouseDown={onRegionMouseDown}
         >
+          {/* Rule of Thirds */}
           <Transition
             appear
             enterClass="opacity-0"
@@ -1220,7 +1213,7 @@ export default function Cropper(
               handle.isCorner ? (
                 <div
                   role="slider"
-                  class="absolute z-50 flex h-[30px] w-[30px] *:border-white"
+                  class="fixed z-50 flex h-[30px] w-[30px] *:border-white"
                   classList={{ "opacity-0": state.overlayDragging }}
                   // prettier-ignore
                   style={{
@@ -1254,7 +1247,7 @@ export default function Cropper(
                   class="absolute"
                   // prettier-ignore
                   style={{
-                    visibility: state.resizing && state.hoveringHandle?.isCorner ? "hidden" : "visible",
+                    visibility: state.resizing ? "hidden" : "visible",
                     cursor: state.cursorStyle ?? handle.cursor,
                     ...(handle.x === 'l' ? { left: '-1px', width: '10px', top: '10px', bottom: '10px', transform: 'translateX(-50%)' } :
                         handle.x === 'r' ? { right: '-1px', width: '10px', top: '10px', bottom: '10px', transform: 'translateX(50%)' } :
@@ -1276,6 +1269,7 @@ export default function Cropper(
                 ? aspectState.snapped
                 : null
             }
+            keyed
           >
             {(bounds) => (
               <div class="w-full h-8 flex items-center justify-center">
@@ -1286,39 +1280,13 @@ export default function Cropper(
                     "bg-gray-3 opacity-90": props.disableBackdropFilters,
                   }}
                 >
-                  {bounds()[0]}:{bounds()[1]}
+                  {bounds[0]}:{bounds[1]}
                 </div>
               </div>
             )}
           </Show>
         </div>
-      </Show>
-
-      <Transition
-        appear
-        enterClass="opacity-0"
-        enterActiveClass="transition-opacity duration-200"
-        enterToClass="opacity-100"
-        exitClass="opacity-100"
-        exitActiveClass="transition-opacity duration-200"
-        exitToClass="opacity-0"
-      >
-        <Show when={props.showBounds && labelTransform()}>
-          {(transform) => (
-            <div
-              class="fixed z-50 pointer-events-none bg-gray-2 text-xs px-2 py-0.5 rounded-full shadow-lg border border-gray-5 font-mono scale-50"
-              // prettier-ignore
-              style={{
-                transform: `translate3d(${transform().x}px, ${transform().y}px, 0)`,
-              }}
-            >
-              {realBounds().width} x {realBounds().height}
-            </div>
-          )}
-        </Show>
-      </Transition>
-
-      {resolvedChildren()}
+      </div>
     </div>
   );
 }

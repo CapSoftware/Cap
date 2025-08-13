@@ -34,6 +34,9 @@ import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import Cropper, { CROP_ZERO, CropperRef } from "~/components/Cropper";
+import Tooltip from "~/components/Tooltip";
+import { makePersisted } from "@solid-primitives/storage";
+import { cx } from "cva";
 
 export function Editor() {
   return (
@@ -304,6 +307,11 @@ function Dialogs() {
                   height: dialog().size.y,
                 };
 
+                const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
+                  createSignal(true),
+                  { name: "editorCropSnapToRatio" }
+                );
+
                 return (
                   <>
                     <Dialog.Header>
@@ -367,6 +375,27 @@ function Dialogs() {
                       </div>
                       <div class="flex flex-row gap-3 justify-end items-center w-full">
                         <div class="flex flex-row items-center space-x-[0.5rem] text-gray-11"></div>
+                        <Tooltip content="Snap to ratios">
+                          <Button
+                            variant="secondary"
+                            size="xs"
+                            class={cx(
+                              "flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",
+                              snapToRatio()
+                                ? "border-blue-9"
+                                : "border-transparent"
+                            )}
+                            onClick={() => setSnapToRatioEnabled((s) => !s)}
+                          >
+                            <IconLucideRatio
+                              class={cx(
+                                "w-4",
+                                snapToRatio() ? "text-blue-9" : "text-gray-12"
+                              )}
+                            />
+                          </Button>
+                        </Tooltip>
+
                         <EditorButton
                           leftIcon={<IconLucideMaximize />}
                           onClick={() => cropperRef?.fill()}
@@ -399,7 +428,7 @@ function Dialogs() {
                             onCropChange={setCrop}
                             targetSize={{ x: display.width, y: display.height }}
                             initialCrop={initialBounds}
-                            snapToRatioEnabled={true}
+                            snapToRatioEnabled={snapToRatio()}
                           >
                             <img
                               class="shadow pointer-events-none max-h-[70vh]"

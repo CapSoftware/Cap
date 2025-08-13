@@ -521,7 +521,10 @@ import {
   RecordingOptionsProvider,
   useRecordingOptions,
 } from "./OptionsContext";
-import { createTauriEventListener } from "~/utils/createEventListener";
+import {
+  createCustomTauriEventListener,
+  createTauriEventListener,
+} from "~/utils/createEventListener";
 
 let hasChecked = false;
 function createUpdateCheck() {
@@ -585,14 +588,9 @@ function AreaSelectButton(props: {
     });
   }
 
-  onMount(async () => {
-    const unlistenCaptureAreaWindow =
-      await getCurrentWebviewWindow().listen<boolean>(
-        "cap-window://capture-area/state/pending",
-        (event) => setAreaSelection("pending", event.payload)
-      );
-    onCleanup(unlistenCaptureAreaWindow);
-  });
+  createCustomTauriEventListener<boolean>("captureAreaPending", (e) =>
+    setAreaSelection("pending", e.payload)
+  );
 
   return (
     <Tooltip

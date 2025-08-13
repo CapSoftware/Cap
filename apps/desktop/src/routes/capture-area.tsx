@@ -4,21 +4,14 @@ import {
   getCurrentWebviewWindow,
   WebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
-import {
-  createMemo,
-  createSignal,
-  Match,
-  onCleanup,
-  onMount,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { Transition } from "solid-transition-group";
 import { createOptionsQuery } from "~/utils/queries";
 import Cropper, {
   COMMON_RATIOS,
   CROP_ZERO,
-  CropBounds,
+  type CropBounds,
   type CropperRef,
   type Ratio,
 } from "~/components/Cropper";
@@ -31,21 +24,13 @@ import {
   PredefinedMenuItem,
 } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
-import { createWindowSize } from "@solid-primitives/resize-observer";
 import { createScheduled, debounce } from "@solid-primitives/scheduled";
+import { createTauriEventUnlisten } from "~/utils/createEventListener";
 
 const MIN_SIZE = { width: 50, height: 50 };
 
-const MENU_ID_ASPECT_NONE = "crop-options-aspect-none";
-const MENU_ID_SNAPPING_ENABLED = "crop-options-snapping";
-
-function getMenuIdForRatio(ratio: Ratio) {
-  return `crop-options-aspect-${ratio[0]}-${ratio[1]}`;
-}
-
 export default function CaptureArea() {
   let cropperRef: CropperRef | undefined;
-  let aspectMenu: Menu | undefined;
 
   const [crop, setCrop] = createSignal(CROP_ZERO);
 
@@ -62,7 +47,9 @@ export default function CaptureArea() {
   const webview = getCurrentWebviewWindow();
 
   const setPendingState = (pending: boolean) =>
-    webview.emitTo("main", "cap-window://capture-area/state/pending", pending);
+    webview.emitTo("main", "captureAreaPending", pending);
+
+  setPendingState(true);
 
   const screenId =
     rawOptions.captureTarget.variant === "screen"
@@ -79,60 +66,19 @@ export default function CaptureArea() {
     }
   );
 
-  const windowSize = createWindowSize();
-
-  onMount(async () => {
-    setPendingState(true);
-    const unlisten = await webview.onCloseRequested(() =>
-      setPendingState(false)
-    );
-
-    createEventListener(window, "keydown", (e) => {
-      if (e.key === "Escape") close();
-      else if (e.key === "Enter") handleConfirm();
-    });
-
-    // const items = await Promise.all([
-    //   CheckMenuItem.new({
-    //     id: MENU_ID_ASPECT_NONE,
-    //     text: "Free",
-    //     // checked: !aspectState.selectedRatio,
-    //     // action: () => setAspectState("selectedRatio", null),
-    //   }),
-    //   ...COMMON_RATIOS.map((ratio) =>
-    //     CheckMenuItem.new({
-    //       id: getMenuIdForRatio(ratio),
-    //       text: `${ratio[0]}:${ratio[1]}`,
-    //       // checked: ratiosEqual(aspectState.selectedRatio, ratio),
-    //       // action: () => setAspectState("selectedRatio", ratio),
-    //     })
-    //   ),
-    //   PredefinedMenuItem.new({ item: "Separator" }),
-    //   CheckMenuItem.new({
-    //     id: MENU_ID_SNAPPING_ENABLED,
-    //     text: "Snapping enabled",
-    //     checked: persistedState.snapToRatio,
-    //     action: () => setPersistedState("snapToRatio", (v) => !v),
-    //   }),
-    // ]);
-
-    // Menu.new({
-    //   // id: "crop-options",
-    //   items,
-    // });
-
-    createEventListener(window, "beforeunload", () => {
-      // if (aspectMenu) aspectMenu.close();
-    });
-
-    onCleanup(() => {
-      unlisten();
-      // if (aspectMenu) aspectMenu.close();
-    });
+  createEventListener(window, "keydown", (e) => {
+    if (e.key === "Escape") close();
+    else if (e.key === "Enter") handleConfirm();
   });
+
+  createTauriEventUnlisten(
+    webview.onCloseRequested(() => setPendingState(false))
+  );
 
   function reset() {
     cropperRef?.reset();
+    setAspect(null);
+
     if (!screenId) return;
     setPersistedState("lastSelectedBounds", (values) =>
       values.filter((v) => v.screenId !== screenId)
@@ -192,28 +138,50 @@ export default function CaptureArea() {
     }, 250);
   }
 
-  function ratiosEqual(a: Ratio | null, b: Ratio): boolean {
-    return a?.[0] === b[0] && a?.[1] === b[1];
-  }
+  const [aspect, setAspect] = createSignal<Ratio | null>(null);
 
-  async function aspectRatioMenu(e: MouseEvent) {
-    if (!aspectMenu) return;
+  async function showMenu(e: MouseEvent) {
     e.preventDefault();
     const targetRect = (e.target as HTMLDivElement).getBoundingClientRect();
-    aspectMenu.popup(new LogicalPosition(targetRect.x, targetRect.y + 50));
+
+    const items = [
+      {
+        text: "Free",
+        checked: !aspect(),
+        action: () => setAspect(null),
+      } satisfies CheckMenuItemOptions,
+      ...COMMON_RATIOS.map(
+        (ratio) =>
+          ({
+            text: `${ratio[0]}:${ratio[1]}`,
+            checked: aspect() === ratio,
+            action: () => setAspect(ratio),
+          } satisfies CheckMenuItemOptions)
+      ),
+      { item: "Separator" } satisfies PredefinedMenuItemOptions,
+      {
+        text: "Snap to ratios",
+        checked: persistedState.snapToRatio,
+        action: () => setPersistedState("snapToRatio", (v) => !v),
+      } satisfies CheckMenuItemOptions,
+    ];
+
+    const menu = await Menu.new({ items });
+    await menu.popup(new LogicalPosition(targetRect.x, targetRect.y + 50));
+    await menu.close();
   }
 
   return (
-    <div class="overflow-hidden w-screen h-screen">
+    <div class="overflow-hidden w-screen h-screen fixed">
       <div class="flex fixed z-50 justify-center items-center w-full">
         <Transition
           appear
-          enterClass="-translate-y-8 scale-75 opacity-0"
-          enterActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.275,0.05,0.22,1.3)]"
+          enterClass="-translate-y-5 scale-75 opacity-0 blur-lg"
+          enterActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.175,0.885,0.12,1.175)]"
           enterToClass="translate-y-0 scale-100 opacity-100"
           exitClass="translate-y-0 scale-100 opacity-100"
           exitActiveClass="duration-500 [transition-timing-function:cubic-bezier(0.275,0.05,0.22,1.3)]"
-          exitToClass="-translate-y-8 scale-75 opacity-0"
+          exitToClass="-translate-y-5 scale-75 opacity-0 blur-lg"
         >
           <Show when={visible()}>
             <div
@@ -252,10 +220,30 @@ export default function CaptureArea() {
                     title="Aspect Ratio"
                     class="group flex items-center justify-center size-10 text-gray-11 hover:bg-gray-5 active:bg-gray-6 rounded-full transition-colors duration-200 cursor-default"
                     type="button"
-                    onMouseDown={aspectRatioMenu}
-                    onClick={aspectRatioMenu}
+                    onMouseDown={showMenu}
+                    onClick={showMenu}
                   >
-                    <IconLucideRatio class="group-active:scale-90 transition-transform size-5 pointer-events-none *:pointer-events-none" />
+                    <div class="relative size-5">
+                      <Show when={!aspect()}>
+                        <IconLucideRatio class="group-active:scale-90 transition-transform size-5 pointer-events-none *:pointer-events-none" />
+                      </Show>
+                      <Transition
+                        enterClass="scale-50 opacity-0 blur-md"
+                        enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+                        enterToClass="scale-100 opacity-100 blur-0"
+                        exitClass="opacity-0"
+                        exitActiveClass="duration-0"
+                        exitToClass="opacity-0"
+                      >
+                        <Show when={aspect()} keyed>
+                          {(ratio) => (
+                            <span class="absolute inset-0 flex items-center justify-center text-[13px] text font-medium leading-none tracking-tight text-blue-10 pointer-events-none">
+                              {ratio[0]}:{ratio[1]}
+                            </span>
+                          )}
+                        </Show>
+                      </Transition>
+                    </div>
                   </button>
                 </div>
 
@@ -286,7 +274,7 @@ export default function CaptureArea() {
         <Show when={visible()}>
           <Cropper
             ref={cropperRef}
-            // aspectRatio={[16, 9]}
+            aspectRatio={aspect() ?? undefined}
             showBounds={true}
             onCropChange={setCrop}
             snapToRatioEnabled={persistedState.snapToRatio}
@@ -297,6 +285,10 @@ export default function CaptureArea() {
                   )?.bounds
                 : undefined
             }
+            // WKWebView with `drawsBackground: no`, correctly applies filters and it even has
+            //  access to the display's frame buffer for applying it on stuff behind the view,
+            //  but it only lasts for about 5 seconds before it disappears :c
+            disableBackdropFilters={true}
           />
         </Show>
       </Transition>
