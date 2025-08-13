@@ -41,7 +41,7 @@ class Api extends HttpApi.make("CapWebApi").add(
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.NotFound),
 	),
-) { }
+) {}
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
@@ -198,11 +198,13 @@ const getPlaylistResponse = (
 				const generatedPlaylist = generateMasterPlaylist(
 					videoMetadata?.Metadata?.resolution ?? "",
 					videoMetadata?.Metadata?.bandwidth ?? "",
-					`${serverEnv().WEB_URL}/api/playlist?userId=${video.ownerId
+					`${serverEnv().WEB_URL}/api/playlist?userId=${
+						video.ownerId
 					}&videoId=${video.id}&videoType=video`,
 					audioMetadata
-						? `${serverEnv().WEB_URL}/api/playlist?userId=${video.ownerId
-						}&videoId=${video.id}&videoType=audio`
+						? `${serverEnv().WEB_URL}/api/playlist?userId=${
+								video.ownerId
+							}&videoId=${video.id}&videoType=audio`
 						: null,
 				);
 
