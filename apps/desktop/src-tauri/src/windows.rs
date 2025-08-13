@@ -316,7 +316,7 @@ impl ShowCapWindow {
                     .fullscreen(false)
                     .shadow(false)
                     .content_protected(true)
-                    .always_on_top(cfg!(target_os = "macos"))
+                    .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
                     .transparent(true);

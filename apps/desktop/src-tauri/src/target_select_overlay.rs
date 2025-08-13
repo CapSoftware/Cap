@@ -72,11 +72,8 @@ pub async fn open_target_select_overlays(
 
                             // Convert global window bounds to display-relative coordinates
                             let bounds = if let Some(current_display) = &display {
-                                LogicalBounds::new(
-                                    bounds.position()
-                                        - current_display.raw_handle().logical_position(),
-                                    bounds.size(),
-                                )
+                                let display_pos = current_display.raw_handle().logical_position();
+                                LogicalBounds::new(bounds.position() - display_pos, bounds.size())
                             } else {
                                 bounds
                             };
