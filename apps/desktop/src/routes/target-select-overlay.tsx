@@ -66,18 +66,30 @@ export default function () {
 	});
 
 	const setBounds = (newBounds: typeof bounds) => {
-		newBounds.position.x = Math.max(0, newBounds.position.x);
-		newBounds.position.y = Math.max(0, newBounds.position.y);
-		newBounds.size.width = Math.min(
-			window.innerWidth - newBounds.position.x,
-			newBounds.size.width,
-		);
-		newBounds.size.height = Math.min(
-			window.innerHeight - newBounds.position.y,
-			newBounds.size.height,
-		);
+		const clampedBounds = {
+			position: {
+				x: Math.max(0, newBounds.position.x),
+				y: Math.max(0, newBounds.position.y),
+			},
+			size: {
+				width: Math.max(
+					150,
+					Math.min(
+						window.innerWidth - Math.max(0, newBounds.position.x),
+						newBounds.size.width,
+					),
+				),
+				height: Math.max(
+					150,
+					Math.min(
+						window.innerHeight - Math.max(0, newBounds.position.y),
+						newBounds.size.height,
+					),
+				),
+			},
+		};
 
-		_setBounds(newBounds);
+		_setBounds(clampedBounds);
 	};
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
@@ -235,19 +247,22 @@ export default function () {
 								size: { ...bounds.size },
 							};
 
+							let animationFrame: number | null = null;
+
 							createRoot((dispose) => {
 								createEventListenerMap(window, {
-									mouseup: () => dispose(),
+									mouseup: () => {
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+										dispose();
+									},
 									mousemove: (moveEvent) => {
-										onDrag(startBounds, {
-											x: Math.max(
-												-startBounds.position.x,
-												moveEvent.clientX - downEvent.clientX,
-											),
-											y: Math.max(
-												-startBounds.position.y,
-												moveEvent.clientY - downEvent.clientY,
-											),
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+
+										animationFrame = requestAnimationFrame(() => {
+											onDrag(startBounds, {
+												x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
+												y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
+											});
 										});
 									},
 								});
