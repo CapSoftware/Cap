@@ -175,26 +175,29 @@ export const authOptions = (): NextAuthOptions => {
 			},
 		},
 		callbacks: {
-      async signIn({ user, account, profile }) {
-        // Only apply domain restrictions for new users, existing ones can always sign in
-        if (user.email) {
-          const [existingUser] = await db()
-            .select()
-            .from(users)
-            .where(eq(users.email, user.email))
-            .limit(1);
+			async signIn({ user }) {
+				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
+				if (!allowedDomains) return true;
 
-          if (!existingUser) {
-            const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
-            if (!isEmailAllowedForSignup(user.email, allowedDomains)) {
-              console.log(`Signup blocked for email domain: ${user.email}`);
-              return false;
-            }
-          }
-        }
+				if (user.email) {
+					const [existingUser] = await db()
+						.select()
+						.from(users)
+						.where(eq(users.email, user.email))
+						.limit(1);
 
-        return true;
-      },
+					// Only apply domain restrictions for new users, existing ones can always sign in
+					if (
+						!existingUser &&
+						!isEmailAllowedForSignup(user.email, allowedDomains)
+					) {
+						console.warn(`Signup blocked for email domain: ${user.email}`);
+						return false;
+					}
+				}
+
+				return true;
+			},
 			async session({ token, session }) {
 				if (!session.user) return session;
 
