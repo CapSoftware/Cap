@@ -23,6 +23,7 @@ use tauri_plugin_store::Store;
 use tokio::sync::{broadcast, oneshot};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
+use crate::general_settings::GeneralSettingsStore;
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
@@ -82,6 +83,22 @@ impl CameraPreview {
         self.loading.store(true, Ordering::Relaxed);
 
         let mut renderer = Renderer::init(window.clone()).await?;
+
+        // Update camera preview setting based on GPU composite alpha support
+        let supports_transparency = renderer.supports_transparency();
+        tracing::info!(
+            "GPU transparency support detected: {}, updating camera preview setting",
+            supports_transparency
+        );
+
+        if let Err(e) = GeneralSettingsStore::update_camera_preview_for_gpu_support(
+            &window.app_handle(),
+            supports_transparency
+        ) {
+            error!("Failed to update camera preview setting based on GPU support: {}", e);
+        } else {
+            tracing::info!("Successfully updated camera preview setting based on GPU capabilities");
+        }
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
@@ -793,6 +810,14 @@ impl Renderer {
 
         self.queue.submit(Some(encoder.finish()));
         surface.present();
+    }
+
+    /// Check if the renderer supports transparency via composite alpha modes
+    fn supports_transparency(&self) -> bool {
+        matches!(
+            self.surface_config.alpha_mode,
+            CompositeAlphaMode::PreMultiplied | CompositeAlphaMode::PostMultiplied
+        )
     }
 }
 
