@@ -211,7 +211,7 @@ function Page() {
 							const win = options.window();
 							if (!win)
 								throw new Error(
-									`No screen found. Number of available screens: ${
+									`No window found. Number of available windows: ${
 										_windows()?.length
 									}`,
 								);
