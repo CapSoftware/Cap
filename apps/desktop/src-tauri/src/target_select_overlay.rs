@@ -139,13 +139,10 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
         .map_err(|err| format!("Invalid display ID: {}", err))?;
     let display = Display::from_id(display_id).ok_or("Display not found")?;
 
-    let physical_size = display.physical_size();
-    let refresh_rate = display.refresh_rate().to_string();
-
     Ok(DisplayInformation {
         name: display.name().to_string(),
-        physical_size,
-        refresh_rate,
+        physical_size: display.physical_size(),
+        refresh_rate: display.refresh_rate().to_string(),
     })
 }
 
