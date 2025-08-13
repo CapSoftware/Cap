@@ -509,10 +509,9 @@ export function ExportDialog() {
 
 															if (
 																option.value === "Gif" &&
-																settings.resolution.value !== "720p"
+																!(settings.resolution.value === "720p" || settings.resolution.value === "1080p")
 															)
-																newSettings.resolution =
-																	RESOLUTION_OPTIONS._720p;
+																newSettings.resolution = { ...RESOLUTION_OPTIONS._720p };
 
 															if (
 																option.value === "Gif" &&
