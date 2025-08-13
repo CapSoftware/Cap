@@ -10,10 +10,68 @@ use tracing::trace;
 
 use crate::{ExportError, ExporterBase};
 
-#[derive(Deserialize, Clone, Copy, Debug, Type)]
+/// Settings for exporting recordings as GIF animations.
+///
+/// The GIF export uses advanced color quantization and dithering techniques
+/// to produce high-quality animated GIFs from screen recordings.
+///
+/// # Quality Settings
+///
+/// The export quality can be customized through the `quality` field:
+/// - `palette_size`: Number of colors in the palette (16-256). Higher values give better quality but larger files.
+/// - `dithering`: Dithering method for color reduction:
+///   - "floyd_steinberg" (default): Best quality, distributes color errors naturally
+///   - "ordered": Faster, creates a patterned effect
+///   - "none": Fastest, no dithering (may cause color banding)
+///
+/// # Examples
+///
+/// Basic usage with default settings:
+/// ```rust
+/// let settings = GifExportSettings {
+///     fps: 30,
+///     resolution_base: XY { x: 1920, y: 1080 },
+///     quality: None, // Uses defaults: 256 colors, Floyd-Steinberg dithering
+/// };
+/// ```
+///
+/// High quality with maximum colors:
+/// ```rust
+/// let settings = GifExportSettings {
+///     fps: 15,
+///     resolution_base: XY { x: 1280, y: 720 },
+///     quality: Some(GifQuality {
+///         palette_size: Some(256),
+///         dithering: Some("floyd_steinberg".to_string()),
+///     }),
+/// };
+/// ```
+///
+/// Fast export with reduced quality:
+/// ```rust
+/// let settings = GifExportSettings {
+///     fps: 10,
+///     resolution_base: XY { x: 640, y: 480 },
+///     quality: Some(GifQuality {
+///         palette_size: Some(64),
+///         dithering: Some("none".to_string()),
+///     }),
+/// };
+/// ```
+
+#[derive(Deserialize, Clone, Debug, Type)]
 pub struct GifExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
+}
+
+impl Default for GifExportSettings {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            resolution_base: XY { x: 1920, y: 1080 },
+        }
+    }
 }
 
 impl GifExportSettings {
@@ -46,9 +104,13 @@ impl GifExportSettings {
             "Creating GIF encoder at path '{}'",
             gif_output_path.display()
         );
-        let mut gif_encoder =
-            GifEncoderWrapper::new(&gif_output_path, output_size.0, output_size.1, fps)
-                .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
+        let mut gif_encoder = GifEncoderWrapper::new(
+            &gif_output_path,
+            output_size.0,
+            output_size.1,
+            fps,
+        )
+        .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
