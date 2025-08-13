@@ -1,49 +1,48 @@
+import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
+import { createMutation, useQuery } from "@tanstack/solid-query";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
-  createMutation, useQuery
-} from "@tanstack/solid-query";
-import {
-  getCurrentWindow,
-  LogicalSize,
-  primaryMonitor
+	getCurrentWindow,
+	LogicalSize,
+	primaryMonitor,
 } from "@tauri-apps/api/window";
 import * as dialog from "@tauri-apps/plugin-dialog";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
-import {
-  createEffect, onCleanup,
-  onMount
-} from "solid-js";
-
+import { createEffect, onCleanup, onMount } from "solid-js";
 import { reconcile } from "solid-js/store";
-
+import Tooltip from "~/components/Tooltip";
+import { generalSettingsStore } from "~/store";
 import {
-  createCameraMutation, listAudioDevices,
-  listScreens,
-  listVideoDevices,
-  listWindows
+	createCameraMutation,
+	listAudioDevices,
+	listScreens,
+	listVideoDevices,
+	listWindows,
 } from "~/utils/queries";
 import {
-  CameraInfo, commands,
-  DeviceOrModelID, ScreenCaptureTarget
+	type CameraInfo,
+	commands,
+	type DeviceOrModelID,
+	type ScreenCaptureTarget,
 } from "~/utils/tauri";
-import Tooltip from "~/components/Tooltip";
 import CameraSelect from "./CameraSelect";
-import MicrophoneSelect from "./MicrophoneSelect";
-import SystemAudio from "./SystemAudio";
 import ChangelogButton from "./ChangeLogButton";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { WindowChromeHeader } from "./Context";
+import MicrophoneSelect from "./MicrophoneSelect";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./OptionsContext";
+import SystemAudio from "./SystemAudio";
 import TargetTypeButton from "./TargetTypeButton";
-import { generalSettingsStore } from "~/store";
-import { createEventListener } from "@solid-primitives/event-listener";
-import { type as ostype } from "@tauri-apps/plugin-os";
-import { RecordingOptionsProvider, useRecordingOptions } from "./OptionsContext";
 
 function getWindowSize() {
-  return {
-    width: 270,
-    height: 256,
-  };
+	return {
+		width: 270,
+		height: 256,
+	};
 }
 
 const findCamera = (cameras: CameraInfo[], id: DeviceOrModelID) => {
@@ -99,7 +98,7 @@ function createUpdateCheck() {
 function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
 
-  createUpdateCheck();
+	createUpdateCheck();
 
 	onMount(async () => {
 		// Enforce window size with multiple safeguards
@@ -142,10 +141,10 @@ function Page() {
 		else commands.closeTargetSelectOverlays();
 	});
 
-  const screens = useQuery(() => listScreens);
-  const windows = useQuery(() => listWindows);
-  const cameras = useQuery(() => listVideoDevices);
-  const mics = useQuery(() => listAudioDevices);
+	const screens = useQuery(() => listScreens);
+	const windows = useQuery(() => listWindows);
+	const cameras = useQuery(() => listVideoDevices);
+	const mics = useQuery(() => listAudioDevices);
 
 	cameras.promise.then((cameras) => {
 		if (rawOptions.cameraID && findCamera(cameras, rawOptions.cameraID)) {
@@ -239,101 +238,103 @@ function Page() {
 		else setCamera.mutate(null);
 	});
 
-  return (
-    <div class="flex justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
-      <WindowChromeHeader hideMaximize>
-        <div
-          dir={ostype() === "windows" ? "rtl" : "rtl"}
-          class="flex gap-1 items-center mx-2"
-        >
-          <div class="flex gap-1 items-center">
-          <Tooltip content={<span>Settings</span>}>
-            <button
-              type="button"
-              onClick={async () => {
-                await commands.showWindow({ Settings: { page: "general" } });
-                getCurrentWindow().hide();
-              }}
-              class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
-            >
-              <IconCapSettings class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
-            </button>
-          </Tooltip>
-          <Tooltip content={<span>Previous Recordings</span>}>
-            <button
-              type="button"
-              onClick={async () => {
-                await commands.showWindow({ Settings: { page: "recordings" } });
-                getCurrentWindow().hide();
-              }}
-              class="flex justify-center items-center w-5 h-5"
-            >
-              <IconLucideSquarePlay class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
-            </button>
-          </Tooltip>
-          <ChangelogButton/>
-          {import.meta.env.DEV && (
-            <button
-              type="button"
-              onClick={() => {
-                new WebviewWindow("debug", { url: "/debug" });
-              }}  
-              class="flex justify-center items-center"
-            >
-              <IconLucideBug class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
-            </button>
-          )}
-          </div>
-
-        </div>
-      </WindowChromeHeader>
-      <div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
-        <TargetTypeButton
-          selected={rawOptions.targetMode === "screen"}
-          Component={IconMdiMonitor}
-          onClick={() =>
-            setOptions("targetMode", (v) => (v === "screen" ? null : "screen"))
-          }
-          name="Screen"
-        />
-        <TargetTypeButton
-          selected={rawOptions.targetMode === "window"}
-          Component={IconLucideAppWindowMac}
-          onClick={() =>
-            setOptions("targetMode", (v) => (v === "window" ? null : "window"))
-          }
-          name="Window"
-        />
-        <TargetTypeButton
-          selected={rawOptions.targetMode === "area"}
-          Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-          onClick={() =>
-            setOptions("targetMode", (v) => (v === "area" ? null : "area"))
-          }
-          name="Area"
-        />
-      </div>
-      <div class="space-y-2">
-      <CameraSelect
-        disabled={cameras.isPending}
-        options={cameras.data ?? []}
-        value={options.camera() ?? null}
-        onChange={(c) => {
-          if (!c) setCamera.mutate(null);
-          else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-          else setCamera.mutate({ DeviceID: c.device_id });
-        }}
-      />
-      <MicrophoneSelect
-        disabled={mics.isPending}
-        options={mics.isPending ? [] : mics.data ?? []}
-        // this prevents options.micName() from suspending on initial load
-        value={mics.isPending ? rawOptions.micName : options.micName() ?? null}
-        onChange={(v) => setMicInput.mutate(v)}
-      />
-      <SystemAudio />
-              
-      </div>
-    </div>
-  );
+	return (
+		<div class="flex justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
+			<WindowChromeHeader hideMaximize>
+				<div
+					dir={ostype() === "windows" ? "rtl" : "rtl"}
+					class="flex gap-1 items-center mx-2"
+				>
+					<div class="flex gap-1 items-center">
+						<Tooltip content={<span>Settings</span>}>
+							<button
+								type="button"
+								onClick={async () => {
+									await commands.showWindow({ Settings: { page: "general" } });
+									getCurrentWindow().hide();
+								}}
+								class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
+							>
+								<IconCapSettings class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+							</button>
+						</Tooltip>
+						<Tooltip content={<span>Previous Recordings</span>}>
+							<button
+								type="button"
+								onClick={async () => {
+									await commands.showWindow({
+										Settings: { page: "recordings" },
+									});
+									getCurrentWindow().hide();
+								}}
+								class="flex justify-center items-center w-5 h-5"
+							>
+								<IconLucideSquarePlay class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+							</button>
+						</Tooltip>
+						<ChangelogButton />
+						{import.meta.env.DEV && (
+							<button
+								type="button"
+								onClick={() => {
+									new WebviewWindow("debug", { url: "/debug" });
+								}}
+								class="flex justify-center items-center"
+							>
+								<IconLucideBug class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+							</button>
+						)}
+					</div>
+				</div>
+			</WindowChromeHeader>
+			<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
+				<TargetTypeButton
+					selected={rawOptions.targetMode === "screen"}
+					Component={IconMdiMonitor}
+					onClick={() =>
+						setOptions("targetMode", (v) => (v === "screen" ? null : "screen"))
+					}
+					name="Screen"
+				/>
+				<TargetTypeButton
+					selected={rawOptions.targetMode === "window"}
+					Component={IconLucideAppWindowMac}
+					onClick={() =>
+						setOptions("targetMode", (v) => (v === "window" ? null : "window"))
+					}
+					name="Window"
+				/>
+				<TargetTypeButton
+					selected={rawOptions.targetMode === "area"}
+					Component={IconMaterialSymbolsScreenshotFrame2Rounded}
+					onClick={() =>
+						setOptions("targetMode", (v) => (v === "area" ? null : "area"))
+					}
+					name="Area"
+				/>
+			</div>
+			<div class="space-y-2">
+				<CameraSelect
+					disabled={cameras.isPending}
+					options={cameras.data ?? []}
+					value={options.camera() ?? null}
+					onChange={(c) => {
+						if (!c) setCamera.mutate(null);
+						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+						else setCamera.mutate({ DeviceID: c.device_id });
+					}}
+				/>
+				<MicrophoneSelect
+					disabled={mics.isPending}
+					options={mics.isPending ? [] : (mics.data ?? [])}
+					// this prevents options.micName() from suspending on initial load
+					value={
+						mics.isPending ? rawOptions.micName : (options.micName() ?? null)
+					}
+					onChange={(v) => setMicInput.mutate(v)}
+				/>
+				<SystemAudio />
+			</div>
+		</div>
+	);
 }
