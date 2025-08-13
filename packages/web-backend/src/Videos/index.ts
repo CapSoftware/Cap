@@ -18,12 +18,10 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
 			getById: (id: Video.VideoId) =>
-				repo
-					.getById(id)
-					.pipe(
-						Policy.withPublicPolicy(policy.canView(id)),
-						Effect.withSpan("Videos.getById"),
-					),
+				repo.getById(id).pipe(
+					Policy.withPublicPolicy(policy.canView(id)),
+					Effect.withSpan("Videos.getById"),
+				),
 
 			/*
 			 * Delete a video. Will fail if the user does not have access.
@@ -106,4 +104,4 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		};
 	}),
 	dependencies: [VideosPolicy.Default, VideosRepo.Default, S3Buckets.Default],
-}) {}
+}) { }

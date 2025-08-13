@@ -19,7 +19,7 @@ class Api extends HttpApi.make("Api").add(
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	),
-) {}
+) { }
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
@@ -37,6 +37,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									Effect.andThen(() => new HttpApiError.InternalServerError()),
 								),
 							S3Error: (e) =>
+								Effect.logError(e).pipe(
+									Effect.andThen(() => new HttpApiError.InternalServerError()),
+								),
+							UnknownException: (e) =>
 								Effect.logError(e).pipe(
 									Effect.andThen(() => new HttpApiError.InternalServerError()),
 								),
