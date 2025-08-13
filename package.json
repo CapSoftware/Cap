@@ -22,6 +22,7 @@
 		"typecheck": "pnpm tsc -b",
 		"web": "pnpm run --filter=@cap/web",
 		"env-setup": "node scripts/env-cli.js",
+		"check-tauri-versions": "node scripts/check-tauri-plugin-versions.js",
 		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf"
 	},
 	"devDependencies": {
