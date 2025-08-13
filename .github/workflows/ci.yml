@@ -32,6 +32,9 @@ jobs:
               - 'desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            tauri-plugins:
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
 
   typecheck:
     name: Typecheck
@@ -189,3 +192,21 @@ jobs:
           pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+  tauri-plugins:
+    name: Verify Tauri plugin versions
+    runs-on: ubuntu-latest
+    if: needs.changes.outputs.tauri-plugins == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Run verify
+        shell: bash
+        run: node scripts/check-tauri-plugins.js
