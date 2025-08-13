@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use serde::Serialize;
 use specta::Type;
 
@@ -81,6 +83,14 @@ impl LogicalPosition {
 
     pub fn y(&self) -> f64 {
         self.y
+    }
+}
+
+impl Sub<LogicalPosition> for LogicalPosition {
+    type Output = LogicalPosition;
+
+    fn sub(self, other: LogicalPosition) -> LogicalPosition {
+        LogicalPosition::new(self.x() - other.x(), self.y() - other.y())
     }
 }
 

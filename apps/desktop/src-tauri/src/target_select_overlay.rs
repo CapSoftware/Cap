@@ -9,8 +9,7 @@ use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
-    Display, DisplayId, WindowId,
-    bounds::{LogicalBounds, PhysicalSize},
+    bounds::{LogicalBounds, LogicalPosition, PhysicalSize}, Display, DisplayId, WindowId
 };
 use serde::Serialize;
 use specta::Type;
@@ -70,30 +69,12 @@ pub async fn open_target_select_overlays(
                         window: window.and_then(|w| {
                             let bounds = w.bounds()?;
 
-                            // // Convert global window bounds to display-relative coordinates
-                            // let display_relative_bounds = if let Some(current_display) = &display {
-                            //     let display_position = current_display.raw_handle().logical_position();
-                            //     let relative_position = LogicalPosition::new(
-                            //         bounds.position().x() - display_position.x(),
-                            //         bounds.position().y() - display_position.y(),
-                            //     );
-                            //     let converted_bounds = LogicalBounds::new(relative_position, bounds.size());
-
-                            //     // Debug logging for multi-monitor coordinate conversion
-                            //     tracing::debug!(
-                            //         "Window bounds conversion - Display: {} | Original: ({:.0}, {:.0}) {}x{} | Display offset: ({:.0}, {:.0}) | Converted: ({:.0}, {:.0}) {}x{}",
-                            //         current_display.name(),
-                            //         bounds.position().x(), bounds.position().y(),
-                            //         bounds.size().width(), bounds.size().height(),
-                            //         display_position.x(), display_position.y(),
-                            //         converted_bounds.position().x(), converted_bounds.position().y(),
-                            //         converted_bounds.size().width(), converted_bounds.size().height()
-                            //     );
-
-                            //     converted_bounds
-                            // } else {
-                            //     bounds
-                            // };
+                            // Convert global window bounds to display-relative coordinates
+                            let bounds = if let Some(current_display) = &display {
+                                LogicalBounds::new(bounds.position() - current_display.raw_handle().logical_position(), bounds.size())
+                            } else {
+                                bounds
+                            };
 
                             Some(WindowUnderCursor {
                                 id: w.id(),
