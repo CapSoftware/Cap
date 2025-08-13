@@ -1,51 +1,52 @@
 {
-  "name": "@cap/database",
-  "private": true,
-  "types": "./index.ts",
-  "main": "index.js",
-  "scripts": {
-    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
-    "db:push": "drizzle-kit push --config=drizzle.config.ts",
-    "db:check": "drizzle-kit check:mysql --config=drizzle.config.ts",
-    "db:up": "drizzle-kit up:mysql --config=drizzle.config.ts",
-    "db:drop": "drizzle-kit drop --config=drizzle.config.ts",
-    "db:studio": "drizzle-kit studio --config=drizzle.config.ts",
-    "db:check-integrity": "node scripts/check-migration-integrity.js",
-    "drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts"
-  },
-  "dependencies": {
-    "@cap/env": "workspace:*",
-    "@mattrax/mysql-planetscale": "^0.0.3",
-    "@paralleldrive/cuid2": "^2.2.2",
-    "@planetscale/database": "^1.13.0",
-    "@react-email/components": "^0.1.0",
-    "@react-email/render": "1.1.2",
-    "@react-email/tailwind": "^1.0.5",
-    "drizzle-orm": "0.43.1",
-    "dub": "^0.64.0",
-    "nanoid": "^5.0.4",
-    "next": "14.2.9",
-    "next-auth": "^4.24.5",
-    "react-email": "^4.0.16",
-    "resend": "4.6.0",
-    "zod": "^3"
-  },
-  "devDependencies": {
-    "@cap/ui": "workspace:*",
-    "@cap/utils": "workspace:*",
-    "@types/node": "^20.10.0",
-    "@types/react": "^18.2.38",
-    "@types/react-dom": "latest",
-    "dotenv-cli": "latest",
-    "drizzle-kit": "0.31.0",
-    "nodemailer": "^6.9.8",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^6.18.0",
-    "tsconfig": "workspace:*",
-    "typescript": "^5.8.3"
-  },
-  "engines": {
-    "node": "20"
-  }
+	"name": "@cap/database",
+	"private": true,
+	"types": "./index.ts",
+	"main": "index.js",
+	"scripts": {
+		"db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+		"db:push": "drizzle-kit push --config=drizzle.config.ts",
+		"db:check": "drizzle-kit check:mysql --config=drizzle.config.ts",
+		"db:up": "drizzle-kit up:mysql --config=drizzle.config.ts",
+		"db:drop": "drizzle-kit drop --config=drizzle.config.ts",
+		"db:studio": "drizzle-kit studio --config=drizzle.config.ts",
+		"db:check-integrity": "node scripts/check-migration-integrity.js",
+		"drizzle-kit": "pnpm dotenv -e ../../.env drizzle-kit --config=drizzle.config.ts"
+	},
+	"dependencies": {
+		"@cap/env": "workspace:*",
+		"@cap/web-domain": "workspace:*",
+		"@mattrax/mysql-planetscale": "^0.0.3",
+		"@paralleldrive/cuid2": "^2.2.2",
+		"@planetscale/database": "^1.13.0",
+		"@react-email/components": "^0.1.0",
+		"@react-email/render": "1.1.2",
+		"@react-email/tailwind": "^1.0.5",
+		"drizzle-orm": "0.43.1",
+		"dub": "^0.64.0",
+		"nanoid": "^5.0.4",
+		"next": "14.2.9",
+		"next-auth": "^4.24.5",
+		"react-email": "^4.0.16",
+		"resend": "4.6.0",
+		"zod": "^3"
+	},
+	"devDependencies": {
+		"@cap/ui": "workspace:*",
+		"@cap/utils": "workspace:*",
+		"@types/node": "^20.10.0",
+		"@types/react": "^18.2.38",
+		"@types/react-dom": "latest",
+		"dotenv-cli": "latest",
+		"drizzle-kit": "0.31.0",
+		"nodemailer": "^6.9.8",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
+		"react-router-dom": "^6.18.0",
+		"tsconfig": "workspace:*",
+		"typescript": "^5.8.3"
+	},
+	"engines": {
+		"node": "20"
+	}
 }

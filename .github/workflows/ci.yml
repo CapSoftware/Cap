@@ -11,6 +11,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '.cargo/**'
+              - '.github/**'
+              - 'crates/**'
+              - 'desktop/src-tauri/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+            tauri-plugins:
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
@@ -22,6 +48,21 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+  format-biome:
+    name: Format (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome
+        run: biome ci . --linter-enabled=false
 
   format-rust:
     name: Format (Cargo)
@@ -38,6 +79,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     permissions:
       contents: read
     steps:
@@ -53,8 +96,6 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.settings.target }}
-
-      - uses: ./.github/actions/setup-js
 
       - name: Create .env file in root
         run: |
@@ -73,13 +114,28 @@ jobs:
           cat .env >> $GITHUB_ENV
 
       - name: Run setup
-        run: |
-          pnpm cap-setup
+        shell: bash
+        run: node scripts/setup.js
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
         with:
           args: --workspace --all-features --locked
+
+  lint-biome:
+    name: Lint (Biome)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Biome
+        uses: biomejs/setup-biome@v2
+        with:
+          version: latest
+
+      - name: Run Biome
+        run: biome ci . || true
 
   build-desktop:
     name: Build Desktop
@@ -92,6 +148,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     runs-on: ${{ matrix.settings.runner }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -135,3 +194,21 @@ jobs:
           pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+  tauri-plugins:
+    name: Verify Tauri plugin versions
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.tauri-plugins == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Run verify
+        shell: bash
+        run: node scripts/check-tauri-plugin-versions.js

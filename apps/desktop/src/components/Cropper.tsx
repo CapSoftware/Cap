@@ -117,7 +117,7 @@ type Vec2 = { x: number; y: number };
 const ORIGIN_CENTER: Vec2 = { x: 0.5, y: 0.5 };
 
 function clamp(n: number, min = 0, max = 1) {
-  return Math.max(min, Math.min(max, n));
+	return Math.max(min, Math.min(max, n));
 }
 
 export type CropperRef = {

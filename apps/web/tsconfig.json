@@ -1,60 +1,43 @@
 {
-  "compilerOptions": {
-    "target": "ESNext",
-    "useDefineForClassFields": true,
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ESNext"
-    ],
-    "allowJs": false,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "noUncheckedIndexedAccess": true,
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "preserve",
-    "incremental": true,
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ],
-    "baseUrl": ".",
-    "paths": {
-      "@/app/*": [
-        "app/*"
-      ],
-      "@/components/*": [
-        "components/*"
-      ],
-      "@/pages/*": [
-        "components/pages/*"
-      ],
-      "@/utils/*": [
-        "utils/*"
-      ],
-      "@/lib/*": [
-        "lib/*"
-      ],
-      "@/actions/*": [
-        "actions/*"
-      ]
-    }
-  },
-  "include": [
-    "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
-    ".next/types/**/*.ts"
-  ],
-  "exclude": [
-    "node_modules"
-  ]
+	"compilerOptions": {
+		"target": "ESNext",
+		"useDefineForClassFields": true,
+		"lib": ["DOM", "DOM.Iterable", "ESNext"],
+		"allowJs": false,
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"allowSyntheticDefaultImports": true,
+		"strict": true,
+		"forceConsistentCasingInFileNames": true,
+		"noUncheckedIndexedAccess": true,
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		"jsx": "preserve",
+		"incremental": true,
+		"plugins": [{ "name": "next" }, { "name": "@effect/language-service" }],
+		"baseUrl": ".",
+		"paths": {
+			"@/app/*": ["app/*"],
+			"@/components/*": ["components/*"],
+			"@/pages/*": ["components/pages/*"],
+			"@/utils/*": ["utils/*"],
+			"@/lib/*": ["lib/*"],
+			"@/actions/*": ["actions/*"],
+			"@/services": ["services"]
+		},
+		"types": ["node"]
+	},
+	"include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+	"exclude": ["node_modules"],
+	"references": [
+		{ "path": "../../packages/database" },
+		{ "path": "../../packages/env" },
+		{ "path": "../../packages/ui" },
+		{ "path": "../../packages/utils" },
+		{ "path": "../../packages/web-backend" },
+		{ "path": "../../packages/web-domain" }
+	]
 }

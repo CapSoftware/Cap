@@ -1,8 +1,13 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{App, ArcLock, fake_window, general_settings::AppTheme, permissions};
-use cap_flags::FLAGS;
+use crate::{
+    App, ArcLock, fake_window,
+    general_settings::{AppTheme, GeneralSettingsStore},
+    permissions,
+    target_select_overlay::WindowFocusManager,
+};
+use cap_displays::DisplayId;
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
 use serde::Deserialize;
@@ -23,7 +28,7 @@ use tracing::debug;
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Type)]
 pub enum CapWindowId {
     // Contains onboarding + permissions
     Setup,
@@ -32,6 +37,7 @@ pub enum CapWindowId {
     Editor { id: u32 },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
+    TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
     Camera,
     InProgressRecording,
@@ -67,6 +73,12 @@ impl FromStr for CapWindowId {
                     .parse::<u32>()
                     .map_err(|e| e.to_string())?,
             },
+            s if s.starts_with("target-select-overlay-") => Self::TargetSelectOverlay {
+                display_id: s
+                    .replace("target-select-overlay-", "")
+                    .parse::<DisplayId>()
+                    .map_err(|e| e.to_string())?,
+            },
             _ => return Err(format!("unknown window label: {s}")),
         })
     }
@@ -83,6 +95,9 @@ impl std::fmt::Display for CapWindowId {
                 write!(f, "window-capture-occluder-{screen_id}")
             }
             Self::CaptureArea => write!(f, "capture-area"),
+            Self::TargetSelectOverlay { display_id } => {
+                write!(f, "target-select-overlay-{display_id}")
+            }
             Self::InProgressRecording => write!(f, "in-progress-recording"),
             Self::RecordingsOverlay => write!(f, "recordings-overlay"),
             Self::Upgrade => write!(f, "upgrade"),
@@ -138,7 +153,8 @@ impl CapWindowId {
             Self::Camera
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
-            | Self::RecordingsOverlay => None,
+            | Self::RecordingsOverlay
+            | Self::TargetSelectOverlay { .. } => None,
             _ => Some(None),
         }
     }
@@ -165,6 +181,7 @@ pub enum ShowCapWindow {
     Editor { project_path: PathBuf },
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: u32 },
+    TargetSelectOverlay { display_id: DisplayId },
     CaptureArea { screen_id: u32 },
     Camera,
     InProgressRecording { countdown: Option<u32> },
@@ -174,7 +191,7 @@ pub enum ShowCapWindow {
 
 impl ShowCapWindow {
     pub async fn show(&self, app: &AppHandle<Wry>) -> tauri::Result<WebviewWindow> {
-        if let Self::Editor { project_path } = self {
+        if let Self::Editor { project_path } = &self {
             let state = app.state::<EditorWindowIds>();
             let mut s = state.ids.lock().unwrap();
             if !s.iter().any(|(path, _)| path == project_path) {
@@ -207,17 +224,67 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    self.window_builder(app, "/")
+                    let new_recording_flow = GeneralSettingsStore::get(&app)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.enable_new_recording_flow)
+                        .unwrap_or_default();
+
+                    let window = self
+                        .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
                         .center()
-                        .build()?
+                        .build()?;
+
+                    if new_recording_flow {
+                        #[cfg(target_os = "macos")]
+                        crate::platform::set_window_level(window.as_ref().window(), 50);
+                    }
+
+                    window
                 } else {
                     Box::pin(Self::Setup.show(app)).await?
                 }
+            }
+            Self::TargetSelectOverlay { display_id } => {
+                let Some(display) = cap_displays::Display::from_id(display_id.clone()) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
+
+                let size = display.raw_handle().logical_size();
+                let position = display.raw_handle().logical_position();
+
+                let mut window_builder = self
+                    .window_builder(
+                        app,
+                        format!("/target-select-overlay?displayId={display_id}"),
+                    )
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(cfg!(target_os = "macos"))
+                    .visible_on_all_workspaces(true)
+                    .skip_taskbar(true)
+                    .inner_size(size.width(), size.height())
+                    .position(position.x(), position.y())
+                    .transparent(true);
+
+                let window = window_builder.build()?;
+
+                app.state::<WindowFocusManager>()
+                    .spawn(display_id, window.clone());
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 45);
+                }
+
+                window
             }
             Self::Settings { page } => {
                 // Hide main window when settings window opens
@@ -555,6 +622,9 @@ impl ShowCapWindow {
                 CapWindowId::Editor { id }
             }
             ShowCapWindow::RecordingsOverlay => CapWindowId::RecordingsOverlay,
+            ShowCapWindow::TargetSelectOverlay { display_id } => CapWindowId::TargetSelectOverlay {
+                display_id: display_id.clone(),
+            },
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
                     screen_id: *screen_id,

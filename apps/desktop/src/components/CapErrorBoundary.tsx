@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui-solid";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { ErrorBoundary, ParentProps } from "solid-js";
+import { ErrorBoundary, type ParentProps } from "solid-js";
 
 export function CapErrorBoundary(props: ParentProps) {
   return (
@@ -44,20 +44,20 @@ export function CapErrorBoundary(props: ParentProps) {
               </Button>
             </div>
 
-            {import.meta.env.DEV && (
-              <div class="h-0 text-sm">
-                <pre class="text-left mt-8">{`${e.toString()}\n\n${e.stack
-                  ?.toString()
-                  .split("\n")
-                  .slice(0, 10)
-                  .join("\n")}`}</pre>
-              </div>
-            )}
-          </div>
-        );
-      }}
-    >
-      {props.children}
-    </ErrorBoundary>
-  );
+						{import.meta.env.DEV && (
+							<div class="h-0 text-sm">
+								<pre class="text-left mt-8">{`${e.toString()}\n\n${e.stack
+									?.toString()
+									.split("\n")
+									.slice(0, 10)
+									.join("\n")}`}</pre>
+							</div>
+						)}
+					</div>
+				);
+			}}
+		>
+			{props.children}
+		</ErrorBoundary>
+	);
 }

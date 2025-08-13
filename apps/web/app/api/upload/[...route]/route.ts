@@ -7,10 +7,10 @@ import * as multipart from "./multipart";
 import * as signed from "./signed";
 
 const app = new Hono()
-  .basePath("/api/upload")
-  .use(corsMiddleware)
-  .route("/multipart", multipart.app)
-  .route("/signed", signed.app);
+	.basePath("/api/upload")
+	.use(corsMiddleware)
+	.route("/multipart", multipart.app)
+	.route("/signed", signed.app);
 
 export const GET = handle(app);
 export const POST = handle(app);
