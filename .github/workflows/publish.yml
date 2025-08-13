@@ -142,6 +142,9 @@ jobs:
             runner: macos-latest-large
           - target: x86_64-pc-windows-msvc
             runner: windows-latest-l
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - name: Checkout repository
