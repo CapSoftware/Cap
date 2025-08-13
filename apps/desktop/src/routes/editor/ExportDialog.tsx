@@ -642,7 +642,7 @@ export function ExportDialog() {
 									<For
 										each={
 											settings.format === "Gif"
-												? [RESOLUTION_OPTIONS._720p]
+												? [RESOLUTION_OPTIONS._720p, RESOLUTION_OPTIONS._1080p]
 												: [
 														RESOLUTION_OPTIONS._720p,
 														RESOLUTION_OPTIONS._1080p,
