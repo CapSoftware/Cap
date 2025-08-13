@@ -9,7 +9,8 @@ use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
-    bounds::{LogicalBounds, LogicalPosition, PhysicalSize}, Display, DisplayId, WindowId
+    Display, DisplayId, WindowId,
+    bounds::{LogicalBounds, LogicalPosition, PhysicalSize},
 };
 use serde::Serialize;
 use specta::Type;
@@ -71,7 +72,11 @@ pub async fn open_target_select_overlays(
 
                             // Convert global window bounds to display-relative coordinates
                             let bounds = if let Some(current_display) = &display {
-                                LogicalBounds::new(bounds.position() - current_display.raw_handle().logical_position(), bounds.size())
+                                LogicalBounds::new(
+                                    bounds.position()
+                                        - current_display.raw_handle().logical_position(),
+                                    bounds.size(),
+                                )
                             } else {
                                 bounds
                             };
