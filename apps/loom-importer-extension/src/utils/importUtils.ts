@@ -1,8 +1,5 @@
 import { ImportStep } from "../context/ImportContext";
-import {
-  ChecklistItem,
-  ChecklistItemStatus,
-} from "../components/ImportChecklist";
+import { ChecklistItem } from "../components/ImportChecklist";
 
 /**
  * Generates the checklist items based on the current import step
@@ -35,18 +32,21 @@ export const getChecklistItemsForStep = (
       break;
     case ImportStep.MEMBERS_COLLECTED:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Select a workspace to import from", status: "waiting" }
       );
       break;
     case ImportStep.SELECTING_VIDEOS:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Select videos to import", status: "in-progress" }
       );
       break;
     case ImportStep.VIDEOS_SELECTED:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Videos selected", status: "complete" },
         { message: "Ready to process videos", status: "waiting" }
@@ -54,6 +54,7 @@ export const getChecklistItemsForStep = (
       break;
     case ImportStep.PROCESSING_VIDEOS:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Videos selected", status: "complete" },
         { message: "Processing videos...", status: "in-progress" }
@@ -61,6 +62,7 @@ export const getChecklistItemsForStep = (
       break;
     case ImportStep.PROCESSING_COMPLETE:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Videos selected", status: "complete" },
         { message: "Processing complete!", status: "complete" }
@@ -68,6 +70,7 @@ export const getChecklistItemsForStep = (
       break;
     case ImportStep.IMPORT_COMPLETE:
       items.push(
+        { message: "Spaces collected", status: "complete" },
         { message: "Workspace members collected", status: "complete" },
         { message: "Videos selected", status: "complete" },
         { message: "Processing complete!", status: "complete" },

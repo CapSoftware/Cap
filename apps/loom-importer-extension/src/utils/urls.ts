@@ -35,5 +35,5 @@ export const getCapUrl = (path: string): string => {
 export const CapUrls = {
   LOGIN: getCapUrl("/login"),
   DASHBOARD: getCapUrl("/dashboard"),
-  CREATE_WORKSPACE: getCapUrl("/dashboard/caps?createSpace=true"),
+  CREATE_ORGANIZATION: getCapUrl("/dashboard/caps?createSpace=true"),
 };

@@ -1,16 +1,14 @@
-import React from "react";
+import type React from "react";
 import ImportChecklist from "./ImportChecklist";
 import LoomLogo from "./LoomLogo";
-import { ChecklistItem } from "../types";
-import { ImportState, ImportStep, useImport } from "../context/ImportContext";
-import EmailSelector from "./EmailSelector";
-import { useImportStore } from "../store/importStore";
+import type { ChecklistItem } from "../types";
+import { ImportStep } from "../context/ImportContext";
 import { CapUrls } from "../utils/urls";
 
 interface LoomImporterProps {
   importStarted: boolean;
   checklistItems: ChecklistItem[];
-  selectedWorkspaceId: string | null;
+  selectedOrganizationId: string | null;
   currentStep: ImportStep;
   hasSelectedEmail: boolean;
   onStartImport: () => void;
@@ -21,7 +19,7 @@ interface LoomImporterProps {
 const LoomImporter: React.FC<LoomImporterProps> = ({
   importStarted,
   checklistItems,
-  selectedWorkspaceId,
+  selectedOrganizationId,
   currentStep,
   hasSelectedEmail,
   onStartImport,
@@ -30,8 +28,8 @@ const LoomImporter: React.FC<LoomImporterProps> = ({
 }) => {
   if (currentStep === ImportStep.IMPORT_COMPLETE) {
     return (
-      <div className="flex flex-col items-center gap-4">
-        <div className="flex flex-col items-center gap-4">
+      <div className="flex flex-col gap-4 items-center">
+        <div className="flex flex-col gap-4 items-center">
           <span className="text-xs text-gray-500">
             <span className="text-4xl text-center">🎉</span>
           </span>
@@ -40,11 +38,12 @@ const LoomImporter: React.FC<LoomImporterProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={() => {
             chrome.tabs.create({ url: CapUrls.DASHBOARD });
             onResetImport();
           }}
-          className="bg-blue-500 text-white px-4 py-2 rounded-full text-xs font-medium transition-colors duration-200 hover:bg-blue-600 w-full"
+          className="px-4 py-2 w-full text-xs font-medium text-white bg-blue-500 rounded-full transition-colors duration-200 hover:bg-blue-600"
         >
           Go to Cap.so
         </button>
@@ -53,13 +52,13 @@ const LoomImporter: React.FC<LoomImporterProps> = ({
   }
 
   return (
-    <>
       <div className="flex-grow">
         {currentStep === ImportStep.PROCESSING_COMPLETE ? (
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col gap-4 items-center">
             <ImportChecklist items={checklistItems} />
 
             <button
+              type="button" 
               onClick={onSendToCap}
               className="flex items-center justify-center gap-1 rounded-full border-[1px] bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 disabled:border-gray-300 disabled:cursor-not-allowed border-[#625DF5] px-4 py-2 relative w-full"
               disabled={!hasSelectedEmail}
@@ -69,8 +68,9 @@ const LoomImporter: React.FC<LoomImporterProps> = ({
 
             <div className="flex justify-center">
               <button
+                type="button"
                 onClick={onResetImport}
-                className="text-xs text-gray-400 hover:text-red-500 underline"
+                className="text-xs text-gray-400 underline hover:text-red-500"
               >
                 Reset Import Data
               </button>
@@ -81,28 +81,29 @@ const LoomImporter: React.FC<LoomImporterProps> = ({
             <ImportChecklist items={checklistItems} />
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col gap-4 items-center">
             {importStarted ? (
               <button
+                type="button"
                 onClick={onResetImport}
-                className="text-xs text-gray-400 hover:text-red-500 underline"
+                className="text-xs text-gray-400 underline hover:text-red-500"
               >
                 Reset Import Data
               </button>
             ) : (
               <button
+                type="button"
                 onClick={onStartImport}
-                disabled={!selectedWorkspaceId}
+                disabled={!selectedOrganizationId}
                 className="flex items-center justify-center gap-1 rounded-full border-[1px] bg-[#625DF5] text-white hover:bg-[#524dcf] disabled:bg-gray-300 disabled:border-gray-300 disabled:cursor-not-allowed border-[#625DF5] px-4 py-2 relative w-full"
               >
                 Import from Loom
-                <LoomLogo className="size-4 text-white" />
+                <LoomLogo className="text-white size-4" />
               </button>
             )}
           </div>
         )}
       </div>
-    </>
   );
 };
 

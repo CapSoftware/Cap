@@ -20,13 +20,14 @@ const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
     switch (status) {
       case "waiting":
         return (
-          <div className="w-5 h-5 flex items-center justify-center rounded-full border border-gray-200 bg-white">
+          <div className="flex justify-center items-center w-5 h-5 bg-white rounded-full border border-gray-200">
             <svg
               className="w-3 h-3 text-gray-400"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
+              <title>waiting</title>
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -38,19 +39,20 @@ const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
         );
       case "in-progress":
         return (
-          <div className="w-5 h-5 flex items-center justify-center rounded-full bg-blue-50">
-            <div className="w-3 h-3 border-t-2 border-r-2 border-blue-500 rounded-full animate-spin"></div>
+          <div className="flex justify-center items-center w-5 h-5 bg-blue-50 rounded-full">
+            <div className="w-3 h-3 rounded-full border-t-2 border-r-2 border-blue-500 animate-spin"></div>
           </div>
         );
       case "complete":
         return (
-          <div className="w-5 h-5 flex items-center justify-center rounded-full bg-green-500 text-white">
+          <div className="flex justify-center items-center w-5 h-5 text-white bg-green-500 rounded-full">
             <svg
               className="w-3 h-3"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
+              <title>complete</title>
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -62,13 +64,14 @@ const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
         );
       case "error":
         return (
-          <div className="w-5 h-5 flex items-center justify-center rounded-full bg-red-500 text-white">
+          <div className="flex justify-center items-center w-5 h-5 text-white bg-red-500 rounded-full">
             <svg
               className="w-3 h-3"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
+              <title>error</title>
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -121,7 +124,7 @@ const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
     <div>
       <div className="space-y-0.5">
         {items.map((item, index) => (
-          <React.Fragment key={index}>
+          <React.Fragment key={item.message}>
             <div className="flex items-center space-x-3 py-1.5">
               <div className="flex-shrink-0">{getStatusIcon(item.status)}</div>
               <div className={`flex-1 ${getStatusColor(item.status)}`}>

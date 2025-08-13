@@ -1,5 +1,5 @@
-import React from "react";
-import { WorkspaceMember } from "../types/loom";
+import type React from "react";
+import type { WorkspaceMember } from "../types/loom";
 
 interface EmailSelectorProps {
   workspaceMembers: WorkspaceMember[];
@@ -14,13 +14,13 @@ const EmailSelector: React.FC<EmailSelectorProps> = ({
 }) => {
   return (
     <div className="w-full">
-      <div className="flex items-center justify-between mb-2">
-        <label className="block text-sm font-medium text-gray-700">
+      <div className="flex justify-between items-center mb-2">
+        <p className="block text-sm font-medium text-gray-700">
           Select Loom Email
-        </label>
+        </p>
       </div>
       <select
-        className="w-full p-2 border border-gray-300 rounded-md bg-white"
+        className="p-2 w-full bg-white rounded-md border border-gray-300"
         value={selectedEmail || ""}
         onChange={(e) => onEmailSelected(e.target.value)}
       >
@@ -31,7 +31,7 @@ const EmailSelector: React.FC<EmailSelectorProps> = ({
           </option>
         ))}
       </select>
-      <p className="text-xs text-gray-500 mt-1">
+      <p className="mt-1 text-xs text-gray-500">
         Select the email address you use with Loom to correctly identify your
         videos.
       </p>

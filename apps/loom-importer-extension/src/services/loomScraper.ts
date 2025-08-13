@@ -2,7 +2,7 @@ import { LoomExportData, Video, WorkspaceMember } from "../types/loom";
 import { waitForElement } from "../utils/dom";
 import JSConfetti from "js-confetti";
 
-export type LoomPage = "members" | "workspace" | "other";
+export type LoomPage = "members" | "workspace" | "spaces" | "other";
 
 /**
  * Detects which Loom page we're currently on
@@ -14,6 +14,8 @@ export const detectCurrentPage = (): LoomPage => {
     return "members";
   } else if (url.match(/loom\.com\/spaces\/[a-zA-Z0-9-]+/)) {
     return "workspace";
+  } else if (url.match(/loom\.com\/spaces\/browse/)) {
+    return "spaces";
   } else {
     return "other";
   }
@@ -35,49 +37,107 @@ export const loadExistingData = (): Promise<LoomExportData | null> => {
 };
 
 /**
- * Scrapes workspace members from the Loom members page
+ * Scrapes spaces form the Loom spaces page
  */
-export const scrapeWorkspaceMembers = async (): Promise<WorkspaceMember[]> => {
-  const tableElement = await waitForElement('div[role="table"]');
+export const scrapeSpaces = async () => {
+  const tableElement = await waitForElement(
+    'div[role="table"][aria-label="Spaces"]'
+  );
   if (!tableElement) {
     throw new Error("Table element not found");
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+
+  const spaceNames: string[] = [];
+
+  const getAllRowGroups = tableElement.querySelectorAll('div[role="rowgroup"]');
+
+  getAllRowGroups.forEach((rowGroup, index) => {
+    //skip the first one, since thats table column names
+    if (index === 0) return;
+    const rows = rowGroup.querySelectorAll('div[role="row"]');
+    rows.forEach((row) => {
+      const cells = row.querySelectorAll('div[role="cell"]');
+      const name = cells[0].textContent?.trim() || "";
+      spaceNames.push(name);
+    });
+  });
+  return spaceNames;
+};
+
+/**
+ * Scrapes workspace members from the Loom members page
+ */
+export const scrapeWorkspaceMembers = async (): Promise<WorkspaceMember[]> => {
+  const tableElement = await waitForElement(
+    'div[role="table"][aria-label="Member Role Details"]'
+  );
+  if (!tableElement) {
+    throw new Error("Table element not found");
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 2000));
 
   const members: WorkspaceMember[] = [];
-  const tableRows = document.querySelectorAll(
-    'div[role="table"] div[role="row"]'
-  );
+  const tableRows = tableElement.querySelectorAll('div[role="row"]');
 
   if (!tableRows || tableRows.length === 0) {
     throw new Error("No table rows found");
   }
 
-  tableRows.forEach((row) => {
+  tableRows.forEach((row, index) => {
+    // Skip header row (first row)
+    if (index === 0) return;
+
     if (!row || !row.querySelectorAll) return;
 
     const cells = row.querySelectorAll('div[role="cell"]');
     if (!cells || cells.length < 6) return;
 
     try {
+      // Let's be more flexible with finding the name
+      // Try to find name from various sources
+      let nameElement = "";
+
+      // First, try the avatar approach
       const avatarSelector = [
         'img[alt^="Avatar for "]',
-        'span span[aria-label^="Avatar for "]',
+        'span[aria-label^="Avatar for "]',
+        'img[alt*="Avatar"]',
+        'span[aria-label*="Avatar"]',
       ].join(", ");
 
-      const avatarElement = cells[1]?.querySelector(avatarSelector);
-      const nameElement = avatarElement
-        ? (
-            avatarElement.getAttribute("alt") ||
-            avatarElement.getAttribute("aria-label")
-          )?.replace("Avatar for ", "") || ""
-        : "";
+      const avatarEl = cells[1]?.querySelector(avatarSelector);
+      if (avatarEl) {
+        nameElement =
+          (
+            avatarEl.getAttribute("alt") || avatarEl.getAttribute("aria-label")
+          )?.replace("Avatar for ", "") || "";
+      }
 
-      const roleElement = cells[2]?.querySelector("div");
-      const dateElement = cells[3]?.querySelector("div");
-      const emailElement = cells[4]?.querySelector("a");
-      const statusElement = cells[5]?.querySelector("div");
+      // If avatar approach fails, try to find name in the cell text
+      if (!nameElement) {
+        // Look for name in cells[1] or cells[0] text content
+        nameElement =
+          cells[1]?.textContent?.trim() || cells[0]?.textContent?.trim() || "";
+      }
+
+      const roleElement = cells[2]?.textContent?.trim() || "";
+      const dateElement = cells[3]?.textContent?.trim() || "";
+      const emailElement =
+        cells[4]?.querySelector("a")?.textContent?.trim() ||
+        cells[4]?.textContent?.trim() ||
+        "";
+      const statusElement = cells[5]?.textContent?.trim() || "";
+
+      console.log("Extracted data:", {
+        name: nameElement,
+        role: roleElement,
+        date: dateElement,
+        email: emailElement,
+        status: statusElement,
+      });
 
       if (
         nameElement &&
@@ -87,11 +147,11 @@ export const scrapeWorkspaceMembers = async (): Promise<WorkspaceMember[]> => {
         statusElement
       ) {
         members.push({
-          name: nameElement?.trim() || "",
-          email: emailElement.textContent?.trim() || "",
-          role: roleElement.textContent?.trim() || "",
-          dateJoined: dateElement.textContent?.trim() || "",
-          status: statusElement.textContent?.trim() || "",
+          name: nameElement,
+          email: emailElement,
+          role: roleElement,
+          dateJoined: dateElement,
+          status: statusElement,
         });
       }
     } catch (error) {
@@ -105,7 +165,6 @@ export const scrapeWorkspaceMembers = async (): Promise<WorkspaceMember[]> => {
 
   return members;
 };
-
 /**
  * Saves workspace members to storage and returns updated data
  */
@@ -176,13 +235,15 @@ export const getSelectedVideos = (): {
   title: string;
 }[] => {
   const selectedVideos = document.querySelectorAll<HTMLInputElement>(
-    'input[id^="bulk-action-"]:checked'
+    'input[id^="bulk-action-"][aria-checked="true"]'
   );
   const videos: {
     id: string;
     ownerName: string;
     title: string;
   }[] = [];
+
+  console.log(selectedVideos, "selected videos");
 
   selectedVideos.forEach((checkbox) => {
     const videoId = checkbox.id.replace("bulk-action-", "");

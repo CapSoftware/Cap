@@ -20,6 +20,7 @@ export interface Video {
 export interface LoomExportData {
   workspaceMembers: WorkspaceMember[];
   videos: Video[];
-  selectedWorkspaceId: string;
+  spaces: string[];
+  selectedOrganizationId: string;
   userEmail: string | null;
 }

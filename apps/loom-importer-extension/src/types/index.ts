@@ -1,11 +1,11 @@
-import { LoomExportData } from "./loom";
+import type { LoomExportData } from "./loom";
 
 export interface AuthResponse {
   token: string | null;
   timestamp?: number;
 }
 
-export interface Workspace {
+export interface Organization {
   id: string;
   name: string;
 }
@@ -36,6 +36,6 @@ export interface PopupState {
   importComplete: boolean;
   importData: LoomExportData | null;
   checklistItems: ChecklistItem[];
-  workspaces: Workspace[];
-  selectedWorkspaceId: string | null;
+  organizations: Organization[];
+  selectedOrganizationId: string | null;
 }

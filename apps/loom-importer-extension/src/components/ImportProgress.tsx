@@ -1,5 +1,5 @@
 import React from "react";
-import ImportChecklist, { ChecklistItem } from "./ImportChecklist";
+import ImportChecklist from "./ImportChecklist";
 import { ImportStep } from "../context/ImportContext";
 import { getChecklistItemsForStep } from "../utils/importUtils";
 
@@ -33,9 +33,10 @@ const ImportProgress: React.FC<ImportProgressProps> = ({
 
       {importState.currentStep !== ImportStep.IDLE && (
         <button
+          type="button"
           onClick={processVideos}
           disabled={isProcessingDisabled}
-          className="mt-4 w-full disabled:bg-gray-200 disabled:text-gray-400 bg-blue-500 hover:bg-blue-600 text-white font-medium px-4 py-2 rounded-lg transition-colors duration-200"
+          className="px-4 py-2 mt-4 w-full font-medium text-white bg-blue-500 rounded-lg transition-colors duration-200 disabled:bg-gray-200 disabled:text-gray-400 hover:bg-blue-600"
         >
           {importState.currentStep === ImportStep.PROCESSING_VIDEOS
             ? "Processing..."
@@ -44,7 +45,7 @@ const ImportProgress: React.FC<ImportProgressProps> = ({
       )}
 
       {importState.currentStep === ImportStep.PROCESSING_COMPLETE && (
-        <div className="mt-3 p-4 bg-green-50 border border-green-100 rounded-lg">
+        <div className="p-4 mt-3 bg-green-50 rounded-lg border border-green-100">
           <p className="text-[0.875rem] leading-[1.25rem] font-medium text-green-600 mb-1">
             Success 🎉
           </p>
@@ -55,7 +56,7 @@ const ImportProgress: React.FC<ImportProgressProps> = ({
       )}
 
       {importState.error && (
-        <div className="mt-3 p-4 bg-red-50 border border-red-100 rounded-lg">
+        <div className="p-4 mt-3 bg-red-50 rounded-lg border border-red-100">
           <p className="text-[0.875rem] leading-[1.25rem] font-medium text-red-600 mb-1">
             Error
           </p>
@@ -63,6 +64,7 @@ const ImportProgress: React.FC<ImportProgressProps> = ({
             {importState.error}
           </p>
           <button
+            type="button"
             onClick={() => window.location.reload()}
             className="mt-2 px-3 py-1.5 bg-red-100 hover:bg-red-200 rounded-md text-red-600 text-xs font-medium transition-colors duration-200"
           >

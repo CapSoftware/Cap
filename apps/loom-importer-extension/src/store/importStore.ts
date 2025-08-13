@@ -7,7 +7,9 @@ import { CapApi } from "../api/cap";
 export enum ImportStep {
   IDLE = "idle",
   COLLECTING_MEMBERS = "collecting_members",
+  COLLECTING_SPACES = "collecting_spaces",
   MEMBERS_COLLECTED = "members_collected",
+  SPACES_COLLECTED = "spaces_collected",
   SELECT_WORKSPACE = "select_workspace",
   SELECTING_VIDEOS = "selecting_videos",
   VIDEOS_SELECTED = "videos_selected",
@@ -29,9 +31,10 @@ interface ImportActions {
   setData: (data: Partial<LoomExportData>) => void;
   setCurrentPage: (page: LoomScraper.LoomPage) => void;
   setSelectedUserEmail: (email: string) => void;
-  setSelectedWorkspaceId: (id: string) => void;
+
+  setSelectedOrganizationId: (id: string) => void;
   startImport: (
-    workspaceId: string | null
+    organizationId: string | null
   ) => Promise<{ success: boolean; message?: string }>;
   processVideos: () => Promise<void>;
   sendDataToCap: () => Promise<{ success: boolean; message?: string }>;
@@ -54,7 +57,8 @@ export const useImportStore = create<ImportStore>()(
       data: {
         workspaceMembers: [],
         videos: [],
-        selectedWorkspaceId: "",
+        spaces: [],
+        selectedOrganizationId: "",
         userEmail: null,
       },
       currentPage: "other",
@@ -70,8 +74,8 @@ export const useImportStore = create<ImportStore>()(
         set({ data: { ...get().data, userEmail: email } });
         set({ currentStep: ImportStep.PROCESSING_COMPLETE });
       },
-      setSelectedWorkspaceId: (id) =>
-        set({ data: { ...get().data, selectedWorkspaceId: id } }),
+      setSelectedOrganizationId: (id) =>
+        set({ data: { ...get().data, selectedOrganizationId: id } }),
 
       initializePageDetection: () => {
         const page = LoomScraper.detectCurrentPage();
@@ -95,6 +99,14 @@ export const useImportStore = create<ImportStore>()(
         }
       },
 
+      setupSpaceScraping: () => {
+        const { currentPage, currentStep } = get();
+        if (
+          currentPage === "spaces" &&
+          currentStep === ImportStep.COLLECTING_SPACES
+        ) {
+        }
+      },
       setupMemberScraping: () => {
         const { currentPage, currentStep, data } = get();
 
@@ -128,7 +140,6 @@ export const useImportStore = create<ImportStore>()(
 
           return () => clearTimeout(timer);
         }
-
         return () => {};
       },
 
@@ -290,16 +301,16 @@ export const useImportStore = create<ImportStore>()(
           const response = await api.sendLoomData({
             ...data,
             userEmail: data.userEmail,
-            selectedWorkspaceId: data.selectedWorkspaceId,
+            selectedOrganizationId: data.selectedOrganizationId,
           });
 
-          if (response && response.success) {
+          if (response?.success) {
             chrome.storage.local.remove(["loomImportData"]);
             set({ currentStep: ImportStep.IMPORT_COMPLETE });
             return { success: true };
           } else {
             throw new Error(
-              (response && response.message) || "Failed to send data to Cap.so"
+              response?.message || "Failed to send data to Cap.so"
             );
           }
         } catch (error) {
@@ -330,7 +341,8 @@ export const useImportStore = create<ImportStore>()(
             data: {
               workspaceMembers: [],
               videos: [],
-              selectedWorkspaceId: "",
+              spaces: [],
+              selectedOrganizationId: "",
               userEmail: "",
             },
             currentPage: LoomScraper.detectCurrentPage(),

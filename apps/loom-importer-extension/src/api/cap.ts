@@ -22,7 +22,7 @@ interface LoomImportResponse {
   message: string;
 }
 
-interface Workspace {
+interface Organization {
   id: string;
   name: string;
   ownerId: string;
@@ -36,8 +36,8 @@ interface Workspace {
   workosConnectionId: null;
 }
 
-interface WorkspaceResponse {
-  workspaces: Workspace[];
+interface OrganizationResponse {
+  data: Organization[];
 }
 
 export class CapApi {
@@ -121,10 +121,8 @@ export class CapApi {
     return response.data;
   }
 
-  public async getWorkspaceDetails(): Promise<WorkspaceResponse> {
-    const response = await this.request<WorkspaceResponse>(
-      "/settings/workspace/details"
-    );
+  public async getOrganizations(): Promise<OrganizationResponse> {
+    const response = await this.request<OrganizationResponse>("/organizations");
     return response.data;
   }
 }
