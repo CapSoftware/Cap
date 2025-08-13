@@ -196,8 +196,8 @@ jobs:
   tauri-plugins:
     name: Verify Tauri plugin versions
     runs-on: ubuntu-latest
-    # needs: changes
-    # if: needs.changes.outputs.tauri_plugins == 'true'
+    needs: changes
+    if: needs.changes.outputs.tauri_plugins == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -206,7 +206,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: 20
-          cache: pnpm
 
       - name: Run verify
         shell: bash
