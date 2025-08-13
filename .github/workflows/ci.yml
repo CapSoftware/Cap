@@ -33,7 +33,7 @@ jobs:
               - 'desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-            tauri_plugins:
+            tauri-plugins:
               - 'Cargo.lock'
               - 'pnpm-lock.yaml'
 
