@@ -67,7 +67,7 @@ use crate::{ExportError, ExporterBase};
 /// ```
 
 /// Quality settings for GIF export
-#[derive(Deserialize, Clone, Debug, Type)]
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
     /// Encoding quality from 1-100 (default: 90)
     pub quality: Option<u8>,
@@ -75,7 +75,7 @@ pub struct GifQuality {
     pub fast: Option<bool>,
 }
 
-#[derive(Deserialize, Clone, Debug, Type)]
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,

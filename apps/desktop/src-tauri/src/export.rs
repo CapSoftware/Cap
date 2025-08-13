@@ -6,7 +6,7 @@ use specta::Type;
 use std::path::PathBuf;
 use tracing::info;
 
-#[derive(Deserialize, Clone, Debug, Type)]
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
 #[serde(tag = "format")]
 pub enum ExportSettings {
     Mp4(cap_export::mp4::Mp4ExportSettings),
