@@ -1208,7 +1208,6 @@ dependencies = [
  "gifski",
  "imgref",
  "rgb",
- "tempfile",
  "thiserror 1.0.69",
  "tracing",
 ]

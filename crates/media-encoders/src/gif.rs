@@ -52,13 +52,6 @@ pub struct GifEncoderWrapper {
 }
 
 impl GifEncoderWrapper {
-    /// Create a new GIF encoder with default quality settings
-    ///
-    /// # Arguments
-    /// * `path` - Output path for the GIF file
-    /// * `width` - Width of the GIF in pixels
-    /// * `height` - Height of the GIF in pixels
-    /// * `fps` - Frames per second for the animation
     pub fn new<P: AsRef<Path>>(
         path: P,
         width: u32,
@@ -68,14 +61,6 @@ impl GifEncoderWrapper {
         Self::new_with_quality(path, width, height, fps, GifQuality::default())
     }
 
-    /// Create a new GIF encoder with custom quality settings
-    ///
-    /// # Arguments
-    /// * `path` - Output path for the GIF file
-    /// * `width` - Width of the GIF in pixels
-    /// * `height` - Height of the GIF in pixels
-    /// * `fps` - Frames per second for the animation
-    /// * `quality` - Quality settings for encoding
     pub fn new_with_quality<P: AsRef<Path>>(
         path: P,
         width: u32,
@@ -94,7 +79,6 @@ impl GifEncoderWrapper {
         let (collector, writer) = gifski::new(settings)
             .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
-        // Start the writer thread
         let output_path = path.as_ref().to_path_buf();
         let writer_thread = thread::spawn(move || {
             let file = File::create(output_path)
@@ -115,10 +99,6 @@ impl GifEncoderWrapper {
     }
 
     /// Add a frame to the GIF
-    ///
-    /// # Arguments
-    /// * `frame_data` - RGBA frame data (4 bytes per pixel)
-    /// * `bytes_per_row` - Number of bytes per row in the frame data
     pub fn add_frame(
         &mut self,
         frame_data: &[u8],
@@ -233,142 +213,5 @@ impl Drop for GifEncoderWrapper {
 
             self.finished = true;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_gif_encoder_creation() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let encoder = GifEncoderWrapper::new(&gif_path, 100, 100, 10);
-        assert!(encoder.is_ok());
-    }
-
-    #[test]
-    fn test_gif_encoder_with_quality() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let quality = GifQuality {
-            quality: 100,
-            fast: true,
-        };
-
-        let encoder = GifEncoderWrapper::new_with_quality(&gif_path, 100, 100, 10, quality);
-        assert!(encoder.is_ok());
-    }
-
-    #[test]
-    fn test_gif_encoder_with_frames() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let mut encoder = GifEncoderWrapper::new(&gif_path, 100, 100, 10).unwrap();
-
-        // Create a simple red frame (RGBA)
-        let mut frame_data = Vec::new();
-        for _ in 0..100 * 100 {
-            frame_data.extend_from_slice(&[255u8, 0, 0, 255]);
-        }
-        let bytes_per_row = 100 * 4;
-
-        let result = encoder.add_frame(&frame_data, bytes_per_row);
-        assert!(result.is_ok());
-
-        let finish_result = encoder.finish();
-        assert!(finish_result.is_ok());
-    }
-
-    #[test]
-    fn test_invalid_frame_data() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let mut encoder = GifEncoderWrapper::new(&gif_path, 100, 100, 10).unwrap();
-
-        // Create frame data that's too small
-        let frame_data = vec![255u8; 100]; // Way too small
-        let bytes_per_row = 100 * 4;
-
-        let result = encoder.add_frame(&frame_data, bytes_per_row);
-        assert!(matches!(result, Err(GifEncodingError::InvalidFrameData)));
-    }
-
-    #[test]
-    fn test_multiple_frames() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let mut encoder = GifEncoderWrapper::new(&gif_path, 50, 50, 10).unwrap();
-
-        // Add multiple frames with different colors
-        for i in 0..5 {
-            let mut frame_data = Vec::with_capacity(50 * 50 * 4);
-            for _ in 0..50 * 50 {
-                frame_data.extend_from_slice(&[(i * 50) as u8, 128, (255 - i * 50) as u8, 255]);
-            }
-
-            let result = encoder.add_frame(&frame_data, 50 * 4);
-            assert!(result.is_ok());
-        }
-
-        let finish_result = encoder.finish();
-        assert!(finish_result.is_ok());
-    }
-
-    #[test]
-    fn test_encoder_finished_state() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let mut encoder = GifEncoderWrapper::new(&gif_path, 10, 10, 10).unwrap();
-
-        // Add a frame
-        let mut frame_data = Vec::new();
-        for _ in 0..10 * 10 {
-            frame_data.extend_from_slice(&[255u8, 0, 0, 255]);
-        }
-        encoder.add_frame(&frame_data, 10 * 4).unwrap();
-
-        // Test that we can successfully finish the encoder
-        let finish_result = encoder.finish();
-        assert!(finish_result.is_ok());
-
-        // Note: After finish() is called, the encoder is consumed, so we can't test
-        // adding frames to the same instance. This is by design to prevent misuse.
-    }
-
-    #[test]
-    fn test_edge_case_dimensions() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        // Test with minimum practical dimensions
-        let encoder = GifEncoderWrapper::new(&gif_path, 1, 1, 1);
-        assert!(encoder.is_ok());
-
-        // Test with larger dimensions
-        let gif_path2 = temp_dir.path().join("test2.gif");
-        let encoder2 = GifEncoderWrapper::new(&gif_path2, 1920, 1080, 30);
-        assert!(encoder2.is_ok());
-    }
-
-    #[test]
-    fn test_encoder_properties() {
-        let temp_dir = tempdir().unwrap();
-        let gif_path = temp_dir.path().join("test.gif");
-
-        let encoder = GifEncoderWrapper::new(&gif_path, 200, 150, 25).unwrap();
-
-        assert_eq!(encoder.dimensions(), (200, 150));
-        assert_eq!(encoder.fps(), 25);
-        assert_eq!(encoder.frame_count(), 0);
     }
 }

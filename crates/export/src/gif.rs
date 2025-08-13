@@ -10,63 +10,6 @@ use tracing::trace;
 
 use crate::{ExportError, ExporterBase};
 
-/// Settings for exporting recordings as GIF animations.
-///
-/// The GIF export uses the high-quality `gifski` encoder to produce
-/// excellent animated GIFs from screen recordings with superior compression
-/// and color quality.
-///
-/// # Quality Settings
-///
-/// The export quality can be customized through the `quality` field:
-/// - `quality`: Encoding quality from 1-100 (default: 90). Higher values give better quality but larger files.
-/// - `fast`: Whether to prioritize encoding speed over quality (default: false)
-///
-/// # Examples
-///
-/// Basic usage with default settings:
-/// ```rust,ignore
-/// use cap_export::gif::GifExportSettings;
-/// use cap_project::XY;
-///
-/// let settings = GifExportSettings {
-///     fps: 30,
-///     resolution_base: XY { x: 1920, y: 1080 },
-///     quality: None, // Uses defaults: quality 90, slow encoding
-/// };
-/// ```
-///
-/// High quality settings:
-/// ```rust,ignore
-/// use cap_export::gif::{GifExportSettings, GifQuality};
-/// use cap_project::XY;
-///
-/// let settings = GifExportSettings {
-///     fps: 15,
-///     resolution_base: XY { x: 1280, y: 720 },
-///     quality: Some(GifQuality {
-///         quality: Some(100),
-///         fast: Some(false),
-///     }),
-/// };
-/// ```
-///
-/// Fast export with reduced quality:
-/// ```rust,ignore
-/// use cap_export::gif::{GifExportSettings, GifQuality};
-/// use cap_project::XY;
-///
-/// let settings = GifExportSettings {
-///     fps: 10,
-///     resolution_base: XY { x: 640, y: 480 },
-///     quality: Some(GifQuality {
-///         quality: Some(70),
-///         fast: Some(true),
-///     }),
-/// };
-/// ```
-
-/// Quality settings for GIF export
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifQuality {
     /// Encoding quality from 1-100 (default: 90)
@@ -79,7 +22,6 @@ pub struct GifQuality {
 pub struct GifExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
-    /// Optional quality settings
     pub quality: Option<GifQuality>,
 }
 
