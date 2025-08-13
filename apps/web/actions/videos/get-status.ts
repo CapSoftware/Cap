@@ -5,6 +5,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
+import { userHasAccessToVideo } from "@/utils/auth";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
@@ -23,12 +24,8 @@ export interface VideoStatusResult {
 
 export async function getVideoStatus(
 	videoId: string,
-): Promise<VideoStatusResult> {
-	const user = await getCurrentUser();
-
-	if (!user) {
-		throw new Error("Authentication required");
-	}
+): Promise<VideoStatusResult | { success: false; access: string }> {
+	const userPromise = getCurrentUser();
 
 	if (!videoId) {
 		throw new Error("Video ID not provided");
@@ -228,6 +225,9 @@ export async function getVideoStatus(
 			);
 		}
 	}
+
+	const access = await userHasAccessToVideo(userPromise, video);
+	if (access !== "has-access") return { success: false, access };
 
 	return {
 		transcriptionStatus:

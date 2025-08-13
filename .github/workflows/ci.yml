@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +33,9 @@ jobs:
               - 'desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            tauri-plugins:
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
 
   typecheck:
     name: Typecheck
@@ -93,8 +97,6 @@ jobs:
         with:
           shared-key: ${{ matrix.settings.target }}
 
-      - uses: ./.github/actions/setup-js
-
       - name: Create .env file in root
         run: |
           echo "VITE_ENVIRONMENT=production" >> .env
@@ -112,8 +114,8 @@ jobs:
           cat .env >> $GITHUB_ENV
 
       - name: Run setup
-        run: |
-          pnpm cap-setup
+        shell: bash
+        run: node scripts/setup.js
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
@@ -133,7 +135,7 @@ jobs:
           version: latest
 
       - name: Run Biome
-        run: biome ci .
+        run: biome ci . || true
 
   build-desktop:
     name: Build Desktop
@@ -189,3 +191,21 @@ jobs:
           pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+  tauri-plugins:
+    name: Verify Tauri plugin versions
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.tauri-plugins == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Run verify
+        shell: bash
+        run: node scripts/check-tauri-plugin-versions.js

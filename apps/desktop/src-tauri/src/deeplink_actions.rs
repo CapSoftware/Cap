@@ -81,6 +81,12 @@ impl TryFrom<&Url> for DeepLinkAction {
     type Error = ActionParseFromUrlError;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
+        if url.scheme() == "file" {
+            return Ok(Self::OpenEditor {
+                project_path: url.path().into(),
+            });
+        }
+
         match url.domain() {
             Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),

@@ -15,7 +15,9 @@ export class Video extends Schema.Class<Video>("Video")({
 	ownerId: Schema.String,
 	name: Schema.String,
 	public: Schema.Boolean,
-	metadata: Schema.Record({ key: Schema.String, value: Schema.Any }),
+	metadata: Schema.OptionFromNullOr(
+		Schema.Record({ key: Schema.String, value: Schema.Any }),
+	),
 	source: Schema.Struct({
 		type: Schema.Literal("MediaConvert", "local", "desktopMP4"),
 	}),

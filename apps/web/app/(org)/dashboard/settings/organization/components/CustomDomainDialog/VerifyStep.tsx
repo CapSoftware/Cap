@@ -4,7 +4,7 @@ import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
-import type { DomainConfig } from "./types";
+import type { DomainConfig, DomainVerification } from "./types";
 
 interface VerifyStepProps {
 	domain: string;
@@ -31,8 +31,10 @@ const VerifyStep = ({
 	const recommendedARecord = domainConfig?.requiredAValue;
 	const currentCnames = domainConfig?.cnames || [];
 	const currentAValues = domainConfig?.currentAValues || [];
+	const verificationRecords = domainConfig?.verification || [];
 
 	const hasRecommendedCNAME = recommendedCnames.length > 0;
+	const hasTXTVerification = verificationRecords.length > 0;
 
 	const getRecommendedAValues = () => {
 		if (recommendedARecord) return [recommendedARecord];
@@ -64,6 +66,7 @@ const VerifyStep = ({
 
 	const showARecord = recommendedARecord && !aRecordConfigured;
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
+	const showTXTRecord = hasTXTVerification && !isVerified;
 
 	const handleCopy = async (text: string, fieldId: string) => {
 		try {
@@ -71,7 +74,7 @@ const VerifyStep = ({
 			setCopiedField(fieldId);
 			setTimeout(() => setCopiedField(null), 2000);
 			toast.success("Copied to clipboard");
-		} catch (err) {
+		} catch {
 			toast.error("Failed to copy to clipboard");
 		}
 	};
@@ -90,6 +93,16 @@ const VerifyStep = ({
 			clearInterval(interval);
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
+
+	const TXTDomainValueHandler = (record: DomainVerification) => {
+		if (!record.domain) return "@";
+		if (record.domain === domain) return "@";
+		const suffix = `.${domain}`;
+		if (record.domain.endsWith(suffix)) {
+			return record.domain.replace(suffix, "") || "@";
+		}
+		return record.domain;
+	};
 
 	return (
 		<div className="space-y-6">
@@ -112,6 +125,75 @@ const VerifyStep = ({
 				!isVerified &&
 				domainConfig && (
 					<div className="space-y-4">
+						{/* TXT Record Configuration for Verification */}
+						{showTXTRecord && (
+							<div className="overflow-hidden rounded-lg border border-gray-4">
+								<div className="px-4 py-3 border-b bg-gray-2 border-gray-4">
+									<p className="font-medium text-md text-gray-12">
+										TXT Record Configuration
+									</p>
+									<p className="mt-1 text-sm text-gray-10">
+										Add this TXT record to verify domain ownership:
+									</p>
+								</div>
+								<div className="px-4 py-3">
+									<dl className="grid gap-4">
+										{verificationRecords.map((record, index) => (
+											<div key={index.toString()} className="space-y-4">
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Type
+													</dt>
+													<dd className="text-sm text-gray-10">
+														{record.type || "TXT"}
+													</dd>
+												</div>
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Name
+													</dt>
+													<dd className="text-sm text-gray-10">
+														<code className="px-2 py-1 text-xs rounded bg-gray-4">
+															{TXTDomainValueHandler(record)}
+														</code>
+													</dd>
+												</div>
+												<div className="grid grid-cols-[100px,1fr] items-center">
+													<dt className="text-sm font-medium text-gray-12">
+														Value
+													</dt>
+													<dd className="text-sm text-gray-10">
+														<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
+															<code className="text-xs break-all text-gray-10">
+																{record.value}
+															</code>
+															<button
+																type="button"
+																onClick={() =>
+																	handleCopy(
+																		record.value,
+																		`txt-record-${index}`,
+																	)
+																}
+																className="p-1 rounded-md transition-colors hover:bg-gray-1 shrink-0"
+																title="Copy to clipboard"
+															>
+																{copiedField === `txt-record-${index}` ? (
+																	<Check className="size-3.5 text-green-500" />
+																) : (
+																	<Copy className="size-3.5 text-gray-10" />
+																)}
+															</button>
+														</div>
+													</dd>
+												</div>
+											</div>
+										))}
+									</dl>
+								</div>
+							</div>
+						)}
+
 						{/* A Record Configuration */}
 						{showARecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
@@ -134,7 +216,7 @@ const VerifyStep = ({
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentAValues.map((value, index) => (
 														<div
-															key={`a-${index}`}
+															key={`a-${index.toString()}`}
 															className={clsx(
 																recommendedAValues.includes(value)
 																	? "flex items-center gap-2 text-green-300"
@@ -178,7 +260,7 @@ const VerifyStep = ({
 											<dd className="space-y-2 text-sm text-gray-10">
 												{recommendedAValues.map((ipAddress, index) => (
 													<div
-														key={`ip-${index}`}
+														key={`ip-${index.toString()}`}
 														className="flex gap-2 items-center"
 													>
 														<div className="flex items-center justify-between gap-1.5 bg-gray-3 px-2 py-1 rounded-lg flex-1 min-w-0 border border-gray-4">
@@ -236,7 +318,7 @@ const VerifyStep = ({
 												<dd className="space-y-1.5 text-sm text-gray-10">
 													{currentCnames.map((value, index) => (
 														<div
-															key={`cname-${index}`}
+															key={`cname-${index.toString()}`}
 															className={clsx(
 																recommendedCnames.some(
 																	(rec) => rec.value === value,
