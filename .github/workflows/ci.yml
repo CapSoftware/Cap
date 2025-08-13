@@ -210,4 +210,4 @@ jobs:
 
       - name: Run verify
         shell: bash
-        run: node scripts/check-tauri-plugins.js
+        run: node scripts/check-tauri-plugin-versions.js
