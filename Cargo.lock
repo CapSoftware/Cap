@@ -891,9 +891,12 @@ dependencies = [
 name = "cap-camera-avfoundation"
 version = "0.1.0"
 dependencies = [
+ "block2 0.6.1",
  "cidre",
  "clap",
  "inquire",
+ "objc2-av-foundation",
+ "objc2-foundation 0.3.1",
  "tracing",
 ]
 

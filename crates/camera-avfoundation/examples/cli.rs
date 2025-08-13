@@ -128,6 +128,17 @@ pub fn main() {
         .set_video_settings(Some(video_settings.as_ref()))
         .unwrap();
 
+    let mut notification_center = ns::NotificationCenter::default();
+
+    let _guard = notification_center.add_observer_guard(
+        av::capture_device_notifications::was_disconnected(),
+        None,
+        None,
+        |e| {
+            dbg!(e);
+        },
+    );
+
     // The device config must stay locked while running starts,
     // otherwise start_running can overwrite the active format on macOS
     // https://stackoverflow.com/questions/36689578/avfoundation-capturing-video-with-custom-resolution
@@ -139,7 +150,9 @@ pub fn main() {
         session.start_running();
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(10));
+    for i in 0..10 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
 
     session.stop_running();
 

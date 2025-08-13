@@ -14,4 +14,7 @@ clap = { version = "4.5.40", features = ["derive"] }
 inquire = "0.7.5"
 
 [dependencies]
+block2 = "0.6.1"
+objc2-av-foundation = "0.3.1"
+objc2-foundation = "0.3.1"
 tracing.workspace = true
