@@ -2,7 +2,6 @@
 
 import { Button } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
-import { useState } from "react";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -13,60 +12,11 @@ import {
 
 export const DownloadPage = () => {
 	const { platform, isIntel } = useDetectPlatform();
-	const [showDebug, setShowDebug] = useState(false);
 	const loading = platform === null;
 
 	return (
 		<div className="py-32 md:py-40 wrapper wrapper-sm">
 			<div className="space-y-4 text-center">
-				{/* Debug toggle button in top-right corner */}
-				<button
-					onClick={() => setShowDebug(!showDebug)}
-					className="absolute top-4 right-4 px-2 py-1 text-xs bg-gray-800 rounded text-gray-8 hover:text-gray-300"
-				>
-					{showDebug ? "Hide Debug" : "Debug"}
-				</button>
-
-				{/* Debug panel */}
-				{showDebug && (
-					<div className="fixed right-4 top-10 z-50 p-3 text-left bg-gray-800 rounded shadow-lg">
-						<div className="mb-2 text-xs text-gray-300">Platform Simulator</div>
-						<div className="space-y-2">
-							<button
-								className={`text-xs px-2 py-1 rounded w-full text-left ${
-									platform === "windows"
-										? "bg-blue-600"
-										: "bg-gray-700 hover:bg-gray-600"
-								}`}
-							>
-								Windows (Beta)
-							</button>
-							<button
-								className={`text-xs px-2 py-1 rounded w-full text-left ${
-									platform === "macos" && isIntel
-										? "bg-blue-600"
-										: "bg-gray-700 hover:bg-gray-600"
-								}`}
-							>
-								macOS (Intel)
-							</button>
-							<button
-								className={`text-xs px-2 py-1 rounded w-full text-left ${
-									platform === "macos" && !isIntel
-										? "bg-blue-600"
-										: "bg-gray-700 hover:bg-gray-600"
-								}`}
-							>
-								macOS (Apple Silicon)
-							</button>
-							<div className="mt-2 text-xs text-gray-8">
-								Current: {platform}{" "}
-								{platform === "macos" &&
-									(isIntel ? "(Intel)" : "(Apple Silicon)")}
-							</div>
-						</div>
-					</div>
-				)}
 
 				<h1 className="text-2xl fade-in-down animate-delay-1 md:text-4xl">
 					Download Cap
