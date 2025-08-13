@@ -13,28 +13,26 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		const repo = yield* S3BucketsRepo;
 
 		const defaultConfigs = {
-			publicEndpoint:
-				yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
-					Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
-					Config.option,
-					Effect.flatten,
-					Effect.catchTag("NoSuchElementException", () =>
-						Effect.dieMessage(
-							"Neither S3_PUBLIC_ENDPOINT nor CAP_AWS_ENDPOINT provided",
-						),
+			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
+				Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
+				Config.option,
+				Effect.flatten,
+				Effect.catchTag("NoSuchElementException", () =>
+					Effect.dieMessage(
+						"Neither S3_PUBLIC_ENDPOINT nor CAP_AWS_ENDPOINT provided",
 					),
 				),
-			internalEndpoint:
-				yield* Config.string("S3_INTERNAL_ENDPOINT").pipe(
-					Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
-					Config.option,
-					Effect.flatten,
-					Effect.catchTag("NoSuchElementException", () =>
-						Effect.dieMessage(
-							"Neither S3_INTERNAL_ENDPOINT nor CAP_AWS_ENDPOINT provided",
-						),
+			),
+			internalEndpoint: yield* Config.string("S3_INTERNAL_ENDPOINT").pipe(
+				Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
+				Config.option,
+				Effect.flatten,
+				Effect.catchTag("NoSuchElementException", () =>
+					Effect.dieMessage(
+						"Neither S3_INTERNAL_ENDPOINT nor CAP_AWS_ENDPOINT provided",
 					),
 				),
+			),
 			region: yield* Config.string("CAP_AWS_REGION"),
 			accessKey: yield* Config.string("CAP_AWS_ACCESS_KEY"),
 			secretKey: yield* Config.string("CAP_AWS_SECRET_KEY"),
@@ -181,4 +179,4 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		};
 	}),
 	dependencies: [S3BucketsRepo.Default],
-}) { }
+}) {}
