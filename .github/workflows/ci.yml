@@ -97,8 +97,6 @@ jobs:
         with:
           shared-key: ${{ matrix.settings.target }}
 
-      - uses: ./.github/actions/setup-js
-
       - name: Create .env file in root
         run: |
           echo "VITE_ENVIRONMENT=production" >> .env
@@ -116,8 +114,8 @@ jobs:
           cat .env >> $GITHUB_ENV
 
       - name: Run setup
-        run: |
-          pnpm cap-setup
+        shell: bash
+        run: node scripts/setup.js
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
