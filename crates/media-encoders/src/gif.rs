@@ -1,9 +1,9 @@
+use gifski::{Collector, Repeat, Settings};
+use rgb::RGBA8;
+use std::fs::File;
 use std::path::Path;
 use std::thread::{self, JoinHandle};
-use std::fs::File;
 use thiserror::Error;
-use gifski::{Collector, Settings, Repeat};
-use rgb::RGBA8;
 
 /// Errors that can occur during GIF encoding
 #[derive(Error, Debug)]
@@ -76,14 +76,14 @@ impl GifEncoderWrapper {
             repeat: Repeat::Infinite,
         };
 
-        let (collector, writer) = gifski::new(settings)
-            .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
+        let (collector, writer) =
+            gifski::new(settings).map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
         let output_path = path.as_ref().to_path_buf();
         let writer_thread = thread::spawn(move || {
-            let file = File::create(output_path)
-                .map_err(|e| GifEncodingError::Io(e))?;
-            writer.write(file, &mut gifski::progress::NoProgress {})
+            let file = File::create(output_path).map_err(|e| GifEncodingError::Io(e))?;
+            writer
+                .write(file, &mut gifski::progress::NoProgress {})
                 .map_err(|e| GifEncodingError::Gifski(e.to_string()))
         });
 
@@ -108,7 +108,9 @@ impl GifEncoderWrapper {
             return Err(GifEncodingError::EncoderFinished);
         }
 
-        let collector = self.collector.as_mut()
+        let collector = self
+            .collector
+            .as_mut()
             .ok_or(GifEncodingError::EncoderFinished)?;
 
         // Calculate expected size
@@ -143,17 +145,14 @@ impl GifEncoderWrapper {
         }
 
         // Create imgref for gifski
-        let img = imgref::Img::new(
-            rgba_pixels,
-            self.width as usize,
-            self.height as usize,
-        );
+        let img = imgref::Img::new(rgba_pixels, self.width as usize, self.height as usize);
 
         // Calculate presentation timestamp based on frame index and fps
         let pts = (self.frame_index as f64) / (self.fps as f64);
 
         // Add frame to collector
-        collector.add_frame_rgba(self.frame_index as usize, img, pts)
+        collector
+            .add_frame_rgba(self.frame_index as usize, img, pts)
             .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
         self.frame_index += 1;
@@ -176,7 +175,11 @@ impl GifEncoderWrapper {
         if let Some(writer_thread) = self.writer_thread.take() {
             match writer_thread.join() {
                 Ok(result) => result?,
-                Err(_) => return Err(GifEncodingError::Gifski("Writer thread panicked".to_string())),
+                Err(_) => {
+                    return Err(GifEncodingError::Gifski(
+                        "Writer thread panicked".to_string(),
+                    ));
+                }
             }
         }
 

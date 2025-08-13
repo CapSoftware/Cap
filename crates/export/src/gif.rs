@@ -67,10 +67,13 @@ impl GifExportSettings {
         );
 
         // Create GIF encoder with quality settings
-        let quality = self.quality.map(|q| EncoderGifQuality {
-            quality: q.quality.unwrap_or(90),
-            fast: q.fast.unwrap_or(false),
-        }).unwrap_or_default();
+        let quality = self
+            .quality
+            .map(|q| EncoderGifQuality {
+                quality: q.quality.unwrap_or(90),
+                fast: q.fast.unwrap_or(false),
+            })
+            .unwrap_or_default();
 
         let mut gif_encoder = GifEncoderWrapper::new_with_quality(
             &gif_output_path,
