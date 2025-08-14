@@ -1,5 +1,6 @@
 use std::{ffi::c_void, str::FromStr};
 
+use cidre::{arc, ns, sc};
 use core_foundation::{base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
@@ -139,6 +140,35 @@ impl DisplayImpl {
             // Fallback to generic name with display ID
             format!("Display {}", self.0.id)
         }
+    }
+}
+
+impl DisplayImpl {
+    pub async fn as_sc(&self) -> Option<arc::R<sc::Display>> {
+        sc::ShareableContent::current()
+            .await
+            .ok()?
+            .displays()
+            .iter()
+            .find(|d| d.display_id().0 == self.0.id)
+            .map(|v| v.retained())
+    }
+
+    pub async fn as_content_filter(&self) -> Option<arc::R<sc::ContentFilter>> {
+        self.as_content_filter_excluding_windows(vec![]).await
+    }
+
+    pub async fn as_content_filter_excluding_windows(
+        &self,
+        windows: Vec<arc::R<sc::Window>>,
+    ) -> Option<arc::R<sc::ContentFilter>> {
+        let excluded_windows =
+            ns::Array::from_slice_retained(windows.into_iter().collect::<Vec<_>>().as_slice());
+
+        Some(sc::ContentFilter::with_display_excluding_windows(
+            self.as_sc().await?.as_ref(),
+            &excluded_windows,
+        ))
     }
 }
 

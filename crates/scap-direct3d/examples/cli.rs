@@ -1,8 +1,10 @@
-use scap_direct3d::{Capturer, Display, PixelFormat, Settings};
+use cap_displays::*;
+use scap_direct3d::{Capturer, PixelFormat, Settings};
 use std::time::Duration;
 
 fn main() {
     let display = Display::primary().unwrap();
+    let display = display.raw_handle();
 
     let capturer = Capturer::new(
         display.try_as_capture_item().unwrap(),

@@ -1,6 +1,6 @@
 // a whole bunch of credit to https://github.com/NiiightmareXD/windows-capture
 
-#![cfg(windows)]
+// #![cfg(windows)]
 
 use std::{
     os::windows::io::AsRawHandle,
@@ -64,11 +64,6 @@ impl PixelFormat {
     }
 }
 
-#[derive(Clone)]
-pub struct CaptureItem {
-    inner: GraphicsCaptureItem,
-}
-
 pub struct Display {
     inner: HMONITOR,
 }
@@ -98,12 +93,12 @@ pub struct Settings {
 }
 
 pub struct Capturer {
-    item: CaptureItem,
+    item: GraphicsCaptureItem,
     settings: Settings,
 }
 
 impl Capturer {
-    pub fn new(item: CaptureItem, settings: Settings) -> Self {
+    pub fn new(item: GraphicsCaptureItem, settings: Settings) -> Self {
         Self { item, settings }
     }
 
@@ -288,7 +283,7 @@ impl<'a> FrameBuffer<'a> {
 }
 
 fn run(
-    item: CaptureItem,
+    item: GraphicsCaptureItem,
     settings: Settings,
     mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
     stop_flag: Arc<AtomicBool>,
@@ -340,12 +335,12 @@ fn run(
         &direct3d_device,
         PixelFormat::R8G8B8A8Unorm.as_directx(),
         1,
-        item.inner.Size().map_err(|_| "Item size")?,
+        item.Size().map_err(|_| "Item size")?,
     )
     .map_err(|_| "Failed to create frame pool")?;
 
     let session = frame_pool
-        .CreateCaptureSession(&item.inner)
+        .CreateCaptureSession(&item)
         .map_err(|_| "Failed to create capture session")?;
 
     if let Some(border_required) = settings.is_border_required {

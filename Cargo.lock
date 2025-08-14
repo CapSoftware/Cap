@@ -852,7 +852,7 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "flume",
- "scap",
+ "scap 0.1.0-beta.1",
  "serde",
  "serde_json",
  "tokio",
@@ -1019,7 +1019,7 @@ dependencies = [
  "relative-path",
  "reqwest",
  "rodio",
- "scap",
+ "scap 0.1.0-beta.1",
  "sentry",
  "serde",
  "serde_json",
@@ -1065,6 +1065,7 @@ dependencies = [
 name = "cap-displays"
 version = "0.1.0"
 dependencies = [
+ "cidre",
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -1180,7 +1181,7 @@ dependencies = [
  "objc-foundation",
  "objc2-foundation 0.2.2",
  "ringbuf",
- "scap",
+ "scap 0.1.0-beta.1",
  "screencapturekit",
  "serde",
  "specta",
@@ -1259,7 +1260,7 @@ dependencies = [
  "objc",
  "objc2-app-kit",
  "relative-path",
- "scap",
+ "scap 0.1.0-beta.1",
  "screencapturekit",
  "serde",
  "serde_json",
@@ -6790,9 +6791,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "scap"
+version = "0.1.0"
+dependencies = [
+ "cap-displays",
+ "scap-direct3d",
+ "scap-screencapturekit",
+]
+
+[[package]]
 name = "scap-direct3d"
 version = "0.1.0"
 dependencies = [
+ "cap-displays",
  "windows 0.60.0",
 ]
 
@@ -6812,6 +6823,7 @@ dependencies = [
 name = "scap-screencapturekit"
 version = "0.1.0"
 dependencies = [
+ "cap-displays",
  "cidre",
  "clap",
  "futures",

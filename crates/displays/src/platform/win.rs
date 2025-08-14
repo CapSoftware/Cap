@@ -11,13 +11,16 @@ use windows::{
             QueryDisplayConfig,
         },
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
-        Graphics::Gdi::{
-            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
-            CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
-            GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ, HMONITOR,
-            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
-            ReleaseDC, SelectObject,
+        Graphics::{
+            Capture::GraphicsCaptureItem,
+            Gdi::{
+                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
+                CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC,
+                DeleteObject, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW,
+                FillRect, GetDC, GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ,
+                HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW,
+                MonitorFromPoint, ReleaseDC, SelectObject,
+            },
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
@@ -648,6 +651,11 @@ impl DisplayImpl {
             }
         }
         None
+    }
+
+    fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        unsafe { interop.CreateForMonitor(self.inner) }
     }
 }
 

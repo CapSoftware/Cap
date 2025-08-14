@@ -3,7 +3,8 @@ name = "scap-direct3d"
 version = "0.1.0"
 edition = "2024"
 
-[target.'cfg(windows)'.dependencies]
+# [target.'cfg(windows)'.dependencies]
+[dependencies]
 windows = { workspace = true, features = [
 	"System",
 	"Graphics_Capture",
@@ -18,6 +19,9 @@ windows = { workspace = true, features = [
 	"Win32_System_WinRT_Graphics_Capture",
 	"Win32_UI_WindowsAndMessaging",
 ] }
+
+[dev-dependencies]
+cap-displays = { path = "../displays" }
 
 [lints]
 workspace = true
