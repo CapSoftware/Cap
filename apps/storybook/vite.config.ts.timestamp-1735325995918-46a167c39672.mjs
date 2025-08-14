@@ -2,10 +2,9 @@
 import { defineConfig } from "file:///Users/onyedikachi/Documents/codes/algora-bounties/Cap/node_modules/.pnpm/vite@5.4.8_@types+node@20.16.9_terser@5.34.0/node_modules/vite/dist/node/index.js";
 import solid from "file:///Users/onyedikachi/Documents/codes/algora-bounties/Cap/node_modules/.pnpm/vite-plugin-solid@2.10.2_@testing-library+jest-dom@6.5.0_solid-js@1.9.3_vite@5.4.8_@types+node@20.16.9_terser@5.34.0_/node_modules/vite-plugin-solid/dist/esm/index.mjs";
 import capUIPlugin from "file:///Users/onyedikachi/Documents/codes/algora-bounties/Cap/packages/ui-solid/vite.js";
+
 var vite_config_default = defineConfig({
-  plugins: [solid(), capUIPlugin]
+	plugins: [solid(), capUIPlugin],
 });
-export {
-  vite_config_default as default
-};
+export { vite_config_default as default };
 //# sourceMappingURL=data:application/json;base64,ewogICJ2ZXJzaW9uIjogMywKICAic291cmNlcyI6IFsidml0ZS5jb25maWcudHMiXSwKICAic291cmNlc0NvbnRlbnQiOiBbImNvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9kaXJuYW1lID0gXCIvVXNlcnMvb255ZWRpa2FjaGkvRG9jdW1lbnRzL2NvZGVzL2FsZ29yYS1ib3VudGllcy9DYXAvYXBwcy9zdG9yeWJvb2tcIjtjb25zdCBfX3ZpdGVfaW5qZWN0ZWRfb3JpZ2luYWxfZmlsZW5hbWUgPSBcIi9Vc2Vycy9vbnllZGlrYWNoaS9Eb2N1bWVudHMvY29kZXMvYWxnb3JhLWJvdW50aWVzL0NhcC9hcHBzL3N0b3J5Ym9vay92aXRlLmNvbmZpZy50c1wiO2NvbnN0IF9fdml0ZV9pbmplY3RlZF9vcmlnaW5hbF9pbXBvcnRfbWV0YV91cmwgPSBcImZpbGU6Ly8vVXNlcnMvb255ZWRpa2FjaGkvRG9jdW1lbnRzL2NvZGVzL2FsZ29yYS1ib3VudGllcy9DYXAvYXBwcy9zdG9yeWJvb2svdml0ZS5jb25maWcudHNcIjtpbXBvcnQgeyBkZWZpbmVDb25maWcgfSBmcm9tIFwidml0ZVwiO1xuaW1wb3J0IHNvbGlkIGZyb20gXCJ2aXRlLXBsdWdpbi1zb2xpZFwiO1xuaW1wb3J0IGNhcFVJUGx1Z2luIGZyb20gXCJAY2FwL3VpLXNvbGlkL3ZpdGVcIjtcblxuZXhwb3J0IGRlZmF1bHQgZGVmaW5lQ29uZmlnKHtcbiAgcGx1Z2luczogW3NvbGlkKCksIGNhcFVJUGx1Z2luXSxcbn0pO1xuIl0sCiAgIm1hcHBpbmdzIjogIjtBQUFpWSxTQUFTLG9CQUFvQjtBQUM5WixPQUFPLFdBQVc7QUFDbEIsT0FBTyxpQkFBaUI7QUFFeEIsSUFBTyxzQkFBUSxhQUFhO0FBQUEsRUFDMUIsU0FBUyxDQUFDLE1BQU0sR0FBRyxXQUFXO0FBQ2hDLENBQUM7IiwKICAibmFtZXMiOiBbXQp9Cg==

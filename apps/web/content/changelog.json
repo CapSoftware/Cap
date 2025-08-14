@@ -1,16 +1,16 @@
 [
-    {
-      "title": "Trimming, Shortcuts and Bug Fixes",
-      "app": "Cap Desktop",
-      "publishedAt": "2024-09-18",
-      "version": "0.3.0-alpha.24",
-      "image:": ""
-    },
-    {
-      "title": "v0.3 Early Access Release",
-      "app": "Cap Desktop",
-      "publishedAt": "2024-09-13",
-      "version": "0.3.0",
-      "image:": ""
-    }
-  ]
+	{
+		"title": "Trimming, Shortcuts and Bug Fixes",
+		"app": "Cap Desktop",
+		"publishedAt": "2024-09-18",
+		"version": "0.3.0-alpha.24",
+		"image:": ""
+	},
+	{
+		"title": "v0.3 Early Access Release",
+		"app": "Cap Desktop",
+		"publishedAt": "2024-09-13",
+		"version": "0.3.0",
+		"image:": ""
+	}
+]

@@ -3,9 +3,9 @@
 @tailwind utilities;
 
 body {
-  font-family: "Geist Sans", sans-serif;
+	font-family: "Geist Sans", sans-serif;
 }
 
 .custom-bg {
-  background: linear-gradient(180deg, #3B82F6 0%, #2563EB 100%);
+	background: linear-gradient(180deg, #3b82f6 0%, #2563eb 100%);
 }

@@ -1,9 +1,9 @@
 "use server";
 
-import { getCurrentUser } from "@cap/database/auth/session";
-import { organizations, organizationMembers } from "@cap/database/schema";
 import { db } from "@cap/database";
-import { eq, and } from "drizzle-orm";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { organizationMembers, organizations } from "@cap/database/schema";
+import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -12,47 +12,57 @@ import { revalidatePath } from "next/cache";
  * @param organizationId The organization to remove from
  */
 export async function removeOrganizationMember(
-  memberId: string,
-  organizationId: string
+	memberId: string,
+	organizationId: string,
 ) {
-  const user = await getCurrentUser();
-  if (!user) throw new Error("Unauthorized");
+	const user = await getCurrentUser();
+	if (!user) throw new Error("Unauthorized");
 
-  const organization = await db()
-    .select()
-    .from(organizations)
-    .where(eq(organizations.id, organizationId))
-    .limit(1);
+	const organization = await db()
+		.select()
+		.from(organizations)
+		.where(eq(organizations.id, organizationId))
+		.limit(1);
 
-  if (!organization || organization.length === 0) {
-    throw new Error("Organization not found");
-  }
-  if (organization[0]?.ownerId !== user.id) {
-    throw new Error("Only the owner can remove organization members");
-  }
+	if (!organization || organization.length === 0) {
+		throw new Error("Organization not found");
+	}
+	if (organization[0]?.ownerId !== user.id) {
+		throw new Error("Only the owner can remove organization members");
+	}
 
-  // Prevent owner from removing themselves
-  const member = await db()
-    .select()
-    .from(organizationMembers)
-    .where(and(eq(organizationMembers.id, memberId), eq(organizationMembers.organizationId, organizationId)))
-    .limit(1);
-  if (!member || member.length === 0) {
-    throw new Error("Member not found");
-  }
-  if (member[0]?.userId === user.id) {
-    // Defensive: this should never happen due to the above check, but TS wants safety
-    throw new Error("Owner cannot remove themselves");
-  }
+	// Prevent owner from removing themselves
+	const member = await db()
+		.select()
+		.from(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.id, memberId),
+				eq(organizationMembers.organizationId, organizationId),
+			),
+		)
+		.limit(1);
+	if (!member || member.length === 0) {
+		throw new Error("Member not found");
+	}
+	if (member[0]?.userId === user.id) {
+		// Defensive: this should never happen due to the above check, but TS wants safety
+		throw new Error("Owner cannot remove themselves");
+	}
 
-  const result = await db()
-    .delete(organizationMembers)
-    .where(and(eq(organizationMembers.id, memberId), eq(organizationMembers.organizationId, organizationId)));
+	const result = await db()
+		.delete(organizationMembers)
+		.where(
+			and(
+				eq(organizationMembers.id, memberId),
+				eq(organizationMembers.organizationId, organizationId),
+			),
+		);
 
-  if (result.rowsAffected === 0) {
-    throw new Error("Member not found");
-  }
+	if (result.rowsAffected === 0) {
+		throw new Error("Member not found");
+	}
 
-  revalidatePath('/dashboard/settings/organization');
-  return { success: true };
+	revalidatePath("/dashboard/settings/organization");
+	return { success: true };
 }

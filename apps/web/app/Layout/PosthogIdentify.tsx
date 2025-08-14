@@ -1,42 +1,42 @@
 "use client";
 
 import { Suspense, use, useEffect } from "react";
-import { useAuthContext } from "./AuthContext";
 import {
-  identifyUser,
-  initAnonymousUser,
-  trackEvent,
+	identifyUser,
+	initAnonymousUser,
+	trackEvent,
 } from "../utils/analytics";
+import { useAuthContext } from "./AuthContext";
 
 export function PosthogIdentify() {
-  return (
-    <Suspense>
-      <Inner />
-    </Suspense>
-  );
+	return (
+		<Suspense>
+			<Inner />
+		</Suspense>
+	);
 }
 
 function Inner() {
-  const user = use(useAuthContext().user);
+	const user = use(useAuthContext().user);
 
-  useEffect(() => {
-    if (!user) {
-      initAnonymousUser();
-      return;
-    } else {
-      // Track if this is the first time a user is being identified
-      const isNewUser = !localStorage.getItem("user_identified");
+	useEffect(() => {
+		if (!user) {
+			initAnonymousUser();
+			return;
+		} else {
+			// Track if this is the first time a user is being identified
+			const isNewUser = !localStorage.getItem("user_identified");
 
-      identifyUser(user.id);
+			identifyUser(user.id);
 
-      if (isNewUser) {
-        localStorage.setItem("user_identified", "true");
-        trackEvent("user_signed_up");
-      }
+			if (isNewUser) {
+				localStorage.setItem("user_identified", "true");
+				trackEvent("user_signed_up");
+			}
 
-      trackEvent("user_signed_in");
-    }
-  }, [user]);
+			trackEvent("user_signed_in");
+		}
+	}, [user]);
 
-  return null;
+	return null;
 }

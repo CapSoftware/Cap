@@ -1,31 +1,30 @@
 {
-  "name": "@cap/utils",
-  "version": "0.0.0",
-  "main": "./src/index.tsx",
-  "types": "./src/index.tsx",
-  "exports": {
-    ".": "./src/index.tsx"
-  },
-  "scripts": {
-    "lint": "eslint src --cache",
-    "typecheck": "tsc -b"
-  },
-  "devDependencies": {
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "react-router-dom": "^6.18.0",
-    "tsconfig": "workspace:*",
-    "typescript": "^5.8.3"
-  },
-  "dependencies": {
-    "@aws-sdk/client-s3": "^3.485.0",
-    "@cap/env": "workspace:*",
-    "clsx": "^2.0.0",
-    "stripe": "^14.24.0",
-    "tailwind-merge": "^2.1.0",
-    "zod": "^3"
-  },
-  "engines": {
-    "node": "20"
-  }
+	"name": "@cap/utils",
+	"version": "0.0.0",
+	"main": "./src/index.tsx",
+	"types": "./src/index.tsx",
+	"exports": {
+		".": "./src/index.tsx"
+	},
+	"scripts": {
+		"typecheck": "tsc -b"
+	},
+	"devDependencies": {
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
+		"react-router-dom": "^6.18.0",
+		"tsconfig": "workspace:*",
+		"typescript": "^5.8.3"
+	},
+	"dependencies": {
+		"@aws-sdk/client-s3": "^3.485.0",
+		"@cap/env": "workspace:*",
+		"clsx": "^2.0.0",
+		"stripe": "^14.24.0",
+		"tailwind-merge": "^2.1.0",
+		"zod": "^3"
+	},
+	"engines": {
+		"node": "20"
+	}
 }

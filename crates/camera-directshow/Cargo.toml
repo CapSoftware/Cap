@@ -8,8 +8,8 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-core = { version = "0.60" }
-windows = { version = "0.60", features = [
+windows-core = { workspace = true }
+windows = { workspace = true, features = [
 	"Win32_System_Com",
 	"Win32_Media_MediaFoundation",
 	"Win32_Media_DirectShow",
@@ -27,8 +27,9 @@ inquire = "0.7.5"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
 
-windows-core = { version = "0.60" }
-windows = { version = "0.60", features = [
+[target.'cfg(windows)'.dev-dependencies]
+windows-core = { workspace = true }
+windows = { workspace = true, features = [
 	"Win32_System_Com",
 	"Win32_Media_MediaFoundation",
 	"Win32_Media_DirectShow",

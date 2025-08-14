@@ -1,10 +1,10 @@
+import type { Metadata } from "next";
 import { DocsPage } from "@/components/pages/DocsPage";
-import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Documentation — Cap",
+	title: "Documentation — Cap",
 };
 
 export default function App() {
-  return <DocsPage />;
+	return <DocsPage />;
 }

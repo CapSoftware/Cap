@@ -10,7 +10,7 @@ workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-futures = "0.3"
+futures = { workspace = true }
 
 # Skia dependencies
 skia-safe = "0.86.1"

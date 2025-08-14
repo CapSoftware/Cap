@@ -6,18 +6,18 @@ import DownloadIcon from "./Download";
 import HomeIcon from "./Home";
 import LayersIcon from "./Layers";
 import LogoutIcon from "./Logout";
-import SettingsGearIcon from "./Settings";
 import ReferIcon from "./Refer";
+import SettingsGearIcon from "./Settings";
 
 export {
-  ArrowUpIcon,
-  CapIcon,
-  MessageCircleMoreIcon,
-  CogIcon,
-  DownloadIcon,
-  HomeIcon,
-  LayersIcon,
-  LogoutIcon,
-  SettingsGearIcon,
-  ReferIcon,
+	ArrowUpIcon,
+	CapIcon,
+	MessageCircleMoreIcon,
+	CogIcon,
+	DownloadIcon,
+	HomeIcon,
+	LayersIcon,
+	LogoutIcon,
+	SettingsGearIcon,
+	ReferIcon,
 };

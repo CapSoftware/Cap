@@ -11,7 +11,7 @@ use ffmpeg::{
 
 #[derive(thiserror::Error, Debug)]
 pub enum AACEncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("AAC codec not found")]
     CodecNotFound,

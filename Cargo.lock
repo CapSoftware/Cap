@@ -188,7 +188,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55f533f8e0af236ffe5eb979b99381df3258853f00ba2e44b6e1955292c75227"
 dependencies = [
  "clipboard-win",
- "image",
+ "image 0.25.6",
  "log",
  "objc2 0.6.1",
  "objc2-app-kit",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.63"
+version = "0.3.66"
 dependencies = [
  "anyhow",
  "axum",
@@ -980,6 +980,7 @@ dependencies = [
  "bytemuck",
  "cap-audio",
  "cap-camera",
+ "cap-displays",
  "cap-editor",
  "cap-export",
  "cap-fail",
@@ -1004,7 +1005,7 @@ dependencies = [
  "futures",
  "futures-intrusive",
  "global-hotkey",
- "image",
+ "image 0.25.6",
  "keyed_priority_queue",
  "lazy_static",
  "log",
@@ -1064,7 +1065,13 @@ dependencies = [
 name = "cap-displays"
 version = "0.1.0"
 dependencies = [
+ "cocoa 0.26.1",
+ "core-foundation 0.10.1",
  "core-graphics 0.24.0",
+ "image 0.24.9",
+ "objc",
+ "serde",
+ "specta",
  "windows 0.60.0",
  "windows-sys 0.59.0",
 ]
@@ -1106,7 +1113,7 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "futures",
- "image",
+ "image 0.25.6",
  "inquire",
  "mp4",
  "serde",
@@ -1164,7 +1171,7 @@ dependencies = [
  "flume",
  "futures",
  "gif",
- "image",
+ "image 0.25.6",
  "indexmap 2.10.0",
  "inquire",
  "kameo",
@@ -1248,7 +1255,7 @@ dependencies = [
  "flume",
  "futures",
  "hex",
- "image",
+ "image 0.25.6",
  "objc",
  "objc2-app-kit",
  "relative-path",
@@ -1286,7 +1293,7 @@ dependencies = [
  "futures",
  "futures-intrusive",
  "glyphon",
- "image",
+ "image 0.25.6",
  "log",
  "pretty_assertions",
  "reactive_graph",
@@ -1538,7 +1545,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afede46921767868c5c7f8f55202bdd8bec0bab6bc9605174200f45924f93c62"
 dependencies = [
  "clipboard-win",
- "image",
+ "image 0.25.6",
  "objc2 0.6.1",
  "objc2-app-kit",
  "objc2-foundation 0.3.1",
@@ -3812,6 +3819,24 @@ dependencies = [
 
 [[package]]
 name = "image"
+version = "0.24.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5690139d2f55868e080017335e4b94cb7414274c74f1669c84fb5feba2c9f69d"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+ "color_quant",
+ "exr",
+ "gif",
+ "jpeg-decoder",
+ "num-traits",
+ "png",
+ "qoi",
+ "tiff",
+]
+
+[[package]]
+name = "image"
 version = "0.25.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db35664ce6b9810857a38a906215e75a9c879f0696556a39f59c62829710251a"
@@ -4071,6 +4096,9 @@ name = "jpeg-decoder"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
+dependencies = [
+ "rayon",
+]
 
 [[package]]
 name = "js-sys"
@@ -6762,6 +6790,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "scap-direct3d"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+]
+
+[[package]]
+name = "scap-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "ffmpeg-next",
+ "futures",
+ "scap-direct3d",
+ "scap-screencapturekit",
+ "windows 0.60.0",
+]
+
+[[package]]
+name = "scap-screencapturekit"
+version = "0.1.0"
+dependencies = [
+ "cidre",
+ "clap",
+ "futures",
+ "inquire",
+ "objc2 0.6.1",
+ "objc2-app-kit",
+ "objc2-foundation 0.3.1",
+ "tracing",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7896,7 +7957,7 @@ dependencies = [
  "heck 0.5.0",
  "http",
  "http-range",
- "image",
+ "image 0.25.6",
  "jni",
  "libc",
  "log",

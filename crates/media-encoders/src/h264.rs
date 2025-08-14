@@ -24,7 +24,7 @@ pub enum H264Preset {
 
 #[derive(thiserror::Error, Debug)]
 pub enum H264EncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Codec not found")]
     CodecNotFound,

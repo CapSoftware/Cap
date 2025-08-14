@@ -1,13 +1,13 @@
 import { Suspense } from "react";
 
 export default function ToolsLayout({
-  children,
+	children,
 }: {
-  children: React.ReactNode;
+	children: React.ReactNode;
 }) {
-  return (
-    <Suspense>
-      <section>{children}</section>
-    </Suspense>
-  );
+	return (
+		<Suspense>
+			<section>{children}</section>
+		</Suspense>
+	);
 }

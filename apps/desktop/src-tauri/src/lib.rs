@@ -16,6 +16,7 @@ mod permissions;
 mod platform;
 mod presets;
 mod recording;
+mod target_select_overlay;
 mod tray;
 mod upload;
 mod web_api;
@@ -69,6 +70,7 @@ use tauri::Window;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
@@ -77,6 +79,7 @@ use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::EditorWindowIds;
@@ -1758,7 +1761,7 @@ async fn get_system_audio_waveforms(
 #[tauri::command]
 #[specta::specta]
 async fn show_window(app: AppHandle, window: ShowCapWindow) -> Result<(), String> {
-    window.show(&app).await.unwrap();
+    let _ = window.show(&app).await;
     Ok(())
 }
 
@@ -1951,7 +1954,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             captions::download_whisper_model,
             captions::check_model_exists,
             captions::delete_whisper_model,
-            captions::export_captions_srt
+            captions::export_captions_srt,
+            target_select_overlay::open_target_select_overlays,
+            target_select_overlay::close_target_select_overlays,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1971,7 +1976,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             UploadProgress,
             captions::DownloadProgress,
             recording::RecordingEvent,
-            RecordingDeleted
+            RecordingDeleted,
+            target_select_overlay::TargetUnderCursor,
+            hotkeys::OnEscapePress
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -1981,13 +1988,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    #[cfg(debug_assertions)]
-    specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../src/utils/tauri.ts",
-        )
-        .expect("Failed to export typescript bindings");
+    // #[cfg(debug_assertions)]
+    // specta_builder
+    //     .export(
+    //         specta_typescript::Typescript::default(),
+    //         "../src/utils/tauri.ts",
+    //     )
+    //     .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
@@ -1998,6 +2005,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     #[allow(unused_mut)]
     let mut builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            trace!("Single instance invoked with args {args:?}");
+
+            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
             let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))
@@ -2042,6 +2052,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .with_denylist(&[
                     CapWindowId::Setup.label().as_str(),
                     "window-capture-occluder",
+                    "target-select-overlay",
                     CapWindowId::CaptureArea.label().as_str(),
                     CapWindowId::Camera.label().as_str(),
                     CapWindowId::RecordingsOverlay.label().as_str(),
@@ -2053,6 +2064,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     label if label.starts_with("window-capture-occluder-") => {
                         "window-capture-occluder"
                     }
+                    label if label.starts_with("target-select-overlay") => "target-select-overlay",
                     _ => label,
                 })
                 .build(),
@@ -2064,6 +2076,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             hotkeys::init(&app);
             general_settings::init(&app);
             fake_window::init(&app);
+            app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
@@ -2197,6 +2210,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 }
                                 return;
                             }
+                            CapWindowId::TargetSelectOverlay { display_id } => {
+                                app.state::<target_select_overlay::WindowFocusManager>()
+                                    .destroy(&display_id, app.global_shortcut());
+                            }
                             _ => {}
                         };
                     }
@@ -2256,7 +2273,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     }
                 } else {
                     let handle = handle.clone();
-                    tokio::spawn(async move { ShowCapWindow::Main.show(&handle).await });
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Main.show(&handle).await;
+                    });
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {

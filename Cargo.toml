@@ -41,6 +41,7 @@ sentry = { version = "0.34.0", features = [
 	"debug-images",
 ] }
 tracing = "0.1.41"
+futures = "0.3.31"
 
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438", features = [
 	"macos_13_0",

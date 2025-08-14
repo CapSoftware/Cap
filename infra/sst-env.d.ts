@@ -4,21 +4,20 @@
 /* deno-fmt-ignore-file */
 
 declare module "sst" {
-  export interface Resource {
-    DISCORD_BOT_TOKEN: {
-      type: "sst.sst.Secret";
-      value: string;
-    };
-    DiscordBotScript: {
-      type: "sst.cloudflare.Worker";
-    };
-    GITHUB_APP_PRIVATE_KEY: {
-      type: "sst.sst.Secret";
-      value: string;
-    };
-  }
+	export interface Resource {
+		DISCORD_BOT_TOKEN: {
+			type: "sst.sst.Secret";
+			value: string;
+		};
+		DiscordBotScript: {
+			type: "sst.cloudflare.Worker";
+		};
+		GITHUB_APP_PRIVATE_KEY: {
+			type: "sst.sst.Secret";
+			value: string;
+		};
+	}
 }
 /// <reference path="sst-env.d.ts" />
 
 import "sst";
-export {};
