@@ -1,10 +1,10 @@
 import { onCleanup } from "solid-js";
 import { events } from "./tauri";
 import {
-  listen,
-  type UnlistenFn,
-  type EventCallback as TauriEventCallback,
-  type EventName as TauriEventName,
+	listen,
+	type UnlistenFn,
+	type EventCallback as TauriEventCallback,
+	type EventName as TauriEventName,
 } from "@tauri-apps/api/event";
 
 type EventListener<T> = {
@@ -67,11 +67,11 @@ export function createTauriEventListener<T>(
  * ```
  */
 export function createCustomTauriEventListener<T>(
-  name: TauriEventName,
-  callback: TauriEventCallback<T>
+	name: TauriEventName,
+	callback: TauriEventCallback<T>,
 ): void {
-  const unlisten = listen(name, callback);
-  onCleanup(() => unlisten.then((cleanup) => cleanup()));
+	const unlisten = listen(name, callback);
+	onCleanup(() => unlisten.then((cleanup) => cleanup()));
 }
 
 /**
@@ -95,7 +95,7 @@ export function createCustomTauriEventListener<T>(
  * ```
  */
 export function createTauriEventUnlisten(promise: Promise<UnlistenFn>) {
-  onCleanup(() => promise.then((unlisten) => unlisten()));
+	onCleanup(() => promise.then((unlisten) => unlisten()));
 }
 
 /**

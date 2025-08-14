@@ -558,8 +558,8 @@ import {
 	useRecordingOptions,
 } from "./OptionsContext";
 import {
-  createCustomTauriEventListener,
-  createTauriEventListener,
+	createCustomTauriEventListener,
+	createTauriEventListener,
 } from "~/utils/createEventListener";
 
 let hasChecked = false;
@@ -624,9 +624,9 @@ function AreaSelectButton(props: {
 		});
 	}
 
-  createCustomTauriEventListener<boolean>("captureAreaPending", (e) =>
-    setAreaSelection("pending", e.payload)
-  );
+	createCustomTauriEventListener<boolean>("captureAreaPending", (e) =>
+		setAreaSelection("pending", e.payload),
+	);
 
 	return (
 		<Tooltip
