@@ -119,6 +119,8 @@ export type CropperRef = {
 	reset: () => void;
 	setCrop: (value: CropBounds | ((bounds: CropBounds) => CropBounds)) => void;
 	bounds: Accessor<CropBounds>;
+	// Visual-only animation to target real bounds
+	animateTo: (real: CropBounds, durationMs?: number) => void;
 };
 
 export default function Cropper(
@@ -143,15 +145,25 @@ export default function Cropper(
 
 	const [, setSelectionClear] = createSignal(true);
 
-	const [rawBounds, setRawBounds] = createSignal<CropBounds>({
-		x: 0,
-		y: 0,
-		width: 0,
-		height: 0,
-	});
+	const [rawBounds, setRawBounds] = createSignal<CropBounds>(CROP_ZERO);
+	const [displayRawBounds, setDisplayRawBounds] =
+		createSignal<CropBounds>(CROP_ZERO);
+
+	const [isAnimating, setIsAnimating] = createSignal(false);
+	let animationFrameId: number | null = null;
+	const [isReady, setIsReady] = createSignal(false);
+
+	function stopAnimation() {
+		if (animationFrameId !== null) {
+			cancelAnimationFrame(animationFrameId);
+			animationFrameId = null;
+		}
+		setIsAnimating(false);
+		setDisplayRawBounds(rawBounds());
+	}
 
 	const boundsTooSmall = createMemo(
-		() => rawBounds().width <= 30 || rawBounds().height <= 30,
+		() => displayRawBounds().width <= 30 || displayRawBounds().height <= 30,
 	);
 
 	const [state, setState] = createStore({
@@ -171,8 +183,15 @@ export default function Cropper(
 		on(
 			() => props.aspectRatio,
 			(v) => {
-				setAspectState("value", v ? ratioToValue(v) : null);
-				setRawBoundsConstraining(Box.fromBounds(rawBounds()));
+				const nextRatio = v ? ratioToValue(v) : null;
+				setAspectState("value", nextRatio);
+				// Only animate aspect changes after initial setup
+				if (!isReady()) return;
+				// Reuse the same animating setter for aspect changes
+				const current = rawBounds();
+				const targetBox = Box.fromBounds(current);
+				if (nextRatio) targetBox.constrainToRatio(nextRatio, ORIGIN_CENTER);
+				setRawBoundsAndAnimate(targetBox);
 			},
 		),
 	);
@@ -268,7 +287,71 @@ export default function Cropper(
 		};
 	}
 
-	// Removed unused vec2ToRaw
+	function animateToRawBounds(target: CropBounds, durationMs = 240) {
+		setIsAnimating(true);
+		if (animationFrameId !== null) {
+			cancelAnimationFrame(animationFrameId);
+		}
+		const start = displayRawBounds();
+		const startTime = performance.now();
+		const easeInOutCubic = (t: number) =>
+			t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
+
+		const step = () => {
+			const now = performance.now();
+			const t = Math.min(1, (now - startTime) / durationMs);
+			const e = easeInOutCubic(t);
+			setDisplayRawBounds({
+				x: start.x + (target.x - start.x) * e,
+				y: start.y + (target.y - start.y) * e,
+				width: start.width + (target.width - start.width) * e,
+				height: start.height + (target.height - start.height) * e,
+			});
+			if (t < 1) {
+				animationFrameId = requestAnimationFrame(step);
+			} else {
+				animationFrameId = null;
+				setIsAnimating(false);
+			}
+		};
+
+		animationFrameId = requestAnimationFrame(step);
+	}
+
+	function setRawBoundsAndAnimate(box: Box, durationMs = 240) {
+		// Prevent display sync while setting real bounds
+		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
+		setIsAnimating(true);
+		setRawBoundsConstraining(box);
+		animateToRawBounds(box.toBounds(), durationMs);
+	}
+
+	function computeInitialBox(): Box {
+		const target = targetSize();
+		const initialCrop =
+			typeof props.initialCrop === "function"
+				? props.initialCrop()
+				: props.initialCrop;
+
+		const startBoundsReal = initialCrop ?? {
+			x: 0,
+			y: 0,
+			width: Math.round(target.x / 2),
+			height: Math.round(target.y / 2),
+		};
+
+		const box = Box.fromBounds(boundsToRaw(startBoundsReal));
+		const ratioValue = aspectState.value;
+		if (ratioValue) box.constrainToRatio(ratioValue, ORIGIN_CENTER);
+		const container = containerSize();
+		box.constrainToBoundary(container.x, container.y, ORIGIN_CENTER);
+		if (!initialCrop)
+			box.move(
+				container.x / 2 - box.width / 2,
+				container.y / 2 - box.height / 2,
+			);
+		return box;
+	}
 
 	function rawSizeConstraint() {
 		const scale = logicalScale();
@@ -315,6 +398,9 @@ export default function Cropper(
 
 		box.slideIntoBounds(container.x, container.y);
 		setRawBounds(box.toBounds());
+		if (!isAnimating()) {
+			setDisplayRawBounds(box.toBounds());
+		}
 	}
 
 	onMount(() => {
@@ -325,11 +411,23 @@ export default function Cropper(
 		// In the Eidtor, the first time the modal opens we're given a size that's not correct
 		// so we delay the initialization until we get a correct size.
 		const updateContainerSize = (width: number, height: number) => {
+			// Preserve the current real bounds before changing scale
+			const prevScale = logicalScale();
+			const currentRaw = rawBounds();
+			const preservedReal = {
+				x: Math.round(currentRaw.x * prevScale.x),
+				y: Math.round(currentRaw.y * prevScale.y),
+				width: Math.round(currentRaw.width * prevScale.x),
+				height: Math.round(currentRaw.height * prevScale.y),
+			};
+
 			setContainerSize({
 				x: width,
 				y: height,
 			});
-			setRawBoundsConstraining(Box.fromBounds(rawBounds()));
+
+			// Recompute raw bounds from preserved real bounds for the new scale
+			setRawBoundsConstraining(Box.fromBounds(boundsToRaw(preservedReal)));
 
 			if (!initialized && width > 1 && height > 1) {
 				initialized = true;
@@ -342,49 +440,27 @@ export default function Cropper(
 		);
 		updateContainerSize(containerRef.clientWidth, containerRef.clientHeight);
 
+		// Initialize display bounds to the starting raw bounds
+		setDisplayRawBounds(rawBounds());
+
 		function init() {
-			const target = targetSize();
-			const initialCrop =
-				typeof props.initialCrop === "function"
-					? props.initialCrop()
-					: props.initialCrop;
-
-			const box = Box.fromBounds(
-				boundsToRaw(
-					initialCrop ?? {
-						x: 0,
-						y: 0,
-						width: Math.round(target.x / 2),
-						height: Math.round(target.y / 2),
-					},
-				),
-			);
-
-			const ratioValue = aspectState.value;
-			if (ratioValue) box.constrainToRatio(ratioValue, ORIGIN_CENTER);
-			const container = containerSize();
-
-			box.constrainToBoundary(container.x, container.y, ORIGIN_CENTER);
-			if (!initialCrop)
-				box.move(
-					container.x / 2 - box.width / 2,
-					container.y / 2 - box.height / 2,
-				);
-
+			const box = computeInitialBox();
 			setRawBoundsConstraining(box);
+			setDisplayRawBounds(box.toBounds());
+			setIsReady(true);
 		}
 
 		if (props.ref) {
 			const fill = () => {
 				const container = containerSize();
-				setRawBoundsConstraining(
-					Box.fromBounds({
-						x: 0,
-						y: 0,
-						width: container.x,
-						height: container.y,
-					}),
-				);
+				const targetRaw = Box.fromBounds({
+					x: 0,
+					y: 0,
+					width: container.x,
+					height: container.y,
+				});
+
+				setRawBoundsAndAnimate(targetRaw);
 				setSelectionClear(false);
 				setAspectState("snapped", null);
 			};
@@ -392,7 +468,8 @@ export default function Cropper(
 			const cropperRef: CropperRef = {
 				reset: () => {
 					setSelectionClear(false);
-					init();
+					const box = computeInitialBox();
+					setRawBoundsAndAnimate(box);
 					setAspectState("snapped", null);
 				},
 				fill,
@@ -407,6 +484,9 @@ export default function Cropper(
 				get bounds() {
 					return realBounds;
 				},
+				// Visual-only animation API. Accepts real bounds; will tween displayRawBounds only.
+				animateTo: (real, durationMs) =>
+					setRawBoundsAndAnimate(Box.fromBounds(boundsToRaw(real)), durationMs),
 			};
 
 			if (typeof props.ref === "function") {
@@ -419,6 +499,8 @@ export default function Cropper(
 
 	function onRegionMouseDown(e: MouseEvent) {
 		if (!containerRef) return;
+		// Stop any running animation before interacting
+		stopAnimation();
 		e.stopPropagation();
 		setState({
 			cursorStyle: "grabbing",
@@ -449,6 +531,11 @@ export default function Cropper(
 
 					box.move(newX, newY);
 					setRawBounds(box.toBounds());
+
+					// Keep display bounds in sync unless an active animation overrides it
+					if (!isAnimating()) {
+						setDisplayRawBounds(box.toBounds());
+					}
 				},
 			}),
 		);
@@ -532,8 +619,49 @@ export default function Cropper(
 		};
 
 		// Clamp mouse position to container boundaries
-		const clampedMouseX = clamp(mouseX, 0, container.x);
-		const clampedMouseY = clamp(mouseY, 0, container.y);
+		let clampedMouseX = clamp(mouseX, 0, container.x);
+		let clampedMouseY = clamp(mouseY, 0, container.y);
+
+		// Corner handles: allow no-flip or full-flip (opposite quadrant) only.
+		// Disallow adjacent-quadrant flips (flip only one axis) by snapping that axis to the anchor.
+		const sx = handle.movable.left ? -1 : handle.movable.right ? 1 : 0;
+		const sy = handle.movable.top ? -1 : handle.movable.bottom ? 1 : 0;
+		if (sx !== 0 && sy !== 0) {
+			const signX =
+				clampedMouseX === anchorPoint.x
+					? 0
+					: clampedMouseX > anchorPoint.x
+						? 1
+						: -1;
+			const signY =
+				clampedMouseY === anchorPoint.y
+					? 0
+					: clampedMouseY > anchorPoint.y
+						? 1
+						: -1;
+			const noFlip = signX === sx && signY === sy;
+			const fullFlip = signX === -sx && signY === -sy;
+			if (!noFlip && !fullFlip) {
+				if (signX !== sx && signY === sy) {
+					clampedMouseX = anchorPoint.x;
+				} else if (signY !== sy && signX === sx) {
+					clampedMouseY = anchorPoint.y;
+				} else {
+					if (signX !== sx) clampedMouseX = anchorPoint.x;
+					if (signY !== sy) clampedMouseY = anchorPoint.y;
+				}
+			}
+		} else {
+			// Side handles: prevent crossing the anchor along the controlled axis
+			if (handle.movable.left && clampedMouseX > anchorPoint.x)
+				clampedMouseX = anchorPoint.x;
+			if (handle.movable.right && clampedMouseX < anchorPoint.x)
+				clampedMouseX = anchorPoint.x;
+			if (handle.movable.top && clampedMouseY > anchorPoint.y)
+				clampedMouseY = anchorPoint.y;
+			if (handle.movable.bottom && clampedMouseY < anchorPoint.y)
+				clampedMouseY = anchorPoint.y;
+		}
 
 		let x1 = anchorPoint.x;
 		let y1 = anchorPoint.y;
@@ -607,11 +735,9 @@ export default function Cropper(
 				const minHeightForWidth = min.x / ratioValue;
 
 				if (minWidthForHeight >= min.x) {
-					// Height constraint is more restrictive
 					minWidth = minWidthForHeight;
 					minHeight = min.y;
 				} else {
-					// Width constraint is more restrictive
 					minWidth = min.x;
 					minHeight = minHeightForWidth;
 				}
@@ -1026,11 +1152,16 @@ export default function Cropper(
 		);
 
 		setRawBounds(bounds);
+		if (!isAnimating()) {
+			setDisplayRawBounds(bounds);
+		}
 	}
 
 	function onHandleMouseDown(handle: HandleSide, e: MouseEvent) {
 		e.stopPropagation();
 		if (!containerRef) return;
+		// Stop any running animation before interacting
+		stopAnimation();
 		setState({
 			cursorStyle: handle.cursor,
 			resizing: true,
@@ -1105,8 +1236,10 @@ export default function Cropper(
 
 					// Prevent miss click
 					const bounds = rawBounds();
-					if (bounds.width < 5 || bounds.height < 5)
+					if (bounds.width < 5 || bounds.height < 5) {
 						setRawBounds(initialBounds);
+						if (!isAnimating()) setDisplayRawBounds(initialBounds);
+					}
 
 					dispose();
 				},
@@ -1121,10 +1254,10 @@ export default function Cropper(
 			class="relative w-full h-full select-none overscroll-contain"
 			style={{
 				cursor: state.cursorStyle ?? "crosshair",
-				"--crop-x": `${Math.round(rawBounds().x)}px`,
-				"--crop-y": `${Math.round(rawBounds().y)}px`,
-				"--crop-width": `${Math.round(rawBounds().width)}px`,
-				"--crop-height": `${Math.round(rawBounds().height)}px`,
+				"--crop-x": `${Math.round(displayRawBounds().x)}px`,
+				"--crop-y": `${Math.round(displayRawBounds().y)}px`,
+				"--crop-width": `${Math.round(displayRawBounds().width)}px`,
+				"--crop-height": `${Math.round(displayRawBounds().height)}px`,
 			}}
 		>
 			<Transition

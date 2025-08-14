@@ -306,6 +306,7 @@ function Dialogs() {
 									useEditorContext();
 
 								const display = editorInstance.recordings.segments[0].display;
+								console.log(`Display: ${JSON.stringify(display)}`);
 
 								let cropperRef: CropperRef | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
@@ -464,7 +465,10 @@ function Dialogs() {
 												</EditorButton>
 												<EditorButton
 													leftIcon={<IconCapCircleX />}
-													onClick={() => cropperRef?.reset()}
+													onClick={() => {
+														cropperRef?.reset();
+														setAspect(null);
+													}}
 													disabled={
 														crop().x === dialog().position.x &&
 														crop().y === dialog().position.y &&
