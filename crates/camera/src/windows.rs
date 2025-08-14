@@ -90,6 +90,10 @@ impl WindowsCaptureHandle {
     pub fn stop_capturing(self) -> Result<(), String> {
         self.inner.stop_capturing().map_err(|e| e.to_string())
     }
+
+    pub fn inner(&self) -> &cap_camera_windows::CaptureHandle {
+        &self.inner
+    }
 }
 
 impl Deref for NativeCapturedFrame {

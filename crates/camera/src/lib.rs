@@ -6,14 +6,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
-use macos::*;
+// #[cfg(target_os = "macos")]
+// mod macos;
+// #[cfg(target_os = "macos")]
+// use macos::*;
 
-#[cfg(windows)]
+// #[cfg(windows)]
 mod windows;
-#[cfg(windows)]
+// #[cfg(windows)]
 use windows::*;
 
 #[derive(Debug, Clone)]

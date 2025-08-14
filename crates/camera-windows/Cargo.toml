@@ -7,7 +7,7 @@ edition = "2024"
 thiserror.workspace = true
 inquire = "0.7.5"
 
-[target.'cfg(windows)'.dependencies]
+# [target.'cfg(windows)'.dependencies]
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 
@@ -19,9 +19,3 @@ workspace = true
 
 [dev-dependencies]
 inquire = "0.7.5"
-
-cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
-cap-camera-directshow = { path = "../camera-directshow" }
-
-windows = { workspace = true }
-windows-core = { workspace = true }

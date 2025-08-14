@@ -51,7 +51,7 @@ objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 screencapturekit = "0.3.5"
 
-[target.'cfg(target_os = "windows")'.dependencies]
+# [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
 	"Win32_Foundation",
 	"Win32_System",
@@ -64,6 +64,8 @@ windows = { workspace = true, features = [
 ] }
 windows-capture = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
+cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
+cap-camera-directshow = { path = "../camera-directshow" }
 
 [dev-dependencies]
 inquire = "0.7.5"
