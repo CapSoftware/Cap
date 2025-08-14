@@ -234,4 +234,8 @@ impl RecordingHandle {
     pub fn stop_capturing(self) -> Result<(), String> {
         self.native.stop_capturing()
     }
+
+    pub fn native(&self) -> &NativeRecordingHandle {
+        &self.native
+    }
 }

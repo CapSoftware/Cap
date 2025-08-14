@@ -195,7 +195,7 @@ impl Device {
     pub fn start_capturing(
         &self,
         requested_format: &IMFMediaType,
-        callback: Box<dyn FnMut(CallbackData) + 'static>,
+        frame_callback: Box<dyn FnMut(Frame) + 'static>,
     ) -> Result<CaptureHandle, StartCapturingError> {
         unsafe {
             let capture_engine_factory: IMFCaptureEngineClassFactory = CoCreateInstance(
@@ -212,7 +212,7 @@ impl Device {
             let (event_tx, event_rx) = channel();
             let video_callback = VideoCallback {
                 event_tx,
-                sample_callback: Mutex::new(callback),
+                sample_callback: Mutex::new(frame_callback),
             }
             .into_object();
 
@@ -586,7 +586,7 @@ impl<'a> DerefMut for IMFMediaBufferLock<'a> {
     }
 }
 
-pub struct CallbackData {
+pub struct Frame {
     pub sample: IMFSample,
     pub reference_time: Instant,
     pub timestamp: Duration,
@@ -596,7 +596,7 @@ pub struct CallbackData {
 #[implement(IMFCaptureEngineOnSampleCallback, IMFCaptureEngineOnEventCallback)]
 struct VideoCallback {
     event_tx: Sender<CaptureEngineEvent>,
-    sample_callback: Mutex<Box<dyn FnMut(CallbackData)>>,
+    sample_callback: Mutex<Box<dyn FnMut(Frame)>>,
 }
 
 impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
@@ -626,7 +626,7 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
         let capture_begin_time =
             reference_time + Duration::from_micros(raw_capture_begin_time / 10) - mf_time_now;
 
-        (callback)(CallbackData {
+        (callback)(Frame {
             sample: sample.clone(),
             reference_time,
             timestamp,

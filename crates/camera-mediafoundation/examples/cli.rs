@@ -1,13 +1,12 @@
 fn main() {
     #[cfg(windows)]
-    windows::run();
+    windows::main();
     #[cfg(not(windows))]
     panic!("This example is only available on Windows");
 }
 
 #[cfg(windows)]
 mod windows {
-
     use std::{fmt::Display, time::Duration};
 
     use cap_camera_mediafoundation::DeviceSourcesIterator;
@@ -50,7 +49,7 @@ mod windows {
                 formats.remove(0)
             };
 
-            let _handle = selected
+            let handle = selected
                 .start_capturing(
                     &selected_format.inner,
                     Box::new(|data| {
@@ -71,6 +70,11 @@ mod windows {
                     }),
                 )
                 .unwrap();
+
+            loop {
+                let e = handle.event_rx().recv();
+                dbg!(e.map(|e| e.variant()));
+            }
 
             std::thread::sleep(Duration::from_secs(10));
         }

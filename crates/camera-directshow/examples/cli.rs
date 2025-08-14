@@ -19,7 +19,7 @@ mod windows {
         core::Interface,
     };
 
-    fn main() {
+    pub fn run() {
         tracing_subscriber::fmt::init();
 
         unsafe {
@@ -110,17 +110,24 @@ mod windows {
                 .prompt()
                 .unwrap();
 
-            device
+            let handle = device
                 .start_capturing(
                     &selected_format.media_type,
                     Box::new(|frame| {
                         unsafe { dbg!(frame.sample.GetActualDataLength()) };
-                        dbg!(frame.media_type.subtype_str());
-                        dbg!(frame.reference_time);
-                        dbg!(frame.timestamp);
+                        // dbg!(frame.media_type.subtype_str());
+                        // dbg!(frame.reference_time);
+                        // dbg!(frame.timestamp);
                     }),
                 )
                 .unwrap();
+
+            loop {
+                let e = handle.try_get_event(5000);
+                if let Ok(Some(e)) = e {
+                    dbg!(e);
+                }
+            }
 
             std::thread::sleep(Duration::from_secs(10));
         }

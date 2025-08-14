@@ -21,6 +21,7 @@ use windows::{
         },
         System::{
             Com::{StructuredStorage::IPropertyBag, *},
+            Threading::WaitForSingleObject,
             Variant::{VARIANT, VT_BSTR},
         },
     },
@@ -451,6 +452,11 @@ impl VideoInputDevice {
                 CoCreateInstance(&CLSID_FilterGraph, None, CLSCTX_INPROC_SERVER)
                     .map_err(StartCapturingError::CreateGraph)?;
 
+            let media_event = graph_builder
+                .cast::<IMediaEvent>()
+                .expect("Failed to cast IGraphBuilder to IMediaEvent");
+            dbg!(&media_event);
+
             let capture_graph_builder: ICaptureGraphBuilder2 =
                 CoCreateInstance(&CLSID_CaptureGraphBuilder2, None, CLSCTX_INPROC_SERVER)
                     .map_err(StartCapturingError::CreateGraph)?;
@@ -491,11 +497,17 @@ impl VideoInputDevice {
 
             media_control.Run().map_err(StartCapturingError::Run)?;
 
+            let event_handle = media_event
+                .GetEventHandle()
+                .expect("Failed to get event handle");
+
             Ok(CaptureHandle {
                 media_control,
                 graph_builder,
                 output_capture_pin: self.output_pin,
                 input_sink_pin,
+                media_event,
+                event_handle: HANDLE(event_handle as _),
             })
         }
     }
@@ -506,6 +518,19 @@ pub struct CaptureHandle {
     graph_builder: IGraphBuilder,
     output_capture_pin: IPin,
     input_sink_pin: IPin,
+    media_event: IMediaEvent,
+    event_handle: HANDLE,
+}
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum CaptureEvent {
+    DeviceLost,
+    ErrorAbort,
+    ErrorAbortEx,
+    StreamErrorStopped,
+    ClockChanged,
+    Other { event_code: i32 },
 }
 
 impl CaptureHandle {
@@ -519,6 +544,34 @@ impl CaptureHandle {
         }
 
         Ok(())
+    }
+
+    pub fn try_get_event(&self, timeout: u32) -> windows::core::Result<Option<CaptureEvent>> {
+        let a = unsafe { WaitForSingleObject(self.event_handle, timeout) };
+
+        if a == WAIT_OBJECT_0 {
+            let mut event_code = 0;
+            let mut param1 = 0;
+            let mut param2 = 0;
+
+            unsafe {
+                self.media_event
+                    .GetEvent(&mut event_code, &mut param1, &mut param2, 0)?;
+            };
+
+            let _ = unsafe { self.media_event.FreeEventParams(event_code, param1, param2) }?;
+
+            return match event_code as u32 {
+                EC_DEVICE_LOST => Ok(Some(CaptureEvent::DeviceLost)),
+                EC_ERRORABORT => Ok(Some(CaptureEvent::ErrorAbort)),
+                EC_ERRORABORTEX => Ok(Some(CaptureEvent::ErrorAbortEx)),
+                EC_STREAM_ERROR_STOPPED => Ok(Some(CaptureEvent::StreamErrorStopped)),
+                EC_CLOCK_CHANGED => Ok(Some(CaptureEvent::ClockChanged)),
+                _ => Ok(Some(CaptureEvent::Other { event_code })),
+            };
+        }
+
+        Ok(None)
     }
 }
 

@@ -354,30 +354,32 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
 
     let (frame_tx, frame_rx) = mpsc::sync_channel(8);
 
-    let capture_handle = camera.start_capturing(format.clone(), move |frame| {
-        let Ok(mut ff_frame) = frame.to_ffmpeg() else {
-            return;
-        };
+    thread::spawn(move || {
+        let capture_handle = camera.start_capturing(format.clone(), move |frame| {
+            let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+                return;
+            };
 
-        ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+            ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 
-        if let Some(signal) = ready_signal.take() {
-            let video_info = VideoInfo::from_raw_ffmpeg(
-                ff_frame.format(),
-                ff_frame.width(),
-                ff_frame.height(),
-                frame_rate,
-            );
+            if let Some(signal) = ready_signal.take() {
+                let video_info = VideoInfo::from_raw_ffmpeg(
+                    ff_frame.format(),
+                    ff_frame.width(),
+                    ff_frame.height(),
+                    frame_rate,
+                );
 
-            let _ = signal.send((video_info, frame.reference_time));
-        }
+                let _ = signal.send((video_info, frame.reference_time));
+            }
 
-        let _ = frame_tx.send(RawCameraFrame {
-            frame: ff_frame,
-            timestamp: frame.timestamp,
-            refrence_time: frame.reference_time,
-        });
-    })?;
+            let _ = frame_tx.send(RawCameraFrame {
+                frame: ff_frame,
+                timestamp: frame.timestamp,
+                refrence_time: frame.reference_time,
+            });
+        })?;
+    });
 
     let (video_info, reference_time) = ready_rx
         .recv_timeout(CAMERA_INIT_TIMEOUT)
