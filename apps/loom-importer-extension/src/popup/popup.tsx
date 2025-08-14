@@ -9,8 +9,8 @@ import { useAuth } from "../hooks/useAuth";
 import {
 	ImportProvider,
 	useImport,
-	ImportStep,
 } from "../context/ImportContext";
+import { ImportStep } from "../store/importStore";
 import { useOrganizations } from "../hooks/useOrganizations";
 import { getChecklistItemsForStep } from "../utils/importUtils";
 import { useImportStore } from "../store/importStore";

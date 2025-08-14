@@ -1,7 +1,8 @@
 import React, { createContext, useContext, ReactNode, useEffect } from "react";
-import { LoomExportData } from "../types/loom";
-import * as LoomScraper from "../services/loomScraper";
-import { ImportStep, useImportStore } from "../store/importStore";
+import type { LoomExportData } from "../types/loom";
+import type * as LoomScraper from "../services/loomScraper";
+import { ImportStep } from "../store/importStore";
+import { useImportStore } from "../store/importStore";
 
 export { ImportStep };
 export interface ImportState {
@@ -37,9 +38,14 @@ export const ImportProvider: React.FC<{ children: ReactNode }> = ({
   }, [store.currentPage]);
 
   useEffect(() => {
+    const cleanup = store.setupSpaceScraping();
+    return cleanup;
+  }, [store.currentPage, store.currentStep]);
+
+  useEffect(() => {
     const cleanup = store.setupMemberScraping();
     return cleanup;
-  }, [store.currentPage, store.currentStep, store.data]);
+  }, [store.currentPage, store.currentStep]);
 
   useEffect(() => {
     const cleanup = store.setupWorkspaceDetection();
@@ -47,8 +53,14 @@ export const ImportProvider: React.FC<{ children: ReactNode }> = ({
   }, [store.currentPage, store.currentStep]);
 
   useEffect(() => {
-    const cleanup = store.setupVideoSelection();
-    return cleanup;
+    // Only setup video selection when we're on workspace page
+    // Don't recreate when toggling between SELECTING_VIDEOS and VIDEOS_SELECTED
+    if (store.currentPage === "workspace" && 
+        (store.currentStep === ImportStep.SELECTING_VIDEOS || 
+         store.currentStep === ImportStep.VIDEOS_SELECTED)) {
+      const cleanup = store.setupVideoSelection();
+      return cleanup;
+    }
   }, [store.currentPage, store.currentStep]);
 
   const importContextValue: ImportContextType = {

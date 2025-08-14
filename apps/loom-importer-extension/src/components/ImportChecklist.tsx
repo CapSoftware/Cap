@@ -8,6 +8,7 @@ export type ChecklistItemStatus =
 
 export interface ChecklistItem {
   message: string;
+  subMessage?: string;
   status: ChecklistItemStatus;
 }
 
@@ -15,7 +16,9 @@ interface ImportChecklistProps {
   items: ChecklistItem[];
 }
 
+
 const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
+  console.log(items, "items")
   const getStatusIcon = (status: ChecklistItemStatus) => {
     switch (status) {
       case "waiting":
@@ -131,6 +134,11 @@ const ImportChecklist: React.FC<ImportChecklistProps> = ({ items }) => {
                 <p className="text-[0.875rem] leading-[1.25rem] font-medium text-gray-700">
                   {item.message}
                 </p>
+                {item.subMessage && (
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    {item.subMessage}
+                  </p>
+                )}
                 {item.status === "in-progress" && (
                   <p className="text-xs text-gray-400 mt-0.5">Processing...</p>
                 )}

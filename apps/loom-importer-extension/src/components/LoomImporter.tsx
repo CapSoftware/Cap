@@ -2,7 +2,7 @@ import type React from "react";
 import ImportChecklist from "./ImportChecklist";
 import LoomLogo from "./LoomLogo";
 import type { ChecklistItem } from "../types";
-import { ImportStep } from "../context/ImportContext";
+import { ImportStep } from "../store/importStore";
 import { CapUrls } from "../utils/urls";
 
 interface LoomImporterProps {

@@ -4,7 +4,7 @@ import { ImportProvider, useImport } from "../context/ImportContext";
 import ImportProgress from "../components/ImportProgress";
 
 const AppContent: React.FC = () => {
-  const { importState, processVideos } = useImport();
+  const { importState, processVideos, resetImport } = useImport();
   const { currentPage } = importState;
 
   if (currentPage === "other") return null;
@@ -15,6 +15,7 @@ const AppContent: React.FC = () => {
         <ImportProgress
           importState={importState}
           processVideos={processVideos}
+          resetImport={resetImport}
         />
       </div>
     </div>

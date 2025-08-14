@@ -1,5 +1,5 @@
-import { ImportStep } from "../context/ImportContext";
-import { ChecklistItem } from "../components/ImportChecklist";
+import { ImportStep } from "../store/importStore";
+import type { ChecklistItem } from "../components/ImportChecklist";
 
 /**
  * Generates the checklist items based on the current import step
@@ -15,20 +15,49 @@ export const getChecklistItemsForStep = (
     case ImportStep.IDLE:
       items.push({
         message: "Ready to start importing",
+        subMessage: "Open the extension popup to start the process",
         status: "waiting",
       });
       break;
-    case ImportStep.COLLECTING_MEMBERS:
+    case ImportStep.COLLECTING_SPACES:
       items.push({
-        message: "Collecting workspace members...",
+        message: "Collecting spaces...",
         status: "in-progress",
       });
       break;
-    case ImportStep.SELECT_WORKSPACE:
+    case ImportStep.SPACES_COLLECTED:
       items.push({
-        message: "Select a workspace to import from",
-        status: "waiting",
+        message: "Spaces collected",
+        status: "complete",
       });
+      break;
+    case ImportStep.COLLECTING_MEMBERS:
+      items.push(
+        {
+          message: "Spaces collected",
+          status: "complete",
+        },
+        {
+          message: "Collecting workspace members...",
+          status: "in-progress",
+        }
+      );
+      break;
+    case ImportStep.SELECT_WORKSPACE:
+      items.push(
+        {
+          message: "Spaces collected",
+          status: "complete",
+        },
+        {
+          message: "Workspace members collected",
+          status: "complete",
+        },
+        {
+          message: "Select a workspace to import from",
+          status: "waiting",
+        }
+      );
       break;
     case ImportStep.MEMBERS_COLLECTED:
       items.push(

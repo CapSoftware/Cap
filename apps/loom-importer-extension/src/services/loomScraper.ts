@@ -1,4 +1,4 @@
-import { LoomExportData, Video, WorkspaceMember } from "../types/loom";
+import type { LoomExportData, Video, WorkspaceMember } from "../types/loom";
 import { waitForElement } from "../utils/dom";
 import JSConfetti from "js-confetti";
 
@@ -9,13 +9,14 @@ export type LoomPage = "members" | "workspace" | "spaces" | "other";
  */
 export const detectCurrentPage = (): LoomPage => {
   const url = window.location.href;
+  console.log("🔍 Current URL:", url);
 
   if (url.includes("loom.com/settings/workspace#members")) {
     return "members";
+  } else if (url.includes("loom.com/spaces/browse")) {
+    return "spaces";
   } else if (url.match(/loom\.com\/spaces\/[a-zA-Z0-9-]+/)) {
     return "workspace";
-  } else if (url.match(/loom\.com\/spaces\/browse/)) {
-    return "spaces";
   } else {
     return "other";
   }
@@ -63,7 +64,23 @@ export const scrapeSpaces = async () => {
       spaceNames.push(name);
     });
   });
+
+  console.log(spaceNames, "space names in scrapeSpaces function");
+
   return spaceNames;
+};
+
+export const saveSpacesToStorage = async (
+  currentData: LoomExportData,
+  spaces: string[]
+): Promise<LoomExportData> => {
+  const updatedData = { ...currentData, spaces };
+
+  return new Promise((resolve) => {
+    chrome.storage.local.set({ loomImportData: updatedData }, () => {
+      resolve(updatedData);
+    });
+  });
 };
 
 /**
@@ -185,47 +202,88 @@ export const saveMembersToStorage = async (
  * Sets up video selection checkboxes and returns a cleanup function
  */
 export const setupVideoSelection = async (
-  onSelectionChange: (hasSelectedVideos: boolean) => void
+  onSelectionChange: (
+    hasSelectedVideos: boolean,
+    videos?: { id: string; ownerName: string; title: string }[]
+  ) => void
 ): Promise<() => void> => {
-  const videoElement = await waitForElement("article[data-videoid]");
-  if (!videoElement) {
+  const container = await waitForElement("article[data-videoid]");
+  if (!container) {
     throw new Error("No videos found on page");
   }
 
-  const articles = document.querySelectorAll<HTMLElement>(
-    "article[data-videoid]"
-  );
-
-  const listeners: { element: HTMLElement; listener: EventListener }[] = [];
-
-  articles.forEach((article) => {
-    const videoId = article.getAttribute("data-videoid");
-    if (!videoId) return;
-
-    const checkbox = document.querySelector<HTMLInputElement>(
-      `#bulk-action-${videoId}`
+  const checkAnySelected = () => {
+    const selectedCheckboxes = Array.from(
+      document.querySelectorAll<HTMLInputElement>(
+        'input[id^="bulk-action-"][aria-checked="true"]'
+      )
     );
-    if (!checkbox) return;
 
-    const listener = () => {
-      const anyVideoSelected = Array.from(
-        document.querySelectorAll<HTMLInputElement>('input[id^="bulk-action-"]')
-      ).some((cb) => cb.checked);
+    const hasSelected = selectedCheckboxes.length > 0;
 
-      onSelectionChange(anyVideoSelected);
-    };
+    let videos: { id: string; ownerName: string; title: string }[] = [];
+    if (hasSelected) {
+      videos = getSelectedVideos();
+    } else {
+      videos = [];
+    }
 
-    checkbox.addEventListener("change", listener);
-    listeners.push({ element: checkbox, listener });
+    onSelectionChange(hasSelected, videos);
+  };
+
+  // Event delegation
+  const parentContainer =
+    container.closest("[data-testid], main, .container") || document.body;
+
+  const delegatedListener = (event: Event) => {
+    const target = event.target as HTMLElement;
+    if (target.matches('input[id^="bulk-action-"]')) {
+      checkAnySelected();
+    }
+  };
+
+  parentContainer.addEventListener("change", delegatedListener);
+  parentContainer.addEventListener("click", delegatedListener);
+
+  // MutationObserver for aria-checked changes
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      if (
+        mutation.type === "attributes" &&
+        mutation.attributeName === "aria-checked" &&
+        mutation.target instanceof HTMLInputElement &&
+        mutation.target.id.startsWith("bulk-action-")
+      ) {
+        const oldValue = mutation.oldValue;
+        const newValue = (mutation.target as HTMLInputElement).getAttribute(
+          "aria-checked"
+        );
+        console.log(`🔄 aria-checked changed: ${oldValue} → ${newValue}`);
+
+        // Add a small delay to ensure DOM is updated
+        setTimeout(() => {
+          checkAnySelected();
+        }, 50);
+      }
+    });
+  });
+
+  // Observe all bulk-action inputs with attributeOldValue: true
+  const checkboxes = document.querySelectorAll('input[id^="bulk-action-"]');
+  checkboxes.forEach((checkbox) => {
+    observer.observe(checkbox, {
+      attributes: true,
+      attributeFilter: ["aria-checked"],
+      attributeOldValue: true, // This will give us the old value
+    });
   });
 
   return () => {
-    listeners.forEach(({ element, listener }) => {
-      element.removeEventListener("change", listener);
-    });
+    parentContainer.removeEventListener("change", delegatedListener);
+    parentContainer.removeEventListener("click", delegatedListener);
+    observer.disconnect();
   };
 };
-
 /**
  * Gets all selected videos from the page
  */
@@ -256,7 +314,7 @@ export const getSelectedVideos = (): {
 
     const ownerName =
       article
-        .querySelector('a[class^="profile-card_textLink_"] span')
+        .querySelector('button[class^="profile-card_textLink_"] span')
         ?.textContent?.trim() || "";
 
     const labelText =

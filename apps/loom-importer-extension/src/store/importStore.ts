@@ -1,14 +1,15 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import { LoomExportData } from "../types/loom";
+import type { LoomExportData } from "../types/loom";
 import * as LoomScraper from "../services/loomScraper";
 import { CapApi } from "../api/cap";
+import { createTab } from "../utils/urls";
 
 export enum ImportStep {
   IDLE = "idle",
   COLLECTING_MEMBERS = "collecting_members",
-  COLLECTING_SPACES = "collecting_spaces",
   MEMBERS_COLLECTED = "members_collected",
+  COLLECTING_SPACES = "collecting_spaces",
   SPACES_COLLECTED = "spaces_collected",
   SELECT_WORKSPACE = "select_workspace",
   SELECTING_VIDEOS = "selecting_videos",
@@ -43,6 +44,7 @@ interface ImportActions {
   initializePageDetection: () => void;
   loadExistingData: () => void;
   setupMemberScraping: () => void;
+  setupSpaceScraping: () => void;
   setupWorkspaceDetection: () => void;
   setupVideoSelection: () => void;
 }
@@ -79,6 +81,10 @@ export const useImportStore = create<ImportStore>()(
 
       initializePageDetection: () => {
         const page = LoomScraper.detectCurrentPage();
+        console.log("🔍 Page detection:", {
+          url: window.location.href,
+          detectedPage: page,
+        });
         set({ currentPage: page });
       },
 
@@ -86,25 +92,63 @@ export const useImportStore = create<ImportStore>()(
         const { currentPage } = get();
         if (currentPage === "workspace" || currentPage === "members") {
           const data = await LoomScraper.loadExistingData();
+          console.log("📦 Loaded existing data:", data);
+
           if (data) {
+            console.log("data.videos", data.videos);
             const newStep =
               data.videos && data.videos.length > 0
                 ? ImportStep.PROCESSING_COMPLETE
                 : data.workspaceMembers && data.workspaceMembers.length > 0
-                ? ImportStep.SELECT_WORKSPACE
+                ? ImportStep.SELECTING_VIDEOS
                 : ImportStep.MEMBERS_COLLECTED;
 
+            console.log("🔄 Setting step to:", newStep);
             set({ data, currentStep: newStep });
           }
         }
       },
 
       setupSpaceScraping: () => {
-        const { currentPage, currentStep } = get();
+        const { currentPage, currentStep, data } = get();
+
         if (
           currentPage === "spaces" &&
           currentStep === ImportStep.COLLECTING_SPACES
         ) {
+          console.log("✅ Starting spaces scraping...");
+          const timer = setTimeout(async () => {
+            try {
+              const spaces = await LoomScraper.scrapeSpaces();
+              console.log("✅ Successfully scraped spaces:", spaces);
+              const updatedData = await LoomScraper.saveSpacesToStorage(
+                data,
+                spaces
+              );
+              set({
+                currentStep: ImportStep.SPACES_COLLECTED,
+                data: updatedData,
+                error: null,
+              });
+
+              // After spaces are collected, navigate to members page
+              setTimeout(() => {
+                createTab("https://www.loom.com/settings/workspace#members");
+                set({
+                  currentStep: ImportStep.COLLECTING_MEMBERS,
+                });
+              }, 1000);
+            } catch (error) {
+              console.error("Failed to scrape spaces:", error);
+
+              set({
+                error: `Failed to get spaces: ${
+                  error instanceof Error ? error.message : "Unknown error"
+                }`,
+              });
+            }
+          }, 3000);
+          return () => clearTimeout(timer);
         }
       },
       setupMemberScraping: () => {
@@ -129,7 +173,6 @@ export const useImportStore = create<ImportStore>()(
               });
             } catch (error) {
               console.error("Failed to scrape members:", error);
-
               set({
                 error: `Failed to get workspace members: ${
                   error instanceof Error ? error.message : "Unknown error"
@@ -137,10 +180,8 @@ export const useImportStore = create<ImportStore>()(
               });
             }
           }, 3000);
-
           return () => clearTimeout(timer);
         }
-        return () => {};
       },
 
       setupWorkspaceDetection: () => {
@@ -167,52 +208,78 @@ export const useImportStore = create<ImportStore>()(
 
           return () => clearInterval(intervalId);
         }
-
-        return () => {};
       },
-
       setupVideoSelection: () => {
-        const { currentPage, currentStep } = get();
+        let cleanup: (() => void) | undefined;
 
-        if (
-          currentPage === "workspace" &&
-          currentStep === ImportStep.SELECTING_VIDEOS
-        ) {
-          let cleanup: (() => void) | undefined;
+        const timer = setTimeout(async () => {
+          console.log("running setup video selection try catch");
+          try {
+            const cleanupFn = await LoomScraper.setupVideoSelection(
+              (
+                hasSelectedVideos: boolean,
+                selectedVideos?: {
+                  id: string;
+                  ownerName: string;
+                  title: string;
+                }[]
+              ) => {
+                console.log("📥 Video selection callback:", {
+                  hasSelectedVideos,
+                  selectedVideos,
+                });
 
-          const timer = setTimeout(async () => {
-            try {
-              const cleanupFn = await LoomScraper.setupVideoSelection(
-                (hasSelectedVideos) => {
+                const currentData = get().data; // Get fresh data
+
+                if (
+                  hasSelectedVideos &&
+                  selectedVideos &&
+                  selectedVideos.length > 0
+                ) {
+                  // Process videos using the existing processVideos function
+                  const processedVideos = LoomScraper.processVideos(
+                    selectedVideos,
+                    currentData.workspaceMembers
+                  );
+
+                  console.log(
+                    "✅ Setting videos to SELECTED state:",
+                    processedVideos
+                  );
                   set({
-                    currentStep: hasSelectedVideos
-                      ? ImportStep.VIDEOS_SELECTED
-                      : ImportStep.MEMBERS_COLLECTED,
+                    currentStep: ImportStep.VIDEOS_SELECTED,
+                    data: { ...currentData, videos: processedVideos },
+                    error: null,
+                  });
+                } else {
+                  // When no videos are selected, stay in SELECTING_VIDEOS step
+                  console.log(
+                    "❌ No videos selected, staying in SELECTING_VIDEOS"
+                  );
+                  set({
+                    currentStep: ImportStep.SELECTING_VIDEOS,
+                    data: { ...currentData, videos: [] },
+                    error: null,
                   });
                 }
-              );
+              }
+            );
+            cleanup = cleanupFn;
+          } catch (error) {
+            console.error("Failed to setup video selection:", error);
+            set({
+              error: `Failed to setup video selection: ${
+                error instanceof Error ? error.message : "Unknown error"
+              }`,
+            });
+          }
+        }, 100);
 
-              cleanup = cleanupFn;
-            } catch (error) {
-              console.error("Failed to setup video selection:", error);
-
-              set({
-                error: `Failed to setup video selection: ${
-                  error instanceof Error ? error.message : "Unknown error"
-                }`,
-              });
-            }
-          }, 3000);
-
-          return () => {
-            clearTimeout(timer);
-            if (cleanup) cleanup();
-          };
-        }
-
-        return () => {};
+        return () => {
+          clearTimeout(timer);
+          if (cleanup) cleanup();
+        };
       },
-
       startImport: async (workspaceId: string | null) => {
         if (!workspaceId) {
           return { success: false, message: "Please select a workspace first" };
@@ -220,14 +287,12 @@ export const useImportStore = create<ImportStore>()(
 
         try {
           set({
-            currentStep: ImportStep.COLLECTING_MEMBERS,
+            currentStep: ImportStep.COLLECTING_SPACES,
             error: null,
           });
 
           chrome.storage.local.remove(["loomImportData"], () => {
-            chrome.tabs.create({
-              url: "https://www.loom.com/settings/workspace#members",
-            });
+            createTab("https://www.loom.com/spaces/browse");
           });
 
           return { success: true };

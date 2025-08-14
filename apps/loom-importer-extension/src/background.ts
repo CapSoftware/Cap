@@ -13,6 +13,25 @@ interface ImportMessage {
   [key: string]: any;
 }
 
+// Define message types
+export interface CreateTabMessage {
+  action: "createTab";
+  url: string;
+  active?: boolean;
+}
+
+export interface CreateTabResponse {
+  success: boolean;
+  tab?: chrome.tabs.Tab;
+  error?: string;
+}
+
+// Union type for all possible messages
+type AllMessages =
+  | CreateTabMessage
+  | { action: "getAuthStatus" }
+  | { type: string; [key: string]: any };
+
 import { getServerBaseUrl, CapUrls } from "./utils/urls";
 
 const baseUrl = getServerBaseUrl();
@@ -79,6 +98,7 @@ chrome.cookies.onChanged.addListener(async (changeInfo: CookieChangeInfo) => {
 });
 
 setInterval(verifyTokenFreshness, 30000);
+
 function forwardToPopup(message: ImportMessage): void {
   try {
     chrome.runtime.sendMessage(message, (response) => {
@@ -97,15 +117,60 @@ function forwardToPopup(message: ImportMessage): void {
   }
 }
 
-const messageListeners = new Map();
+// Type guard functions
+function isCreateTabMessage(message: any): message is CreateTabMessage {
+  return message.action === "createTab" && typeof message.url === "string";
+}
 
+function isGetAuthStatusMessage(
+  message: any
+): message is { action: "getAuthStatus" } {
+  return message.action === "getAuthStatus";
+}
+
+function isCAPMessage(
+  message: any
+): message is { type: string; [key: string]: any } {
+  return (
+    message.type &&
+    typeof message.type === "string" &&
+    message.type.startsWith("CAP_")
+  );
+}
+
+// Single unified message listener
 chrome.runtime.onMessage.addListener(
   (
-    request: { action?: string; type?: string; [key: string]: any },
+    message: AllMessages,
     sender: chrome.runtime.MessageSender,
     sendResponse: (response: any) => void
-  ) => {
-    if (request.action === "getAuthStatus") {
+  ): boolean => {
+    // Handle createTab action
+    if (isCreateTabMessage(message)) {
+      chrome.tabs.create(
+        {
+          url: message.url,
+          active: message.active !== false, // Default to true
+        },
+        (tab: chrome.tabs.Tab) => {
+          if (chrome.runtime.lastError) {
+            sendResponse({
+              success: false,
+              error: chrome.runtime.lastError.message,
+            });
+          } else {
+            sendResponse({
+              success: true,
+              tab: tab,
+            });
+          }
+        }
+      );
+      return true; // Keep message channel open for async response
+    }
+
+    // Handle auth status
+    if (isGetAuthStatusMessage(message)) {
       verifyTokenFreshness()
         .then(() => checkAuthToken())
         .then((token) => {
@@ -121,21 +186,21 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
-    if (request.type && request.type.startsWith("CAP_")) {
-      console.log(`Received Cap message: ${request.type}`, request);
+    // Handle CAP messages
+    if (isCAPMessage(message)) {
+      console.log(`Received Cap message: ${message.type}`, message);
 
-      if (request.type === "CAP_LOOM_VIDEOS_SELECTED" && request.videos) {
-        chrome.storage.local.set({ selectedVideos: request.videos });
+      if (message.type === "CAP_LOOM_VIDEOS_SELECTED" && message.videos) {
+        chrome.storage.local.set({ selectedVideos: message.videos });
 
         const capMessage: ImportMessage = {
-          type: request.type,
-          videos: [...request.videos],
+          type: message.type,
+          videos: [...message.videos],
         };
         forwardToPopup(capMessage);
-      } else if (request.type) {
+      } else {
         const capMessage: ImportMessage = {
-          type: request.type,
-          ...request,
+          ...message, // Spread first, so type is included
         };
         forwardToPopup(capMessage);
       }
@@ -144,7 +209,7 @@ chrome.runtime.onMessage.addListener(
       return true;
     }
 
-    return false;
+    return false; // Don't keep channel open for unhandled messages
   }
 );
 
