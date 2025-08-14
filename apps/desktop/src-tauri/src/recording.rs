@@ -253,7 +253,7 @@ pub async fn start_recording(
                     .map(|v| v.owner_name.to_string())
                     .unwrap_or_else(|| "Window".to_string())
             }
-            ScreenCaptureTarget::Screen { .. } => title.unwrap_or_else(|| "Screen".to_string()),
+            ScreenCaptureTarget::Display { .. } => title.unwrap_or_else(|| "Screen".to_string()),
         }
     };
 
@@ -320,7 +320,7 @@ pub async fn start_recording(
                 .show(&app)
                 .await;
         }
-        ScreenCaptureTarget::Area { screen, .. } => {
+        ScreenCaptureTarget::Area { display_id, .. } => {
             let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
                 .show(&app)
                 .await;

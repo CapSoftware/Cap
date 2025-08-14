@@ -852,7 +852,6 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "flume",
- "scap 0.1.0-beta.1",
  "serde",
  "serde_json",
  "tokio",
@@ -865,7 +864,7 @@ dependencies = [
 name = "cap-audio"
 version = "0.1.0"
 dependencies = [
- "cidre",
+ "cidre 0.11.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "tokio",
@@ -877,7 +876,7 @@ version = "0.1.0"
 dependencies = [
  "cap-camera-avfoundation",
  "cap-camera-windows",
- "cidre",
+ "cidre 0.11.0",
  "inquire",
  "objc2-av-foundation",
  "serde",
@@ -891,7 +890,7 @@ dependencies = [
 name = "cap-camera-avfoundation"
 version = "0.1.0"
 dependencies = [
- "cidre",
+ "cidre 0.11.0",
  "clap",
  "inquire",
  "tracing",
@@ -916,7 +915,7 @@ dependencies = [
  "cap-camera",
  "cap-camera-avfoundation",
  "cap-camera-windows",
- "cidre",
+ "cidre 0.11.0",
  "ffmpeg-next",
  "inquire",
  "thiserror 1.0.69",
@@ -991,7 +990,7 @@ dependencies = [
  "cap-rendering",
  "cap-utils",
  "chrono",
- "cidre",
+ "cidre 0.11.0",
  "clipboard-rs",
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
@@ -1019,7 +1018,6 @@ dependencies = [
  "relative-path",
  "reqwest",
  "rodio",
- "scap 0.1.0-beta.1",
  "sentry",
  "serde",
  "serde_json",
@@ -1065,7 +1063,7 @@ dependencies = [
 name = "cap-displays"
 version = "0.1.0"
 dependencies = [
- "cidre",
+ "cidre 0.11.0",
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -1157,12 +1155,13 @@ dependencies = [
  "cap-camera",
  "cap-camera-ffmpeg",
  "cap-camera-windows",
+ "cap-displays",
  "cap-fail",
  "cap-flags",
  "cap-media-encoders",
  "cap-media-info",
  "cap-project",
- "cidre",
+ "cidre 0.11.0",
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
@@ -1181,10 +1180,14 @@ dependencies = [
  "objc-foundation",
  "objc2-foundation 0.2.2",
  "ringbuf",
- "scap 0.1.0-beta.1",
+ "scap",
+ "scap-direct3d",
+ "scap-ffmpeg",
+ "scap-screencapturekit",
  "screencapturekit",
  "serde",
  "specta",
+ "sync_wrapper",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -1204,7 +1207,7 @@ dependencies = [
  "cap-flags",
  "cap-media-info",
  "cap-project",
- "cidre",
+ "cidre 0.11.0",
  "ffmpeg-next",
  "gif",
  "thiserror 1.0.69",
@@ -1248,7 +1251,7 @@ dependencies = [
  "cap-project",
  "cap-utils",
  "chrono",
- "cidre",
+ "cidre 0.11.0",
  "cocoa 0.26.1",
  "device_query",
  "either",
@@ -1260,7 +1263,6 @@ dependencies = [
  "objc",
  "objc2-app-kit",
  "relative-path",
- "scap 0.1.0-beta.1",
  "screencapturekit",
  "serde",
  "serde_json",
@@ -1287,7 +1289,7 @@ dependencies = [
  "cap-flags",
  "cap-project",
  "cap-video-decode",
- "cidre",
+ "cidre 0.11.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1343,7 +1345,7 @@ dependencies = [
 name = "cap-video-decode"
 version = "0.1.0"
 dependencies = [
- "cidre",
+ "cidre 0.11.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
  "ffmpeg-sys-next",
@@ -1470,9 +1472,19 @@ dependencies = [
 [[package]]
 name = "cidre"
 version = "0.10.1"
-source = "git+https://github.com/CapSoftware/cidre?rev=517d097ae438#517d097ae4387ebb97f36c6e133b3c94dca78e25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7a105a9a8dd9e625e1e5938aa8442f63551990bfb2ab4bd606b1b30ccbfd8cf"
 dependencies = [
- "cidre-macros",
+ "cidre-macros 0.2.0",
+ "parking_lot",
+]
+
+[[package]]
+name = "cidre"
+version = "0.11.0"
+source = "git+https://github.com/CapSoftware/cidre?rev=bf84b67079a8#bf84b67079a89d6eaf01c1dab073baaba1ea8f77"
+dependencies = [
+ "cidre-macros 0.3.0",
  "parking_lot",
 ]
 
@@ -1481,6 +1493,12 @@ name = "cidre-macros"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f07a383a232853874a9b0b3e80e6eefe9bea73495b8ab4bdd960bc7c1db4c6d"
+
+[[package]]
+name = "cidre-macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82bc2f84c0baaa09299da3a03864491549685912c1e338a54211e00589dc1e4c"
 
 [[package]]
 name = "clang-sys"
@@ -6775,7 +6793,7 @@ name = "scap"
 version = "0.1.0-beta.1"
 source = "git+https://github.com/CapSoftware/scap?rev=3cefe71561ff#3cefe71561ff735efe5c7bee69bcf32cf9ed3da7"
 dependencies = [
- "cidre",
+ "cidre 0.10.1",
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
  "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -6791,15 +6809,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scap"
-version = "0.1.0"
-dependencies = [
- "cap-displays",
- "scap-direct3d",
- "scap-screencapturekit",
-]
-
-[[package]]
 name = "scap-direct3d"
 version = "0.1.0"
 dependencies = [
@@ -6811,7 +6820,7 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
- "cidre",
+ "cidre 0.11.0",
  "ffmpeg-next",
  "futures",
  "scap-direct3d",
@@ -6824,7 +6833,7 @@ name = "scap-screencapturekit"
 version = "0.1.0"
 dependencies = [
  "cap-displays",
- "cidre",
+ "cidre 0.11.0",
  "clap",
  "futures",
  "inquire",

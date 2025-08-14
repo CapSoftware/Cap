@@ -97,7 +97,6 @@ impl PipelineSourceTask for CameraSource {
     // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
-        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

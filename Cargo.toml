@@ -43,7 +43,7 @@ sentry = { version = "0.34.0", features = [
 tracing = "0.1.41"
 futures = "0.3.31"
 
-cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438", features = [
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
 	"macos_13_0",
 	"cv",
 	"cf",
@@ -79,6 +79,6 @@ debug = true
 
 [patch.crates-io]
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
-cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

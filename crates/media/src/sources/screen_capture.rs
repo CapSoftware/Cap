@@ -453,7 +453,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     // #[instrument(skip_all)]
     fn run(
         &mut self,
-        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
@@ -740,7 +739,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
     fn run(
         &mut self,
-        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
@@ -780,69 +778,69 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     let relative_time = unix_timestamp - start_time_f64;
 
                     match typ {
-                        sc::stream::OutputType::Screen => {
-                            let Some(pixel_buffer) = sample_buffer.image_buf() else {
-                                return ControlFlow::Continue(());
-                            };
+                        // sc::stream::OutputType::Screen => {
+                        //     let Some(pixel_buffer) = sample_buffer.image_buf() else {
+                        //         return ControlFlow::Continue(());
+                        //     };
 
-                            if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                                return ControlFlow::Continue(());
-                            }
+                        //     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                        //         return ControlFlow::Continue(());
+                        //     }
 
-                            let check_skip_send = || {
-                                cap_fail::fail_err!(
-                                    "media::sources::screen_capture::skip_send",
-                                    ()
-                                );
+                        //     let check_skip_send = || {
+                        //         cap_fail::fail_err!(
+                        //             "media::sources::screen_capture::skip_send",
+                        //             ()
+                        //         );
 
-                                Ok::<(), ()>(())
-                            };
+                        //         Ok::<(), ()>(())
+                        //     };
 
-                            if check_skip_send().is_ok()
-                                && video_tx.send((sample_buffer, relative_time)).is_err()
-                            {
-                                error!("Pipeline is unreachable. Shutting down recording.");
-                                return ControlFlow::Continue(());
-                            }
-                        }
-                        sc::stream::OutputType::Audio => {
-                            use ffmpeg::ChannelLayout;
+                        //     if check_skip_send().is_ok()
+                        //         && video_tx.send((sample_buffer, relative_time)).is_err()
+                        //     {
+                        //         error!("Pipeline is unreachable. Shutting down recording.");
+                        //         return ControlFlow::Continue(());
+                        //     }
+                        // }
+                        // sc::stream::OutputType::Audio => {
+                        //     use ffmpeg::ChannelLayout;
 
-                            let res = || {
-                                cap_fail::fail_err!("screen_capture audio skip", ());
-                                Ok::<(), ()>(())
-                            };
-                            if res().is_err() {
-                                return ControlFlow::Continue(());
-                            }
+                        //     let res = || {
+                        //         cap_fail::fail_err!("screen_capture audio skip", ());
+                        //         Ok::<(), ()>(())
+                        //     };
+                        //     if res().is_err() {
+                        //         return ControlFlow::Continue(());
+                        //     }
 
-                            let Some(audio_tx) = &audio_tx else {
-                                return ControlFlow::Continue(());
-                            };
+                        //     let Some(audio_tx) = &audio_tx else {
+                        //         return ControlFlow::Continue(());
+                        //     };
 
-                            let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                            let slice = buf_list.block().as_slice().unwrap();
+                        //     let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
+                        //     let slice = buf_list.block().as_slice().unwrap();
 
-                            let mut frame = ffmpeg::frame::Audio::new(
-                                ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-                                sample_buffer.num_samples() as usize,
-                                ChannelLayout::STEREO,
-                            );
-                            frame.set_rate(48_000);
-                            let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
-                            for i in 0..frame.planes() {
-                                use cap_media_info::PlanarData;
+                        //     let mut frame = ffmpeg::frame::Audio::new(
+                        //         ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                        //         sample_buffer.num_samples() as usize,
+                        //         ChannelLayout::STEREO,
+                        //     );
+                        //     frame.set_rate(48_000);
+                        //     let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
+                        //     for i in 0..frame.planes() {
+                        //         use cap_media_info::PlanarData;
 
-                                frame.plane_data_mut(i).copy_from_slice(
-                                    &slice[i * data_bytes_size as usize
-                                        ..(i + 1) * data_bytes_size as usize],
-                                );
-                            }
+                        //         frame.plane_data_mut(i).copy_from_slice(
+                        //             &slice[i * data_bytes_size as usize
+                        //                 ..(i + 1) * data_bytes_size as usize],
+                        //         );
+                        //     }
 
-                            frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
+                        //     frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
 
-                            let _ = audio_tx.send((frame, relative_time));
-                        }
+                        //     let _ = audio_tx.send((frame, relative_time));
+                        // }
                         _ => {}
                     }
 
@@ -1017,4 +1015,270 @@ fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::A
     ffmpeg_frame.set_rate(scap_frame.rate());
 
     ffmpeg_frame
+}
+
+mod new_stuff {
+    use kameo::prelude::*;
+
+    mod macos {
+        use super::*;
+        use cidre::*;
+
+        #[derive(Actor)]
+        pub struct MacOSScreenCapture {
+            capturer: Option<scap_screencapturekit::Capturer>,
+        }
+
+        // Public
+
+        pub struct StartCapturing {
+            target: arc::R<sc::ContentFilter>,
+            frame_handler: Recipient<NewFrame>,
+            error_handler: Option<Recipient<CaptureError>>,
+        }
+
+        // External
+
+        pub struct NewFrame(pub scap_screencapturekit::Frame);
+
+        // Internal
+
+        pub struct CaptureError(arc::R<ns::Error>);
+
+        #[derive(Debug, Clone)]
+        pub enum StartCapturingError {
+            AlreadyCapturing,
+            CapturerBuild(arc::R<ns::Error>),
+            Start(arc::R<ns::Error>),
+        }
+
+        impl Message<StartCapturing> for MacOSScreenCapture {
+            type Reply = Result<(), StartCapturingError>;
+
+            async fn handle(
+                &mut self,
+                msg: StartCapturing,
+                _: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                if self.capturer.is_some() {
+                    return Err(StartCapturingError::AlreadyCapturing);
+                }
+
+                let capturer = {
+                    let mut capturer_builder = scap_screencapturekit::Capturer::builder(
+                        msg.target.clone(),
+                        sc::StreamCfg::new(),
+                    )
+                    .with_output_sample_buf_cb(move |frame| {
+                        let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
+                    });
+
+                    if let Some(error_handler) = msg.error_handler {
+                        capturer_builder = capturer_builder.with_stop_with_err_cb(move |_, err| {
+                            let _ = error_handler
+                                .tell(CaptureError(err.retained()))
+                                .blocking_send();
+                        });
+                    }
+
+                    capturer_builder
+                        .build()
+                        .map_err(StartCapturingError::CapturerBuild)?
+                };
+
+                capturer.start().await.map_err(StartCapturingError::Start)?;
+
+                self.capturer = Some(capturer);
+
+                Ok(())
+            }
+        }
+
+        impl Message<CaptureError> for MacOSScreenCapture {
+            type Reply = ();
+
+            async fn handle(
+                &mut self,
+                msg: CaptureError,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                dbg!(msg.0);
+                if let Some(capturer) = self.capturer.as_mut() {
+                    let _ = capturer.stop().await;
+                    ctx.actor_ref().kill();
+                }
+            }
+        }
+
+        #[tokio::test]
+        async fn kameo_test() {
+            use std::time::Duration;
+
+            #[derive(Actor)]
+            struct FrameHandler;
+
+            impl Message<NewFrame> for FrameHandler {
+                type Reply = ();
+
+                async fn handle(
+                    &mut self,
+                    msg: NewFrame,
+                    _: &mut Context<Self, Self::Reply>,
+                ) -> Self::Reply {
+                    dbg!(msg.0.output_type());
+                }
+            }
+
+            let actor = MacOSScreenCapture::spawn(MacOSScreenCapture { capturer: None });
+
+            let frame_handler = FrameHandler::spawn(FrameHandler);
+
+            actor
+                .ask(StartCapturing {
+                    target: cap_displays::Display::primary()
+                        .raw_handle()
+                        .as_content_filter()
+                        .await
+                        .unwrap(),
+                    frame_handler: frame_handler.clone().recipient(),
+                    error_handler: None,
+                })
+                .await
+                .inspect_err(|e| {
+                    dbg!(e);
+                })
+                .ok();
+
+            actor
+                .ask(StartCapturing {
+                    target: cap_displays::Display::primary()
+                        .raw_handle()
+                        .as_content_filter()
+                        .await
+                        .unwrap(),
+                    frame_handler: frame_handler.recipient(),
+                    error_handler: None,
+                })
+                .await
+                .inspect_err(|e| {
+                    dbg!(e);
+                })
+                .ok();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    mod windows {
+        use super::*;
+        use ::windows::Graphics::Capture::GraphicsCaptureItem;
+        use scap_ffmpeg::AsFFmpeg;
+
+        #[derive(Actor)]
+        pub struct WindowsScreenCapture {
+            capturer: Option<scap_direct3d::Capturer>,
+        }
+
+        pub struct StartCapturing {
+            target: GraphicsCaptureItem,
+            settings: scap_direct3d::Settings,
+            frame_handler: Recipient<NewFrame>,
+            error_handler: Option<Recipient<CaptureError>>,
+        }
+
+        struct NewFrame {
+            ff_frame: ffmpeg::frame::Video,
+        }
+
+        impl Message<StartCapturing> for WindowsScreenCapture {
+            type Reply = ();
+
+            async fn handle(
+                &mut self,
+                msg: StartCapturing,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
+
+                let capture_handle = capturer.start(
+                    |frame| {
+                        let ff_frame = frame.as_ffmpeg().unwrap();
+
+                        let _ = msg.frame_handler.tell(NewFrame { ff_frame }).try_send();
+
+                        Ok(())
+                    },
+                    || {
+                        Ok(());
+                    },
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn kameo_test() {
+            use std::time::Duration;
+
+            #[derive(Actor)]
+            struct FrameHandler;
+
+            impl Message<NewFrame> for FrameHandler {
+                type Reply = ();
+
+                async fn handle(
+                    &mut self,
+                    msg: NewFrame,
+                    _: &mut Context<Self, Self::Reply>,
+                ) -> Self::Reply {
+                    dbg!(
+                        msg.ff_frame.width(),
+                        msg.ff_frame.height(),
+                        msg.ff_frame.format()
+                    );
+                }
+            }
+
+            let actor = WindowsScreenCapture::spawn(WindowsScreenCapture { capturer: None });
+
+            let frame_handler = FrameHandler::spawn(FrameHandler);
+
+            actor
+                .ask(StartCapturing {
+                    target: cap_displays::Display::primary()
+                        .raw_handle()
+                        .try_as_capture_item()
+                        .unwrap(),
+                    settings: scap_direct3d::Settings {
+                        is_border_required: Some(false),
+                        is_cursor_capture_enabled: Some(false),
+                        pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
+                    },
+                    frame_handler: frame_handler.clone().recipient(),
+                    error_handler: None,
+                })
+                .await
+                .inspect_err(|e| {
+                    dbg!(e);
+                })
+                .ok();
+
+            // actor
+            //     .ask(StartCapturing {
+            //         target: cap_displays::Display::primary()
+            //             .raw_handle()
+            //             .as_content_filter()
+            //             .await
+            //             .unwrap(),
+            //         frame_handler: frame_handler.recipient(),
+            //         error_handler: None,
+            //     })
+            //     .await
+            //     .inspect_err(|e| {
+            //         dbg!(e);
+            //     })
+            //     .ok();
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }

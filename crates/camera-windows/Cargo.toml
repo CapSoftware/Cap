@@ -19,9 +19,3 @@ workspace = true
 
 [dev-dependencies]
 inquire = "0.7.5"
-
-cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
-cap-camera-directshow = { path = "../camera-directshow" }
-
-windows = { workspace = true }
-windows-core = { workspace = true }

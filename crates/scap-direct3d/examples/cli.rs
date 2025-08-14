@@ -15,11 +15,14 @@ fn main() {
         },
     );
 
-    let capture_handle = capturer.start(|frame| {
-        dbg!(frame);
+    let capture_handle = capturer.start(
+        |frame| {
+            dbg!(frame);
 
-        Ok(())
-    });
+            Ok(())
+        },
+        || Ok(()),
+    );
 
     std::thread::sleep(Duration::from_secs(3));
 

@@ -377,7 +377,6 @@ pub async fn create_screen_capture(
 
     ScreenCaptureSource::<ScreenCaptureMethod>::init(
         capture_target,
-        None,
         show_camera,
         force_show_cursor,
         max_fps,

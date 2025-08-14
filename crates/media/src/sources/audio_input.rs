@@ -107,7 +107,6 @@ impl PipelineSourceTask for AudioInputSource {
 
     fn run(
         &mut self,
-        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

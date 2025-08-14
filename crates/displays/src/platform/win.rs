@@ -653,7 +653,7 @@ impl DisplayImpl {
         None
     }
 
-    fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
+    pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
         unsafe { interop.CreateForMonitor(self.inner) }
     }

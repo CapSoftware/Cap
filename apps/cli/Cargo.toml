@@ -17,7 +17,6 @@ cap-camera = { path = "../../crates/camera" }
 serde = { workspace = true }
 serde_json = "1.0.133"
 tokio.workspace = true
-scap.workspace = true
 uuid = { version = "1.11.1", features = ["v4"] }
 ffmpeg = { workspace = true }
 tracing.workspace = true

@@ -126,7 +126,7 @@ impl DeepLinkAction {
                     CaptureMode::Screen(name) => cap_media::sources::list_screens()
                         .into_iter()
                         .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Screen { id: s.id })
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                         .ok_or(format!("No screen with name \"{}\"", &name))?,
                     CaptureMode::Window(name) => cap_media::sources::list_windows()
                         .into_iter()

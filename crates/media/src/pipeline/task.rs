@@ -11,7 +11,6 @@ pub trait PipelineSourceTask: Send {
 
     fn run(
         &mut self,
-        clock: Self::Clock,
         ready_signal: PipelineReadySignal,
         control_signal: PipelineControlSignal,
     ) -> Result<(), String>;

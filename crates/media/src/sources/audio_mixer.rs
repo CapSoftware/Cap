@@ -166,7 +166,6 @@ impl PipelineSourceTask for AudioMixer {
 
     fn run(
         &mut self,
-        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

@@ -105,12 +105,19 @@ impl Capturer {
     pub fn start(
         self,
         callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
+        closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
     ) -> CaptureHandle {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thread_handle = std::thread::spawn({
             let stop_flag = stop_flag.clone();
             move || {
-                let _ = dbg!(run(self.item, self.settings, callback, stop_flag));
+                run(
+                    self.item,
+                    self.settings,
+                    callback,
+                    closed_callback,
+                    stop_flag,
+                );
             }
         });
 
@@ -286,6 +293,7 @@ fn run(
     item: GraphicsCaptureItem,
     settings: Settings,
     mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
+    mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<(), &'static str> {
     if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
@@ -387,6 +395,10 @@ fn run(
             ),
         )
         .map_err(|_| "Failed to register frame arrived handler")?;
+
+    item.Closed(item.Closed(
+        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new({ |_, _| closed_callback() }),
+    ));
 
     session
         .StartCapture()

@@ -867,8 +867,8 @@ async fn create_segment_pipeline(
             cap_displays::Display::list()
                 .into_iter()
                 .find(|m| match &capture_target {
-                    ScreenCaptureTarget::Screen { id }
-                    | ScreenCaptureTarget::Area { screen: id, .. } => {
+                    ScreenCaptureTarget::Display { id }
+                    | ScreenCaptureTarget::Area { display_id: id, .. } => {
                         m.raw_handle().inner().id == *id
                     }
                     ScreenCaptureTarget::Window { id } => {

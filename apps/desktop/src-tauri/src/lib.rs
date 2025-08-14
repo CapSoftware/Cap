@@ -436,12 +436,12 @@ async fn get_current_recording(
         let bounds = r.bounds();
 
         let target = match r.capture_target() {
-            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
+            ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: *id },
             ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
                 id: *id,
                 bounds: *bounds,
             },
-            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+            ScreenCaptureTarget::Area { display_id, bounds } => CurrentRecordingTarget::Area {
                 screen: *screen,
                 bounds: *bounds,
             },

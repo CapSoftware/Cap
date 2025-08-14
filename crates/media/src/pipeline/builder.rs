@@ -41,11 +41,10 @@ impl<T> PipelineBuilder<T> {
         mut task: impl PipelineSourceTask<Clock = C> + 'static,
     ) {
         let name = name.into();
-        let clock = C::clone_from(&self.clock);
         let control_signal = self.control.add_listener(name.clone());
 
         self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal)
+            task.run(ready_signal, control_signal)
         });
     }
 
