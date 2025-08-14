@@ -1020,6 +1020,7 @@ fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::A
 mod new_stuff {
     use kameo::prelude::*;
 
+    #[cfg(target_os = "macos")]
     mod macos {
         use super::*;
         use cidre::*;
@@ -1176,14 +1177,19 @@ mod new_stuff {
 
         #[derive(Actor)]
         pub struct WindowsScreenCapture {
-            capturer: Option<scap_direct3d::Capturer>,
+            capture_handle: Option<scap_direct3d::CaptureHandle>,
         }
 
         pub struct StartCapturing {
             target: GraphicsCaptureItem,
             settings: scap_direct3d::Settings,
             frame_handler: Recipient<NewFrame>,
-            error_handler: Option<Recipient<CaptureError>>,
+            // error_handler: Option<Recipient<CaptureError>>,
+        }
+
+        #[derive(Debug)]
+        pub enum StartCapturingError {
+        	AlreadyCapturing,
         }
 
         struct NewFrame {
@@ -1191,27 +1197,33 @@ mod new_stuff {
         }
 
         impl Message<StartCapturing> for WindowsScreenCapture {
-            type Reply = ();
+            type Reply = Result<(), StartCapturingError>;
 
             async fn handle(
                 &mut self,
                 msg: StartCapturing,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
+	            if self.capture_handle.is_some() {
+	                return Err(StartCapturingError::AlreadyCapturing);
+	            }
+
                 let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
 
                 let capture_handle = capturer.start(
-                    |frame| {
+                    move |frame| {
                         let ff_frame = frame.as_ffmpeg().unwrap();
 
                         let _ = msg.frame_handler.tell(NewFrame { ff_frame }).try_send();
 
                         Ok(())
                     },
-                    || {
-                        Ok(());
-                    },
+                    || Ok(()),
                 );
+
+                self.capture_handle = Some(capture_handle);
+
+                Ok(())
             }
         }
 
@@ -1238,11 +1250,13 @@ mod new_stuff {
                 }
             }
 
-            let actor = WindowsScreenCapture::spawn(WindowsScreenCapture { capturer: None });
+            let actor = WindowsScreenCapture::spawn(WindowsScreenCapture {
+                capture_handle: None,
+            });
 
             let frame_handler = FrameHandler::spawn(FrameHandler);
 
-            actor
+            let _ = actor
                 .ask(StartCapturing {
                     target: cap_displays::Display::primary()
                         .raw_handle()
@@ -1254,31 +1268,33 @@ mod new_stuff {
                         pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
                     },
                     frame_handler: frame_handler.clone().recipient(),
-                    error_handler: None,
+                    // error_handler: None,
                 })
                 .await
                 .inspect_err(|e| {
                     dbg!(e);
+                });
+
+            let _ = actor
+                .ask(StartCapturing {
+                    target: cap_displays::Display::primary()
+                        .raw_handle()
+                        .try_as_capture_item()
+                        .unwrap(),
+                    settings: scap_direct3d::Settings {
+                        is_border_required: Some(false),
+                        is_cursor_capture_enabled: Some(false),
+                        pixel_format: scap_direct3d::PixelFormat::R8G8B8A8Unorm,
+                    },
+                    frame_handler: frame_handler.clone().recipient(),
+                    // error_handler: None,
                 })
-                .ok();
+                .await
+                .inspect_err(|e| {
+                    dbg!(e);
+                });
 
-            // actor
-            //     .ask(StartCapturing {
-            //         target: cap_displays::Display::primary()
-            //             .raw_handle()
-            //             .as_content_filter()
-            //             .await
-            //             .unwrap(),
-            //         frame_handler: frame_handler.recipient(),
-            //         error_handler: None,
-            //     })
-            //     .await
-            //     .inspect_err(|e| {
-            //         dbg!(e);
-            //     })
-            //     .ok();
-
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
 }

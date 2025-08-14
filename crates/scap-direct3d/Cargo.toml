@@ -3,8 +3,7 @@ name = "scap-direct3d"
 version = "0.1.0"
 edition = "2024"
 
-# [target.'cfg(windows)'.dependencies]
-[dependencies]
+[target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
 	"System",
 	"Graphics_Capture",

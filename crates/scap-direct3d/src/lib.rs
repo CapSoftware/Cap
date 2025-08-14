@@ -1,6 +1,6 @@
 // a whole bunch of credit to https://github.com/NiiightmareXD/windows-capture
 
-// #![cfg(windows)]
+#![cfg(windows)]
 
 use std::{
     os::windows::io::AsRawHandle,
@@ -61,27 +61,6 @@ impl PixelFormat {
         match self {
             PixelFormat::R8G8B8A8Unorm => DirectXPixelFormat::R8G8B8A8UIntNormalized,
         }
-    }
-}
-
-pub struct Display {
-    inner: HMONITOR,
-}
-
-impl Display {
-    pub fn primary() -> Option<Self> {
-        let monitor = unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTONULL) };
-        if monitor.is_invalid() {
-            return None;
-        }
-        Some(Self { inner: monitor })
-    }
-
-    pub fn try_as_capture_item(&self) -> windows::core::Result<CaptureItem> {
-        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-        let inner = unsafe { interop.CreateForMonitor(self.inner) }?;
-
-        Ok(CaptureItem { inner })
     }
 }
 
@@ -396,9 +375,12 @@ fn run(
         )
         .map_err(|_| "Failed to register frame arrived handler")?;
 
-    item.Closed(item.Closed(
-        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new({ |_, _| closed_callback() }),
-    ));
+    let _ = item.Closed(
+        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
+            closed_callback();
+            Ok(())
+        }),
+    );
 
     session
         .StartCapture()

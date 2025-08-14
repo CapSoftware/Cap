@@ -1,51 +1,52 @@
 use std::{mem, str::FromStr};
 
 use windows::{
+    core::{BOOL, PCWSTR, PWSTR},
+    Graphics::Capture::GraphicsCaptureItem,
     Win32::{
         Devices::Display::{
+            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
             DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
             DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
             DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
-            QueryDisplayConfig,
+            QDC_ONLY_ACTIVE_PATHS,
         },
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
-        Graphics::{
-            Capture::GraphicsCaptureItem,
+        Graphics::
             Gdi::{
-                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
-                CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC,
-                DeleteObject, ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW,
-                FillRect, GetDC, GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ,
-                HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW,
-                MonitorFromPoint, ReleaseDC, SelectObject,
+                CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+                DeleteObject, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
+                GetDIBits, GetMonitorInfoW, GetObjectA, MonitorFromPoint, ReleaseDC, SelectObject,
+                BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEVMODEW, DIB_RGB_COLORS,
+                ENUM_CURRENT_SETTINGS, HBRUSH, HDC, HGDIOBJ, HMONITOR, MONITORINFOEXW,
+                MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
             },
-        },
+
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
             Registry::{
-                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ, RegCloseKey, RegEnumKeyExW,
-                RegOpenKeyExW, RegQueryValueExW,
+                RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY,
+                HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ,
             },
             Threading::{
-                GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
-                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+                GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+                PROCESS_QUERY_LIMITED_INFORMATION,
             },
+            WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
         UI::{
             HiDpi::GetDpiForWindow,
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
-                GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
-                GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
-                GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
-                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
+                DestroyIcon, DrawIconEx, EnumWindows, GetClassLongPtrW, GetClassNameW,
+                GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow, GetWindowLongW,
+                GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SendMessageW,
+                WindowFromPoint, DI_FLAGS, GCLP_HICON, GWL_EXSTYLE, GW_HWNDNEXT, HICON, ICONINFO,
+                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
             },
         },
     },
-    core::{BOOL, PCWSTR, PWSTR},
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
@@ -107,7 +108,7 @@ impl DisplayImpl {
     }
 
     pub fn raw_id(&self) -> DisplayIdImpl {
-        DisplayIdImpl(self.0.0 as u64)
+        DisplayIdImpl(self.0 .0 as u64)
     }
 
     pub fn from_id(id: String) -> Option<Self> {
@@ -655,7 +656,7 @@ impl DisplayImpl {
 
     pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
         let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
-        unsafe { interop.CreateForMonitor(self.inner) }
+        unsafe { interop.CreateForMonitor(self.0) }
     }
 }
 
@@ -814,7 +815,7 @@ impl WindowImpl {
     }
 
     pub fn id(&self) -> WindowIdImpl {
-        WindowIdImpl(self.0.0 as u64)
+        WindowIdImpl(self.0 .0 as u64)
     }
 
     pub fn level(&self) -> Option<i32> {
