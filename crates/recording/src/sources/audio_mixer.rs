@@ -1,8 +1,7 @@
-use std::time::Duration;
-
 use cap_media_info::AudioInfo;
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
+use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::pipeline::task::PipelineSourceTask;

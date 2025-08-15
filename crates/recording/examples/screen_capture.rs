@@ -1,5 +1,5 @@
-use cap_displays::{Display, Window};
-use cap_media::{
+use cap_displays::Window;
+use cap_recording::{
     pipeline::{control::PipelineControlSignal, task::PipelineSourceTask},
     sources::{CMSampleBufferCapture, ScreenCaptureSource, ScreenCaptureTarget},
 };
@@ -10,8 +10,8 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let (video_tx, video_rx) = flume::unbounded();
-    let (ready_tx, ready_rx) = flume::unbounded();
-    let (ctrl_tx, ctrl_rx) = flume::unbounded();
+    let (ready_tx, _ready_rx) = flume::unbounded();
+    let (_ctrl_tx, ctrl_rx) = flume::unbounded();
 
     let mut source = ScreenCaptureSource::<CMSampleBufferCapture>::init(
         &ScreenCaptureTarget::Window {
@@ -21,7 +21,6 @@ async fn main() {
                 .unwrap()
                 .id(),
         },
-        false,
         false,
         60,
         video_tx,
@@ -33,7 +32,7 @@ async fn main() {
     .unwrap();
 
     std::thread::spawn(move || {
-        source.run(
+        let _ = source.run(
             ready_tx,
             PipelineControlSignal {
                 last_value: None,
@@ -42,7 +41,7 @@ async fn main() {
         );
     });
 
-    while let Ok((video, e)) = video_rx.recv_async().await {
+    while let Ok((video, _)) = video_rx.recv_async().await {
         video.image_buf().unwrap();
         dbg!(video.total_sample_size());
     }

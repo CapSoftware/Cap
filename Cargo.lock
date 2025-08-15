@@ -841,6 +841,7 @@ name = "cap"
 version = "0.1.0"
 dependencies = [
  "cap-camera",
+ "cap-displays",
  "cap-editor",
  "cap-export",
  "cap-flags",
@@ -1090,6 +1091,7 @@ dependencies = [
  "ffmpeg-next",
  "flume",
  "futures",
+ "ringbuf",
  "sentry",
  "serde",
  "specta",
@@ -1168,7 +1170,6 @@ dependencies = [
  "core-graphics 0.24.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
- "ffmpeg-sys-next",
  "flume",
  "futures",
  "gif",
@@ -1242,9 +1243,13 @@ dependencies = [
 name = "cap-recording"
 version = "0.1.0"
 dependencies = [
+ "cap-audio",
+ "cap-camera",
+ "cap-camera-ffmpeg",
  "cap-cursor-capture",
  "cap-cursor-info",
  "cap-displays",
+ "cap-fail",
  "cap-flags",
  "cap-media",
  "cap-media-encoders",
@@ -1254,6 +1259,7 @@ dependencies = [
  "chrono",
  "cidre 0.11.0",
  "cocoa 0.26.1",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "device_query",
  "either",
  "ffmpeg-next",
@@ -1261,9 +1267,15 @@ dependencies = [
  "futures",
  "hex",
  "image 0.25.6",
+ "indexmap 2.10.0",
+ "inquire",
+ "kameo",
  "objc",
  "objc2-app-kit",
  "relative-path",
+ "ringbuf",
+ "scap-direct3d",
+ "scap-screencapturekit",
  "screencapturekit",
  "serde",
  "serde_json",
@@ -1293,7 +1305,6 @@ dependencies = [
  "cidre 0.11.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
- "ffmpeg-sys-next",
  "futures",
  "futures-intrusive",
  "glyphon",
@@ -1349,7 +1360,6 @@ dependencies = [
  "cidre 0.11.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
- "ffmpeg-sys-next",
  "tokio",
  "tracing",
 ]
@@ -2631,7 +2641,6 @@ name = "ffmpeg-hw-device"
 version = "0.1.0"
 dependencies = [
  "ffmpeg-next",
- "ffmpeg-sys-next",
 ]
 
 [[package]]

@@ -1,26 +1,17 @@
 use cap_displays::{
     Display, DisplayId, Window, WindowId,
-    bounds::{LogicalBounds, PhysicalBounds, PhysicalSize},
+    bounds::{LogicalBounds, PhysicalSize},
 };
-use cap_media_info::{AudioInfo, PlanarData, RawVideoFormat, VideoInfo};
+use cap_media_info::{AudioInfo, RawVideoFormat, VideoInfo};
 use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, frame};
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg::{format::Sample, sys::AV_TIME_BASE_Q};
 use flume::Sender;
-use scap::{
-    Target,
-    capturer::{Area, Capturer, Options, Point, Resolution as ScapResolution, Size},
-    frame::{Frame, FrameType, VideoFrame},
-};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::{alloc::System, collections::HashMap, ops::ControlFlow, rc::Rc, time::SystemTime};
-use tracing::{debug, error, info, trace, warn};
+use std::time::SystemTime;
+use tracing::{error, warn};
 
-use crate::{
-    pipeline::{control::Control, task::PipelineSourceTask},
-    platform::{self, Bounds, logical_monitor_bounds},
-};
+use crate::pipeline::{control::Control, task::PipelineSourceTask};
 
 static EXCLUDED_WINDOWS: &[&str] = &[
     "Cap Camera",
@@ -183,7 +174,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
 struct Config {
     target: ScreenCaptureTarget,
     fps: u32,
-    show_camera: bool,
     show_cursor: bool,
 }
 
@@ -191,7 +181,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,
-        show_camera: bool,
         show_cursor: bool,
         max_fps: u32,
         video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
@@ -210,7 +199,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             config: Config {
                 target: target.clone(),
                 fps,
-                show_camera,
                 show_cursor,
             },
             display,
@@ -664,19 +652,19 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                             // return ControlFlow::Continue(());
                         }
                     }
-                    scap_screencapturekit::Frame::Audio(frame) => {
+                    scap_screencapturekit::Frame::Audio(_) => {
                         use ffmpeg::ChannelLayout;
 
-                        // let res = || {
-                        //     cap_fail::fail_err!("screen_capture audio skip", ());
-                        //     Ok::<(), ()>(())
-                        // };
-                        // if res().is_err() {
-                        //     return ControlFlow::Continue(());
-                        // }
+                        let res = || {
+                            cap_fail::fail_err!("screen_capture audio skip", ());
+                            Ok::<(), ()>(())
+                        };
+                        if res().is_err() {
+                            return;
+                        }
 
                         let Some(audio_tx) = &self.audio_tx else {
-                            return; // ControlFlow::Continue(());
+                            return;
                         };
 
                         let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
@@ -817,10 +805,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 }
 
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
-    if !scap::has_permission() {
-        return vec![];
-    }
-
     cap_displays::Display::list()
         .into_iter()
         .map(|display| {
@@ -837,10 +821,6 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
-    if !scap::has_permission() {
-        return vec![];
-    }
-
     cap_displays::Window::list()
         .into_iter()
         .flat_map(|v| {
@@ -867,45 +847,45 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
         .collect()
 }
 
-fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::Audio {
-    use ffmpeg::format::Sample;
-    use scap::frame::AudioFormat;
+// fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::Audio {
+//     use ffmpeg::format::Sample;
+//     use scap::frame::AudioFormat;
 
-    let format_typ = if scap_frame.is_planar() {
-        ffmpeg::format::sample::Type::Planar
-    } else {
-        ffmpeg::format::sample::Type::Packed
-    };
+//     let format_typ = if scap_frame.is_planar() {
+//         ffmpeg::format::sample::Type::Planar
+//     } else {
+//         ffmpeg::format::sample::Type::Packed
+//     };
 
-    let mut ffmpeg_frame = ffmpeg::frame::Audio::new(
-        match scap_frame.format() {
-            AudioFormat::F32 => Sample::F32(format_typ),
-            AudioFormat::F64 => Sample::F64(format_typ),
-            AudioFormat::I16 => Sample::I16(format_typ),
-            AudioFormat::I32 => Sample::I32(format_typ),
-            AudioFormat::U8 => Sample::U8(format_typ),
-            _ => panic!("Unsupported sample format"),
-        },
-        scap_frame.sample_count(),
-        ffmpeg::ChannelLayout::default(scap_frame.channels() as i32),
-    );
+//     let mut ffmpeg_frame = ffmpeg::frame::Audio::new(
+//         match scap_frame.format() {
+//             AudioFormat::F32 => Sample::F32(format_typ),
+//             AudioFormat::F64 => Sample::F64(format_typ),
+//             AudioFormat::I16 => Sample::I16(format_typ),
+//             AudioFormat::I32 => Sample::I32(format_typ),
+//             AudioFormat::U8 => Sample::U8(format_typ),
+//             _ => panic!("Unsupported sample format"),
+//         },
+//         scap_frame.sample_count(),
+//         ffmpeg::ChannelLayout::default(scap_frame.channels() as i32),
+//     );
 
-    if scap_frame.is_planar() {
-        for i in 0..scap_frame.planes() {
-            ffmpeg_frame
-                .plane_data_mut(i as usize)
-                .copy_from_slice(scap_frame.plane_data(i as usize));
-        }
-    } else {
-        ffmpeg_frame
-            .data_mut(0)
-            .copy_from_slice(scap_frame.raw_data());
-    }
+//     if scap_frame.is_planar() {
+//         for i in 0..scap_frame.planes() {
+//             ffmpeg_frame
+//                 .plane_data_mut(i as usize)
+//                 .copy_from_slice(scap_frame.plane_data(i as usize));
+//         }
+//     } else {
+//         ffmpeg_frame
+//             .data_mut(0)
+//             .copy_from_slice(scap_frame.raw_data());
+//     }
 
-    ffmpeg_frame.set_rate(scap_frame.rate());
+//     ffmpeg_frame.set_rate(scap_frame.rate());
 
-    ffmpeg_frame
-}
+//     ffmpeg_frame
+// }
 
 use kameo::prelude::*;
 

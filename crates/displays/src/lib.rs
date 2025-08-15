@@ -1,14 +1,11 @@
 pub mod bounds;
 pub mod platform;
 
-use std::str::FromStr;
-
 use bounds::{LogicalBounds, PhysicalSize};
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
-
-use crate::bounds::PhysicalBounds;
+use std::str::FromStr;
 
 #[derive(Clone, Copy)]
 pub struct Display(DisplayImpl);

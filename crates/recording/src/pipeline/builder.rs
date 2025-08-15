@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::pipeline::{
-    MediaError, Pipeline, PipelineClock,
+    MediaError, Pipeline,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
 };
@@ -19,16 +19,14 @@ struct Task {
     done_rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
 }
 
-pub struct PipelineBuilder<T> {
-    clock: T,
+pub struct PipelineBuilder {
     control: ControlBroadcast,
     tasks: IndexMap<String, Task>,
 }
 
-impl<T> PipelineBuilder<T> {
-    pub fn new(clock: T) -> Self {
+impl PipelineBuilder {
+    pub fn new() -> Self {
         Self {
-            clock,
             control: ControlBroadcast::default(),
             tasks: IndexMap::new(),
         }
@@ -104,15 +102,11 @@ impl<T> PipelineBuilder<T> {
     }
 }
 
-impl<T: PipelineClock> PipelineBuilder<T> {
+impl PipelineBuilder {
     pub async fn build(
         self,
-    ) -> Result<(Pipeline<T>, oneshot::Receiver<Result<(), String>>), MediaError> {
-        let Self {
-            clock,
-            control,
-            tasks,
-        } = self;
+    ) -> Result<(Pipeline, oneshot::Receiver<Result<(), String>>), MediaError> {
+        let Self { control, tasks } = self;
 
         if tasks.is_empty() {
             return Err(MediaError::EmptyPipeline);
@@ -159,7 +153,6 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 
         Ok((
             Pipeline {
-                clock,
                 control,
                 task_handles,
                 is_shutdown: false,

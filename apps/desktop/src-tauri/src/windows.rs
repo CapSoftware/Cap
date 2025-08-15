@@ -1,14 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{
-    App, ArcLock, fake_window,
-    general_settings::{AppTheme, GeneralSettingsStore},
-    permissions,
-    target_select_overlay::WindowFocusManager,
-};
 use cap_displays::{Display, DisplayId};
-use cap_media::{platform::logical_monitor_bounds, sources::CaptureDisplay};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -24,6 +17,13 @@ use tauri::{
 };
 use tokio::sync::RwLock;
 use tracing::debug;
+
+use crate::{
+    App, ArcLock, fake_window,
+    general_settings::{AppTheme, GeneralSettingsStore},
+    permissions,
+    target_select_overlay::WindowFocusManager,
+};
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -182,7 +182,7 @@ pub enum ShowCapWindow {
     RecordingsOverlay,
     WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
-    CaptureArea { screen_id: u32 },
+    CaptureArea { screen_id: DisplayId },
     Camera,
     InProgressRecording { countdown: Option<u32> },
     Upgrade,
@@ -438,22 +438,15 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
-                let target_monitor = app
-                    .monitor_from_point(screen_bounds.x, screen_bounds.y)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(monitor);
+                let Some(display) = Display::from_id(screen_id) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
 
-                let size = target_monitor.size();
-                let scale_factor = target_monitor.scale_factor();
-                let pos = target_monitor.position();
+                let bounds = display.logical_bounds();
+
                 window_builder = window_builder
-                    .inner_size(
-                        (size.width as f64) / scale_factor,
-                        (size.height as f64) / scale_factor,
-                    )
-                    .position(pos.x as f64, pos.y as f64);
+                    .inner_size(bounds.size().width(), bounds.size().height())
+                    .position(bounds.position().x(), bounds.position().y());
 
                 let window = window_builder.build()?;
 
@@ -467,7 +460,7 @@ impl ShowCapWindow {
                 if let Some(main_window) = CapWindowId::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                    && target_monitor.intersects(outer_pos, outer_size)
+                    && display.intersects(outer_pos, outer_size)
                 {
                     let _ = main_window.minimize();
                 };
@@ -720,15 +713,14 @@ trait MonitorExt {
     fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool;
 }
 
-impl MonitorExt for Monitor {
+impl MonitorExt for Display {
     fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
-        let PhysicalPosition { x, y } = *self.position();
-        let PhysicalSize { width, height } = *self.size();
+        let bounds = self.logical_bounds();
 
-        let left = x;
-        let right = x + width as i32;
-        let top = y;
-        let bottom = y + height as i32;
+        let left = bounds.position().x() as i32;
+        let right = left + bounds.size().width() as i32;
+        let top = bounds.position().y() as i32;
+        let bottom = top + bounds.size().height() as i32;
 
         [
             (position.x, position.y),

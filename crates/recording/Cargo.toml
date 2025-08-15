@@ -7,6 +7,8 @@ edition = "2024"
 workspace = true
 
 [dependencies]
+cap-audio = { path = "../audio" }
+cap-fail = { path = "../fail" }
 cap-project = { path = "../project" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
@@ -16,6 +18,8 @@ cap-cursor-capture = { path = "../cursor-capture" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }
 cap-cursor-info = { path = "../cursor-info" }
+cap-camera = { path = "../camera" }
+cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -36,6 +40,11 @@ futures = { workspace = true }
 tokio-util = "0.7.15"
 sha2 = "0.10.9"
 hex = "0.4.3"
+ringbuf = "0.4.8"
+cpal.workspace = true
+indexmap = "2.10.0"
+kameo = "0.17.2"
+inquire = "0.7.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "0.3.5"
@@ -43,6 +52,7 @@ cocoa = "0.26.0"
 objc = "0.2.7"
 cidre = { workspace = true }
 objc2-app-kit = "0.3.1"
+scap-screencapturekit = { path = "../scap-screencapturekit" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -50,6 +60,7 @@ windows = { workspace = true, features = [
 	"Win32_Graphics_Gdi",
 	"Win32_UI_WindowsAndMessaging",
 ] }
+scap-direct3d = { path = "../scap-direct3d" }
 
 [dev-dependencies]
 tempfile = "3.20.0"

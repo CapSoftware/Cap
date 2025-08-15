@@ -4,7 +4,7 @@ fn main() {
     // Test display functionality
     println!("=== Display Information ===");
     for (index, display) in cap_displays::Display::list().iter().enumerate() {
-        println!("Display {}: {}", index + 1, display.name());
+        println!("Display {}: {}", index + 1, display.name().unwrap());
         println!("  ID: {}", display.id());
 
         let logical_size = display.raw_handle().logical_size();
@@ -45,7 +45,10 @@ fn main() {
     }
 
     if let Some(cursor_display) = cap_displays::Display::get_containing_cursor() {
-        println!("🖱️  Cursor is currently on: {}", cursor_display.name());
+        println!(
+            "🖱️  Cursor is currently on: {}",
+            cursor_display.name().unwrap()
+        );
         println!();
     }
 

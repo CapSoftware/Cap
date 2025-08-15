@@ -1,3 +1,6 @@
+use cap_media::MediaError;
+use cap_media_info::AudioInfo;
+use flume::{Receiver, Sender};
 use std::{
     future::Future,
     path::PathBuf,
@@ -5,37 +8,30 @@ use std::{
     time::SystemTime,
 };
 
-use cap_media::{
-    MediaError,
+use crate::{
+    RecordingError,
     feeds::AudioInputFeed,
-    pipeline::{RealTimeClock, builder::PipelineBuilder},
+    pipeline::builder::PipelineBuilder,
     sources::{
-        AVFrameCapture, AudioInputSource, AudioMixer, ScreenCaptureFormat, ScreenCaptureSource,
-        ScreenCaptureTarget,
+        AudioInputSource, AudioMixer, ScreenCaptureFormat, ScreenCaptureSource,
+        ScreenCaptureTarget, screen_capture,
     },
 };
-use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
-use cap_media_info::AudioInfo;
-use flume::{Receiver, Sender};
-
-use crate::RecordingError;
-
-pub type CapturePipelineBuilder = PipelineBuilder<RealTimeClock<()>>;
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     fn make_studio_mode_pipeline(
-        builder: CapturePipelineBuilder,
+        builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
+    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError>
     where
         Self: Sized;
 
     fn make_instant_mode_pipeline(
-        builder: CapturePipelineBuilder,
+        builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
@@ -44,21 +40,21 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> impl Future<Output = Result<CapturePipelineBuilder, MediaError>> + Send
+    ) -> impl Future<Output = Result<PipelineBuilder, MediaError>> + Send
     where
         Self: Sized;
 }
 
 #[cfg(target_os = "macos")]
-impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
+impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
     fn make_studio_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
+        mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError> {
+    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError> {
         let screen_config = source.0.info();
         let mut screen_encoder = cap_media_encoders::MP4AVAssetWriterEncoder::init(
             "screen",
@@ -108,7 +104,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     }
 
     async fn make_instant_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
+        mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
@@ -117,7 +113,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> Result<CapturePipelineBuilder, MediaError> {
+    ) -> Result<PipelineBuilder, MediaError> {
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
 
@@ -226,15 +222,15 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
 }
 
 #[cfg(windows)]
-impl MakeCapturePipeline for AVFrameCapture {
+impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     fn make_studio_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
+        mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(CapturePipelineBuilder, flume::Receiver<f64>), MediaError>
+    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError>
     where
         Self: Sized,
     {
@@ -269,7 +265,7 @@ impl MakeCapturePipeline for AVFrameCapture {
     }
 
     async fn make_instant_mode_pipeline(
-        mut builder: CapturePipelineBuilder,
+        mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
@@ -278,7 +274,7 @@ impl MakeCapturePipeline for AVFrameCapture {
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         _pause_flag: Arc<AtomicBool>,
-    ) -> Result<CapturePipelineBuilder, MediaError>
+    ) -> Result<PipelineBuilder, MediaError>
     where
         Self: Sized,
     {
@@ -361,14 +357,13 @@ type ScreenCaptureReturn<T> = (
 );
 
 #[cfg(target_os = "macos")]
-pub type ScreenCaptureMethod = cap_media::sources::CMSampleBufferCapture;
+pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
-#[cfg(not(target_os = "macos"))]
-pub type ScreenCaptureMethod = AVFrameCapture;
+#[cfg(windows)]
+pub type ScreenCaptureMethod = screen_capture::AVFrameCapture;
 
 pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
-    show_camera: bool,
     force_show_cursor: bool,
     max_fps: u32,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
@@ -378,7 +373,6 @@ pub async fn create_screen_capture(
 
     ScreenCaptureSource::<ScreenCaptureMethod>::init(
         capture_target,
-        show_camera,
         force_show_cursor,
         max_fps,
         video_tx,

@@ -9,6 +9,7 @@ mod editor_window;
 mod export;
 mod fake_window;
 mod flags;
+mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod notifications;
@@ -28,15 +29,20 @@ use camera::{CameraPreview, CameraWindowState};
 use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
-use cap_media::feeds::RawCameraFrame;
-use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
 };
+use cap_recording::feeds::DeviceOrModelID;
+use cap_recording::{
+    feeds::CameraFeed,
+    feeds::RawCameraFrame,
+    feeds::{AudioInputFeed, AudioInputSamplesSender},
+    sources::ScreenCaptureTarget,
+};
 use cap_rendering::ProjectRecordingsMeta;
+use cap_rendering::RenderedFrame;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
@@ -246,7 +252,7 @@ async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     camera_preview: State<'_, CameraPreview>,
-    id: Option<cap_media::feeds::DeviceOrModelID>,
+    id: Option<DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
 
@@ -2318,16 +2324,21 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
+    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
-    let instance = EditorInstance::new(path, {
+    let instance = {
         let app = app.clone();
-        move |state| {
-            EditorStateChanged::new(state).emit(&app).ok();
-        }
-    })
-    .await?;
+        EditorInstance::new(
+            path,
+            move |state| {
+                let _ = EditorStateChanged::new(state).emit(&app);
+            },
+            frame_cb,
+        )
+        .await?
+    };
 
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();

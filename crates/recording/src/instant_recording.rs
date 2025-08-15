@@ -1,30 +1,26 @@
+use cap_media::MediaError;
+use cap_media_info::VideoInfo;
+use cap_project::InstantRecordingMeta;
+use cap_utils::{ensure_dir, spawn_actor};
+use flume::Receiver;
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use cap_media::{
-    MediaError,
-    feeds::AudioInputFeed,
-    pipeline::{Pipeline, RealTimeClock},
-    platform::Bounds,
-    sources::{ScreenCaptureSource, ScreenCaptureTarget},
-};
-use cap_media_info::VideoInfo;
-use cap_project::InstantRecordingMeta;
-use cap_utils::{ensure_dir, spawn_actor};
-use flume::Receiver;
 use tokio::sync::oneshot;
 use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
     ActorError, RecordingBaseInputs, RecordingError,
     capture_pipeline::{MakeCapturePipeline, create_screen_capture},
+    feeds::AudioInputFeed,
+    pipeline::Pipeline,
+    sources::{ScreenCaptureSource, ScreenCaptureTarget},
 };
 
 struct InstantRecordingPipeline {
-    pub inner: Pipeline<RealTimeClock<()>>,
+    pub inner: Pipeline,
     #[allow(unused)]
     pub output_path: PathBuf,
     pub pause_flag: Arc<AtomicBool>,
@@ -127,8 +123,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     ),
     MediaError,
 > {
-    let clock = RealTimeClock::<()>::new();
-    let pipeline_builder = Pipeline::builder(clock);
+    let pipeline_builder = Pipeline::builder();
 
     let pause_flag = Arc::new(AtomicBool::new(false));
     let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
@@ -184,15 +179,8 @@ pub async fn spawn_instant_recording_actor<'a>(
         (None, None)
     };
 
-    let (screen_source, screen_rx) = create_screen_capture(
-        &inputs.capture_target,
-        true,
-        true,
-        30,
-        system_audio.0,
-        start_time,
-    )
-    .await?;
+    let (screen_source, screen_rx) =
+        create_screen_capture(&inputs.capture_target, true, 30, system_audio.0, start_time).await?;
 
     debug!("screen capture: {screen_source:#?}");
 

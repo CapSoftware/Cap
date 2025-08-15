@@ -1,4 +1,24 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use cap_fail::fail;
+use cap_project::{
+    CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
+    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
+    ZoomSegment, cursor::CursorEvents,
+};
+use cap_recording::{
+    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
+    feeds::CameraFeed,
+    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
+    sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+};
+use cap_rendering::ProjectRecordingsMeta;
+use cap_utils::{ensure_dir, spawn_actor};
+use serde::Deserialize;
+use specta::Type;
+use std::{path::PathBuf, sync::Arc, time::Duration};
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
+use tauri_specta::Event;
+use tracing::{error, info};
 
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStarted,
@@ -16,26 +36,6 @@ use crate::{
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
-use cap_fail::fail;
-use cap_media::sources::{CaptureDisplay, CaptureWindow};
-use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
-use cap_project::{
-    CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
-};
-use cap_recording::{
-    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
-    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
-};
-use cap_rendering::ProjectRecordingsMeta;
-use cap_utils::{ensure_dir, spawn_actor};
-use serde::Deserialize;
-use specta::Type;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
-use tauri_specta::Event;
-use tracing::{error, info};
 
 pub enum InProgressRecording {
     Instant {
@@ -169,7 +169,7 @@ impl CompletedRecording {
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_capture_displays() -> Vec<CaptureDisplay> {
-    cap_media::sources::list_displays()
+    screen_capture::list_displays()
         .into_iter()
         .map(|(v, _)| v)
         .collect()
@@ -178,7 +178,7 @@ pub async fn list_capture_displays() -> Vec<CaptureDisplay> {
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_capture_windows() -> Vec<CaptureWindow> {
-    cap_media::sources::list_windows()
+    screen_capture::list_windows()
         .into_iter()
         .map(|(v, _)| v)
         .collect()
@@ -293,7 +293,7 @@ pub async fn start_recording(
                 .display()
                 .map(|d| ShowCapWindow::WindowCaptureOccluder { screen_id: d.id() })
             {
-                show.show(&app).await;
+                let _ = show.show(&app).await;
             }
         }
         ScreenCaptureTarget::Area { screen, .. } => {

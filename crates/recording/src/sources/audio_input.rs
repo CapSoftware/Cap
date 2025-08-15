@@ -1,27 +1,19 @@
-use std::time::SystemTime;
-
 use cap_fail::fail;
+use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg::{frame::Audio as FFAudio, sys::AV_TIME_BASE_Q};
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
+use std::time::SystemTime;
 use tracing::{error, info};
 
-use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
-    MediaError,
-    data::FFAudio,
-    pipeline::{clock::LocalTimestamp, control::Control, task::PipelineSourceTask},
+    feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples},
+    pipeline::{control::Control, task::PipelineSourceTask},
 };
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
-
-impl LocalTimestamp for StreamInstant {
-    fn elapsed_since(&self, other: &Self) -> std::time::Duration {
-        self.duration_since(other).unwrap()
-    }
-}
 
 pub struct AudioInputSource {
     feed_connection: AudioInputConnection,
