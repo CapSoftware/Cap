@@ -130,7 +130,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.where(eq(videos.id, videoId))
-		.limit(1)
+		.limit(1);
 
 	if (query.length === 0) {
 		console.log("[generateMetadata] No video found for videoId:", videoId);
