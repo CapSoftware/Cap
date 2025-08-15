@@ -159,7 +159,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 	const userAccess = await userHasAccessToVideo(
 		user,
 		video,
-		space?.isSpaceMember,
+		!!space?.isSpaceMember,
 	);
 
 	const headersList = headers();
@@ -365,7 +365,7 @@ export default async function ShareVideoPage(props: Props) {
 	const userAccess = await userHasAccessToVideo(
 		user,
 		video,
-		space?.isSpaceMember,
+		!!space?.isSpaceMember,
 	);
 
 	if (userAccess === "private") {

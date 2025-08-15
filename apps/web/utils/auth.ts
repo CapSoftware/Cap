@@ -22,7 +22,7 @@ export async function userHasAccessToVideo(
 		spaceId: string | null;
 		sharedOrganization: null | { organizationId: string | null };
 	},
-	isSpaceMember?: string,
+	isSpaceMember?: boolean,
 ): Promise<"has-access" | "private" | "needs-password" | "not-org-email"> {
 	if (video.public && video.password === null) return "has-access";
 
