@@ -1,7 +1,7 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
@@ -106,7 +106,7 @@ export default function FolderVideosSection({
 	};
 
 	const { data: analyticsData, isLoading: isLoadingAnalytics } =
-		useSuspenseQuery({
+		useQuery({
 			queryKey: ["analytics", initialVideos.map((video) => video.id)],
 			queryFn: async () => {
 				if (!dubApiKeyEnabled || initialVideos.length === 0) {
