@@ -96,10 +96,6 @@ type Props = {
 	searchParams: { [key: string]: string | string[] | undefined };
 };
 
-type CommentWithAuthor = typeof comments.$inferSelect & {
-	authorName: string | null;
-};
-
 type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganization?: {
 		organizationId: string;
@@ -118,7 +114,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		"[generateMetadata] Fetching video metadata for videoId:",
 		videoId,
 	);
-	const query = await db().select().from(videos).where(eq(videos.id, videoId));
+	const query = await db()
+		.select({
+			id: videos.id,
+			public: videos.public,
+			name: videos.name,
+			password: videos.password,
+			ownerId: videos.ownerId,
+			sharedOrganization: {
+				organizationId: sharedVideos.organizationId,
+			},
+			spaceId: spaceVideos.spaceId,
+		})
+		.from(videos)
+		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
+		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
 		console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -131,8 +142,25 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		return notFound();
 	}
 
-	const userPromise = getCurrentUser();
-	const userAccess = await userHasAccessToVideo(userPromise, video);
+	const user = await getCurrentUser();
+
+	const [space] = await db()
+		.select({
+			isSpaceMember: spaceMembers.userId,
+		})
+		.from(spaceMembers)
+		.where(
+			and(
+				eq(spaceMembers.userId, user?.id ?? ""),
+				eq(spaceMembers.spaceId, video?.spaceId ?? ""),
+			),
+		);
+
+	const userAccess = await userHasAccessToVideo(
+		user,
+		video,
+		space?.isSpaceMember,
+	);
 
 	const headersList = headers();
 	const referrer = headersList.get("x-referrer") || "";
