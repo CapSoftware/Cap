@@ -41,7 +41,8 @@ export async function userHasAccessToVideo(
 	}
 
 	// If the video is shared and has a space id, it's in a specific space
-	const isVideoSharedWithSpace = videoOrgId && video.spaceId;
+	const isVideoSharedWithSpace =
+		videoOrgId && video.spaceId && video.spaceId.length > 0;
 	if (
 		isSpaceMember &&
 		userActiveOrgId === videoOrgId &&

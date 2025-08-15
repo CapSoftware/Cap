@@ -152,15 +152,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		.where(
 			and(
 				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceMembers.spaceId, video?.spaceId ?? ""),
+				eq(spaceMembers.spaceId, video.spaceId ?? ""),
 			),
 		);
 
-	const userAccess = await userHasAccessToVideo(
-		user,
-		video,
-		!!space?.isSpaceMember,
-	);
+	const isMember = !!space?.isSpaceMember;
+	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	const headersList = headers();
 	const referrer = headersList.get("x-referrer") || "";
@@ -337,18 +334,6 @@ export default async function ShareVideoPage(props: Props) {
 		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 		.where(eq(videos.id, videoId));
 
-	const [space] = await db()
-		.select({
-			isSpaceMember: spaceMembers.userId,
-		})
-		.from(spaceMembers)
-		.where(
-			and(
-				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceMembers.spaceId, video?.spaceId ?? ""),
-			),
-		);
-
 	if (user && video && user.id !== video.ownerId) {
 		try {
 			await createNotification({ type: "view", videoId, authorId: user.id });
@@ -362,11 +347,20 @@ export default async function ShareVideoPage(props: Props) {
 		return <p>No video found</p>;
 	}
 
-	const userAccess = await userHasAccessToVideo(
-		user,
-		video,
-		!!space?.isSpaceMember,
-	);
+	const [space] = await db()
+		.select({
+			isSpaceMember: spaceMembers.userId,
+		})
+		.from(spaceMembers)
+		.where(
+			and(
+				eq(spaceMembers.userId, user?.id ?? ""),
+				eq(spaceMembers.spaceId, video.spaceId ?? ""),
+			),
+		);
+
+	const isMember = !!space?.isSpaceMember;
+	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	if (userAccess === "private") {
 		return (
