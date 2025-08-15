@@ -503,14 +503,13 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         impl FrameHandler {
             // Helper function to clean up old frame events
             fn cleanup_old_events(
-                &self,
-                frame_events: &mut VecDeque<(Instant, bool)>,
+                &mut self,
                 now: Instant,
             ) {
                 let cutoff = now - WINDOW_DURATION;
-                while let Some(&(timestamp, _)) = frame_events.front() {
+                while let Some(&(timestamp, _)) = self.frame_events.front() {
                     if timestamp < cutoff {
-                        frame_events.pop_front();
+                        self.frame_events.pop_front();
                     } else {
                         break;
                     }
@@ -519,18 +518,17 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
             // Helper function to calculate current drop rate
             fn calculate_drop_rate(
-                &self,
-                frame_events: &mut VecDeque<(Instant, bool)>,
+                &mut self,
             ) -> (f64, usize, usize) {
                 let now = Instant::now();
-                cleanup_old_events(frame_events, now);
+                self.cleanup_old_events(now);
 
-                if frame_events.is_empty() {
+                if self.frame_events.is_empty() {
                     return (0.0, 0, 0);
                 }
 
-                let total_frames = frame_events.len();
-                let dropped_frames = frame_events.iter().filter(|(_, dropped)| *dropped).count();
+                let total_frames = self.frame_events.len();
+                let dropped_frames = self.frame_events.iter().filter(|(_, dropped)| *dropped).count();
                 let drop_rate = dropped_frames as f64 / total_frames as f64;
 
                 (drop_rate, dropped_frames, total_frames)
@@ -556,7 +554,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 {
                     Err(flume::TrySendError::Disconnected(_)) => {
                         warn!("Pipeline disconnected");
-                        ctx.actor_ref().stop();
+                        let _ = ctx.actor_ref().stop_gracefully().await;
                         return;
                     }
                     Err(flume::TrySendError::Full(_)) => {
@@ -570,13 +568,13 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 self.frame_events.push_back((now, frame_dropped));
 
                 if now.duration_since(self.last_cleanup) > Duration::from_millis(100) {
-                    self.cleanup_old_events(&mut self.frame_events, now);
+                    self.cleanup_old_events(now);
                     self.last_cleanup = now;
                 }
 
                 // Check drop rate and potentially exit
                 let (drop_rate, dropped_count, total_count) =
-                    self.calculate_drop_rate(&mut frame_events);
+                    self.calculate_drop_rate();
 
                 if drop_rate > MAX_DROP_RATE_THRESHOLD && total_count >= 10 {
                     error!(
@@ -584,9 +582,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         drop_rate * 100.0,
                         dropped_count,
                         total_count,
-                        window_duration.as_secs()
+                        WINDOW_DURATION.as_secs()
                     );
-                    return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
+                    return;
+                    // return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
                 }
 
                 // Periodic logging of drop rate
@@ -596,7 +595,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                         drop_rate * 100.0,
                         dropped_count,
                         total_count,
-                        frames_dropped
+                        self.frames_dropped
                     );
                     self.last_log = now;
                 }
@@ -614,6 +613,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 video_tx,
                 audio_tx,
                 start_time,
+                frame_events: Default::default(),
+                frames_dropped: Default::default(),
+                last_cleanup: Instant::now(),
+                last_log: Instant::now()
             });
 
             let (capture_item, mut settings) = match target {
