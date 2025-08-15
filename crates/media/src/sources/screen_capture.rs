@@ -470,6 +470,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         use kameo::prelude::*;
         use new_stuff::{windows::*, *};
 
+        const WINDOW_DURATION: Duration = Duration::from_secs(3);
+        const LOG_INTERVAL: Duration = Duration::from_secs(5);
+        const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
+
         let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -485,28 +489,39 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         use std::collections::VecDeque;
         use std::time::{Duration, Instant};
 
-        let mut frame_events: VecDeque<(Instant, bool)> = VecDeque::new();
-        let window_duration = Duration::from_secs(3);
-        let max_drop_rate_threshold = 0.25;
-        let mut last_cleanup = Instant::now();
-        let mut last_log = Instant::now();
-        let log_interval = Duration::from_secs(5);
+        #[derive(Actor)]
+        struct FrameHandler {
+            start_time: SystemTime,
+            frames_dropped: u32,
+            last_cleanup: Instant,
+            last_log: Instant,
+            frame_events: VecDeque<(Instant, bool)>,
+            video_tx: Sender<(ffmpeg::frame::Video, f64)>,
+            audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+        }
 
-        // Helper function to clean up old frame events
-        let cleanup_old_events = |frame_events: &mut VecDeque<(Instant, bool)>, now: Instant| {
-            let cutoff = now - window_duration;
-            while let Some(&(timestamp, _)) = frame_events.front() {
-                if timestamp < cutoff {
-                    frame_events.pop_front();
-                } else {
-                    break;
+        impl FrameHandler {
+            // Helper function to clean up old frame events
+            fn cleanup_old_events(
+                &self,
+                frame_events: &mut VecDeque<(Instant, bool)>,
+                now: Instant,
+            ) {
+                let cutoff = now - WINDOW_DURATION;
+                while let Some(&(timestamp, _)) = frame_events.front() {
+                    if timestamp < cutoff {
+                        frame_events.pop_front();
+                    } else {
+                        break;
+                    }
                 }
             }
-        };
 
-        // Helper function to calculate current drop rate
-        let calculate_drop_rate =
-            |frame_events: &mut VecDeque<(Instant, bool)>| -> (f64, usize, usize) {
+            // Helper function to calculate current drop rate
+            fn calculate_drop_rate(
+                &self,
+                frame_events: &mut VecDeque<(Instant, bool)>,
+            ) -> (f64, usize, usize) {
                 let now = Instant::now();
                 cleanup_old_events(frame_events, now);
 
@@ -519,13 +534,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 let drop_rate = dropped_frames as f64 / total_frames as f64;
 
                 (drop_rate, dropped_frames, total_frames)
-            };
-
-        #[derive(Actor)]
-        struct FrameHandler {
-            start_time: SystemTime,
-            video_tx: Sender<(ffmpeg::frame::Video, f64)>,
-            audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+            }
         }
 
         impl Message<NewFrame> for FrameHandler {
@@ -534,13 +543,63 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             async fn handle(
                 &mut self,
                 msg: NewFrame,
-                _: &mut kameo::prelude::Context<Self, Self::Reply>,
+                ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
             ) -> Self::Reply {
-            	let Ok(elapsed) = msg.display_time.duration_since(self.start_time) else {
-	             	return;
-	            };
+                let Ok(elapsed) = msg.display_time.duration_since(self.start_time) else {
+                    return;
+                };
 
-            	self.video_tx.try_send((msg.ff_frame, elapsed.as_secs_f64()));
+                let now = Instant::now();
+                let frame_dropped = match self
+                    .video_tx
+                    .try_send((msg.ff_frame, elapsed.as_secs_f64()))
+                {
+                    Err(flume::TrySendError::Disconnected(_)) => {
+                        warn!("Pipeline disconnected");
+                        ctx.actor_ref().stop();
+                        return;
+                    }
+                    Err(flume::TrySendError::Full(_)) => {
+                        warn!("Screen capture sender is full, dropping frame");
+                        self.frames_dropped += 1;
+                        true
+                    }
+                    _ => false,
+                };
+
+                self.frame_events.push_back((now, frame_dropped));
+
+                if now.duration_since(self.last_cleanup) > Duration::from_millis(100) {
+                    self.cleanup_old_events(&mut self.frame_events, now);
+                    self.last_cleanup = now;
+                }
+
+                // Check drop rate and potentially exit
+                let (drop_rate, dropped_count, total_count) =
+                    self.calculate_drop_rate(&mut frame_events);
+
+                if drop_rate > MAX_DROP_RATE_THRESHOLD && total_count >= 10 {
+                    error!(
+                        "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
+                        drop_rate * 100.0,
+                        dropped_count,
+                        total_count,
+                        window_duration.as_secs()
+                    );
+                    return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
+                }
+
+                // Periodic logging of drop rate
+                if now.duration_since(self.last_log) > LOG_INTERVAL && total_count > 0 {
+                    info!(
+                        "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
+                        drop_rate * 100.0,
+                        dropped_count,
+                        total_count,
+                        frames_dropped
+                    );
+                    self.last_log = now;
+                }
             }
         }
 
@@ -551,22 +610,27 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
             let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
 
-            let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx, start_time });
+            let frame_handler = FrameHandler::spawn(FrameHandler {
+                video_tx,
+                audio_tx,
+                start_time,
+            });
 
             let (capture_item, mut settings) = match target {
                 ScreenCaptureTarget::Screen { id } => {
                     let display = Display::from_id(id).unwrap();
                     let display = display.raw_handle();
 
-                    (display.try_as_capture_item().unwrap(), scap_direct3d::Settings {
-	                    is_border_required: Some(false),
-	                    ..Default::default()
-                    } )
+                    (
+                        display.try_as_capture_item().unwrap(),
+                        scap_direct3d::Settings {
+                            is_border_required: Some(false),
+                            ..Default::default()
+                        },
+                    )
                 }
                 _ => todo!(),
             };
-
-            dbg!(&settings);
 
             let _ = capturer
                 .ask(StartCapturing {
@@ -854,13 +918,9 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                 match &frame {
                     scap_screencapturekit::Frame::Screen(frame) => {
-                        // let pixel_buffer = frame.image_buf();
-
-                        // if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                        //     return ControlFlow::Continue(());
-                        // }
-
-                        // dbg!(frame.image_buf().width(), frame.image_buf().height());
+                        if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
+                            return;
+                        }
 
                         let check_skip_send = || {
                             cap_fail::fail_err!("media::sources::screen_capture::skip_send", ());
@@ -986,7 +1046,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     let content_filter = display.raw_handle().as_content_filter().await.unwrap();
 
-                    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+                    let settings = scap_screencapturekit::StreamCfgBuilder::default()
                         .with_width(display.raw_handle().physical_size().width() as usize)
                         .with_height(display.raw_handle().physical_size().height() as usize)
                         .build();
@@ -1003,6 +1063,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             };
 
             settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+
             let _ = capturer
                 .ask(StartCapturing {
                     target: content_filter,
@@ -1016,7 +1077,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             let _ = ready_signal.send(Ok(()));
 
             while let Ok(msg) = control_signal.receiver.recv_async().await {
-                dbg!(msg);
                 if let Control::Shutdown = msg {
                     let _ = stop_recipient.ask(StopCapturing).await;
                     break;
@@ -1025,97 +1085,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         });
 
         Ok(())
-
-        // inner(
-        //     self,
-        //     ready_signal,
-        //     control_signal,
-        //     |capturer| match capturer.raw().get_next_sample_buffer() {
-        //         Ok((sample_buffer, typ)) => {
-        //             use cidre::sc;
-
-        //             #[allow(clippy::useless_transmute)]
-        //             let sample_buffer = unsafe {
-        //                 std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
-        //             };
-
-        //             let frame_time =
-        //                 sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
-        //             let unix_timestamp = start_time_unix + frame_time - start_cmtime;
-        //             let relative_time = unix_timestamp - start_time_f64;
-
-        //             match typ {
-        //                 sc::stream::OutputType::Screen => {
-        //                     let Some(pixel_buffer) = sample_buffer.image_buf() else {
-        //                         return ControlFlow::Continue(());
-        //                     };
-
-        //                     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-        //                         return ControlFlow::Continue(());
-        //                     }
-
-        //                     let check_skip_send = || {
-        //                         cap_fail::fail_err!(
-        //                             "media::sources::screen_capture::skip_send",
-        //                             ()
-        //                         );
-
-        //                         Ok::<(), ()>(())
-        //                     };
-
-        //                     if check_skip_send().is_ok()
-        //                         && video_tx.send((sample_buffer, relative_time)).is_err()
-        //                     {
-        //                         error!("Pipeline is unreachable. Shutting down recording.");
-        //                         return ControlFlow::Continue(());
-        //                     }
-        //                 }
-        //                 sc::stream::OutputType::Audio => {
-        //                     use ffmpeg::ChannelLayout;
-
-        //                     let res = || {
-        //                         cap_fail::fail_err!("screen_capture audio skip", ());
-        //                         Ok::<(), ()>(())
-        //                     };
-        //                     if res().is_err() {
-        //                         return ControlFlow::Continue(());
-        //                     }
-
-        //                     let Some(audio_tx) = &audio_tx else {
-        //                         return ControlFlow::Continue(());
-        //                     };
-
-        //                     let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-        //                     let slice = buf_list.block().as_slice().unwrap();
-
-        //                     let mut frame = ffmpeg::frame::Audio::new(
-        //                         ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-        //                         sample_buffer.num_samples() as usize,
-        //                         ChannelLayout::STEREO,
-        //                     );
-        //                     frame.set_rate(48_000);
-        //                     let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
-        //                     for i in 0..frame.planes() {
-        //                         use cap_media_info::PlanarData;
-
-        //                         frame.plane_data_mut(i).copy_from_slice(
-        //                             &slice[i * data_bytes_size as usize
-        //                                 ..(i + 1) * data_bytes_size as usize],
-        //                         );
-        //                     }
-
-        //                     frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
-
-        //                     let _ = audio_tx.send((frame, relative_time));
-        //                 }
-        //                 _ => {}
-        //             }
-
-        //             ControlFlow::Continue(())
-        //         }
-        //         Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
-        //     },
-        // )
     }
 }
 
@@ -1483,7 +1452,9 @@ mod new_stuff {
 
         impl WindowsScreenCapture {
             pub fn new() -> Self {
-                Self { capture_handle: None }
+                Self {
+                    capture_handle: None,
+                }
             }
         }
 
@@ -1501,7 +1472,7 @@ mod new_stuff {
 
         pub struct NewFrame {
             pub ff_frame: ffmpeg::frame::Video,
-            pub display_time: SystemTime
+            pub display_time: SystemTime,
         }
 
         impl Message<StartCapturing> for WindowsScreenCapture {
@@ -1512,7 +1483,7 @@ mod new_stuff {
                 msg: StartCapturing,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
-            	println!("bruh");
+                println!("bruh");
 
                 if self.capture_handle.is_some() {
                     return Err(StartCapturingError::AlreadyCapturing);
@@ -1522,10 +1493,16 @@ mod new_stuff {
 
                 let capture_handle = capturer.start(
                     move |frame| {
-                    	let display_time = SystemTime::now();
+                        let display_time = SystemTime::now();
                         let ff_frame = frame.as_ffmpeg().unwrap();
 
-                        let _ = msg.frame_handler.tell(NewFrame { ff_frame, display_time }).try_send();
+                        let _ = msg
+                            .frame_handler
+                            .tell(NewFrame {
+                                ff_frame,
+                                display_time,
+                            })
+                            .try_send();
 
                         Ok(())
                     },

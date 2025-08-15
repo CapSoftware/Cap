@@ -3,9 +3,9 @@ mod screencapturekit;
 #[cfg(target_os = "macos")]
 pub use screencapturekit::*;
 
-// #[cfg(windows)]
+#[cfg(windows)]
 mod direct3d;
-// #[cfg(windows)]
+#[cfg(windows)]
 pub use direct3d::*;
 
 pub trait AsFFmpeg {
