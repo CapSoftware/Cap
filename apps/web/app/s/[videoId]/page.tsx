@@ -5,6 +5,7 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
+	spaceMembers,
 	spaces,
 	spaceVideos,
 	users,
@@ -13,7 +14,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { eq, type InferSelectModel, sql } from "drizzle-orm";
+import { and, eq, type InferSelectModel, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -95,10 +96,6 @@ type Props = {
 	searchParams: { [key: string]: string | string[] | undefined };
 };
 
-type CommentWithAuthor = typeof comments.$inferSelect & {
-	authorName: string | null;
-};
-
 type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganization?: {
 		organizationId: string;
@@ -117,7 +114,23 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		"[generateMetadata] Fetching video metadata for videoId:",
 		videoId,
 	);
-	const query = await db().select().from(videos).where(eq(videos.id, videoId));
+	const query = await db()
+		.select({
+			id: videos.id,
+			public: videos.public,
+			name: videos.name,
+			password: videos.password,
+			ownerId: videos.ownerId,
+			sharedOrganization: {
+				organizationId: sharedVideos.organizationId,
+			},
+			spaceId: spaceVideos.spaceId,
+		})
+		.from(videos)
+		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
+		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+		.where(eq(videos.id, videoId))
+		.limit(1);
 
 	if (query.length === 0) {
 		console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -130,8 +143,22 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		return notFound();
 	}
 
-	const userPromise = getCurrentUser();
-	const userAccess = await userHasAccessToVideo(userPromise, video);
+	const user = await getCurrentUser();
+
+	const [membership] = await db()
+		.select({ userId: spaceMembers.userId })
+		.from(spaceMembers)
+		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
+		.where(
+			and(
+				eq(spaceMembers.userId, user?.id ?? ""),
+				eq(spaceVideos.videoId, video.id),
+			),
+		)
+		.limit(1);
+
+	const isMember = !!membership?.userId;
+	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	const headersList = headers();
 	const referrer = headersList.get("x-referrer") || "";
@@ -301,9 +328,11 @@ export default async function ShareVideoPage(props: Props) {
 			sharedOrganization: {
 				organizationId: sharedVideos.organizationId,
 			},
+			spaceId: spaceVideos.spaceId,
 		})
 		.from(videos)
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 		.where(eq(videos.id, videoId));
 
 	if (user && video && user.id !== video.ownerId) {
@@ -319,12 +348,26 @@ export default async function ShareVideoPage(props: Props) {
 		return <p>No video found</p>;
 	}
 
-	const userAccess = await userHasAccessToVideo(user, video);
+	const [membership] = await db()
+		.select({ userId: spaceMembers.userId })
+		.from(spaceMembers)
+		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
+		.where(
+			and(
+				eq(spaceMembers.userId, user?.id ?? ""),
+				eq(spaceVideos.videoId, video.id),
+			),
+		)
+		.limit(1);
+
+	const isMember = !!membership?.userId;
+	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	if (userAccess === "private") {
 		return (
 			<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-				<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+				<Logo className="size-32" />
+				<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
 				<p className="text-gray-400">
 					If you own this video, please <Link href="/login">sign in</Link> to
 					manage sharing.

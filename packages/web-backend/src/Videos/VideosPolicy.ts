@@ -1,6 +1,8 @@
 import { Policy, Video } from "@cap/web-domain";
 import { Effect, Option } from "effect";
 
+import { OrganisationsRepo } from "../Organisations/OrganisationsRepo";
+import { SpacesRepo } from "../Spaces/SpacesRepo";
 import { VideosRepo } from "./VideosRepo";
 
 export class VideosPolicy extends Effect.Service<VideosPolicy>()(
@@ -8,6 +10,8 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 	{
 		effect: Effect.gen(function* () {
 			const repo = yield* VideosRepo;
+			const orgsRepo = yield* OrganisationsRepo;
+			const spacesRepo = yield* SpacesRepo;
 
 			const canView = (videoId: Video.VideoId) =>
 				Policy.publicPolicy(
@@ -18,13 +22,21 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 
 						const [video, password] = res.value;
 
-						if (
-							user.pipe(
-								Option.filter((user) => user.id === video.ownerId),
-								Option.isSome,
-							)
-						)
-							return true;
+						if (Option.isSome(user)) {
+							const userId = user.value.id;
+							if (userId === video.ownerId) return true;
+
+							if (!video.public) {
+								const [videoOrgShareMembership, videoSpaceShareMembership] =
+									yield* Effect.all([
+										orgsRepo.membershipForVideo(userId, video.id),
+										spacesRepo.membershipForVideo(userId, video.id),
+									]);
+
+								if (!videoSpaceShareMembership || !videoOrgShareMembership)
+									return false;
+							}
+						}
 
 						yield* Video.verifyPassword(video, password);
 
@@ -46,6 +58,6 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 
 			return { canView, isOwner };
 		}),
-		dependencies: [VideosRepo.Default],
+		dependencies: [VideosRepo.Default, OrganisationsRepo.Default, SpacesRepo.Default],
 	},
-) {}
+) { }
