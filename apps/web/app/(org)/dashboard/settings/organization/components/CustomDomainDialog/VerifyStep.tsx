@@ -3,9 +3,9 @@ import clsx from "clsx";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { parse } from "tldts";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { DomainConfig, DomainVerification } from "./types";
-import { parse } from "tldts";
 
 interface VerifyStepProps {
 	domain: string;
