@@ -55,12 +55,13 @@ const VerifyStep = ({
 	};
 
 	const isSubdomain = (domain: string): boolean => {
-		domain = domain.replace(/^https?:\/\//, '');
-		domain = domain.split('/')[0] ?? '';
+		domain = domain.replace(/^https?:\/\//, "");
+		domain = domain.split("/")[0] ?? "";
 		if (!domain) return false;
-		const parts: string[] = domain.split('.');
+		const parts: string[] = domain.split(".");
 		return parts.length > 2;
 	}
+	};
 
 	const recommendedAValues = getRecommendedAValues();
 
@@ -71,7 +72,8 @@ const VerifyStep = ({
 	const cnameConfigured =
 		recommendedCnames.length > 0 &&
 		recommendedCnames.some((rec) => currentCnames.includes(rec.value));
-	const showARecord = recommendedARecord && !aRecordConfigured && !isSubdomain(domain);
+	const showARecord =
+		recommendedARecord && !aRecordConfigured && !isSubdomain(domain);
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
