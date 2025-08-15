@@ -80,8 +80,8 @@ impl DisplayImpl {
             };
         }
 
-        let width = unsafe { core_graphics::display::CGDisplayModeGetWidth(mode) };
-        let height = unsafe { core_graphics::display::CGDisplayModeGetHeight(mode) };
+        let width = unsafe { core_graphics::display::CGDisplayModeGetPixelWidth(mode) };
+        let height = unsafe { core_graphics::display::CGDisplayModeGetPixelHeight(mode) };
 
         unsafe { core_graphics::display::CGDisplayModeRelease(mode) };
 

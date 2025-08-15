@@ -42,6 +42,7 @@ tokio-util = "0.7.15"
 kameo = "0.17.2"
 scap = { workspace = true }
 sync_wrapper = "1.0.2"
+scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
@@ -68,7 +69,6 @@ windows = { workspace = true, features = [
 windows-capture = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
 scap-direct3d = { path = "../scap-direct3d" }
-scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 [dev-dependencies]
 inquire = "0.7.5"

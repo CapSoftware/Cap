@@ -164,7 +164,7 @@ pub async fn spawn_studio_recording_actor<'a>(
     let mut segment_pipeline_factory = SegmentPipelineFactory::new(
         segments_dir,
         cursors_dir,
-        base_inputs.capture_target,
+        base_inputs.capture_target.clone(),
         audio_input_feed,
         base_inputs.capture_system_audio,
         camera_feed,
@@ -612,7 +612,7 @@ impl SegmentPipelineFactory {
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
-            self.capture_target,
+            self.capture_target.clone(),
             &self.audio_input_feed,
             self.capture_system_audio,
             self.camera_feed.as_deref(),
@@ -668,8 +668,8 @@ async fn create_segment_pipeline(
         start_time,
     )
     .await?;
-    #[cfg(target_os = "macos")]
-    let screen_crop_ratio = screen_source.crop_ratio();
+    // #[cfg(target_os = "macos")]
+    // let screen_crop_ratio = screen_source.crop_ratio();
 
     let camera_feed = match camera_feed.as_ref() {
         Some(camera_feed) => Some(camera_feed.lock().await),
@@ -687,7 +687,12 @@ async fn create_segment_pipeline(
     trace!("preparing segment pipeline {index}");
 
     let screen = {
-        let bounds = *screen_source.get_bounds();
+        let bounds = cap_media::platform::Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 3456.0,
+            height: 2234.0,
+        }; // *screen_source.get_bounds();
         let video_info = screen_source.info();
 
         let (pipeline_builder_, screen_timestamp_rx) =
@@ -860,36 +865,37 @@ async fn create_segment_pipeline(
         None
     };
 
-    let cursor = custom_cursor_capture.then(move || {
-        let cursor = spawn_cursor_recorder(
-            screen.bounds,
-            #[cfg(target_os = "macos")]
-            cap_displays::Display::list()
-                .into_iter()
-                .find(|m| match &capture_target {
-                    ScreenCaptureTarget::Display { id }
-                    | ScreenCaptureTarget::Area { display_id: id, .. } => {
-                        m.raw_handle().inner().id == *id
-                    }
-                    ScreenCaptureTarget::Window { id } => {
-                        m.raw_handle().inner().id
-                            == cap_media::platform::display_for_window(*id).unwrap().id
-                    }
-                })
-                .unwrap(),
-            #[cfg(target_os = "macos")]
-            screen_crop_ratio,
-            cursors_dir.to_path_buf(),
-            prev_cursors,
-            next_cursors_id,
-            start_time,
-        );
+    let cursor = None;
+    // custom_cursor_capture.then(move || {
+    //     let cursor = spawn_cursor_recorder(
+    //         screen.bounds,
+    //         #[cfg(target_os = "macos")]
+    //         cap_displays::Display::list()
+    //             .into_iter()
+    //             .find(|m| match &capture_target {
+    //                 ScreenCaptureTarget::Screen { id }
+    //                 | ScreenCaptureTarget::Area { screen: id, .. } => {
+    //                     m.raw_handle().inner().id == *id
+    //                 }
+    //                 ScreenCaptureTarget::Window { id } => {
+    //                     m.raw_handle().inner().id
+    //                         == cap_media::platform::display_for_window(*id).unwrap().id
+    //                 }
+    //             })
+    //             .unwrap(),
+    //         #[cfg(target_os = "macos")]
+    //         screen_crop_ratio,
+    //         cursors_dir.to_path_buf(),
+    //         prev_cursors,
+    //         next_cursors_id,
+    //         start_time,
+    //     );
 
-        CursorPipeline {
-            output_path: dir.join("cursor.json"),
-            actor: Some(cursor),
-        }
-    });
+    //     CursorPipeline {
+    //         output_path: dir.join("cursor.json"),
+    //         actor: Some(cursor),
+    //     }
+    // });
 
     let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
 

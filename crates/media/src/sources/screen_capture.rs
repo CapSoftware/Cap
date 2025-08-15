@@ -1,3 +1,7 @@
+use cap_displays::{
+    Display, DisplayId, Window, WindowId,
+    bounds::{LogicalBounds, PhysicalBounds},
+};
 use cap_media_info::{AudioInfo, PlanarData, RawVideoFormat, VideoInfo};
 use cpal::traits::{DeviceTrait, HostTrait};
 use ffmpeg::{format::Sample, frame};
@@ -8,7 +12,6 @@ use scap::{
     capturer::{Area, Capturer, Options, Point, Resolution as ScapResolution, Size},
     frame::{Frame, FrameType, VideoFrame},
 };
-
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{collections::HashMap, ops::ControlFlow, rc::Rc, time::SystemTime};
@@ -19,7 +22,7 @@ use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 use crate::{
     MediaError,
     pipeline::{clock::*, control::Control, task::PipelineSourceTask},
-    platform::{self, Bounds, Window, logical_monitor_bounds},
+    platform::{self, Bounds, logical_monitor_bounds},
 };
 
 static EXCLUDED_WINDOWS: &[&str] = &[
@@ -30,16 +33,16 @@ static EXCLUDED_WINDOWS: &[&str] = &[
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureWindow {
-    pub id: u32,
+    pub id: WindowId,
     pub owner_name: String,
     pub name: String,
-    pub bounds: Bounds,
+    pub bounds: LogicalBounds,
     pub refresh_rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureScreen {
-    pub id: u32,
+    pub id: DisplayId,
     pub name: String,
     pub refresh_rate: u32,
 }
@@ -50,85 +53,91 @@ pub struct CaptureArea {
     pub bounds: Bounds,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase", tag = "variant")]
 pub enum ScreenCaptureTarget {
-    Window { id: u32 },
-    Screen { id: u32 },
-    Area { screen: u32, bounds: Bounds },
+    Window {
+        id: WindowId,
+    },
+    Screen {
+        id: DisplayId,
+    },
+    Area {
+        screen: DisplayId,
+        bounds: PhysicalBounds,
+    },
 }
 
 impl ScreenCaptureTarget {
     // only available on mac and windows
-    pub fn primary_display() -> Self {
-        ScreenCaptureTarget::Screen {
-            id: scap::get_main_display().id,
-        }
-    }
+    // pub fn primary_display() -> Self {
+    //     ScreenCaptureTarget::Screen {
+    //         id: scap::get_main_display().id,
+    //     }
+    // }
 
-    pub fn get_target(&self) -> Option<scap::Target> {
-        let targets = scap::get_all_targets();
+    // pub fn get_target(&self) -> Option<scap::Target> {
+    //     let targets = scap::get_all_targets();
 
-        match self {
-            ScreenCaptureTarget::Window { id } => targets.into_iter().find(|t| match t {
-                scap::Target::Window(window) => window.id == *id,
-                _ => false,
-            }),
-            ScreenCaptureTarget::Screen { id } => targets.into_iter().find(|t| match t {
-                scap::Target::Display(screen) => screen.id == *id,
-                _ => false,
-            }),
-            ScreenCaptureTarget::Area { screen, .. } => targets.into_iter().find(|t| match t {
-                scap::Target::Display(display) => display.id == *screen,
-                _ => false,
-            }),
-        }
-    }
+    //     match self {
+    //         ScreenCaptureTarget::Window { id } => targets.into_iter().find(|t| match t {
+    //             scap::Target::Window(window) => window.id == *id,
+    //             _ => false,
+    //         }),
+    //         ScreenCaptureTarget::Screen { id } => targets.into_iter().find(|t| match t {
+    //             scap::Target::Display(screen) => screen.id == *id,
+    //             _ => false,
+    //         }),
+    //         ScreenCaptureTarget::Area { screen, .. } => targets.into_iter().find(|t| match t {
+    //             scap::Target::Display(display) => display.id == *screen,
+    //             _ => false,
+    //         }),
+    //     }
+    // }
 
-    pub fn get_title(&self) -> Option<String> {
-        let target = self.get_target();
+    // pub fn get_title(&self) -> Option<String> {
+    //     let target = self.get_target();
 
-        match target {
-            None => None,
-            Some(scap::Target::Window(window)) => Some(window.title.clone()),
-            Some(scap::Target::Display(screen)) => {
-                let names = crate::platform::display_names();
+    //     match target {
+    //         None => None,
+    //         Some(scap::Target::Window(window)) => Some(window.title.clone()),
+    //         Some(scap::Target::Display(screen)) => {
+    //             let names = crate::platform::display_names();
 
-                Some(
-                    names
-                        .get(&screen.id)
-                        .cloned()
-                        .unwrap_or_else(|| screen.title.clone()),
-                )
-            }
-        }
-    }
+    //             Some(
+    //                 names
+    //                     .get(&screen.id)
+    //                     .cloned()
+    //                     .unwrap_or_else(|| screen.title.clone()),
+    //             )
+    //         }
+    //     }
+    // }
 }
 
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     target: ScreenCaptureTarget,
-    output_type: Option<FrameType>,
     fps: u32,
     video_info: VideoInfo,
     options: Rc<Options>,
     show_camera: bool,
     force_show_cursor: bool,
-    bounds: Bounds,
+    // bounds: Bounds,
     // logical display size
-    display_size: (f32, f32),
+    // display_size: (f32, f32),
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     start_time: SystemTime,
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenCaptureSource")
             .field("target", &self.target)
-            .field("bounds", &self.bounds)
+            // .field("bounds", &self.bounds)
             // .field("output_resolution", &self.output_resolution)
-            .field("output_type", &self.output_type)
             .field("fps", &self.fps)
             .field("video_info", &self.video_info)
             .field(
@@ -167,17 +176,17 @@ unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
 impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
-            target: self.target,
-            output_type: self.output_type,
+            target: self.target.clone(),
             fps: self.fps,
             video_info: self.video_info,
             options: self.options.clone(),
             show_camera: self.show_camera,
             force_show_cursor: self.force_show_cursor,
-            bounds: self.bounds,
-            display_size: self.display_size,
+            // bounds: self.bounds,
+            // display_size: self.display_size,
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
+            tokio_handle: self.tokio_handle.clone(),
             _phantom: std::marker::PhantomData,
             start_time: self.start_time,
         }
@@ -200,47 +209,47 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,
-        output_type: Option<FrameType>,
         show_camera: bool,
         force_show_cursor: bool,
         max_fps: u32,
         video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
         audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         start_time: SystemTime,
+        tokio_handle: tokio::runtime::Handle,
     ) -> Result<Self, String> {
         cap_fail::fail!("media::screen_capture::init");
 
-        let OptionsConfig {
-            scap_target,
-            bounds,
-            crop_area,
-            display_size,
-        } = Self::get_options_config(target)?;
+        // let OptionsConfig {
+        //     scap_target,
+        //     bounds,
+        //     crop_area,
+        //     display_size,
+        // } = Self::get_options_config(target)?;
 
-        let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
-        let fps = fps.min(max_fps);
+        // let fps = get_target_fps(&scap_target).map_err(|e| format!("target_fps / {e}"))?;
+        let fps = 60; // fps.min(max_fps);
 
         let captures_audio = audio_tx.is_some();
 
         let mut this = Self {
-            target: *target,
-            output_type,
+            target: target.clone(),
             fps,
             video_info: VideoInfo::from_raw(RawVideoFormat::Bgra, 0, 0, 0),
             options: std::rc::Rc::new(Default::default()),
-            bounds,
-            display_size,
+            // bounds,
+            // display_size,
             show_camera,
             force_show_cursor,
             video_tx,
             audio_tx,
+            tokio_handle,
             _phantom: std::marker::PhantomData,
             start_time,
         };
 
-        let options = this.create_options(scap_target, crop_area, captures_audio)?;
+        // let options = this.create_options(scap_target, crop_area, captures_audio)?;
 
-        this.options = std::rc::Rc::new(options);
+        // this.options = std::rc::Rc::new(options);
 
         #[cfg(target_os = "macos")]
         let video_size = {
@@ -262,139 +271,139 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         Ok(this)
     }
 
-    pub fn get_bounds(&self) -> &Bounds {
-        &self.bounds
-    }
+    // pub fn get_bounds(&self) -> &Bounds {
+    //     &self.bounds
+    // }
 
-    pub fn crop_ratio(&self) -> CropRatio {
-        if let Some(crop_area) = &self.options.crop_area {
-            CropRatio {
-                position: (
-                    crop_area.origin.x as f32 / self.display_size.0,
-                    crop_area.origin.y as f32 / self.display_size.1,
-                ),
-                size: (
-                    crop_area.size.width as f32 / self.display_size.0,
-                    crop_area.size.height as f32 / self.display_size.1,
-                ),
-            }
-        } else {
-            CropRatio {
-                position: (0.0, 0.0),
-                size: (1.0, 1.0),
-            }
-        }
-    }
+    // pub fn crop_ratio(&self) -> CropRatio {
+    //     if let Some(crop_area) = &self.options.crop_area {
+    //         CropRatio {
+    //             position: (
+    //                 crop_area.origin.x as f32 / self.display_size.0,
+    //                 crop_area.origin.y as f32 / self.display_size.1,
+    //             ),
+    //             size: (
+    //                 crop_area.size.width as f32 / self.display_size.0,
+    //                 crop_area.size.height as f32 / self.display_size.1,
+    //             ),
+    //         }
+    //     } else {
+    //         CropRatio {
+    //             position: (0.0, 0.0),
+    //             size: (1.0, 1.0),
+    //         }
+    //     }
+    // }
 
-    fn get_options_config(target: &ScreenCaptureTarget) -> Result<OptionsConfig, String> {
-        let targets = scap::get_all_targets();
+    // fn get_options_config(target: &ScreenCaptureTarget) -> Result<OptionsConfig, String> {
+    //     let targets = scap::get_all_targets();
 
-        Ok(match target {
-            ScreenCaptureTarget::Window { id } => {
-                let windows = list_windows();
+    //     Ok(match target {
+    //         ScreenCaptureTarget::Window { id } => {
+    //             let windows = list_windows();
 
-                let (mut window_info, target) = windows
-                    .into_iter()
-                    .find(|t| t.0.id == *id)
-                    .ok_or_else(|| "Capture window not found".to_string())?;
+    //             let (mut window_info, target) = windows
+    //                 .into_iter()
+    //                 .find(|t| t.0.id == *id)
+    //                 .ok_or_else(|| "Capture window not found".to_string())?;
 
-                let Target::Display(display) = display_for_target(&target, &targets)
-                    .ok_or_else(|| "Screen for capture window not found".to_string())?
-                else {
-                    unreachable!()
-                };
+    //             let Target::Display(display) = display_for_target(&target, &targets)
+    //                 .ok_or_else(|| "Screen for capture window not found".to_string())?
+    //             else {
+    //                 unreachable!()
+    //             };
 
-                let id = {
-                    #[cfg(target_os = "macos")]
-                    {
-                        display.raw_handle.0
-                    }
+    //             let id = {
+    //                 #[cfg(target_os = "macos")]
+    //                 {
+    //                     display.raw_handle.0
+    //                 }
 
-                    #[cfg(windows)]
-                    {
-                        display.raw_handle.0 as u32
-                    }
-                };
+    //                 #[cfg(windows)]
+    //                 {
+    //                     display.raw_handle.0 as u32
+    //                 }
+    //             };
 
-                let monitor_bounds = logical_monitor_bounds(id).unwrap();
+    //             let monitor_bounds = logical_monitor_bounds(id).unwrap();
 
-                window_info.bounds.x -= monitor_bounds.position.x;
-                window_info.bounds.y -= monitor_bounds.position.y;
+    //             window_info.bounds.x -= monitor_bounds.position.x;
+    //             window_info.bounds.y -= monitor_bounds.position.y;
 
-                fn div_by_2able(n: f64) -> f64 {
-                    n + n % 2.0
-                }
+    //             fn div_by_2able(n: f64) -> f64 {
+    //                 n + n % 2.0
+    //             }
 
-                let crop = Area {
-                    size: Size {
-                        width: div_by_2able(window_info.bounds.width),
-                        height: div_by_2able(window_info.bounds.height),
-                    },
-                    origin: Point {
-                        x: div_by_2able(window_info.bounds.x),
-                        y: div_by_2able(window_info.bounds.y),
-                    },
-                };
+    //             let crop = Area {
+    //                 size: Size {
+    //                     width: div_by_2able(window_info.bounds.width),
+    //                     height: div_by_2able(window_info.bounds.height),
+    //                 },
+    //                 origin: Point {
+    //                     x: div_by_2able(window_info.bounds.x),
+    //                     y: div_by_2able(window_info.bounds.y),
+    //                 },
+    //             };
 
-                OptionsConfig {
-                    scap_target: Target::Display(display),
-                    bounds: Bounds {
-                        x: crop.origin.x,
-                        y: crop.origin.y,
-                        width: crop.size.width,
-                        height: crop.size.height,
-                    },
-                    crop_area: Some(crop),
-                    display_size: (
-                        monitor_bounds.size.width as f32,
-                        monitor_bounds.size.height as f32,
-                    ),
-                }
-            }
-            ScreenCaptureTarget::Screen { id } => {
-                let screens = list_screens();
+    //             OptionsConfig {
+    //                 scap_target: Target::Display(display),
+    //                 bounds: Bounds {
+    //                     x: crop.origin.x,
+    //                     y: crop.origin.y,
+    //                     width: crop.size.width,
+    //                     height: crop.size.height,
+    //                 },
+    //                 crop_area: Some(crop),
+    //                 display_size: (
+    //                     monitor_bounds.size.width as f32,
+    //                     monitor_bounds.size.height as f32,
+    //                 ),
+    //             }
+    //         }
+    //         ScreenCaptureTarget::Screen { id } => {
+    //             let screens = list_screens();
 
-                let (screen_info, target) = screens
-                    .into_iter()
-                    .find(|(i, _t)| i.id == *id)
-                    .ok_or_else(|| "Target for screen capture not found".to_string())?;
+    //             let (screen_info, target) = screens
+    //                 .into_iter()
+    //                 .find(|(i, _t)| i.id == *id)
+    //                 .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
-                let bounds = platform::monitor_bounds(screen_info.id);
+    //             let bounds = platform::monitor_bounds(screen_info.id);
 
-                OptionsConfig {
-                    scap_target: target,
-                    bounds,
-                    crop_area: None,
-                    display_size: (bounds.width as f32, bounds.height as f32),
-                }
-            }
-            ScreenCaptureTarget::Area { screen, bounds } => {
-                let screen_bounds = platform::monitor_bounds(*screen);
+    //             OptionsConfig {
+    //                 scap_target: target,
+    //                 bounds,
+    //                 crop_area: None,
+    //                 display_size: (bounds.width as f32, bounds.height as f32),
+    //             }
+    //         }
+    //         ScreenCaptureTarget::Area { screen, bounds } => {
+    //             let screen_bounds = platform::monitor_bounds(*screen);
 
-                let screens = list_screens();
-                let screen = screens
-                    .into_iter()
-                    .find_map(|(i, t)| (i.id == *screen).then_some(t))
-                    .ok_or_else(|| "Target for screen capture not found".to_string())?;
+    //             let screens = list_screens();
+    //             let screen = screens
+    //                 .into_iter()
+    //                 .find_map(|(i, t)| (i.id == *screen).then_some(t))
+    //                 .ok_or_else(|| "Target for screen capture not found".to_string())?;
 
-                OptionsConfig {
-                    scap_target: screen,
-                    bounds: *bounds,
-                    crop_area: Some(Area {
-                        size: Size {
-                            width: bounds.width,
-                            height: bounds.height,
-                        },
-                        origin: Point {
-                            x: bounds.x,
-                            y: bounds.y,
-                        },
-                    }),
-                    display_size: (screen_bounds.width as f32, screen_bounds.height as f32),
-                }
-            }
-        })
-    }
+    //             OptionsConfig {
+    //                 scap_target: screen,
+    //                 bounds: *bounds,
+    //                 crop_area: Some(Area {
+    //                     size: Size {
+    //                         width: bounds.width,
+    //                         height: bounds.height,
+    //                     },
+    //                     origin: Point {
+    //                         x: bounds.x,
+    //                         y: bounds.y,
+    //                     },
+    //                 }),
+    //                 display_size: (screen_bounds.width as f32, screen_bounds.height as f32),
+    //             }
+    //         }
+    //     })
+    // }
 
     fn create_options(
         &self,
@@ -427,7 +436,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             show_highlight: false,
             target: Some(target.clone()),
             crop_area,
-            output_type: self.output_type.unwrap_or(FrameType::BGRAFrame),
+            output_type: FrameType::BGRAFrame,
             output_resolution: ScapResolution::Captured,
             excluded_targets: (!excluded_targets.is_empty()).then_some(excluded_targets),
             captures_audio,
@@ -456,6 +465,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
+        use cidre::cv;
+        use kameo::prelude::*;
+        use new_stuff::{windows::*, *};
+
         let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -506,6 +519,47 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
                 (drop_rate, dropped_frames, total_frames)
             };
+
+        #[derive(Actor)]
+        struct FrameHandler {
+            video_tx: Sender<(ffmpeg::frame::Video, f64)>,
+            audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+        }
+
+        let _ = self.tokio_handle.block_on(async move {
+            let capturer = WindowsScreenCapture::spawn(WindowsScreenCapture);
+
+            let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
+
+            let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx });
+
+            let (capture_item, mut settings) = match target {
+                ScreenCaptureTarget::Screen { id } => {
+                    let display = Display::from_id(id).unwrap();
+                    let display = display.raw_handle();
+
+                    (display.try_as_capture_item().unwrap())
+                }
+                _ => todo!(),
+            };
+
+            let _ = capturer
+                .ask(StartCapturing {
+                    target: capture_item,
+                    settings: Default::default(),
+                    frame_handler: frame_handler.recipient(),
+                })
+                .send()
+                .await;
+
+            while let Ok(msg) = control_signal.receiver.recv_async().await {
+                dbg!(msg);
+                if let Control::Shutdown = msg {
+                    let _ = stop_recipient.ask(StopCapturing).await;
+                    break;
+                }
+            }
+        });
 
         inner(
             self,
@@ -652,10 +706,10 @@ fn inner<T: ScreenCaptureFormat>(
 ) -> Result<(), String> {
     trace!("Preparing screen capture source thread...");
 
-    let maybe_capture_window_id = match &source.target {
-        ScreenCaptureTarget::Window { id } => Some(*id),
-        _ => None,
-    };
+    // let maybe_capture_window_id = match &source.target {
+    //     ScreenCaptureTarget::Window { id } => Some(*id),
+    //     _ => None,
+    // };
 
     let mut capturer = match Capturer::build(source.options.as_ref().clone()) {
         Ok(capturer) => capturer,
@@ -685,9 +739,9 @@ fn inner<T: ScreenCaptureFormat>(
             }
             Some(Control::Play) => {
                 if !capturing {
-                    if let Some(window_id) = maybe_capture_window_id {
-                        crate::platform::bring_window_to_focus(window_id);
-                    }
+                    // if let Some(window_id) = maybe_capture_window_id {
+                    //     crate::platform::bring_window_to_focus(window_id);
+                    // }
                     capturer.start_capture();
                     capturing = true;
 
@@ -742,8 +796,103 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        let video_tx = self.video_tx.clone();
-        let audio_tx = self.audio_tx.clone();
+        use cidre::cv;
+        use kameo::prelude::*;
+        use new_stuff::{macos::*, *};
+
+        #[derive(Actor)]
+        struct FrameHandler {
+            start_time_unix: f64,
+            start_cmtime: f64,
+            start_time_f64: f64,
+            video_tx: Sender<(cidre::arc::R<cidre::cm::SampleBuf>, f64)>,
+            audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+        }
+
+        impl Message<NewFrame> for FrameHandler {
+            type Reply = ();
+
+            async fn handle(
+                &mut self,
+                msg: NewFrame,
+                _: &mut kameo::prelude::Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                let frame = msg.0;
+                let sample_buffer = frame.sample_buf();
+
+                let frame_time =
+                    sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
+                let unix_timestamp = self.start_time_unix + frame_time - self.start_cmtime;
+                let relative_time = unix_timestamp - self.start_time_f64;
+
+                match &frame {
+                    scap_screencapturekit::Frame::Screen(frame) => {
+                        // let pixel_buffer = frame.image_buf();
+
+                        // if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+                        //     return ControlFlow::Continue(());
+                        // }
+
+                        // dbg!(frame.image_buf().width(), frame.image_buf().height());
+
+                        let check_skip_send = || {
+                            cap_fail::fail_err!("media::sources::screen_capture::skip_send", ());
+
+                            Ok::<(), ()>(())
+                        };
+
+                        if check_skip_send().is_ok()
+                            && self
+                                .video_tx
+                                .send((sample_buffer.retained(), relative_time))
+                                .is_err()
+                        {
+                            // error!("Pipeline is unreachable. Shutting down recording.");
+                            // return ControlFlow::Continue(());
+                        }
+                    }
+                    scap_screencapturekit::Frame::Audio(frame) => {
+                        use ffmpeg::ChannelLayout;
+
+                        // let res = || {
+                        //     cap_fail::fail_err!("screen_capture audio skip", ());
+                        //     Ok::<(), ()>(())
+                        // };
+                        // if res().is_err() {
+                        //     return ControlFlow::Continue(());
+                        // }
+
+                        let Some(audio_tx) = &self.audio_tx else {
+                            return; // ControlFlow::Continue(());
+                        };
+
+                        let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
+                        let slice = buf_list.block().as_slice().unwrap();
+
+                        let mut frame = ffmpeg::frame::Audio::new(
+                            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                            sample_buffer.num_samples() as usize,
+                            ChannelLayout::STEREO,
+                        );
+                        frame.set_rate(48_000);
+                        let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
+                        for i in 0..frame.planes() {
+                            use cap_media_info::PlanarData;
+
+                            frame.plane_data_mut(i).copy_from_slice(
+                                &slice[i * data_bytes_size as usize
+                                    ..(i + 1) * data_bytes_size as usize],
+                            );
+                        }
+
+                        frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
+
+                        let _ = audio_tx.send((frame, relative_time));
+                    }
+                    _ => {}
+                }
+            }
+        }
 
         let start = std::time::SystemTime::now();
         let start_time_unix = start
@@ -759,96 +908,187 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             .unwrap()
             .as_secs_f64();
 
-        inner(
-            self,
-            ready_signal,
-            control_signal,
-            |capturer| match capturer.raw().get_next_sample_buffer() {
-                Ok((sample_buffer, typ)) => {
-                    use cidre::sc;
+        let video_tx = self.video_tx.clone();
+        let audio_tx = self.audio_tx.clone();
 
-                    #[allow(clippy::useless_transmute)]
-                    let sample_buffer = unsafe {
-                        std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
-                    };
+        let target = self.target.clone();
 
-                    let frame_time =
-                        sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
-                    let unix_timestamp = start_time_unix + frame_time - start_cmtime;
-                    let relative_time = unix_timestamp - start_time_f64;
+        let _ = self.tokio_handle.block_on(async move {
+            let capturer = MacOSScreenCapture::spawn(MacOSScreenCapture::new());
 
-                    match typ {
-                        // sc::stream::OutputType::Screen => {
-                        //     let Some(pixel_buffer) = sample_buffer.image_buf() else {
-                        //         return ControlFlow::Continue(());
-                        //     };
+            let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
 
-                        //     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
-                        //         return ControlFlow::Continue(());
-                        //     }
+            let frame_handler = FrameHandler::spawn(FrameHandler {
+                video_tx,
+                audio_tx,
+                start_time_unix,
+                start_cmtime,
+                start_time_f64,
+            });
 
-                        //     let check_skip_send = || {
-                        //         cap_fail::fail_err!(
-                        //             "media::sources::screen_capture::skip_send",
-                        //             ()
-                        //         );
+            let (content_filter, mut settings) = match target {
+                ScreenCaptureTarget::Screen { id } => {
+                    let display = Display::from_id(id).unwrap().raw_handle().clone();
 
-                        //         Ok::<(), ()>(())
-                        //     };
+                    let content_filter = display.as_content_filter().await.unwrap();
 
-                        //     if check_skip_send().is_ok()
-                        //         && video_tx.send((sample_buffer, relative_time)).is_err()
-                        //     {
-                        //         error!("Pipeline is unreachable. Shutting down recording.");
-                        //         return ControlFlow::Continue(());
-                        //     }
-                        // }
-                        // sc::stream::OutputType::Audio => {
-                        //     use ffmpeg::ChannelLayout;
+                    let settings = scap_screencapturekit::StreamCfgBuilder::default()
+                        .with_width(display.physical_size().width() as usize)
+                        .with_height(display.physical_size().height() as usize)
+                        .build();
 
-                        //     let res = || {
-                        //         cap_fail::fail_err!("screen_capture audio skip", ());
-                        //         Ok::<(), ()>(())
-                        //     };
-                        //     if res().is_err() {
-                        //         return ControlFlow::Continue(());
-                        //     }
-
-                        //     let Some(audio_tx) = &audio_tx else {
-                        //         return ControlFlow::Continue(());
-                        //     };
-
-                        //     let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                        //     let slice = buf_list.block().as_slice().unwrap();
-
-                        //     let mut frame = ffmpeg::frame::Audio::new(
-                        //         ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-                        //         sample_buffer.num_samples() as usize,
-                        //         ChannelLayout::STEREO,
-                        //     );
-                        //     frame.set_rate(48_000);
-                        //     let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
-                        //     for i in 0..frame.planes() {
-                        //         use cap_media_info::PlanarData;
-
-                        //         frame.plane_data_mut(i).copy_from_slice(
-                        //             &slice[i * data_bytes_size as usize
-                        //                 ..(i + 1) * data_bytes_size as usize],
-                        //         );
-                        //     }
-
-                        //     frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
-
-                        //     let _ = audio_tx.send((frame, relative_time));
-                        // }
-                        _ => {}
-                    }
-
-                    ControlFlow::Continue(())
+                    (content_filter, settings)
                 }
-                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
-            },
-        )
+                ScreenCaptureTarget::Window { id } => {
+                    todo!()
+                    // let display = Window::from_id(id).unwrap();
+
+                    // let content_filter =
+                    //     display.raw_handle().as_content_filter().await.unwrap();
+
+                    // let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+                    //     .with_width(display.raw_handle().physical_size().width() as usize)
+                    //     .with_height(display.raw_handle().physical_size().height() as usize);
+
+                    // (content_filter, settings)
+                }
+                ScreenCaptureTarget::Area { screen, bounds } => {
+                    use cidre::cg;
+
+                    let display = Display::from_id(screen).unwrap();
+
+                    let content_filter = display.raw_handle().as_content_filter().await.unwrap();
+
+                    let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+                        .with_width(display.raw_handle().physical_size().width() as usize)
+                        .with_height(display.raw_handle().physical_size().height() as usize)
+                        .build();
+
+                    settings.set_dst_rect(cg::Rect::new(
+                        bounds.position().x(),
+                        bounds.position().y(),
+                        bounds.size().width(),
+                        bounds.size().height(),
+                    ));
+
+                    (content_filter, settings)
+                }
+            };
+
+            settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+            let _ = capturer
+                .ask(StartCapturing {
+                    target: content_filter,
+                    settings,
+                    frame_handler: frame_handler.recipient(),
+                    // error_handler: None,
+                })
+                .send()
+                .await;
+
+            let _ = ready_signal.send(Ok(()));
+
+            while let Ok(msg) = control_signal.receiver.recv_async().await {
+                dbg!(msg);
+                if let Control::Shutdown = msg {
+                    let _ = stop_recipient.ask(StopCapturing).await;
+                    break;
+                }
+            }
+        });
+
+        Ok(())
+
+        // inner(
+        //     self,
+        //     ready_signal,
+        //     control_signal,
+        //     |capturer| match capturer.raw().get_next_sample_buffer() {
+        //         Ok((sample_buffer, typ)) => {
+        //             use cidre::sc;
+
+        //             #[allow(clippy::useless_transmute)]
+        //             let sample_buffer = unsafe {
+        //                 std::mem::transmute::<_, cidre::arc::R<cidre::cm::SampleBuf>>(sample_buffer)
+        //             };
+
+        //             let frame_time =
+        //                 sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
+        //             let unix_timestamp = start_time_unix + frame_time - start_cmtime;
+        //             let relative_time = unix_timestamp - start_time_f64;
+
+        //             match typ {
+        //                 sc::stream::OutputType::Screen => {
+        //                     let Some(pixel_buffer) = sample_buffer.image_buf() else {
+        //                         return ControlFlow::Continue(());
+        //                     };
+
+        //                     if pixel_buffer.height() == 0 || pixel_buffer.width() == 0 {
+        //                         return ControlFlow::Continue(());
+        //                     }
+
+        //                     let check_skip_send = || {
+        //                         cap_fail::fail_err!(
+        //                             "media::sources::screen_capture::skip_send",
+        //                             ()
+        //                         );
+
+        //                         Ok::<(), ()>(())
+        //                     };
+
+        //                     if check_skip_send().is_ok()
+        //                         && video_tx.send((sample_buffer, relative_time)).is_err()
+        //                     {
+        //                         error!("Pipeline is unreachable. Shutting down recording.");
+        //                         return ControlFlow::Continue(());
+        //                     }
+        //                 }
+        //                 sc::stream::OutputType::Audio => {
+        //                     use ffmpeg::ChannelLayout;
+
+        //                     let res = || {
+        //                         cap_fail::fail_err!("screen_capture audio skip", ());
+        //                         Ok::<(), ()>(())
+        //                     };
+        //                     if res().is_err() {
+        //                         return ControlFlow::Continue(());
+        //                     }
+
+        //                     let Some(audio_tx) = &audio_tx else {
+        //                         return ControlFlow::Continue(());
+        //                     };
+
+        //                     let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
+        //                     let slice = buf_list.block().as_slice().unwrap();
+
+        //                     let mut frame = ffmpeg::frame::Audio::new(
+        //                         ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+        //                         sample_buffer.num_samples() as usize,
+        //                         ChannelLayout::STEREO,
+        //                     );
+        //                     frame.set_rate(48_000);
+        //                     let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
+        //                     for i in 0..frame.planes() {
+        //                         use cap_media_info::PlanarData;
+
+        //                         frame.plane_data_mut(i).copy_from_slice(
+        //                             &slice[i * data_bytes_size as usize
+        //                                 ..(i + 1) * data_bytes_size as usize],
+        //                         );
+        //                     }
+
+        //                     frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
+
+        //                     let _ = audio_tx.send((frame, relative_time));
+        //                 }
+        //                 _ => {}
+        //             }
+
+        //             ControlFlow::Continue(())
+        //         }
+        //         Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
+        //     },
+        // )
     }
 }
 
@@ -869,60 +1109,62 @@ pub fn list_screens() -> Vec<(CaptureScreen, Target)> {
     let names = crate::platform::display_names();
 
     for (idx, screen) in screens.into_iter().enumerate() {
-        targets.push((
-            CaptureScreen {
-                id: screen.id,
-                name: names
-                    .get(&screen.id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Screen {}", idx + 1)),
-                refresh_rate: {
-                    let Ok(fps) = get_target_fps(&Target::Display(screen.clone())) else {
-                        continue;
-                    };
+        // targets.push((
+        //     CaptureScreen {
+        //         id: screen.id,
+        //         name: names
+        //             .get(&screen.id)
+        //             .cloned()
+        //             .unwrap_or_else(|| format!("Screen {}", idx + 1)),
+        //         refresh_rate: {
+        //             let Ok(fps) = get_target_fps(&Target::Display(screen.clone())) else {
+        //                 continue;
+        //             };
 
-                    fps
-                },
-            },
-            Target::Display(screen),
-        ));
+        //             fps
+        //         },
+        //     },
+        //     Target::Display(screen),
+        // ));
     }
     targets
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Target)> {
-    if !scap::has_permission() {
-        return vec![];
-    }
+    return vec![];
 
-    let targets = scap::get_all_targets();
+    // if !scap::has_permission() {
+    //     return vec![];
+    // }
 
-    let platform_windows: HashMap<u32, Window> = crate::platform::get_on_screen_windows()
-        .into_iter()
-        .map(|window| (window.window_id, window))
-        .collect();
+    // let targets = scap::get_all_targets();
 
-    targets
-        .into_iter()
-        .filter_map(|target| match &target {
-            Target::Window(window) => {
-                let id = window.id;
-                platform_windows.get(&id).map(|platform_window| {
-                    (
-                        CaptureWindow {
-                            id,
-                            owner_name: platform_window.owner_name.clone(),
-                            name: platform_window.name.clone(),
-                            bounds: platform_window.bounds,
-                            refresh_rate: get_target_fps(&target).unwrap_or_default(),
-                        },
-                        target,
-                    )
-                })
-            }
-            Target::Display(_) => None,
-        })
-        .collect()
+    // let platform_windows: HashMap<u32, Window> = crate::platform::get_on_screen_windows()
+    //     .into_iter()
+    //     .map(|window| (window.window_id, window))
+    //     .collect();
+
+    // targets
+    //     .into_iter()
+    //     .filter_map(|target| match &target {
+    //         Target::Window(window) => {
+    //             let id = window.id;
+    //             platform_windows.get(&id).map(|platform_window| {
+    //                 (
+    //                     CaptureWindow {
+    //                         id,
+    //                         owner_name: platform_window.owner_name.clone(),
+    //                         name: platform_window.name.clone(),
+    //                         bounds: platform_window.bounds,
+    //                         refresh_rate: get_target_fps(&target).unwrap_or_default(),
+    //                     },
+    //                     target,
+    //                 )
+    //             })
+    //         }
+    //         Target::Display(_) => None,
+    //     })
+    //     .collect()
 }
 
 pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
@@ -1018,10 +1260,18 @@ fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::A
 }
 
 mod new_stuff {
+    use super::*;
     use kameo::prelude::*;
 
+    pub struct StopCapturing;
+
+    #[derive(Debug, Clone)]
+    pub enum StopCapturingError {
+        NotCapturing,
+    }
+
     #[cfg(target_os = "macos")]
-    mod macos {
+    pub mod macos {
         use super::*;
         use cidre::*;
 
@@ -1030,12 +1280,19 @@ mod new_stuff {
             capturer: Option<scap_screencapturekit::Capturer>,
         }
 
+        impl MacOSScreenCapture {
+            pub fn new() -> Self {
+                MacOSScreenCapture { capturer: None }
+            }
+        }
+
         // Public
 
         pub struct StartCapturing {
-            target: arc::R<sc::ContentFilter>,
-            frame_handler: Recipient<NewFrame>,
-            error_handler: Option<Recipient<CaptureError>>,
+            pub target: arc::R<sc::ContentFilter>,
+            pub settings: arc::R<sc::StreamCfg>,
+            pub frame_handler: Recipient<NewFrame>,
+            // pub error_handler: Option<Recipient<CaptureError>>,
         }
 
         // External
@@ -1044,7 +1301,7 @@ mod new_stuff {
 
         // Internal
 
-        pub struct CaptureError(arc::R<ns::Error>);
+        struct CaptureError(arc::R<ns::Error>);
 
         #[derive(Debug, Clone)]
         pub enum StartCapturingError {
@@ -1059,28 +1316,25 @@ mod new_stuff {
             async fn handle(
                 &mut self,
                 msg: StartCapturing,
-                _: &mut Context<Self, Self::Reply>,
+                ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
                 if self.capturer.is_some() {
                     return Err(StartCapturingError::AlreadyCapturing);
                 }
 
                 let capturer = {
-                    let mut capturer_builder = scap_screencapturekit::Capturer::builder(
-                        msg.target.clone(),
-                        sc::StreamCfg::new(),
-                    )
-                    .with_output_sample_buf_cb(move |frame| {
-                        let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
-                    });
+                    let error_recipient = ctx.actor_ref().recipient();
 
-                    if let Some(error_handler) = msg.error_handler {
-                        capturer_builder = capturer_builder.with_stop_with_err_cb(move |_, err| {
-                            let _ = error_handler
-                                .tell(CaptureError(err.retained()))
-                                .blocking_send();
-                        });
-                    }
+                    let capturer_builder =
+                        scap_screencapturekit::Capturer::builder(msg.target, msg.settings)
+                            .with_output_sample_buf_cb(move |frame| {
+                                let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
+                            })
+                            .with_stop_with_err_cb(move |_, err| {
+                                let _ = error_recipient
+                                    .tell(CaptureError(err.retained()))
+                                    .blocking_send();
+                            });
 
                     capturer_builder
                         .build()
@@ -1095,6 +1349,26 @@ mod new_stuff {
             }
         }
 
+        impl Message<StopCapturing> for MacOSScreenCapture {
+            type Reply = Result<(), StopCapturingError>;
+
+            async fn handle(
+                &mut self,
+                msg: StopCapturing,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                let Some(capturer) = self.capturer.take() else {
+                    return Err(StopCapturingError::NotCapturing);
+                };
+
+                if let Err(e) = capturer.stop().await {
+                    error!("Silently failed to stop macOS capturer: {}", e);
+                }
+
+                Ok(())
+            }
+        }
+
         impl Message<CaptureError> for MacOSScreenCapture {
             type Reply = ();
 
@@ -1103,7 +1377,6 @@ mod new_stuff {
                 msg: CaptureError,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
-                dbg!(msg.0);
                 if let Some(capturer) = self.capturer.as_mut() {
                     let _ = capturer.stop().await;
                     ctx.actor_ref().kill();
@@ -1111,66 +1384,67 @@ mod new_stuff {
             }
         }
 
-        #[tokio::test]
-        async fn kameo_test() {
-            use std::time::Duration;
+        // #[tokio::test]
+        // async fn kameo_test() {
+        //     use std::time::Duration;
 
-            #[derive(Actor)]
-            struct FrameHandler;
+        //     #[derive(Actor)]
+        //     struct FrameHandler;
 
-            impl Message<NewFrame> for FrameHandler {
-                type Reply = ();
+        //     impl Message<NewFrame> for FrameHandler {
+        //         type Reply = ();
 
-                async fn handle(
-                    &mut self,
-                    msg: NewFrame,
-                    _: &mut Context<Self, Self::Reply>,
-                ) -> Self::Reply {
-                    dbg!(msg.0.output_type());
-                }
-            }
+        //         async fn handle(
+        //             &mut self,
+        //             msg: NewFrame,
+        //             _: &mut Context<Self, Self::Reply>,
+        //         ) -> Self::Reply {
+        //             dbg!(msg.0.output_type());
+        //         }
+        //     }
 
-            let actor = MacOSScreenCapture::spawn(MacOSScreenCapture { capturer: None });
+        //     let actor = MacOSScreenCapture::spawn(MacOSScreenCapture { capturer: None });
 
-            let frame_handler = FrameHandler::spawn(FrameHandler);
+        //     let frame_handler = FrameHandler::spawn(FrameHandler);
 
-            actor
-                .ask(StartCapturing {
-                    target: cap_displays::Display::primary()
-                        .raw_handle()
-                        .as_content_filter()
-                        .await
-                        .unwrap(),
-                    frame_handler: frame_handler.clone().recipient(),
-                    error_handler: None,
-                })
-                .await
-                .inspect_err(|e| {
-                    dbg!(e);
-                })
-                .ok();
+        //     actor
+        //         .ask(StartCapturing {
+        //             target: cap_displays::Display::primary()
+        //                 .raw_handle()
+        //                 .as_content_filter()
+        //                 .await
+        //                 .unwrap(),
+        //             frame_handler: frame_handler.clone().recipient(),
+        //             // error_handler: None,
+        //         })
+        //         .await
+        //         .inspect_err(|e| {
+        //             dbg!(e);
+        //         })
+        //         .ok();
 
-            actor
-                .ask(StartCapturing {
-                    target: cap_displays::Display::primary()
-                        .raw_handle()
-                        .as_content_filter()
-                        .await
-                        .unwrap(),
-                    frame_handler: frame_handler.recipient(),
-                    error_handler: None,
-                })
-                .await
-                .inspect_err(|e| {
-                    dbg!(e);
-                })
-                .ok();
+        //     actor
+        //         .ask(StartCapturing {
+        //             target: cap_displays::Display::primary()
+        //                 .raw_handle()
+        //                 .as_content_filter()
+        //                 .await
+        //                 .unwrap(),
+        //             frame_handler: frame_handler.recipient(),
+        //             // error_handler: None,
+        //         })
+        //         .await
+        //         .inspect_err(|e| {
+        //             dbg!(e);
+        //         })
+        //         .ok();
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        //     tokio::time::sleep(Duration::from_millis(100)).await;
+        // }
     }
 
-    mod windows {
+    // #[cfg(windows)]
+    pub mod windows {
         use super::*;
         use ::windows::Graphics::Capture::GraphicsCaptureItem;
         use scap_ffmpeg::AsFFmpeg;
@@ -1180,16 +1454,22 @@ mod new_stuff {
             capture_handle: Option<scap_direct3d::CaptureHandle>,
         }
 
+        impl WindowsScreenCapture {
+            pub fn new() -> Self {
+                Self { capturer: None }
+            }
+        }
+
         pub struct StartCapturing {
-            target: GraphicsCaptureItem,
-            settings: scap_direct3d::Settings,
-            frame_handler: Recipient<NewFrame>,
+            pub target: GraphicsCaptureItem,
+            pub settings: scap_direct3d::Settings,
+            pub frame_handler: Recipient<NewFrame>,
             // error_handler: Option<Recipient<CaptureError>>,
         }
 
         #[derive(Debug)]
         pub enum StartCapturingError {
-        	AlreadyCapturing,
+            AlreadyCapturing,
         }
 
         struct NewFrame {
@@ -1204,9 +1484,9 @@ mod new_stuff {
                 msg: StartCapturing,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
-	            if self.capture_handle.is_some() {
-	                return Err(StartCapturingError::AlreadyCapturing);
-	            }
+                if self.capture_handle.is_some() {
+                    return Err(StartCapturingError::AlreadyCapturing);
+                }
 
                 let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
 

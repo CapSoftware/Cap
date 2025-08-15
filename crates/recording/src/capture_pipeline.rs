@@ -383,6 +383,7 @@ pub async fn create_screen_capture(
         video_tx,
         audio_tx,
         start_time,
+        tokio::runtime::Handle::current(),
     )
     .await
     .map(|v| (v, video_rx))

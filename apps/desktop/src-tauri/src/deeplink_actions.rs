@@ -121,27 +121,29 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                use cap_media::sources::ScreenCaptureTarget;
-                let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_media::sources::list_screens()
-                        .into_iter()
-                        .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
-                        .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_media::sources::list_windows()
-                        .into_iter()
-                        .find(|(w, _)| w.name == name)
-                        .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
-                        .ok_or(format!("No window with name \"{}\"", &name))?,
-                };
+                todo!();
 
-                let inputs = StartRecordingInputs {
-                    capture_target,
-                    capture_system_audio,
-                    mode,
-                };
+                // use cap_media::sources::ScreenCaptureTarget;
+                // let capture_target: ScreenCaptureTarget = match capture_mode {
+                //     CaptureMode::Screen(name) => cap_media::sources::list_screens()
+                //         .into_iter()
+                //         .find(|(s, _)| s.name == name)
+                //         .map(|(s, _)| ScreenCaptureTarget::Screen { id: s.id })
+                //         .ok_or(format!("No screen with name \"{}\"", &name))?,
+                //     CaptureMode::Window(name) => cap_media::sources::list_windows()
+                //         .into_iter()
+                //         .find(|(w, _)| w.name == name)
+                //         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
+                //         .ok_or(format!("No window with name \"{}\"", &name))?,
+                // };
 
-                crate::recording::start_recording(app.clone(), state, inputs).await
+                // let inputs = StartRecordingInputs {
+                //     capture_target,
+                //     capture_system_audio,
+                //     mode,
+                // };
+
+                // crate::recording::start_recording(app.clone(), state, inputs).await
             }
             DeepLinkAction::StopRecording => {
                 crate::recording::stop_recording(app.clone(), app.state()).await

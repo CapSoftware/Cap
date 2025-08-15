@@ -143,7 +143,7 @@ function Page() {
 	// allowing us to define fallbacks if the selected options aren't actually available
 	const options = {
 		screen: () => {
-			let screen;
+			let screen: CaptureScreen | undefined;
 
 			if (rawOptions.captureTarget.variant === "screen") {
 				const screenId = rawOptions.captureTarget.id;
@@ -156,7 +156,7 @@ function Page() {
 			return screen;
 		},
 		window: () => {
-			let win;
+			let win: CaptureWindow | undefined;
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
@@ -170,11 +170,15 @@ function Page() {
 				const { cameraID } = rawOptions;
 				if (!cameraID) return;
 				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
-				if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
+				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
 			}),
 		micName: () => mics.data?.find((name) => name === rawOptions.micName),
 	};
+
+	createEffect(() => {
+		console.log(_windows());
+	});
 
 	// if target is window and no windows are available, switch to screen capture
 	createEffect(() => {
@@ -333,6 +337,8 @@ function Page() {
 					</a>
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
+							{/** biome-ignore lint/a11y/useKeyWithClickEvents: <explanation> */}
+							{/** biome-ignore lint/a11y/noStaticElementInteractions: <explanation> */}
 							<span
 								onClick={async () => {
 									if (license.data?.type !== "pro") {
@@ -366,12 +372,14 @@ function Page() {
 							: rawOptions.captureTarget.variant
 					}
 					onChange={(area) => {
+						const screen = options.screen();
+						if (!screen) return;
 						if (!area)
 							setOptions(
 								"captureTarget",
 								reconcile({
 									variant: "screen",
-									id: options.screen()?.id ?? -1,
+									id: screen.id,
 								}),
 							);
 					}}
@@ -750,6 +758,7 @@ function CameraSelect(props: {
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
+				type="button"
 				disabled={!!currentRecording.data || props.disabled}
 				class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
 				onClick={() => {
@@ -856,6 +865,7 @@ function MicrophoneSelect(props: {
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
+				type="button"
 				disabled={!!currentRecording.data || props.disabled}
 				class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 				onClick={() => {
@@ -921,6 +931,7 @@ function SystemAudio() {
 
 	return (
 		<button
+			type="button"
 			onClick={() => {
 				if (!rawOptions) return;
 				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
@@ -943,7 +954,7 @@ function SystemAudio() {
 	);
 }
 
-function TargetSelect<T extends { id: number; name: string }>(props: {
+function TargetSelect<T extends { id: string; name: string }>(props: {
 	options: Array<T>;
 	onChange: (value: T) => void;
 	value: T | null;
@@ -969,6 +980,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
 
 	return (
 		<button
+			type="button"
 			class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-10 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
 			data-selected={props.selected}
 			disabled={props.disabled}

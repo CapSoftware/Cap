@@ -1018,6 +1018,7 @@ dependencies = [
  "relative-path",
  "reqwest",
  "rodio",
+ "scap",
  "sentry",
  "serde",
  "serde_json",

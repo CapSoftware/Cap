@@ -10,7 +10,7 @@ pub enum Control {
 
 pub struct PipelineControlSignal {
     last_value: Option<Control>,
-    receiver: Receiver<Control>,
+    pub receiver: Receiver<Control>,
 }
 
 impl PipelineControlSignal {

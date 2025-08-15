@@ -47,7 +47,7 @@ enum InstantRecordingActorState {
 pub struct InstantRecordingHandle {
     ctrl_tx: flume::Sender<InstantRecordingActorControlMessage>,
     pub capture_target: ScreenCaptureTarget,
-    pub bounds: Bounds,
+    // pub bounds: Bounds,
 }
 
 macro_rules! send_message {
@@ -253,7 +253,7 @@ pub async fn spawn_instant_recording_actor<'a>(
         InstantRecordingHandle {
             ctrl_tx,
             capture_target: inputs.capture_target,
-            bounds: *screen_source.get_bounds(),
+            // bounds: *screen_source.get_bounds(),
         },
         done_rx,
     ))

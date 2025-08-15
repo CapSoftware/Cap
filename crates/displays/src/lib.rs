@@ -49,7 +49,7 @@ impl Display {
     }
 }
 
-#[derive(Serialize, Deserialize, Type, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]
 pub struct DisplayId(
     #[serde(with = "serde_display_id")]
     #[specta(type = String)]
@@ -131,7 +131,7 @@ impl Window {
     }
 }
 
-#[derive(Serialize, Deserialize, Type, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]
 pub struct WindowId(
     #[serde(with = "serde_window_id")]
     #[specta(type = String)]

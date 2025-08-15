@@ -1,7 +1,7 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 
-#[derive(Clone, Copy, Debug, Type, Serialize)]
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
 pub struct LogicalBounds {
     pub(crate) position: LogicalPosition,
     pub(crate) size: LogicalSize,
@@ -28,7 +28,34 @@ impl LogicalBounds {
     }
 }
 
-#[derive(Clone, Copy, Debug, Type, Serialize)]
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
+pub struct PhysicalBounds {
+    pub(crate) position: PhysicalPosition,
+    pub(crate) size: PhysicalSize,
+}
+
+impl PhysicalBounds {
+    pub fn new(position: PhysicalPosition, size: PhysicalSize) -> Self {
+        Self { position, size }
+    }
+
+    pub fn position(&self) -> PhysicalPosition {
+        self.position
+    }
+
+    pub fn size(&self) -> PhysicalSize {
+        self.size
+    }
+
+    pub fn contains_point(&self, point: PhysicalPosition) -> bool {
+        point.x() >= self.position.x()
+            && point.x() < self.position.x() + self.size.width()
+            && point.y() >= self.position.y()
+            && point.y() < self.position.y() + self.size.height()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
 pub struct LogicalSize {
     pub(crate) width: f64,
     pub(crate) height: f64,
@@ -44,7 +71,7 @@ impl LogicalSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, Type, Serialize)]
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
 pub struct PhysicalSize {
     pub(crate) width: f64,
     pub(crate) height: f64,
@@ -64,7 +91,7 @@ impl PhysicalSize {
     }
 }
 
-#[derive(Clone, Copy, Debug, Type, Serialize)]
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
 pub struct LogicalPosition {
     pub(crate) x: f64,
     pub(crate) y: f64,
@@ -80,7 +107,7 @@ impl LogicalPosition {
     }
 }
 
-#[derive(Clone, Copy, Debug, Type, Serialize)]
+#[derive(Clone, Copy, Debug, Type, Serialize, Deserialize)]
 pub struct PhysicalPosition {
     pub(crate) x: f64,
     pub(crate) y: f64,

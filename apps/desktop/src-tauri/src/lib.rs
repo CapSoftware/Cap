@@ -433,17 +433,19 @@ async fn get_current_recording(
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
     Ok(JsonValue::new(&state.current_recording().map(|r| {
-        let bounds = r.bounds();
+        // let bounds = r.bounds();
 
         let target = match r.capture_target() {
-            ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: *id },
+            ScreenCaptureTarget::Screen { id } => {
+                CurrentRecordingTarget::Screen { id: 0, /* *id */ }
+            }
             ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                id: *id,
-                bounds: *bounds,
+                id: 0,                     // *id,
+                bounds: Bounds::default(), // *bounds,
             },
-            ScreenCaptureTarget::Area { display_id, bounds } => CurrentRecordingTarget::Area {
-                screen: *screen,
-                bounds: *bounds,
+            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                screen: 0,                  //  *screen,
+                bounds: Default::default(), //  *bounds,
             },
         };
 
@@ -1988,13 +1990,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    // #[cfg(debug_assertions)]
-    // specta_builder
-    //     .export(
-    //         specta_typescript::Typescript::default(),
-    //         "../src/utils/tauri.ts",
-    //     )
-    //     .expect("Failed to export typescript bindings");
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/utils/tauri.ts",
+        )
+        .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 

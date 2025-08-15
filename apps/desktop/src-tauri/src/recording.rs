@@ -125,12 +125,12 @@ impl InProgressRecording {
         }
     }
 
-    pub fn bounds(&self) -> &Bounds {
-        match self {
-            Self::Instant { handle, .. } => &handle.bounds,
-            Self::Studio { handle, .. } => &handle.bounds,
-        }
-    }
+    // pub fn bounds(&self) -> &Bounds {
+    //     match self {
+    //         Self::Instant { handle, .. } => &handle.bounds,
+    //         Self::Studio { handle, .. } => &handle.bounds,
+    //     }
+    // }
 }
 
 pub enum CompletedRecording {
@@ -172,19 +172,46 @@ impl CompletedRecording {
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_capture_screens() -> Vec<CaptureScreen> {
-    cap_media::sources::list_screens()
+    cap_displays::Display::list()
         .into_iter()
-        .map(|(v, _)| v)
+        .enumerate()
+        .map(|(i, display)| {
+            let id = display.id();
+            let name = format!("Display {}", i);
+            let refresh_rate = display.raw_handle().refresh_rate();
+
+            CaptureScreen {
+                id,
+                name,
+                refresh_rate: refresh_rate as u32,
+            }
+        })
         .collect()
+
+    // cap_media::sources::list_screens()
+    //     .into_iter()
+    //     .map(|(v, _)| v)
+    //     .collect()
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_capture_windows() -> Vec<CaptureWindow> {
-    cap_media::sources::list_windows()
+    cap_displays::Window::list()
         .into_iter()
-        .map(|(v, _)| v)
+        .enumerate()
+        .map(|(i, v)| CaptureWindow {
+            id: v.id(),
+            owner_name: v.owner_name().unwrap_or_default(),
+            name: format!("Window {i}"),
+            bounds: v.bounds().unwrap(),
+            refresh_rate: 60,
+        })
         .collect()
+    // cap_media::sources::list_windows()
+    //     .into_iter()
+    //     .map(|(v, _)| v)
+    //     .collect()
 }
 
 #[tauri::command(async)]
@@ -237,9 +264,9 @@ pub async fn start_recording(
         .await?;
 
     let target_name = {
-        let title = inputs.capture_target.get_title();
+        let title = "TODO Title".to_string(); //  inputs.capture_target.get_title();
 
-        match inputs.capture_target {
+        match inputs.capture_target.clone() {
             ScreenCaptureTarget::Area { .. } => "Area".to_string(),
             ScreenCaptureTarget::Window { id, .. } => {
                 let platform_windows: HashMap<u32, cap_media::platform::Window> =
@@ -248,12 +275,13 @@ pub async fn start_recording(
                         .map(|window| (window.window_id, window))
                         .collect();
 
-                platform_windows
-                    .get(&id)
-                    .map(|v| v.owner_name.to_string())
-                    .unwrap_or_else(|| "Window".to_string())
+                "Window".to_string()
+                // platform_windows
+                //     .get(&id)
+                //     .map(|v| v.owner_name.to_string())
+                //     .unwrap_or_else(|| "Window".to_string())
             }
-            ScreenCaptureTarget::Display { .. } => title.unwrap_or_else(|| "Screen".to_string()),
+            ScreenCaptureTarget::Screen { .. } => title, // .unwrap_or_else(|| "Screen".to_string()),
         }
     };
 
@@ -300,33 +328,33 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    match &inputs.capture_target {
-        ScreenCaptureTarget::Window { id: _id } => {
-            #[cfg(target_os = "macos")]
-            let display = display_for_window(*_id).unwrap().id;
+    // match &inputs.capture_target {
+    //     ScreenCaptureTarget::Window { id: _id } => {
+    //         #[cfg(target_os = "macos")]
+    //         let display = display_for_window(*_id).unwrap().id;
 
-            #[cfg(windows)]
-            let display = {
-                let scap::Target::Window(target) = inputs.capture_target.get_target().unwrap()
-                else {
-                    unreachable!();
-                };
-                display_for_window(windows::Win32::Foundation::HWND(target.raw_handle.0))
-                    .unwrap()
-                    .0 as u32
-            };
+    //         #[cfg(windows)]
+    //         let display = {
+    //             let scap::Target::Window(target) = inputs.capture_target.get_target().unwrap()
+    //             else {
+    //                 unreachable!();
+    //             };
+    //             display_for_window(windows::Win32::Foundation::HWND(target.raw_handle.0))
+    //                 .unwrap()
+    //                 .0 as u32
+    //         };
 
-            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
-                .show(&app)
-                .await;
-        }
-        ScreenCaptureTarget::Area { display_id, .. } => {
-            let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
-                .show(&app)
-                .await;
-        }
-        _ => {}
-    }
+    //         let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
+    //             .show(&app)
+    //             .await;
+    //     }
+    //     ScreenCaptureTarget::Area { screen, .. } => {
+    //         let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
+    //             .show(&app)
+    //             .await;
+    //     }
+    //     _ => {}
+    // }
 
     // Set pending state BEFORE closing main window and starting countdown
     {
@@ -376,12 +404,13 @@ pub async fn start_recording(
     let actor_done_rx = spawn_actor({
         let state_mtx = Arc::clone(&state_mtx);
         let general_settings = general_settings.cloned();
+        let capture_target = inputs.capture_target.clone();
         async move {
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
             let base_inputs = cap_recording::RecordingBaseInputs {
-                capture_target: inputs.capture_target,
+                capture_target,
                 capture_system_audio: inputs.capture_system_audio,
                 mic_feed: &state.mic_feed,
             };
