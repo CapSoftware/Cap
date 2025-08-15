@@ -25,11 +25,12 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
+use cap_displays::DisplayId;
+use cap_displays::{WindowId, bounds::LogicalBounds};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_media::feeds::RawCameraFrame;
 use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::platform::Bounds;
 use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
@@ -414,9 +415,17 @@ pub struct RecordingInfo {
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 enum CurrentRecordingTarget {
-    Window { id: u32, bounds: Bounds },
-    Screen { id: u32 },
-    Area { screen: u32, bounds: Bounds },
+    Window {
+        id: WindowId,
+        bounds: LogicalBounds,
+    },
+    Screen {
+        id: DisplayId,
+    },
+    Area {
+        screen: DisplayId,
+        bounds: LogicalBounds,
+    },
 }
 
 #[derive(Serialize, Type)]
@@ -432,31 +441,37 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording().map(|r| {
-        // let bounds = r.bounds();
+    Ok(JsonValue::new(
+        &state
+            .current_recording()
+            .map(|r| {
+                let target = match r.capture_target() {
+                    ScreenCaptureTarget::Screen { id } => {
+                        CurrentRecordingTarget::Screen { id: id.clone() }
+                    }
+                    ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                        id: id.clone(),
+                        bounds: cap_displays::Window::from_id(id)
+                            .ok_or(())?
+                            .logical_bounds()
+                            .ok_or(())?,
+                    },
+                    ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                        screen: screen.clone(),
+                        bounds: bounds.clone(),
+                    },
+                };
 
-        let target = match r.capture_target() {
-            ScreenCaptureTarget::Screen { id } => {
-                CurrentRecordingTarget::Screen { id: 0, /* *id */ }
-            }
-            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                id: 0,                     // *id,
-                bounds: Bounds::default(), // *bounds,
-            },
-            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-                screen: 0,                  //  *screen,
-                bounds: Default::default(), //  *bounds,
-            },
-        };
-
-        CurrentRecording {
-            target,
-            r#type: match r {
-                InProgressRecording::Instant { .. } => RecordingType::Instant,
-                InProgressRecording::Studio { .. } => RecordingType::Studio,
-            },
-        }
-    })))
+                Ok(CurrentRecording {
+                    target,
+                    r#type: match r {
+                        InProgressRecording::Instant { .. } => RecordingType::Instant,
+                        InProgressRecording::Studio { .. } => RecordingType::Studio,
+                    },
+                })
+            })
+            .transpose()?,
+    ))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]

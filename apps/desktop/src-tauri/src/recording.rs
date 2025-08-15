@@ -286,33 +286,25 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
-    // match &inputs.capture_target {
-    //     ScreenCaptureTarget::Window { id: _id } => {
-    //         #[cfg(target_os = "macos")]
-    //         let display = display_for_window(*_id).unwrap().id;
-
-    //         #[cfg(windows)]
-    //         let display = {
-    //             let scap::Target::Window(target) = inputs.capture_target.get_target().unwrap()
-    //             else {
-    //                 unreachable!();
-    //             };
-    //             display_for_window(windows::Win32::Foundation::HWND(target.raw_handle.0))
-    //                 .unwrap()
-    //                 .0 as u32
-    //         };
-
-    //         let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: display }
-    //             .show(&app)
-    //             .await;
-    //     }
-    //     ScreenCaptureTarget::Area { screen, .. } => {
-    //         let _ = ShowCapWindow::WindowCaptureOccluder { screen_id: *screen }
-    //             .show(&app)
-    //             .await;
-    //     }
-    //     _ => {}
-    // }
+    match &inputs.capture_target {
+        ScreenCaptureTarget::Window { id: _id } => {
+            if let Some(display) = inputs.capture_target.display() {
+                let _ = ShowCapWindow::WindowCaptureOccluder {
+                    screen_id: display.id(),
+                }
+                .show(&app)
+                .await;
+            }
+        }
+        ScreenCaptureTarget::Area { screen, .. } => {
+            let _ = ShowCapWindow::WindowCaptureOccluder {
+                screen_id: screen.clone(),
+            }
+            .show(&app)
+            .await;
+        }
+        _ => {}
+    }
 
     // Set pending state BEFORE closing main window and starting countdown
     {

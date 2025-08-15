@@ -7,7 +7,7 @@ use crate::{
     permissions,
     target_select_overlay::WindowFocusManager,
 };
-use cap_displays::DisplayId;
+use cap_displays::{Display, DisplayId};
 use cap_media::{platform::logical_monitor_bounds, sources::CaptureDisplay};
 use futures::pin_mut;
 use serde::Deserialize;
@@ -180,7 +180,7 @@ pub enum ShowCapWindow {
     Settings { page: Option<String> },
     Editor { project_path: PathBuf },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea { screen_id: u32 },
     Camera,
@@ -394,9 +394,11 @@ impl ShowCapWindow {
                 window
             }
             Self::WindowCaptureOccluder { screen_id } => {
-                let Some(bounds) = logical_monitor_bounds(*screen_id) else {
+                let Some(display) = Display::from_id(screen_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
+
+                let bounds = display.logical_bounds();
 
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
@@ -408,8 +410,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(bounds.size.width, bounds.size.height)
-                    .position(bounds.position.x, bounds.position.y)
+                    .inner_size(bounds.size().width(), bounds.size().height())
+                    .position(bounds.position().x(), bounds.position().y())
                     .transparent(true);
 
                 let window = window_builder.build()?;
