@@ -303,14 +303,22 @@ export default async function ShareVideoPage(props: Props) {
 				organizationId: sharedVideos.organizationId,
 			},
 			spaceId: spaceVideos.spaceId,
-			isSpaceMember: spaceMembers.userId,
 		})
 		.from(videos)
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
-		.leftJoin(spaceMembers, eq(spaceVideos.spaceId, spaceMembers.spaceId))
+		.where(eq(videos.id, videoId));
+
+	const [space] = await db()
+		.select({
+			isSpaceMember: spaceMembers.userId,
+		})
+		.from(spaceMembers)
 		.where(
-			and(eq(videos.id, videoId), eq(spaceMembers.userId, user.id)),
+			and(
+				eq(spaceMembers.userId, user?.id ?? ""),
+				eq(spaceMembers.spaceId, video?.spaceId ?? ""),
+			),
 		);
 
 	if (user && video && user.id !== video.ownerId) {
@@ -326,7 +334,11 @@ export default async function ShareVideoPage(props: Props) {
 		return <p>No video found</p>;
 	}
 
-	const userAccess = await userHasAccessToVideo(user, video);
+	const userAccess = await userHasAccessToVideo(
+		user,
+		video,
+		space?.isSpaceMember,
+	);
 
 	if (userAccess === "private") {
 		return (
