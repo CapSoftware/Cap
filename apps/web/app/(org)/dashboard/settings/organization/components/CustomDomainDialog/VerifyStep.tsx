@@ -60,7 +60,6 @@ const VerifyStep = ({
 		if (!domain) return false;
 		const parts: string[] = domain.split(".");
 		return parts.length > 2;
-	}
 	};
 
 	const recommendedAValues = getRecommendedAValues();
