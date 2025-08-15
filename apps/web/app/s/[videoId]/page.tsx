@@ -129,7 +129,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		.from(videos)
 		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.where(eq(videos.id, videoId));
+		.where(eq(videos.id, videoId))
+		.limit(1)
 
 	if (query.length === 0) {
 		console.log("[generateMetadata] No video found for videoId:", videoId);
@@ -144,19 +145,19 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 	const user = await getCurrentUser();
 
-	const [space] = await db()
-		.select({
-			isSpaceMember: spaceMembers.userId,
-		})
+	const [membership] = await db()
+		.select({ userId: spaceMembers.userId })
 		.from(spaceMembers)
+		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
 		.where(
 			and(
 				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceMembers.spaceId, video.spaceId ?? ""),
+				eq(spaceVideos.videoId, video.id),
 			),
-		);
+		)
+		.limit(1);
 
-	const isMember = !!space?.isSpaceMember;
+	const isMember = !!membership?.userId;
 	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	const headersList = headers();
@@ -347,19 +348,19 @@ export default async function ShareVideoPage(props: Props) {
 		return <p>No video found</p>;
 	}
 
-	const [space] = await db()
-		.select({
-			isSpaceMember: spaceMembers.userId,
-		})
+	const [membership] = await db()
+		.select({ userId: spaceMembers.userId })
 		.from(spaceMembers)
+		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
 		.where(
 			and(
 				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceMembers.spaceId, video.spaceId ?? ""),
+				eq(spaceVideos.videoId, video.id),
 			),
-		);
+		)
+		.limit(1);
 
-	const isMember = !!space?.isSpaceMember;
+	const isMember = !!membership?.userId;
 	const userAccess = await userHasAccessToVideo(user, video, isMember);
 
 	if (userAccess === "private") {
