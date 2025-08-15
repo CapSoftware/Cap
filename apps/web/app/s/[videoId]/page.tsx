@@ -310,7 +310,7 @@ export default async function ShareVideoPage(props: Props) {
 		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
 		.leftJoin(spaceMembers, eq(spaceVideos.spaceId, spaceMembers.spaceId))
 		.where(
-			and(eq(videos.id, videoId), eq(spaceMembers.userId, user?.id ?? "")),
+			and(eq(videos.id, videoId), eq(spaceMembers.userId, user.id)),
 		);
 
 	if (user && video && user.id !== video.ownerId) {
