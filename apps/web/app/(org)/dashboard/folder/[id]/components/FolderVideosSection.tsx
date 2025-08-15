@@ -105,50 +105,49 @@ export default function FolderVideosSection({
 		});
 	};
 
-	const { data: analyticsData, isLoading: isLoadingAnalytics } =
-		useQuery({
-			queryKey: ["analytics", initialVideos.map((video) => video.id)],
-			queryFn: async () => {
-				if (!dubApiKeyEnabled || initialVideos.length === 0) {
-					return {};
+	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+		queryKey: ["analytics", initialVideos.map((video) => video.id)],
+		queryFn: async () => {
+			if (!dubApiKeyEnabled || initialVideos.length === 0) {
+				return {};
+			}
+
+			const analyticsPromises = initialVideos.map(async (video) => {
+				try {
+					const response = await fetch(`/api/analytics?videoId=${video.id}`, {
+						method: "GET",
+						headers: {
+							"Content-Type": "application/json",
+						},
+					});
+
+					if (response.ok) {
+						const responseData = await response.json();
+						return { videoId: video.id, count: responseData.count || 0 };
+					}
+					return { videoId: video.id, count: 0 };
+				} catch (error) {
+					console.warn(
+						`Failed to fetch analytics for video ${video.id}:`,
+						error,
+					);
+					return { videoId: video.id, count: 0 };
 				}
+			});
 
-				const analyticsPromises = initialVideos.map(async (video) => {
-					try {
-						const response = await fetch(`/api/analytics?videoId=${video.id}`, {
-							method: "GET",
-							headers: {
-								"Content-Type": "application/json",
-							},
-						});
+			const results = await Promise.allSettled(analyticsPromises);
+			const analyticsData: Record<string, number> = {};
 
-						if (response.ok) {
-							const responseData = await response.json();
-							return { videoId: video.id, count: responseData.count || 0 };
-						}
-						return { videoId: video.id, count: 0 };
-					} catch (error) {
-						console.warn(
-							`Failed to fetch analytics for video ${video.id}:`,
-							error,
-						);
-						return { videoId: video.id, count: 0 };
-					}
-				});
-
-				const results = await Promise.allSettled(analyticsPromises);
-				const analyticsData: Record<string, number> = {};
-
-				results.forEach((result) => {
-					if (result.status === "fulfilled" && result.value) {
-						analyticsData[result.value.videoId] = result.value.count;
-					}
-				});
-				return analyticsData;
-			},
-			staleTime: 30000, // 30 seconds
-			refetchOnWindowFocus: false,
-		});
+			results.forEach((result) => {
+				if (result.status === "fulfilled" && result.value) {
+					analyticsData[result.value.videoId] = result.value.count;
+				}
+			});
+			return analyticsData;
+		},
+		staleTime: 30000, // 30 seconds
+		refetchOnWindowFocus: false,
+	});
 
 	const analytics = analyticsData || {};
 
