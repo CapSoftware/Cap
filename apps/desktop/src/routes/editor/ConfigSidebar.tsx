@@ -30,7 +30,7 @@ import {
 	Suspense,
 	type ValidComponent,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
 import colorBg from "~/assets/illustrations/color.webp";
@@ -1014,8 +1014,11 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									);
 									if (!wallpaper) return;
 
+									if (project.background.padding === 0) {
+										setProject("background", "padding", 12);
+									}	
+									
 									// Get the raw path without any URL prefixes
-
 									debouncedSetProject(wallpaper.rawPath);
 								} catch (err) {
 									toast.error("Failed to set wallpaper");

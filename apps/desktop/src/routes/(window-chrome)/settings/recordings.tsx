@@ -1,9 +1,10 @@
+import { ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
-	createMutation,
 	createQuery,
 	queryOptions,
-	useQueryClient,
+	useMutation,
+	useQueryClient
 } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -15,10 +16,8 @@ import {
 	createMemo,
 	createSignal,
 	For,
-	type JSX,
-	onCleanup,
-	type ParentProps,
-	Show,
+	type JSX, type ParentProps,
+	Show
 } from "solid-js";
 
 import { trackEvent } from "~/utils/analytics";
@@ -238,7 +237,7 @@ function RecordingItem(props: {
 				</Show>
 				<Show when={type() === "instant"}>
 					{(_) => {
-						const reupload = createMutation(() => ({
+						const reupload = useMutation(() => ({
 							mutationFn: () => {
 								return commands.uploadExportedVideo(
 									props.recording.path,
@@ -256,7 +255,7 @@ function RecordingItem(props: {
 											onClick={() => reupload.mutate()}
 										>
 											{reupload.isPending ? (
-												<IconLucideLoaderCircle class="animate-spin" />
+												<ProgressCircle variant="primary" progress={50} size="sm"/>
 											) : (
 												<IconLucideRotateCcw class="size-4" />
 											)}
