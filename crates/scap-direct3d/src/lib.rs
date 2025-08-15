@@ -49,7 +49,7 @@ use windows::{
     core::{IInspectable, Interface},
 };
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 #[repr(i32)]
 pub enum PixelFormat {
     #[default]
@@ -64,7 +64,7 @@ impl PixelFormat {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct Settings {
     pub is_border_required: Option<bool>,
     pub is_cursor_capture_enabled: Option<bool>,

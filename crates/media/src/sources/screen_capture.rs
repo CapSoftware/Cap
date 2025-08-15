@@ -148,30 +148,14 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
     }
 }
 
+unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureSource<T> {}
+unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
+
 pub trait ScreenCaptureFormat {
     type VideoFormat;
 
     fn audio_info() -> AudioInfo;
 }
-
-impl ScreenCaptureFormat for AVFrameCapture {
-    type VideoFormat = ffmpeg::frame::Video;
-
-    fn audio_info() -> AudioInfo {
-        let host = cpal::default_host();
-        let output_device = host.default_output_device().unwrap();
-        let supported_config = output_device.default_output_config().unwrap();
-
-        let mut info = AudioInfo::from_stream_config(&supported_config);
-
-        info.sample_format = Sample::F32(ffmpeg::format::sample::Type::Packed);
-
-        info
-    }
-}
-
-unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureSource<T> {}
-unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
 
 impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
@@ -258,12 +242,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         };
         #[cfg(windows)]
         // not sure how reliable this is for the general case so just use it for screen capture for now
-        let video_size = if matches!(target, ScreenCaptureTarget::Screen { .. }) {
-            let [x, y] = scap::capturer::get_output_frame_size(&this.options);
-            (x, y)
-        } else {
-            (bounds.width as u32, bounds.height as u32)
-        };
+        let video_size = (1920, 1080);
+        // if matches!(target, ScreenCaptureTarget::Screen { .. }) {
+        //     let [x, y] = scap::capturer::get_output_frame_size(&this.options);
+        //     (x, y)
+        // } else {
+        //     (bounds.width as u32, bounds.height as u32)
+        // };
 
         this.video_info =
             VideoInfo::from_raw(RawVideoFormat::Bgra, video_size.0, video_size.1, fps);
@@ -456,6 +441,23 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 #[derive(Debug)]
 pub struct AVFrameCapture;
 
+impl ScreenCaptureFormat for AVFrameCapture {
+    type VideoFormat = ffmpeg::frame::Video;
+
+    fn audio_info() -> AudioInfo {
+        let host = cpal::default_host();
+        let output_device = host.default_output_device().unwrap();
+        let supported_config = output_device.default_output_config().unwrap();
+
+        let mut info = AudioInfo::from_stream_config(&supported_config);
+
+        info.sample_format = Sample::F32(ffmpeg::format::sample::Type::Packed);
+
+        info
+    }
+}
+
+#[cfg(windows)]
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
     type Clock = RealTimeClock<RawNanoseconds>;
 
@@ -465,7 +467,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        use cidre::cv;
         use kameo::prelude::*;
         use new_stuff::{windows::*, *};
 
@@ -522,31 +523,55 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         #[derive(Actor)]
         struct FrameHandler {
+            start_time: SystemTime,
             video_tx: Sender<(ffmpeg::frame::Video, f64)>,
             audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         }
 
+        impl Message<NewFrame> for FrameHandler {
+            type Reply = ();
+
+            async fn handle(
+                &mut self,
+                msg: NewFrame,
+                _: &mut kameo::prelude::Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+            	let Ok(elapsed) = msg.display_time.duration_since(self.start_time) else {
+	             	return;
+	            };
+
+            	self.video_tx.try_send((msg.ff_frame, elapsed.as_secs_f64()));
+            }
+        }
+
+        let target = self.target.clone();
+
         let _ = self.tokio_handle.block_on(async move {
-            let capturer = WindowsScreenCapture::spawn(WindowsScreenCapture);
+            let capturer = WindowsScreenCapture::spawn(WindowsScreenCapture::new());
 
             let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
 
-            let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx });
+            let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx, start_time });
 
             let (capture_item, mut settings) = match target {
                 ScreenCaptureTarget::Screen { id } => {
                     let display = Display::from_id(id).unwrap();
                     let display = display.raw_handle();
 
-                    (display.try_as_capture_item().unwrap())
+                    (display.try_as_capture_item().unwrap(), scap_direct3d::Settings {
+	                    is_border_required: Some(false),
+	                    ..Default::default()
+                    } )
                 }
                 _ => todo!(),
             };
 
+            dbg!(&settings);
+
             let _ = capturer
                 .ask(StartCapturing {
                     target: capture_item,
-                    settings: Default::default(),
+                    settings,
                     frame_handler: frame_handler.recipient(),
                 })
                 .send()
@@ -561,140 +586,142 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             }
         });
 
-        inner(
-            self,
-            ready_signal,
-            control_signal,
-            |capturer| match capturer.get_next_frame() {
-                Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
-                    video_i += 1;
+        Ok(())
 
-                    if frame.height == 0 || frame.width == 0 {
-                        return ControlFlow::Continue(());
-                    }
+        // inner(
+        //     self,
+        //     ready_signal,
+        //     control_signal,
+        //     |capturer| match capturer.get_next_frame() {
+        //         Ok(Frame::Video(VideoFrame::BGRA(frame))) => {
+        //             video_i += 1;
 
-                    let Ok(elapsed) = frame.display_time.duration_since(start_time) else {
-                        warn!("Skipping video frame {video_i} as elapsed time is invalid");
-                        return ControlFlow::Continue(());
-                    };
+        //             if frame.height == 0 || frame.width == 0 {
+        //                 return ControlFlow::Continue(());
+        //             }
 
-                    let mut buffer = frame::Video::new(
-                        video_info.pixel_format,
-                        video_info.width,
-                        video_info.height,
-                    );
+        //             let Ok(elapsed) = frame.display_time.duration_since(start_time) else {
+        //                 warn!("Skipping video frame {video_i} as elapsed time is invalid");
+        //                 return ControlFlow::Continue(());
+        //             };
 
-                    let bytes_per_pixel = 4;
-                    let width_in_bytes = frame.width as usize * bytes_per_pixel;
-                    let height = frame.height as usize;
+        //             let mut buffer = frame::Video::new(
+        //                 video_info.pixel_format,
+        //                 video_info.width,
+        //                 video_info.height,
+        //             );
 
-                    let src_data = &frame.data;
+        //             let bytes_per_pixel = 4;
+        //             let width_in_bytes = frame.width as usize * bytes_per_pixel;
+        //             let height = frame.height as usize;
 
-                    let src_stride = src_data.len() / height;
-                    let dst_stride = buffer.stride(0);
+        //             let src_data = &frame.data;
 
-                    if src_data.len() < src_stride * height {
-                        warn!("Frame data size mismatch.");
-                        return ControlFlow::Continue(());
-                    }
+        //             let src_stride = src_data.len() / height;
+        //             let dst_stride = buffer.stride(0);
 
-                    if src_stride < width_in_bytes {
-                        warn!("Source stride is less than expected width in bytes.");
-                        return ControlFlow::Continue(());
-                    }
+        //             if src_data.len() < src_stride * height {
+        //                 warn!("Frame data size mismatch.");
+        //                 return ControlFlow::Continue(());
+        //             }
 
-                    if buffer.data(0).len() < dst_stride * height {
-                        warn!("Destination data size mismatch.");
-                        return ControlFlow::Continue(());
-                    }
+        //             if src_stride < width_in_bytes {
+        //                 warn!("Source stride is less than expected width in bytes.");
+        //                 return ControlFlow::Continue(());
+        //             }
 
-                    {
-                        let dst_data = buffer.data_mut(0);
+        //             if buffer.data(0).len() < dst_stride * height {
+        //                 warn!("Destination data size mismatch.");
+        //                 return ControlFlow::Continue(());
+        //             }
 
-                        for y in 0..height {
-                            let src_offset = y * src_stride;
-                            let dst_offset = y * dst_stride;
-                            dst_data[dst_offset..dst_offset + width_in_bytes].copy_from_slice(
-                                &src_data[src_offset..src_offset + width_in_bytes],
-                            );
-                        }
-                    }
+        //             {
+        //                 let dst_data = buffer.data_mut(0);
 
-                    buffer.set_pts(Some(
-                        (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
-                    ));
+        //                 for y in 0..height {
+        //                     let src_offset = y * src_stride;
+        //                     let dst_offset = y * dst_stride;
+        //                     dst_data[dst_offset..dst_offset + width_in_bytes].copy_from_slice(
+        //                         &src_data[src_offset..src_offset + width_in_bytes],
+        //                     );
+        //                 }
+        //             }
 
-                    // Record frame attempt and check if it was dropped
-                    let now = Instant::now();
-                    let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
-                        Err(flume::TrySendError::Disconnected(_)) => {
-                            return ControlFlow::Break(Err(
-                                "Pipeline is unreachable. Shutting down recording".to_string(),
-                            ));
-                        }
-                        Err(flume::TrySendError::Full(_)) => {
-                            warn!("Screen capture sender is full, dropping frame");
-                            frames_dropped += 1;
-                            true
-                        }
-                        _ => false,
-                    };
+        //             buffer.set_pts(Some(
+        //                 (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+        //             ));
 
-                    frame_events.push_back((now, frame_dropped));
+        //             // Record frame attempt and check if it was dropped
+        //             let now = Instant::now();
+        //             let frame_dropped = match video_tx.try_send((buffer, elapsed.as_secs_f64())) {
+        //                 Err(flume::TrySendError::Disconnected(_)) => {
+        //                     return ControlFlow::Break(Err(
+        //                         "Pipeline is unreachable. Shutting down recording".to_string(),
+        //                     ));
+        //                 }
+        //                 Err(flume::TrySendError::Full(_)) => {
+        //                     warn!("Screen capture sender is full, dropping frame");
+        //                     frames_dropped += 1;
+        //                     true
+        //                 }
+        //                 _ => false,
+        //             };
 
-                    if now.duration_since(last_cleanup) > Duration::from_millis(100) {
-                        cleanup_old_events(&mut frame_events, now);
-                        last_cleanup = now;
-                    }
+        //             frame_events.push_back((now, frame_dropped));
 
-                    // Check drop rate and potentially exit
-                    let (drop_rate, dropped_count, total_count) =
-                        calculate_drop_rate(&mut frame_events);
+        //             if now.duration_since(last_cleanup) > Duration::from_millis(100) {
+        //                 cleanup_old_events(&mut frame_events, now);
+        //                 last_cleanup = now;
+        //             }
 
-                    if drop_rate > max_drop_rate_threshold && total_count >= 10 {
-                        error!(
-                            "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
-                            drop_rate * 100.0,
-                            dropped_count,
-                            total_count,
-                            window_duration.as_secs()
-                        );
-                        return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
-                    }
+        //             // Check drop rate and potentially exit
+        //             let (drop_rate, dropped_count, total_count) =
+        //                 calculate_drop_rate(&mut frame_events);
 
-                    // Periodic logging of drop rate
-                    if now.duration_since(last_log) > log_interval && total_count > 0 {
-                        info!(
-                            "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
-                            drop_rate * 100.0,
-                            dropped_count,
-                            total_count,
-                            frames_dropped
-                        );
-                        last_log = now;
-                    }
+        //             if drop_rate > max_drop_rate_threshold && total_count >= 10 {
+        //                 error!(
+        //                     "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
+        //                     drop_rate * 100.0,
+        //                     dropped_count,
+        //                     total_count,
+        //                     window_duration.as_secs()
+        //                 );
+        //                 return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
+        //             }
 
-                    ControlFlow::Continue(())
-                }
-                Ok(Frame::Audio(frame)) => {
-                    if let Some(audio_tx) = &audio_tx {
-                        let Ok(elapsed) = frame.time().duration_since(start_time) else {
-                            warn!("Skipping audio frame {audio_i} as elapsed time is invalid");
-                            return ControlFlow::Continue(());
-                        };
-                        let mut frame = scap_audio_to_ffmpeg(frame);
-                        frame.set_pts(Some(
-                            (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
-                        ));
-                        let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
-                        audio_i += 1;
-                    }
-                    ControlFlow::Continue(())
-                }
-                Ok(_) => panic!("Unsupported video format"),
-                Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
-            },
-        )
+        //             // Periodic logging of drop rate
+        //             if now.duration_since(last_log) > log_interval && total_count > 0 {
+        //                 info!(
+        //                     "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
+        //                     drop_rate * 100.0,
+        //                     dropped_count,
+        //                     total_count,
+        //                     frames_dropped
+        //                 );
+        //                 last_log = now;
+        //             }
+
+        //             ControlFlow::Continue(())
+        //         }
+        //         Ok(Frame::Audio(frame)) => {
+        //             if let Some(audio_tx) = &audio_tx {
+        //                 let Ok(elapsed) = frame.time().duration_since(start_time) else {
+        //                     warn!("Skipping audio frame {audio_i} as elapsed time is invalid");
+        //                     return ControlFlow::Continue(());
+        //                 };
+        //                 let mut frame = scap_audio_to_ffmpeg(frame);
+        //                 frame.set_pts(Some(
+        //                     (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+        //                 ));
+        //                 let _ = audio_tx.send((frame, elapsed.as_secs_f64()));
+        //                 audio_i += 1;
+        //             }
+        //             ControlFlow::Continue(())
+        //         }
+        //         Ok(_) => panic!("Unsupported video format"),
+        //         Err(error) => ControlFlow::Break(Err(format!("Capture error: {error}"))),
+        //     },
+        // )
     }
 }
 
@@ -1443,7 +1470,7 @@ mod new_stuff {
         // }
     }
 
-    // #[cfg(windows)]
+    #[cfg(windows)]
     pub mod windows {
         use super::*;
         use ::windows::Graphics::Capture::GraphicsCaptureItem;
@@ -1456,7 +1483,7 @@ mod new_stuff {
 
         impl WindowsScreenCapture {
             pub fn new() -> Self {
-                Self { capturer: None }
+                Self { capture_handle: None }
             }
         }
 
@@ -1472,8 +1499,9 @@ mod new_stuff {
             AlreadyCapturing,
         }
 
-        struct NewFrame {
-            ff_frame: ffmpeg::frame::Video,
+        pub struct NewFrame {
+            pub ff_frame: ffmpeg::frame::Video,
+            pub display_time: SystemTime
         }
 
         impl Message<StartCapturing> for WindowsScreenCapture {
@@ -1484,6 +1512,8 @@ mod new_stuff {
                 msg: StartCapturing,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
+            	println!("bruh");
+
                 if self.capture_handle.is_some() {
                     return Err(StartCapturingError::AlreadyCapturing);
                 }
@@ -1492,9 +1522,10 @@ mod new_stuff {
 
                 let capture_handle = capturer.start(
                     move |frame| {
+                    	let display_time = SystemTime::now();
                         let ff_frame = frame.as_ffmpeg().unwrap();
 
-                        let _ = msg.frame_handler.tell(NewFrame { ff_frame }).try_send();
+                        let _ = msg.frame_handler.tell(NewFrame { ff_frame, display_time }).try_send();
 
                         Ok(())
                     },
@@ -1507,6 +1538,25 @@ mod new_stuff {
             }
         }
 
+        impl Message<StopCapturing> for WindowsScreenCapture {
+            type Reply = Result<(), StopCapturingError>;
+
+            async fn handle(
+                &mut self,
+                msg: StopCapturing,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                let Some(capturer) = self.capture_handle.take() else {
+                    return Err(StopCapturingError::NotCapturing);
+                };
+
+                if let Err(e) = capturer.stop() {
+                    error!("Silently failed to stop Windows capturer: {}", e);
+                }
+
+                Ok(())
+            }
+        }
         #[tokio::test]
         async fn kameo_test() {
             use std::time::Duration;

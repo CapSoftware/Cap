@@ -9,7 +9,7 @@ pub enum Control {
 }
 
 pub struct PipelineControlSignal {
-    last_value: Option<Control>,
+    pub last_value: Option<Control>,
     pub receiver: Receiver<Control>,
 }
 
