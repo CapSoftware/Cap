@@ -5,7 +5,7 @@ use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use tracing::{debug, warn};
 
-use crate::pipeline::{RawNanoseconds, RealTimeClock, task::PipelineSourceTask};
+use crate::pipeline::task::PipelineSourceTask;
 
 pub struct AudioMixer {
     sources: Vec<AudioMixerSource>,
@@ -162,8 +162,6 @@ pub struct AudioMixerSource {
 }
 
 impl PipelineSourceTask for AudioMixer {
-    type Clock = RealTimeClock<RawNanoseconds>;
-
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,

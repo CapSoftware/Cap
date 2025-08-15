@@ -24,7 +24,7 @@ use tracing::{debug, info, trace};
 use crate::{
     ActorError, RecordingBaseInputs, RecordingError,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
-    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
+    cursor::{CursorActor, Cursors /*spawn_cursor_recorder*/},
 };
 
 #[allow(clippy::large_enum_variant)]

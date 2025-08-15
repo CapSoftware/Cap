@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use cap_displays::{Display, DisplayId};
 use cap_media::sources::ScreenCaptureTarget;
 use cap_recording::RecordingBaseInputs;
 
@@ -18,7 +19,9 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::primary_display(),
+            capture_target: ScreenCaptureTarget::Screen {
+                id: Display::primary().id(),
+            },
             capture_system_audio: false,
             mic_feed: &None,
         },

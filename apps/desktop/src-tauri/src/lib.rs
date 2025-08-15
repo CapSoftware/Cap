@@ -1894,7 +1894,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::delete_recording,
             recording::list_cameras,
             recording::list_capture_windows,
-            recording::list_capture_screens,
+            recording::list_capture_displays,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,

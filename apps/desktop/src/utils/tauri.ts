@@ -35,8 +35,8 @@ async listCameras() : Promise<CameraInfo[]> {
 async listCaptureWindows() : Promise<CaptureWindow[]> {
     return await TAURI_INVOKE("list_capture_windows");
 },
-async listCaptureScreens() : Promise<CaptureScreen[]> {
-    return await TAURI_INVOKE("list_capture_screens");
+async listCaptureDisplays() : Promise<CaptureDisplay[]> {
+    return await TAURI_INVOKE("list_capture_displays");
 },
 async takeScreenshot() : Promise<null> {
     return await TAURI_INVOKE("take_screenshot");
@@ -341,7 +341,7 @@ export type CaptionData = { segments: CaptionSegment[]; settings: CaptionSetting
 export type CaptionSegment = { id: string; start: number; end: number; text: string }
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
-export type CaptureScreen = { id: DisplayId; name: string; refresh_rate: number }
+export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
 export type CaptureWindow = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
 export type Crop = { position: XY<number>; size: XY<number> }
@@ -388,8 +388,6 @@ export type OSPermission = "screenRecording" | "camera" | "microphone" | "access
 export type OSPermissionStatus = "notNeeded" | "empty" | "granted" | "denied"
 export type OSPermissionsCheck = { screenRecording: OSPermissionStatus; microphone: OSPermissionStatus; camera: OSPermissionStatus; accessibility: OSPermissionStatus }
 export type OnEscapePress = null
-export type PhysicalBounds = { position: PhysicalPosition; size: PhysicalSize }
-export type PhysicalPosition = { x: number; y: number }
 export type PhysicalSize = { width: number; height: number }
 export type Plan = { upgraded: boolean; manual: boolean; last_checked: number }
 export type Platform = "MacOS" | "Windows"
@@ -413,7 +411,7 @@ export type RequestNewScreenshot = null
 export type RequestOpenSettings = { page: string }
 export type RequestStartRecording = null
 export type S3UploadMeta = { id: string }
-export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "screen"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: PhysicalBounds }
+export type ScreenCaptureTarget = { variant: "window"; id: WindowId } | { variant: "screen"; id: DisplayId } | { variant: "area"; screen: DisplayId; bounds: LogicalBounds }
 export type ScreenUnderCursor = { name: string; physical_size: PhysicalSize; refresh_rate: string }
 export type SegmentRecordings = { display: Video; camera: Video | null; mic: Audio | null; system_audio: Audio | null }
 export type SerializedEditorInstance = { framesSocketUrl: string; recordingDuration: number; savedProjectConfig: ProjectConfiguration; recordings: ProjectRecordingsMeta; path: string }

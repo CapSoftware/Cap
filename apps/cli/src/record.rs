@@ -30,7 +30,7 @@ pub struct RecordStart {
 impl RecordStart {
     pub async fn run(self) -> Result<(), String> {
         let (target_info, _) = match (self.target.screen, self.target.window) {
-            (Some(id), _) => cap_media::sources::list_screens()
+            (Some(id), _) => cap_media::sources::list_displays()
                 .into_iter()
                 .find(|s| s.0.id == id)
                 .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))

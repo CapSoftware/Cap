@@ -9,7 +9,6 @@ use tracing::{error, info};
 
 use crate::pipeline::{
     MediaError, Pipeline, PipelineClock,
-    clock::CloneFrom,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
 };
@@ -35,10 +34,10 @@ impl<T> PipelineBuilder<T> {
         }
     }
 
-    pub fn spawn_source<C: CloneFrom<T> + Send + 'static>(
+    pub fn spawn_source(
         &mut self,
         name: impl Into<String>,
-        mut task: impl PipelineSourceTask<Clock = C> + 'static,
+        mut task: impl PipelineSourceTask + 'static,
     ) {
         let name = name.into();
         let control_signal = self.control.add_listener(name.clone());

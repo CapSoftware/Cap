@@ -12,11 +12,7 @@ use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
     MediaError,
     data::FFAudio,
-    pipeline::{
-        clock::{LocalTimestamp, RealTimeClock},
-        control::Control,
-        task::PipelineSourceTask,
-    },
+    pipeline::{clock::LocalTimestamp, control::Control, task::PipelineSourceTask},
 };
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
@@ -103,8 +99,6 @@ impl AudioInputSource {
 }
 
 impl PipelineSourceTask for AudioInputSource {
-    type Clock = RealTimeClock<StreamInstant>;
-
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,

@@ -8,6 +8,8 @@ pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
+use crate::bounds::PhysicalBounds;
+
 #[derive(Clone, Copy)]
 pub struct Display(DisplayImpl);
 
@@ -28,8 +30,8 @@ impl Display {
         DisplayId(self.0.raw_id())
     }
 
-    pub fn from_id(id: DisplayId) -> Option<Self> {
-        Self::list().into_iter().find(|d| d.id() == id)
+    pub fn from_id(id: &DisplayId) -> Option<Self> {
+        Self::list().into_iter().find(|d| &d.id() == id)
     }
 
     pub fn get_containing_cursor() -> Option<Self> {
@@ -47,6 +49,14 @@ impl Display {
     pub fn refresh_rate(&self) -> f64 {
         self.0.refresh_rate()
     }
+
+    pub fn logical_bounds(&self) -> LogicalBounds {
+        self.0.logical_bounds()
+    }
+
+    // pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
+    //     self.0.physical_bounds()
+    // }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]
@@ -114,9 +124,21 @@ impl Window {
         WindowId(self.0.id())
     }
 
-    pub fn bounds(&self) -> Option<LogicalBounds> {
-        self.0.bounds()
+    pub fn from_id(id: &WindowId) -> Option<Self> {
+        Self::list().into_iter().find(|d| &d.id() == id)
     }
+
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        self.0.logical_bounds()
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        self.0.physical_size()
+    }
+
+    // pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
+    //     self.0.physical_bounds()
+    // }
 
     pub fn owner_name(&self) -> Option<String> {
         self.0.owner_name()
@@ -128,6 +150,10 @@ impl Window {
 
     pub fn raw_handle(&self) -> &WindowImpl {
         &self.0
+    }
+
+    pub fn display(&self) -> Option<Display> {
+        self.0.display().map(Display)
     }
 }
 

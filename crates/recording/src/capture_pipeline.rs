@@ -225,6 +225,7 @@ impl MakeCapturePipeline for cap_media::sources::CMSampleBufferCapture {
     }
 }
 
+#[cfg(windows)]
 impl MakeCapturePipeline for AVFrameCapture {
     fn make_studio_mode_pipeline(
         mut builder: CapturePipelineBuilder,

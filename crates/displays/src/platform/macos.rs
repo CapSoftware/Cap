@@ -1,13 +1,16 @@
 use std::{ffi::c_void, str::FromStr};
 
 use cidre::{arc, ns, sc};
-use core_foundation::{base::FromVoid, number::CFNumber, string::CFString};
+use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
         CGRect, kCGWindowListOptionIncludingWindow,
     },
-    window::{CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerName},
+    window::{
+        CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
+        kCGWindowOwnerName,
+    },
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
@@ -56,6 +59,13 @@ impl DisplayImpl {
         LogicalPosition {
             x: rect.origin.x,
             y: rect.origin.y,
+        }
+    }
+
+    pub fn logical_bounds(&self) -> LogicalBounds {
+        LogicalBounds {
+            position: self.logical_position(),
+            size: self.logical_size(),
         }
     }
 
@@ -233,7 +243,7 @@ impl WindowImpl {
         Self::list()
             .into_iter()
             .filter_map(|window| {
-                let bounds = window.bounds()?;
+                let bounds = window.logical_bounds()?;
                 bounds.contains_point(cursor).then_some(window)
             })
             .collect()
@@ -288,7 +298,21 @@ impl WindowImpl {
         }
     }
 
-    pub fn bounds(&self) -> Option<LogicalBounds> {
+    pub fn name(&self) -> Option<String> {
+        let windows =
+            core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
+
+        let window_dict =
+            unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
+
+        unsafe {
+            window_dict
+                .find(kCGWindowName)
+                .map(|v| CFString::from_void(*v).to_string())
+        }
+    }
+
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
         let windows =
             core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
 
@@ -309,6 +333,18 @@ impl WindowImpl {
                 width: rect.size.width,
                 height: rect.size.height,
             },
+        })
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        let logical_bounds = self.logical_bounds()?;
+        let display = self.display()?;
+
+        let scale = display.physical_size().width() / display.logical_size().width();
+
+        Some(PhysicalSize {
+            width: logical_bounds.size().width() * scale,
+            height: logical_bounds.size().height() * scale,
         })
     }
 
@@ -387,6 +423,38 @@ impl WindowImpl {
             pool.drain();
             result
         }
+    }
+
+    pub async fn as_sc(&self) -> Option<arc::R<sc::Window>> {
+        sc::ShareableContent::current()
+            .await
+            .ok()?
+            .windows()
+            .iter()
+            .find(|w| w.id() == self.0)
+            .map(|v| v.retained())
+    }
+
+    pub fn display(&self) -> Option<DisplayImpl> {
+        let descriptions = core_graphics::window::create_description_from_array(
+            CFArray::from_copyable(&[self.0]),
+        )?;
+
+        let window_bounds = CGRect::from_dict_representation(
+            &descriptions
+                .get(0)?
+                .get(unsafe { kCGWindowBounds })
+                .downcast::<CFDictionary>()?,
+        )?;
+
+        for id in CGDisplay::active_displays().ok()? {
+            let display = CGDisplay::new(id);
+            if window_bounds.is_intersects(&display.bounds()) {
+                return Some(DisplayImpl(display));
+            }
+        }
+
+        None
     }
 }
 

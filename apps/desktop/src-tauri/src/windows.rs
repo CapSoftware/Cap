@@ -8,7 +8,7 @@ use crate::{
     target_select_overlay::WindowFocusManager,
 };
 use cap_displays::DisplayId;
-use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
+use cap_media::{platform::logical_monitor_bounds, sources::CaptureDisplay};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -251,7 +251,7 @@ impl ShowCapWindow {
                 }
             }
             Self::TargetSelectOverlay { display_id } => {
-                let Some(display) = cap_displays::Display::from_id(display_id.clone()) else {
+                let Some(display) = cap_displays::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
 

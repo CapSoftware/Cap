@@ -16,7 +16,6 @@ import {
 	type CameraInfo,
 	commands,
 	type DeviceOrModelID,
-	ModelIDType,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
@@ -40,8 +39,8 @@ export const listWindows = queryOptions({
 });
 
 export const listScreens = queryOptions({
-	queryKey: ["capture", "screens"] as const,
-	queryFn: () => commands.listCaptureScreens(),
+	queryKey: ["capture", "displays"] as const,
+	queryFn: () => commands.listCaptureDisplays(),
 	reconcile: "id",
 	refetchInterval: 1000,
 });

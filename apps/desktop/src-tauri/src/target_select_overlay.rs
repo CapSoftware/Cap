@@ -70,7 +70,7 @@ pub async fn open_target_select_overlays(
                     window: window.and_then(|w| {
                         Some(WindowUnderCursor {
                             id: w.id(),
-                            bounds: w.bounds()?,
+                            bounds: w.logical_bounds()?,
                             app_name: w.owner_name()?,
                             icon: w.app_icon().map(|bytes| {
                                 format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))

@@ -6821,11 +6821,13 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-displays",
  "cidre 0.11.0",
  "ffmpeg-next",
  "futures",
  "scap-direct3d",
  "scap-screencapturekit",
+ "tokio",
  "windows 0.60.0",
 ]
 

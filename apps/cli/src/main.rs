@@ -77,7 +77,7 @@ async fn main() -> Result<(), String> {
         }
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
-                let screens = cap_media::sources::list_screens();
+                let screens = cap_media::sources::list_displays();
 
                 for (i, (screen, target)) in screens.iter().enumerate() {
                     println!(

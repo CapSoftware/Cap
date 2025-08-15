@@ -17,11 +17,8 @@ use crate::{
     windows::{CapWindowId, ShowCapWindow},
 };
 use cap_fail::fail;
+use cap_media::sources::{CaptureDisplay, CaptureWindow};
 use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
-use cap_media::{
-    platform::Bounds,
-    sources::{CaptureScreen, CaptureWindow},
-};
 use cap_project::{
     CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
@@ -171,47 +168,20 @@ impl CompletedRecording {
 
 #[tauri::command(async)]
 #[specta::specta]
-pub async fn list_capture_screens() -> Vec<CaptureScreen> {
-    cap_displays::Display::list()
+pub async fn list_capture_displays() -> Vec<CaptureDisplay> {
+    cap_media::sources::list_displays()
         .into_iter()
-        .enumerate()
-        .map(|(i, display)| {
-            let id = display.id();
-            let name = format!("Display {}", i);
-            let refresh_rate = display.raw_handle().refresh_rate();
-
-            CaptureScreen {
-                id,
-                name,
-                refresh_rate: refresh_rate as u32,
-            }
-        })
+        .map(|(v, _)| v)
         .collect()
-
-    // cap_media::sources::list_screens()
-    //     .into_iter()
-    //     .map(|(v, _)| v)
-    //     .collect()
 }
 
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_capture_windows() -> Vec<CaptureWindow> {
-    cap_displays::Window::list()
+    cap_media::sources::list_windows()
         .into_iter()
-        .enumerate()
-        .map(|(i, v)| CaptureWindow {
-            id: v.id(),
-            owner_name: v.owner_name().unwrap_or_default(),
-            name: format!("Window {i}"),
-            bounds: v.bounds().unwrap(),
-            refresh_rate: 60,
-        })
+        .map(|(v, _)| v)
         .collect()
-    // cap_media::sources::list_windows()
-    //     .into_iter()
-    //     .map(|(v, _)| v)
-    //     .collect()
 }
 
 #[tauri::command(async)]
@@ -264,24 +234,12 @@ pub async fn start_recording(
         .await?;
 
     let target_name = {
-        let title = "TODO Title".to_string(); //  inputs.capture_target.get_title();
+        let title = inputs.capture_target.title();
 
         match inputs.capture_target.clone() {
-            ScreenCaptureTarget::Area { .. } => "Area".to_string(),
-            ScreenCaptureTarget::Window { id, .. } => {
-                let platform_windows: HashMap<u32, cap_media::platform::Window> =
-                    cap_media::platform::get_on_screen_windows()
-                        .into_iter()
-                        .map(|window| (window.window_id, window))
-                        .collect();
-
-                "Window".to_string()
-                // platform_windows
-                //     .get(&id)
-                //     .map(|v| v.owner_name.to_string())
-                //     .unwrap_or_else(|| "Window".to_string())
-            }
-            ScreenCaptureTarget::Screen { .. } => title, // .unwrap_or_else(|| "Screen".to_string()),
+            ScreenCaptureTarget::Area { .. } => title.unwrap_or_else(|| "Area".to_string()),
+            ScreenCaptureTarget::Window { .. } => title.unwrap_or_else(|| "Window".to_string()),
+            ScreenCaptureTarget::Screen { .. } => title.unwrap_or_else(|| "Screen".to_string()),
         }
     };
 

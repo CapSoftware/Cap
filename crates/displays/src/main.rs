@@ -61,7 +61,7 @@ fn main() {
             // Limit to first 5 windows
             println!("\nWindow {}: {}", index + 1, window.id());
 
-            if let Some(bounds) = window.bounds() {
+            if let Some(bounds) = window.logical_bounds() {
                 println!(
                     "  Bounds: {}x{} at ({}, {})",
                     bounds.size().width(),
