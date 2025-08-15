@@ -1,10 +1,10 @@
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
-    Dictionary,
     codec::{codec::Codec, context, encoder},
     format::{self},
     frame,
     threading::Config,
+    Dictionary,
 };
 use tracing::{debug, error};
 
@@ -161,7 +161,7 @@ impl H264Encoder {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to convert frame: {:?} from format {:?} to YUV420P",
+                        "Failed to convert frame: {} from format {:?} to YUV420P",
                         e,
                         frame.format()
                     );

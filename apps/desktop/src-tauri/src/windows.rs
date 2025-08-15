@@ -36,7 +36,7 @@ pub enum CapWindowId {
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
     Camera,
@@ -70,7 +70,7 @@ impl FromStr for CapWindowId {
             s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
                 screen_id: s
                     .replace("window-capture-occluder-", "")
-                    .parse::<u32>()
+                    .parse::<DisplayId>()
                     .map_err(|e| e.to_string())?,
             },
             s if s.starts_with("target-select-overlay-") => Self::TargetSelectOverlay {
@@ -628,7 +628,7 @@ impl ShowCapWindow {
             },
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
-                    screen_id: *screen_id,
+                    screen_id: screen_id.clone(),
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,

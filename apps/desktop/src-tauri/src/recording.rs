@@ -288,12 +288,12 @@ pub async fn start_recording(
 
     match &inputs.capture_target {
         ScreenCaptureTarget::Window { id: _id } => {
-            if let Some(display) = inputs.capture_target.display() {
-                let _ = ShowCapWindow::WindowCaptureOccluder {
-                    screen_id: display.id(),
-                }
-                .show(&app)
-                .await;
+            if let Some(show) = inputs
+                .capture_target
+                .display()
+                .map(|d| ShowCapWindow::WindowCaptureOccluder { screen_id: d.id() })
+            {
+                show.show(&app).await;
             }
         }
         ScreenCaptureTarget::Area { screen, .. } => {

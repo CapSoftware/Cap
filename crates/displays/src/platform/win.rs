@@ -1,37 +1,35 @@
 use std::{mem, str::FromStr};
 
 use windows::{
-    core::{BOOL, PCWSTR, PWSTR},
     Graphics::Capture::GraphicsCaptureItem,
     Win32::{
         Devices::Display::{
-            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig,
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
             DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
             DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
             DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            QDC_ONLY_ACTIVE_PATHS,
+            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
+            QueryDisplayConfig,
         },
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
-        Graphics::
-            Gdi::{
-                CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
-                DeleteObject, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
-                GetDIBits, GetMonitorInfoW, GetObjectA, MonitorFromPoint, ReleaseDC, SelectObject,
-                BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DEVMODEW, DIB_RGB_COLORS,
-                ENUM_CURRENT_SETTINGS, HBRUSH, HDC, HGDIOBJ, HMONITOR, MONITORINFOEXW,
-                MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
-            },
-
+        Graphics::Gdi::{
+            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
+            CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS,
+            DISPLAY_DEVICE_STATE_FLAGS, DISPLAY_DEVICEW, DeleteDC, DeleteObject,
+            ENUM_CURRENT_SETTINGS, EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW,
+            FillRect, GetDC, GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ,
+            HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW,
+            MonitorFromPoint, MonitorFromWindow, ReleaseDC, SelectObject,
+        },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
             Registry::{
-                RegCloseKey, RegEnumKeyExW, RegOpenKeyExW, RegQueryValueExW, HKEY,
-                HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ,
+                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ, RegCloseKey, RegEnumKeyExW,
+                RegOpenKeyExW, RegQueryValueExW,
             },
             Threading::{
-                GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-                PROCESS_QUERY_LIMITED_INFORMATION,
+                GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
+                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
             WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
@@ -39,17 +37,20 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DestroyIcon, DrawIconEx, EnumWindows, GetClassLongPtrW, GetClassNameW,
-                GetCursorPos, GetIconInfo, GetLayeredWindowAttributes, GetWindow, GetWindowLongW,
-                GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SendMessageW,
-                WindowFromPoint, DI_FLAGS, GCLP_HICON, GWL_EXSTYLE, GW_HWNDNEXT, HICON, ICONINFO,
-                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
+                GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
+                GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
+                GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
+                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint, GetWindowTextLengthW, GetWindowTextW
             },
         },
     },
+    core::{BOOL, PCWSTR, PWSTR},
 };
 
-use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use crate::bounds::{
+    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+};
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
@@ -108,7 +109,7 @@ impl DisplayImpl {
     }
 
     pub fn raw_id(&self) -> DisplayIdImpl {
-        DisplayIdImpl(self.0 .0 as u64)
+        DisplayIdImpl(self.0.0 as u64)
     }
 
     pub fn from_id(id: String) -> Option<Self> {
@@ -150,6 +151,13 @@ impl DisplayImpl {
             } else {
                 LogicalPosition { x: 0.0, y: 0.0 }
             }
+        }
+    }
+
+    pub fn logical_bounds(&self) -> LogicalBounds {
+        LogicalBounds {
+            size: self.logical_size(),
+            position: self.logical_position(),
         }
     }
 
@@ -231,48 +239,43 @@ impl DisplayImpl {
         }
     }
 
-    pub fn name(&self) -> String {
-        // First try the modern DisplayConfig API for friendly names
-        if let Some(friendly_name) = self.get_friendly_name_from_displayconfig() {
-            return friendly_name;
-        }
-
-        // Try WMI query for better localized names
-        if let Some(wmi_name) = self.get_friendly_name_from_wmi() {
-            return wmi_name;
-        }
-
-        // Fallback to the existing registry method
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
+    pub fn name(&self) -> Option<String> {
         unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                // Convert the device name from wide string to String
-                let device_name = &info.szDevice;
-                let null_pos = device_name
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(device_name.len());
-                let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
+            let mut monitor_info = MONITORINFOEXW {
+                monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+                    cbSize: mem::size_of::<MONITORINFOEXW>() as u32,
+                    rcMonitor: RECT::default(),
+                    rcWork: RECT::default(),
+                    dwFlags: 0,
+                },
+                szDevice: [0; 32],
+            };
 
-                // Try to get friendly name from registry
-                if let Some(friendly_name) = self.get_friendly_name_from_registry(&device_name_str)
-                {
-                    return friendly_name;
+            if GetMonitorInfoW(self.0, &mut monitor_info as *mut _ as *mut _).as_bool() {
+                let device_name = PCWSTR::from_raw(monitor_info.szDevice.as_ptr());
+
+                let mut display_device = DISPLAY_DEVICEW {
+                    cb: mem::size_of::<DISPLAY_DEVICEW>() as u32,
+                    DeviceName: [0; 32],
+                    DeviceString: [0; 128],
+                    StateFlags: DISPLAY_DEVICE_STATE_FLAGS(0),
+                    DeviceID: [0; 128],
+                    DeviceKey: [0; 128],
+                };
+
+                if EnumDisplayDevicesW(device_name, 0, &mut display_device, 0).as_bool() {
+                    let device_string = display_device.DeviceString;
+                    let len = device_string
+                        .iter()
+                        .position(|&x| x == 0)
+                        .unwrap_or(device_string.len());
+
+                    return Some(String::from_utf16_lossy(&device_string[..len]));
                 }
-
-                // Try EDID-based name lookup as final fallback before device name
-                if let Some(edid_name) = self.get_friendly_name_from_edid(&device_name_str) {
-                    return edid_name;
-                }
-
-                // Final fallback to device name
-                device_name_str
-            } else {
-                format!("Unknown Display")
             }
         }
+
+        None
     }
 
     fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
@@ -808,14 +811,14 @@ impl WindowImpl {
         Self::list()
             .into_iter()
             .filter_map(|window| {
-                let bounds = window.bounds()?;
+                let bounds = window.logical_bounds()?;
                 bounds.contains_point(cursor).then_some(window)
             })
             .collect()
     }
 
     pub fn id(&self) -> WindowIdImpl {
-        WindowIdImpl(self.0 .0 as u64)
+        WindowIdImpl(self.0.0 as u64)
     }
 
     pub fn level(&self) -> Option<i32> {
@@ -1226,7 +1229,7 @@ impl WindowImpl {
         }
     }
 
-    pub fn bounds(&self) -> Option<LogicalBounds> {
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
         let mut rect = RECT::default();
         unsafe {
             if GetWindowRect(self.0, &mut rect).is_ok() {
@@ -1252,6 +1255,61 @@ impl WindowImpl {
                 None
             }
         }
+    }
+
+    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
+        let mut rect = RECT::default();
+        unsafe {
+            if GetWindowRect(self.0, &mut rect).is_ok() {
+                Some(PhysicalBounds {
+                    position: PhysicalPosition {
+                        x: rect.left as f64,
+                        y: rect.top as f64,
+                    },
+                    size: PhysicalSize {
+                        width: (rect.right - rect.left) as f64,
+                        height: (rect.bottom - rect.top) as f64,
+                    },
+                })
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        Some(self.physical_bounds()?.size())
+    }
+
+    pub fn display(&self) -> Option<DisplayImpl> {
+        let hwmonitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONULL) };
+        if hwmonitor.is_invalid() {
+            None
+        } else {
+            Some(DisplayImpl(hwmonitor))
+        }
+    }
+
+    pub fn name(&self) -> Option<String> {
+        let len = unsafe { GetWindowTextLengthW(self.0) };
+
+        let mut name = vec![0u16; usize::try_from(len).unwrap() + 1];
+        if len >= 1 {
+            let copied = unsafe { GetWindowTextW(self.0, &mut name) };
+            if copied == 0 {
+                return Some(String::new());
+            }
+        }
+
+        String::from_utf16(
+            &name
+                .as_slice()
+                .iter()
+                .take_while(|ch| **ch != 0x0000)
+                .copied()
+                .collect::<Vec<u16>>(),
+        )
+        .ok()
     }
 }
 

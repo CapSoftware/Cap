@@ -16,8 +16,6 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{alloc::System, collections::HashMap, ops::ControlFlow, rc::Rc, time::SystemTime};
 use tracing::{debug, error, info, trace, warn};
-#[cfg(target_os = "windows")]
-use windows::Win32::{Foundation::HWND, Graphics::Gdi::HMONITOR};
 
 use crate::{
     pipeline::{control::Control, task::PipelineSourceTask},
@@ -104,9 +102,9 @@ impl ScreenCaptureTarget {
 
     pub fn title(&self) -> Option<String> {
         match self {
-            Self::Screen { id } => Display::from_id(id).map(|d| d.raw_handle().name()),
-            Self::Window { id } => Window::from_id(id).and_then(|w| w.raw_handle().name()),
-            Self::Area { screen, .. } => Display::from_id(screen).map(|d| d.raw_handle().name()),
+            Self::Screen { id } => Display::from_id(id).and_then(|d| d.name()),
+            Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
+            Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
         }
     }
 
@@ -260,8 +258,6 @@ impl ScreenCaptureFormat for AVFrameCapture {
 
 #[cfg(windows)]
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
-    type Clock = RealTimeClock<RawNanoseconds>;
-
     // #[instrument(skip_all)]
     fn run(
         &mut self,
@@ -401,7 +397,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
             }
         }
 
-        let target = self.target.clone();
+        let target = self.config.target.clone();
 
         let _ = self.tokio_handle.block_on(async move {
             let capturer = WindowsScreenCapture::spawn(WindowsScreenCapture::new());
@@ -420,7 +416,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
             let (capture_item, mut settings) = match target {
                 ScreenCaptureTarget::Screen { id } => {
-                    let display = Display::from_id(id).unwrap();
+                    let display = Display::from_id(&id).unwrap();
                     let display = display.raw_handle();
 
                     (
@@ -831,9 +827,7 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
             (
                 CaptureDisplay {
                     id: display.id(),
-                    #[cfg(target_os = "macos")]
-                    name: display.raw_handle().name(),
-                    #[cfg(target_os = "macos")]
+                    name: display.name().unwrap(),
                     refresh_rate: display.raw_handle().refresh_rate() as u32,
                 },
                 display,
@@ -864,39 +858,13 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
                     id: v.id(),
                     owner_name: v.owner_name()?,
                     bounds: v.logical_bounds()?,
-                    #[cfg(target_os = "macos")]
                     name: v.raw_handle().name()?,
-                    #[cfg(target_os = "macos")]
-                    refresh_rate: v.display()?.refresh_rate() as u32,
+                    refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
                 },
                 v,
             ))
         })
         .collect()
-}
-
-pub fn get_target_fps(target: &scap::Target) -> Result<u32, String> {
-    #[cfg(target_os = "macos")]
-    match target {
-        scap::Target::Display(display) => platform::get_display_refresh_rate(display.raw_handle.0),
-        scap::Target::Window(window) => platform::get_display_refresh_rate(
-            platform::display_for_window(window.raw_handle)
-                .ok_or_else(|| "failed to get display for window".to_string())?
-                .id,
-        ),
-    }
-    #[cfg(target_os = "windows")]
-    match target {
-        scap::Target::Display(display) => {
-            platform::get_display_refresh_rate(HMONITOR(display.raw_handle.0))
-        }
-        scap::Target::Window(window) => platform::get_display_refresh_rate(
-            platform::display_for_window(HWND(window.raw_handle.0))
-                .ok_or_else(|| "failed to get display for window".to_string())?,
-        ),
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    None
 }
 
 fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::Audio {

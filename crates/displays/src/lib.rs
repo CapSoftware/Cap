@@ -38,7 +38,7 @@ impl Display {
         DisplayImpl::get_containing_cursor().map(Self)
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> Option<String> {
         self.0.name()
     }
 
@@ -154,6 +154,10 @@ impl Window {
 
     pub fn display(&self) -> Option<Display> {
         self.0.display().map(Display)
+    }
+
+    pub fn name(&self) -> Option<String> {
+        self.0.name()
     }
 }
 

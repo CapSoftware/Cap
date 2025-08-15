@@ -114,7 +114,7 @@ impl DisplayImpl {
         refresh_rate
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> Option<String> {
         use cocoa::appkit::NSScreen;
         use cocoa::base::{id, nil};
         use cocoa::foundation::{NSArray, NSDictionary, NSString};
@@ -142,14 +142,13 @@ impl DisplayImpl {
                         let name = CStr::from_ptr(NSString::UTF8String(name))
                             .to_string_lossy()
                             .to_string();
-                        return name;
+                        return Some(name);
                     }
                 }
             }
-
-            // Fallback to generic name with display ID
-            format!("Display {}", self.0.id)
         }
+
+        None
     }
 }
 

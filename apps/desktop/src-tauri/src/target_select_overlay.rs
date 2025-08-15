@@ -78,7 +78,7 @@ pub async fn open_target_select_overlays(
                         })
                     }),
                     screen: display.map(|d| ScreenUnderCursor {
-                        name: d.name(),
+                        name: d.name().unwrap_or_default(),
                         physical_size: d.physical_size(),
                         refresh_rate: d.refresh_rate().to_string(),
                     }),
