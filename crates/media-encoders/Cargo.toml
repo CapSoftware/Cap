@@ -13,7 +13,9 @@ cap-media-info = { path = "../media-info" }
 ffmpeg.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-gif = "0.13.3"
+gifski = "1.32"
+imgref = "1.10"
+rgb = "0.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
