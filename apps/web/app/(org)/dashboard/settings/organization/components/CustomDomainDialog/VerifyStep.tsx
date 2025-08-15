@@ -131,7 +131,7 @@ const VerifyStep = ({
 			) : (
 				!isVerified &&
 				domainConfig && (
-					<div className="overflow-y-auto space-y-4">
+					<div className="overflow-y-auto h-full max-h-[300px] space-y-4">
 						{/* TXT Record Configuration for Verification */}
 						{showTXTRecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
