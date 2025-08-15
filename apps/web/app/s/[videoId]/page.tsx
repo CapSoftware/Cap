@@ -5,6 +5,7 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
+	spaceMembers,
 	spaces,
 	spaceVideos,
 	users,
@@ -13,7 +14,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { eq, type InferSelectModel, sql } from "drizzle-orm";
+import { and, eq, type InferSelectModel, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -301,10 +302,16 @@ export default async function ShareVideoPage(props: Props) {
 			sharedOrganization: {
 				organizationId: sharedVideos.organizationId,
 			},
+			spaceId: spaceVideos.spaceId,
+			isSpaceMember: spaceMembers.userId,
 		})
 		.from(videos)
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.where(eq(videos.id, videoId));
+		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
+		.leftJoin(spaceMembers, eq(spaceVideos.spaceId, spaceMembers.spaceId))
+		.where(
+			and(eq(videos.id, videoId), eq(spaceMembers.userId, user?.id ?? "")),
+		);
 
 	if (user && video && user.id !== video.ownerId) {
 		try {
@@ -324,7 +331,8 @@ export default async function ShareVideoPage(props: Props) {
 	if (userAccess === "private") {
 		return (
 			<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-				<h1 className="mb-4 text-2xl font-bold">This video is private</h1>
+				<Logo className="size-32" />
+				<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
 				<p className="text-gray-400">
 					If you own this video, please <Link href="/login">sign in</Link> to
 					manage sharing.
