@@ -4,6 +4,8 @@ import {
 	createEventListenerMap,
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
+import { createQuery } from "@tanstack/solid-query";
+import { Menu, Submenu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
@@ -25,6 +27,7 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import DisplayArt from "../assets/illustrations/display.png";
 
 export default function () {
 	const [params] = useSearchParams<{ displayId: string }>();
@@ -34,7 +37,6 @@ export default function () {
 		createStore<TargetUnderCursor>({
 			display_id: null,
 			window: null,
-			screen: null,
 		});
 
 	const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
@@ -42,24 +44,52 @@ export default function () {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
+	const displayInformation = createQuery(() => ({
+		queryKey: ["displayId", params.displayId],
+		queryFn: async () => {
+			if (!params.displayId) return null;
+			try {
+				const info = await commands.displayInformation(params.displayId);
+				return info;
+			} catch (error) {
+				console.error("Failed to fetch screen information:", error);
+				return null;
+			}
+		},
+		enabled:
+			params.displayId !== undefined && rawOptions.targetMode === "screen",
+	}));
+
 	const [bounds, _setBounds] = createStore({
 		position: { x: 0, y: 0 },
 		size: { width: 400, height: 300 },
 	});
 
 	const setBounds = (newBounds: typeof bounds) => {
-		newBounds.position.x = Math.max(0, newBounds.position.x);
-		newBounds.position.y = Math.max(0, newBounds.position.y);
-		newBounds.size.width = Math.min(
-			window.innerWidth - newBounds.position.x,
-			newBounds.size.width,
-		);
-		newBounds.size.height = Math.min(
-			window.innerHeight - newBounds.position.y,
-			newBounds.size.height,
-		);
+		const clampedBounds = {
+			position: {
+				x: Math.max(0, newBounds.position.x),
+				y: Math.max(0, newBounds.position.y),
+			},
+			size: {
+				width: Math.max(
+					150,
+					Math.min(
+						window.innerWidth - Math.max(0, newBounds.position.x),
+						newBounds.size.width,
+					),
+				),
+				height: Math.max(
+					150,
+					Math.min(
+						window.innerHeight - Math.max(0, newBounds.position.y),
+						newBounds.size.height,
+					),
+				),
+			},
+		};
 
-		_setBounds(newBounds);
+		_setBounds(clampedBounds);
 	};
 
 	// We do this so any Cap window, (or external in the case of a bug) that are focused can trigger the close shortcut
@@ -80,18 +110,17 @@ export default function () {
 		<Switch>
 			<Match when={rawOptions.targetMode === "screen"}>
 				{(_) => (
-					<Show when={targetUnderCursor.screen} keyed>
-						{(screenUnderCursor) => (
+					<Show when={displayInformation.data} keyed>
+						{(display) => (
 							<div
-								data-over={targetUnderCursor.display_id === params.displayId}
-								class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
+								data-over="true"
+								class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/30 transition-colors"
 							>
-								<span class="text-3xl font-semibold mb-2">
-									{screenUnderCursor.name}
-								</span>
-								<span class="text-xs mb-2">
-									{`${screenUnderCursor.physical_size.width}x${screenUnderCursor.physical_size.height} · ${screenUnderCursor.refresh_rate}FPS`}
-								</span>
+								<img src={DisplayArt} class="w-full max-w-[160px] mb-5" />
+								<p class="mb-2 text-3xl font-semibold">{display.name}</p>
+								<p class="mb-2 text-base">
+									{`${display.physical_size.width}x${display.physical_size.height} · ${display.refresh_rate}FPS`}
+								</p>
 
 								<RecordingControls
 									target={{
@@ -114,10 +143,10 @@ export default function () {
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
-							class="w-screen h-screen bg-black/50 relative"
+							class="relative w-screen h-screen bg-black/50"
 						>
 							<div
-								class="bg-blue-600/40 absolute flex flex-col items-center justify-center"
+								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
 								style={{
 									width: `${windowUnderCursor.bounds.size.width}px`,
 									height: `${windowUnderCursor.bounds.size.height}px`,
@@ -125,20 +154,20 @@ export default function () {
 									top: `${windowUnderCursor.bounds.position.y}px`,
 								}}
 							>
-								<div class="flex flex-col items-center justify-center">
+								<div class="flex flex-col justify-center items-center">
 									<Show when={windowUnderCursor.icon}>
 										{(icon) => (
 											<img
 												src={icon()}
 												alt={`${windowUnderCursor.app_name} icon`}
-												class="w-32 h-32 mb-3 rounded-lg"
+												class="mb-3 w-32 h-32 rounded-lg"
 											/>
 										)}
 									</Show>
-									<span class="text-3xl font-semibold mb-2">
+									<span class="mb-2 text-3xl font-semibold">
 										{windowUnderCursor.app_name}
 									</span>
-									<span class="text-xs mb-2">
+									<span class="mb-2 text-xs">
 										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
 									</span>
 								</div>
@@ -170,6 +199,41 @@ export default function () {
 			<Match when={rawOptions.targetMode === "area"}>
 				{(_) => {
 					const [dragging, setDragging] = createSignal(false);
+					// Track whether the controls should be placed above the selection to avoid window bottom overflow
+					const [placeControlsAbove, setPlaceControlsAbove] =
+						createSignal(false);
+					let controlsEl: HTMLDivElement | undefined;
+
+					// Recompute placement when bounds change or window resizes
+					createEffect(() => {
+						// Read reactive dependencies
+						const top = bounds.position.y;
+						const height = bounds.size.height;
+						// Measure controls height (fallback to 64px if not yet mounted)
+						const ctrlH = controlsEl?.offsetHeight ?? 64;
+						const margin = 16;
+
+						const wouldOverflow =
+							top + height + margin + ctrlH > window.innerHeight;
+						setPlaceControlsAbove(wouldOverflow);
+					});
+
+					// Handle window resize to keep placement responsive
+					createRoot((dispose) => {
+						const onResize = () => {
+							const ctrlH = controlsEl?.offsetHeight ?? 64;
+							const margin = 16;
+							const wouldOverflow =
+								bounds.position.y + bounds.size.height + margin + ctrlH >
+								window.innerHeight;
+							setPlaceControlsAbove(wouldOverflow);
+						};
+						window.addEventListener("resize", onResize);
+						onCleanup(() => {
+							window.removeEventListener("resize", onResize);
+							dispose();
+						});
+					});
 
 					function createOnMouseDown(
 						onDrag: (
@@ -183,19 +247,22 @@ export default function () {
 								size: { ...bounds.size },
 							};
 
+							let animationFrame: number | null = null;
+
 							createRoot((dispose) => {
 								createEventListenerMap(window, {
-									mouseup: () => dispose(),
+									mouseup: () => {
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+										dispose();
+									},
 									mousemove: (moveEvent) => {
-										onDrag(startBounds, {
-											x: Math.max(
-												-startBounds.position.x,
-												moveEvent.clientX - downEvent.clientX,
-											),
-											y: Math.max(
-												-startBounds.position.y,
-												moveEvent.clientY - downEvent.clientY,
-											),
+										if (animationFrame) cancelAnimationFrame(animationFrame);
+
+										animationFrame = requestAnimationFrame(() => {
+											onDrag(startBounds, {
+												x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
+												y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
+											});
 										});
 									},
 								});
@@ -433,12 +500,12 @@ export default function () {
 							<>
 								{/* Left */}
 								<div
-									class="bg-black/50 absolute top-0 left-0 bottom-0"
+									class="absolute top-0 bottom-0 left-0 bg-black/50"
 									style={{ width: `${bounds.position.x}px` }}
 								/>
 								{/* Right */}
 								<div
-									class="bg-black/50 absolute top-0 right-0 bottom-0"
+									class="absolute top-0 right-0 bottom-0 bg-black/50"
 									style={{
 										width: `${
 											window.innerWidth -
@@ -448,7 +515,7 @@ export default function () {
 								/>
 								{/* Top center */}
 								<div
-									class="bg-black/50 absolute top-0"
+									class="absolute top-0 bg-black/50"
 									style={{
 										left: `${bounds.position.x}px`,
 										width: `${bounds.size.width}px`,
@@ -457,7 +524,7 @@ export default function () {
 								/>
 								{/* Bottom center */}
 								<div
-									class="bg-black/50 absolute bottom-0"
+									class="absolute bottom-0 bg-black/50"
 									style={{
 										left: `${bounds.position.x}px`,
 										width: `${bounds.size.width}px`,
@@ -477,7 +544,7 @@ export default function () {
 
 							<div
 								class={cx(
-									"absolute flex flex-col items-center",
+									"flex absolute flex-col items-center",
 									dragging() ? "cursor-grabbing" : "cursor-grab",
 								)}
 								style={{
@@ -529,7 +596,11 @@ export default function () {
 								}}
 							>
 								<div
-									class="absolute top-full flex flex-col items-center m-2"
+									ref={controlsEl}
+									class={cx(
+										"flex absolute flex-col items-center m-2",
+										placeControlsAbove() ? "bottom-full" : "top-full",
+									)}
 									style={{ width: `${bounds.size.width}px` }}
 								>
 									<RecordingControls
@@ -549,7 +620,7 @@ export default function () {
 
 							<ResizeHandles />
 
-							<span class="text-xl z-10">Click and drag area to record</span>
+							<p class="z-10 text-xl">Click and drag area to record</p>
 						</div>
 					);
 				}}
@@ -559,21 +630,115 @@ export default function () {
 }
 
 function RecordingControls(props: { target: ScreenCaptureTarget }) {
-	const { rawOptions } = createOptionsQuery();
+	const { rawOptions, setOptions } = createOptionsQuery();
+
+	const capitalize = (str: string) => {
+		return str.charAt(0).toUpperCase() + str.slice(1);
+	};
+
+	const menuModes = async () => {
+		return await Menu.new({
+			items: [
+				{
+					id: "studio",
+					text: "Studio Mode",
+					action: () => {
+						setOptions("mode", "studio");
+					},
+				},
+				{
+					id: "instant",
+					text: "Instant Mode",
+					action: () => {
+						setOptions("mode", "instant");
+					},
+				},
+			],
+		});
+	};
+
+	const countdownMenu = async () =>
+		await Submenu.new({
+			text: "Recording Countdown",
+			items: [
+				{
+					id: "countdown-three",
+					text: "3 seconds",
+					action: () => {
+						console.log("Countdown 3 clicked");
+					},
+				},
+				{
+					id: "countdown-five",
+					text: "5 seconds",
+					action: () => {
+						console.log("Countdown 5 clicked");
+					},
+				},
+				{
+					id: "countdown-ten",
+					text: "10 seconds",
+					action: () => {
+						console.log("Countdown 10 clicked");
+					},
+				},
+			],
+		});
+	const preRecordingMenu = async () => {
+		return await Menu.new({
+			items: [await countdownMenu()],
+		});
+	};
 
 	return (
-		<Button
-			size="lg"
-			onClick={() => {
-				commands.startRecording({
-					capture_target: props.target,
-					mode: rawOptions.mode,
-					capture_system_audio: rawOptions.captureSystemAudio,
-				});
-			}}
-		>
-			Start Recording
-		</Button>
+		<div class="flex gap-2.5 items-center p-3 my-4 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+			<div
+				onClick={() => setOptions("targetMode", null)}
+				class="flex justify-center items-center bg-white rounded-full transition-opacity cursor-pointer size-9 hover:opacity-80"
+			>
+				<IconCapX class="will-change-transform size-3" />
+			</div>
+			<div
+				class="flex items-center px-4 py-2 rounded-full transition-colors cursor-pointer bg-blue-9 hover:bg-blue-10"
+				onClick={() => {
+					commands.startRecording({
+						capture_target: props.target,
+						mode: rawOptions.mode,
+						capture_system_audio: rawOptions.captureSystemAudio,
+					});
+				}}
+			>
+				{rawOptions.mode === "studio" ? (
+					<IconCapFilmCut class="mr-2 size-4" />
+				) : (
+					<IconCapInstant class="mr-2 size-4" />
+				)}
+				<p class="text-sm text-white text-nowrap">
+					<span class="font-medium">Start Recording</span>:
+				</p>
+				<div
+					onClick={(e) => {
+						e.stopPropagation();
+						menuModes().then((menu) => menu.popup());
+					}}
+					class="flex gap-1.5 items-center"
+				>
+					<p class="pl-0.5 text-sm text-nowrap text-white">
+						{capitalize(rawOptions.mode) + " Mode"}
+					</p>
+					<IconCapCaretDown class="focus:rotate-90" />
+				</div>
+			</div>
+			<div
+				onClick={(e) => {
+					e.stopPropagation();
+					preRecordingMenu().then((menu) => menu.popup());
+				}}
+				class="flex justify-center items-center rounded-full border transition-opacity cursor-pointer bg-gray-6 border-gray-7 size-9 hover:opacity-80"
+			>
+				<IconCapGear class="will-change-transform size-5" />
+			</div>
+		</div>
 	);
 }
 

@@ -2,33 +2,20 @@ use std::{mem, str::FromStr};
 
 use windows::{
     Win32::{
-        Devices::Display::{
-            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-            DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
-            DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
-            QueryDisplayConfig,
-        },
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::Gdi::{
             BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
-            CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
-            GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ, HMONITOR,
-            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
-            ReleaseDC, SelectObject,
+            CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS,
+            DISPLAY_DEVICE_STATE_FLAGS, DISPLAY_DEVICEW, DeleteDC, DeleteObject,
+            ENUM_CURRENT_SETTINGS, EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW,
+            FillRect, GetDC, GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ,
+            HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW,
+            MonitorFromPoint, ReleaseDC, SelectObject,
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
-        System::{
-            Registry::{
-                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ, RegCloseKey, RegEnumKeyExW,
-                RegOpenKeyExW, RegQueryValueExW,
-            },
-            Threading::{
-                GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
-                PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
-            },
+        System::Threading::{
+            GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
+            PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
         },
         UI::{
             HiDpi::GetDpiForWindow,
@@ -228,426 +215,43 @@ impl DisplayImpl {
     }
 
     pub fn name(&self) -> String {
-        // First try the modern DisplayConfig API for friendly names
-        if let Some(friendly_name) = self.get_friendly_name_from_displayconfig() {
-            return friendly_name;
-        }
-
-        // Try WMI query for better localized names
-        if let Some(wmi_name) = self.get_friendly_name_from_wmi() {
-            return wmi_name;
-        }
-
-        // Fallback to the existing registry method
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
         unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                // Convert the device name from wide string to String
-                let device_name = &info.szDevice;
-                let null_pos = device_name
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(device_name.len());
-                let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
+            let mut monitor_info = MONITORINFOEXW {
+                monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+                    cbSize: mem::size_of::<MONITORINFOEXW>() as u32,
+                    rcMonitor: RECT::default(),
+                    rcWork: RECT::default(),
+                    dwFlags: 0,
+                },
+                szDevice: [0; 32],
+            };
 
-                // Try to get friendly name from registry
-                if let Some(friendly_name) = self.get_friendly_name_from_registry(&device_name_str)
-                {
-                    return friendly_name;
-                }
+            if GetMonitorInfoW(self.0, &mut monitor_info as *mut _ as *mut _).as_bool() {
+                let device_name = PCWSTR::from_raw(monitor_info.szDevice.as_ptr());
 
-                // Try EDID-based name lookup as final fallback before device name
-                if let Some(edid_name) = self.get_friendly_name_from_edid(&device_name_str) {
-                    return edid_name;
-                }
-
-                // Final fallback to device name
-                device_name_str
-            } else {
-                format!("Unknown Display")
-            }
-        }
-    }
-
-    fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
-        unsafe {
-            // Get the device name first
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
-            if !GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                return None;
-            }
-
-            let device_name = &info.szDevice;
-            let null_pos = device_name
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(device_name.len());
-            let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
-
-            // Get display configuration
-            let mut num_paths = 0u32;
-            let mut num_modes = 0u32;
-
-            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut num_paths, &mut num_modes)
-                != WIN32_ERROR(0)
-            {
-                return None;
-            }
-
-            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
-            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
-
-            if QueryDisplayConfig(
-                QDC_ONLY_ACTIVE_PATHS,
-                &mut num_paths,
-                paths.as_mut_ptr(),
-                &mut num_modes,
-                modes.as_mut_ptr(),
-                None,
-            ) != WIN32_ERROR(0)
-            {
-                return None;
-            }
-
-            // Find the matching path for our monitor
-            for path in &paths {
-                // Get source device name to match with our monitor
-                let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
-                    header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                        r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-                        size: mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
-                        adapterId: path.sourceInfo.adapterId,
-                        id: path.sourceInfo.id,
-                    },
-                    viewGdiDeviceName: [0; 32],
+                let mut display_device = DISPLAY_DEVICEW {
+                    cb: mem::size_of::<DISPLAY_DEVICEW>() as u32,
+                    DeviceName: [0; 32],
+                    DeviceString: [0; 128],
+                    StateFlags: DISPLAY_DEVICE_STATE_FLAGS(0),
+                    DeviceID: [0; 128],
+                    DeviceKey: [0; 128],
                 };
 
-                if DisplayConfigGetDeviceInfo(&mut source_name.header as *mut _ as *mut _) != 0 {
-                    continue;
+                if EnumDisplayDevicesW(device_name, 0, &mut display_device, 0).as_bool() {
+                    let device_string = display_device.DeviceString;
+                    let len = device_string
+                        .iter()
+                        .position(|&x| x == 0)
+                        .unwrap_or(device_string.len());
+                    String::from_utf16_lossy(&device_string[..len])
+                } else {
+                    String::new()
                 }
-
-                let source_device_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName);
-                let source_null_pos = source_device_name
-                    .chars()
-                    .position(|c| c == '\0')
-                    .unwrap_or(source_device_name.len());
-                let source_trimmed = &source_device_name[..source_null_pos];
-
-                // Check if this matches our monitor
-                if source_trimmed == device_name_str {
-                    // Get the target (monitor) friendly name
-                    let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
-                        header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-                            size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
-                            adapterId: path.sourceInfo.adapterId,
-                            id: path.targetInfo.id,
-                        },
-                        flags: DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS::default(),
-                        outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY::default(),
-                        edidManufactureId: 0,
-                        edidProductCodeId: 0,
-                        connectorInstance: 0,
-                        monitorFriendlyDeviceName: [0; 64],
-                        monitorDevicePath: [0; 128],
-                    };
-
-                    if DisplayConfigGetDeviceInfo(&mut target_name.header as *mut _ as *mut _) == 0
-                    {
-                        let friendly_name =
-                            String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName);
-                        let null_pos = friendly_name
-                            .chars()
-                            .position(|c| c == '\0')
-                            .unwrap_or(friendly_name.len());
-                        let trimmed_name = friendly_name[..null_pos].trim();
-
-                        if !trimmed_name.is_empty() && trimmed_name != "Generic PnP Monitor" {
-                            return Some(trimmed_name.to_string());
-                        }
-                    }
-                }
+            } else {
+                String::new()
             }
         }
-
-        None
-    }
-
-    fn get_friendly_name_from_wmi(&self) -> Option<String> {
-        unsafe {
-            // Get the device name first for matching
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
-            if !GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                return None;
-            }
-
-            let device_name = &info.szDevice;
-            let null_pos = device_name
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(device_name.len());
-            let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
-
-            // Try alternative registry paths for monitor information
-            let alt_registry_paths = [
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers\\Configuration\\{}",
-                    device_name_str.replace("\\\\.\\", "")
-                ),
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current\\System\\CurrentControlSet\\Control\\VIDEO\\{}",
-                    device_name_str.replace("\\\\.\\DISPLAY", "")
-                ),
-            ];
-
-            for registry_path in &alt_registry_paths {
-                let registry_path_wide: Vec<u16> = registry_path
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut key: HKEY = HKEY::default();
-                if RegOpenKeyExW(
-                    HKEY_LOCAL_MACHINE,
-                    PCWSTR(registry_path_wide.as_ptr()),
-                    Some(0),
-                    KEY_READ,
-                    &mut key,
-                )
-                .is_ok()
-                {
-                    // Try to get monitor description from alternative locations
-                    let value_names = ["Monitor_Name", "Description", "FriendlyName"];
-
-                    for value_name in &value_names {
-                        let value_name_wide = format!("{}\0", value_name)
-                            .encode_utf16()
-                            .collect::<Vec<u16>>();
-                        let mut buffer = [0u16; 512];
-                        let mut buffer_size = (buffer.len() * 2) as u32;
-                        let mut value_type = REG_SZ;
-
-                        if RegQueryValueExW(
-                            key,
-                            PCWSTR(value_name_wide.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(buffer.as_mut_ptr() as *mut u8),
-                            Some(&mut buffer_size),
-                        )
-                        .is_ok()
-                        {
-                            let null_pos =
-                                buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-                            let desc = String::from_utf16_lossy(&buffer[..null_pos]);
-                            let cleaned_name = desc.trim().to_string();
-
-                            if !cleaned_name.is_empty() && cleaned_name != "Default Monitor" {
-                                let _ = RegCloseKey(key);
-                                return Some(cleaned_name);
-                            }
-                        }
-                    }
-                    let _ = RegCloseKey(key);
-                }
-            }
-        }
-        None
-    }
-
-    fn get_friendly_name_from_registry(&self, device_name: &str) -> Option<String> {
-        unsafe {
-            // Try multiple registry paths for better name resolution
-            let registry_paths = [
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{}",
-                    device_name.replace("\\\\.\\", "")
-                ),
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e96e-e325-11ce-bfc1-08002be10318}}"
-                ),
-            ];
-
-            for registry_path in &registry_paths {
-                let registry_path_wide: Vec<u16> = registry_path
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut key: HKEY = HKEY::default();
-                if RegOpenKeyExW(
-                    HKEY_LOCAL_MACHINE,
-                    PCWSTR(registry_path_wide.as_ptr()),
-                    Some(0),
-                    KEY_READ,
-                    &mut key,
-                )
-                .is_ok()
-                {
-                    // Try multiple value names for better localization
-                    let value_names = ["FriendlyName", "DeviceDesc", "DriverDesc"];
-
-                    for value_name in &value_names {
-                        let value_name_wide = format!("{}\0", value_name)
-                            .encode_utf16()
-                            .collect::<Vec<u16>>();
-                        let mut buffer = [0u16; 512];
-                        let mut buffer_size = (buffer.len() * 2) as u32;
-                        let mut value_type = REG_SZ;
-
-                        if RegQueryValueExW(
-                            key,
-                            PCWSTR(value_name_wide.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(buffer.as_mut_ptr() as *mut u8),
-                            Some(&mut buffer_size),
-                        )
-                        .is_ok()
-                        {
-                            let null_pos =
-                                buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-                            let desc = String::from_utf16_lossy(&buffer[..null_pos]);
-
-                            // Clean up the description
-                            let cleaned_name = if let Some(semicolon_pos) = desc.rfind(';') {
-                                desc[semicolon_pos + 1..].trim().to_string()
-                            } else {
-                                desc.trim().to_string()
-                            };
-
-                            if !cleaned_name.is_empty()
-                                && !cleaned_name.contains("PCI\\VEN_")
-                                && cleaned_name != "Generic PnP Monitor"
-                            {
-                                let _ = RegCloseKey(key);
-                                return Some(cleaned_name);
-                            }
-                        }
-                    }
-                    let _ = RegCloseKey(key);
-                }
-            }
-        }
-        None
-    }
-
-    fn get_friendly_name_from_edid(&self, device_name: &str) -> Option<String> {
-        unsafe {
-            // Registry path for EDID data
-            let edid_path = format!(
-                "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{}",
-                device_name.replace("\\\\.\\", "")
-            );
-            let edid_path_wide: Vec<u16> =
-                edid_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let mut key: HKEY = HKEY::default();
-            if RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                PCWSTR(edid_path_wide.as_ptr()),
-                Some(0),
-                KEY_READ,
-                &mut key,
-            )
-            .is_ok()
-            {
-                // Enumerate subkeys to find device instances
-                let mut index = 0;
-                loop {
-                    let mut subkey_name = [0u16; 256];
-                    let mut subkey_size = subkey_name.len() as u32;
-
-                    if RegEnumKeyExW(
-                        key,
-                        index,
-                        Some(PWSTR(subkey_name.as_mut_ptr())),
-                        &mut subkey_size,
-                        None,
-                        Some(PWSTR::null()),
-                        None,
-                        None,
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-
-                    // Open device parameters subkey
-                    let subkey_str = String::from_utf16_lossy(&subkey_name[..subkey_size as usize]);
-                    let params_path = format!("{}\\Device Parameters", subkey_str);
-                    let params_path_wide: Vec<u16> = params_path
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-
-                    let mut params_key: HKEY = HKEY::default();
-                    if RegOpenKeyExW(
-                        key,
-                        PCWSTR(params_path_wide.as_ptr()),
-                        Some(0),
-                        KEY_READ,
-                        &mut params_key,
-                    )
-                    .is_ok()
-                    {
-                        // Read EDID data
-                        let edid_value = "EDID\0".encode_utf16().collect::<Vec<u16>>();
-                        let mut edid_buffer = [0u8; 256];
-                        let mut edid_size = edid_buffer.len() as u32;
-                        let mut value_type = REG_BINARY;
-
-                        if RegQueryValueExW(
-                            params_key,
-                            PCWSTR(edid_value.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(edid_buffer.as_mut_ptr()),
-                            Some(&mut edid_size),
-                        )
-                        .is_ok()
-                            && edid_size >= 128
-                        {
-                            // Parse EDID for monitor name (descriptor blocks start at offset 54)
-                            for i in (54..126).step_by(18) {
-                                if i + 18 > edid_buffer.len() {
-                                    break;
-                                }
-                                if edid_buffer[i] == 0
-                                    && edid_buffer[i + 1] == 0
-                                    && edid_buffer[i + 2] == 0
-                                    && edid_buffer[i + 3] == 0xFC
-                                {
-                                    // Monitor name descriptor found
-                                    if i + 18 <= edid_buffer.len() {
-                                        let name_bytes = &edid_buffer[i + 5..i + 18];
-                                        let name_str = String::from_utf8_lossy(name_bytes);
-                                        let name =
-                                            name_str.trim_end_matches('\0').trim().to_string();
-
-                                        if !name.is_empty() {
-                                            let _ = RegCloseKey(params_key);
-                                            let _ = RegCloseKey(key);
-                                            return Some(name);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let _ = RegCloseKey(params_key);
-                    }
-                    index += 1;
-                }
-                let _ = RegCloseKey(key);
-            }
-        }
-        None
     }
 }
 

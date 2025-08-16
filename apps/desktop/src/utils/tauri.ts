@@ -299,6 +299,9 @@ export const commands = {
 	async closeTargetSelectOverlays(): Promise<null> {
 		return await TAURI_INVOKE("close_target_select_overlays");
 	},
+	async displayInformation(displayId: string): Promise<DisplayInformation> {
+		return await TAURI_INVOKE("display_information", { displayId });
+	},
 };
 
 /** user-defined events **/
@@ -509,6 +512,11 @@ export type Cursors =
 	| { [key in string]: CursorMeta };
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType };
 export type DisplayId = string;
+export type DisplayInformation = {
+	name: string;
+	physical_size: PhysicalSize;
+	refresh_rate: string;
+};
 export type DownloadProgress = { progress: number; message: string };
 export type EditorStateChanged = { playhead_position: number };
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato";
@@ -664,11 +672,6 @@ export type ScreenCaptureTarget =
 	| { variant: "window"; id: number }
 	| { variant: "screen"; id: number }
 	| { variant: "area"; screen: number; bounds: Bounds };
-export type ScreenUnderCursor = {
-	name: string;
-	physical_size: PhysicalSize;
-	refresh_rate: string;
-};
 export type SegmentRecordings = {
 	display: Video;
 	camera: Video | null;
@@ -719,7 +722,6 @@ export type StudioRecordingMeta =
 export type TargetUnderCursor = {
 	display_id: DisplayId | null;
 	window: WindowUnderCursor | null;
-	screen: ScreenUnderCursor | null;
 };
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];

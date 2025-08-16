@@ -1,3 +1,5 @@
+use std::ops::Sub;
+
 use serde::Serialize;
 use specta::Type;
 
@@ -71,12 +73,24 @@ pub struct LogicalPosition {
 }
 
 impl LogicalPosition {
+    pub fn new(x: f64, y: f64) -> Self {
+        Self { x, y }
+    }
+
     pub fn x(&self) -> f64 {
         self.x
     }
 
     pub fn y(&self) -> f64 {
         self.y
+    }
+}
+
+impl Sub<LogicalPosition> for LogicalPosition {
+    type Output = LogicalPosition;
+
+    fn sub(self, other: LogicalPosition) -> LogicalPosition {
+        LogicalPosition::new(self.x() - other.x(), self.y() - other.y())
     }
 }
 
