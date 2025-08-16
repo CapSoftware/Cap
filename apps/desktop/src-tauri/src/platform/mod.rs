@@ -22,8 +22,8 @@ pub enum HapticPattern {
 #[repr(usize)]
 pub enum HapticPerformanceTime {
     Default = 0,
-    #[default]
     Now = 1,
+    #[default]
     DrawCompleted = 2,
 }
 

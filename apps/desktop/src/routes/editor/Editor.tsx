@@ -1,27 +1,22 @@
 import { Button } from "@cap/ui-solid";
 import { trackDeep } from "@solid-primitives/deep";
 import { throttle } from "@solid-primitives/scheduled";
-import { makePersisted } from "@solid-primitives/storage";
 import { createMutation } from "@tanstack/solid-query";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { cx } from "cva";
 import {
+	Match,
+	Show,
+	Switch,
 	createEffect,
 	createMemo,
 	createSignal,
-	Match,
 	on,
-	onMount,
-	Show,
-	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
 
-import Cropper, { cropToFloor } from "~/components/Cropper";
 import { Toggle } from "~/components/Toggle";
-import Tooltip from "~/components/Tooltip";
-import { createTauriEventListener } from "~/utils/createEventListener";
-import { type Crop, events } from "~/utils/tauri";
+
+import { events } from "~/utils/tauri";
 import { ConfigSidebar } from "./ConfigSidebar";
 import {
 	EditorContextProvider,
@@ -36,6 +31,21 @@ import { Header } from "./Header";
 import { Player } from "./Player";
 import { Timeline } from "./Timeline";
 import { Dialog, DialogContent, EditorButton, Input, Subfield } from "./ui";
+import { createTauriEventListener } from "~/utils/createEventListener";
+import Cropper, {
+	COMMON_RATIOS,
+	CROP_ZERO,
+	type CropperRef,
+	type Ratio,
+} from "~/components/Cropper";
+import { makePersisted } from "@solid-primitives/storage";
+import {
+	type CheckMenuItemOptions,
+	type PredefinedMenuItemOptions,
+	Menu,
+} from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { Transition } from "solid-transition-group";
 
 export function Editor() {
 	return (
@@ -294,20 +304,60 @@ function Dialogs() {
 							{(dialog) => {
 								const { setProject: setState, editorInstance } =
 									useEditorContext();
-								const [crop, setCrop] = createStore<Crop>({
-									position: dialog().position,
-									size: dialog().size,
-								});
-								const [cropOptions, setCropOptions] = makePersisted(
-									createStore({
-										showGrid: false,
-									}),
-									{ name: "cropOptionsState" },
-								);
 
 								const display = editorInstance.recordings.segments[0].display;
+								console.log(`Display: ${JSON.stringify(display)}`);
 
-								const adjustedCrop = createMemo(() => cropToFloor(crop));
+								let cropperRef: CropperRef | undefined;
+								const [crop, setCrop] = createSignal(CROP_ZERO);
+								const [aspect, setAspect] = createSignal<Ratio | null>(null);
+
+								const initialBounds = {
+									x: dialog().position.x,
+									y: dialog().position.y,
+									width: dialog().size.x,
+									height: dialog().size.y,
+								};
+
+								const [snapToRatio, setSnapToRatioEnabled] = makePersisted(
+									createSignal(true),
+									{ name: "editorCropSnapToRatio" },
+								);
+
+								async function showCropOptionsMenu(e: MouseEvent) {
+									e.preventDefault();
+									const targetRect = (
+										e.target as HTMLDivElement
+									).getBoundingClientRect();
+
+									const items = [
+										{
+											text: "Free",
+											checked: !aspect(),
+											action: () => setAspect(null),
+										} satisfies CheckMenuItemOptions,
+										...COMMON_RATIOS.map(
+											(ratio) =>
+												({
+													text: `${ratio[0]}:${ratio[1]}`,
+													checked: aspect() === ratio,
+													action: () => setAspect(ratio),
+												}) satisfies CheckMenuItemOptions,
+										),
+										{ item: "Separator" } satisfies PredefinedMenuItemOptions,
+										{
+											text: "Snap to ratios",
+											checked: snapToRatio(),
+											action: () => setSnapToRatioEnabled((v) => !v),
+										} satisfies CheckMenuItemOptions,
+									];
+
+									const menu = await Menu.new({ items });
+									await menu.popup(
+										new LogicalPosition(targetRect.x, targetRect.y + 40),
+									);
+									await menu.close();
+								}
 
 								return (
 									<>
@@ -318,31 +368,25 @@ function Dialogs() {
 													<div class="w-[3.25rem]">
 														<Input
 															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().size.x}
+															value={crop().width}
 															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	size: {
-																		...c.size,
-																		x: Number(e.currentTarget.value),
-																	},
-																}))
+																cropperRef?.setCrop({
+																	...crop(),
+																	width: Number(e.currentTarget.value),
+																})
 															}
 														/>
 													</div>
-													<span>x</span>
+													<span>×</span>
 													<div class="w-[3.25rem]">
 														<Input
 															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().size.y}
+															value={crop().height}
 															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	size: {
-																		...c.size,
-																		y: Number(e.currentTarget.value),
-																	},
-																}))
+																cropperRef?.setCrop({
+																	...crop(),
+																	height: Number(e.currentTarget.value),
+																})
 															}
 														/>
 													</div>
@@ -352,73 +396,84 @@ function Dialogs() {
 													<div class="w-[3.25rem]">
 														<Input
 															class="bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().position.x}
+															value={crop().x}
 															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	position: {
-																		...c.position,
-																		x: Number(e.currentTarget.value),
-																	},
-																}))
+																cropperRef?.setCrop({
+																	...crop(),
+																	x: Number(e.currentTarget.value),
+																})
 															}
 														/>
 													</div>
-													<span>x</span>
+													<span>×</span>
 													<div class="w-[3.25rem]">
 														<Input
 															class="w-[3.25rem] bg-transparent dark:!text-[#ababab]"
-															value={adjustedCrop().position.y}
+															value={crop().y}
 															onChange={(e) =>
-																setCrop((c) => ({
-																	...c,
-																	position: {
-																		...c.position,
-																		y: Number(e.currentTarget.value),
-																	},
-																}))
+																cropperRef?.setCrop({
+																	...crop(),
+																	y: Number(e.currentTarget.value),
+																})
 															}
 														/>
 													</div>
 												</div>
 											</div>
 											<div class="flex flex-row gap-3 justify-end items-center w-full">
-												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
-													<Tooltip content="Rule of Thirds">
-														<Button
-															variant="secondary"
-															size="xs"
-															class={cx(
-																"flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",
-																cropOptions.showGrid
-																	? "border-blue-9"
-																	: "border-transparent",
-															)}
-															onClick={() =>
-																setCropOptions("showGrid", (s) => !s)
-															}
+												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11"></div>
+
+												<Button
+													variant="secondary"
+													size="xs"
+													class="flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9"
+													onMouseDown={showCropOptionsMenu}
+													onClick={showCropOptionsMenu}
+												>
+													<div class="relative size-4 pointer-events-none">
+														<Show when={!aspect()}>
+															<IconLucideRatio class="group-active:scale-90 transition-transform size-4 pointer-events-none *:pointer-events-none" />
+														</Show>
+														<Transition
+															enterClass="scale-50 opacity-0 blur-md"
+															enterActiveClass="duration-200 [transition-timing-function:cubic-bezier(0.215,0.61,0.355,1)]"
+															enterToClass="scale-100 opacity-100 blur-0"
+															exitClass="opacity-0"
+															exitActiveClass="duration-0"
+															exitToClass="opacity-0"
 														>
-															<IconCapPadding
-																class={cx(
-																	"w-4",
-																	cropOptions.showGrid
-																		? "text-blue-9"
-																		: "text-gray-12",
+															<Show when={aspect()} keyed>
+																{(ratio) => (
+																	<span class="absolute inset-0 flex items-center justify-center text-[13px] text font-medium leading-none tracking-tight text-blue-10 pointer-events-none">
+																		{ratio[0]}:{ratio[1]}
+																	</span>
 																)}
-															/>
-														</Button>
-													</Tooltip>
-												</div>
+															</Show>
+														</Transition>
+													</div>
+												</Button>
+
+												<EditorButton
+													leftIcon={<IconLucideMaximize />}
+													onClick={() => cropperRef?.fill()}
+													disabled={
+														crop().width === display.width &&
+														crop().height === display.height
+													}
+												>
+													Full
+												</EditorButton>
 												<EditorButton
 													leftIcon={<IconCapCircleX />}
-													onClick={() =>
-														setCrop({
-															position: { x: 0, y: 0 },
-															size: {
-																x: display.width,
-																y: display.height,
-															},
-														})
+													onClick={() => {
+														cropperRef?.reset();
+														setAspect(null);
+													}}
+													disabled={
+														crop().x === dialog().position.x &&
+														crop().y === dialog().position.y &&
+														crop().width === dialog().size.x &&
+														crop().height === dialog().size.y
 													}
 												>
 													Reset
@@ -427,15 +482,14 @@ function Dialogs() {
 										</Dialog.Header>
 										<Dialog.Content>
 											<div class="flex flex-row justify-center">
-												<div class="overflow-hidden rounded divide-black-transparent-10">
+												<div class="rounded divide-black-transparent-10">
 													<Cropper
-														value={crop}
+														ref={cropperRef}
 														onCropChange={setCrop}
-														mappedSize={{
-															x: display.width,
-															y: display.height,
-														}}
-														showGuideLines={cropOptions.showGrid}
+														aspectRatio={aspect() ?? undefined}
+														targetSize={{ x: display.width, y: display.height }}
+														initialCrop={initialBounds}
+														snapToRatioEnabled={snapToRatio()}
 													>
 														<img
 															class="shadow pointer-events-none max-h-[70vh]"
@@ -451,7 +505,17 @@ function Dialogs() {
 										<Dialog.Footer>
 											<Button
 												onClick={() => {
-													setState("background", "crop", adjustedCrop());
+													const bounds = crop();
+													setState("background", "crop", {
+														position: {
+															x: bounds.x,
+															y: bounds.y,
+														},
+														size: {
+															x: bounds.width,
+															y: bounds.height,
+														},
+													});
 													setDialog((d) => ({ ...d, open: false }));
 												}}
 											>

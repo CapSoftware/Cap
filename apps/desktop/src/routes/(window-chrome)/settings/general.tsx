@@ -232,16 +232,6 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						handleChange("enableNotifications", value);
 					},
 				},
-				{
-					label: "Enable haptics",
-					type: "toggle",
-					os: "macos",
-					description: "Use haptics on Force Touch™ trackpads",
-					get value() {
-						return !!settings.hapticsEnabled;
-					},
-					onChange: (value: boolean) => handleChange("hapticsEnabled", value),
-				},
 			],
 		},
 		{
