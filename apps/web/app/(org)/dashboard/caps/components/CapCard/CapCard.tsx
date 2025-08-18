@@ -105,7 +105,7 @@ export const CapCard = ({
 
 	const router = useRouter();
 
-	const formatDuration = (duration: number | undefined) => {
+	const formatDuration = (duration: string) => {
 		if (!duration) return "0 secs";
 
 		const momentDuration = moment.duration(duration, "milliseconds");
@@ -409,7 +409,7 @@ export const CapCard = ({
 				)}
 				{cap.metadata?.duration && (
 					<p className="text-white leading-0 px-2 py-px rounded-full backdrop-blur-sm absolute z-10 left-3 top-[112px] bg-black/50 text-[10px]">
-						{formatDuration(cap.metadata.duration as number)}
+						{formatDuration(cap.metadata.duration as string)}
 					</p>
 				)}
 				{!sharedCapCard && onSelectToggle && (
@@ -452,7 +452,6 @@ export const CapCard = ({
 					href={`/s/${cap.id}`}
 				>
 					<VideoThumbnail
-						videoMetaData={cap.metadata}
 						imageClass={clsx(
 							anyCapSelected
 								? "opacity-50"
