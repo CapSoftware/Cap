@@ -30,7 +30,7 @@ jobs:
               - '.cargo/**'
               - '.github/**'
               - 'crates/**'
-              - 'desktop/src-tauri/**'
+              - 'apps/desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             tauri-plugins:
@@ -59,7 +59,9 @@ jobs:
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
         with:
-          version: latest
+          # Don't use `latest` as Biome throws an error when it doesn't match the
+          # schema version in the config file.
+          version: 2.2.0
 
       - name: Run Biome
         run: biome ci . --linter-enabled=false

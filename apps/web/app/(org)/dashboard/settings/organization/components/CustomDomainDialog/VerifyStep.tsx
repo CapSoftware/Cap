@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { parse } from "tldts";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { DomainConfig, DomainVerification } from "./types";
 
@@ -54,6 +55,25 @@ const VerifyStep = ({
 		return [];
 	};
 
+	const isSubdomain = (raw: string): boolean => {
+		// Normalize and extract host (no scheme, path, port, or trailing dot)
+		const input =
+			raw
+				.trim()
+				.replace(/^https?:\/\//i, "")
+				.split("/")[0] ?? "";
+		if (!input) return false;
+		const host = (input.replace(/\.$/, "").split(":")[0] || "").toLowerCase();
+		try {
+			// Prefer PSL-backed parsing for correctness (e.g., co.uk, com.au)
+			const { subdomain } = parse(host);
+			return Boolean(subdomain);
+		} catch {
+			// Fallback: conservative heuristic
+			const parts = host.split(".");
+			return parts.length > 2;
+		}
+	};
 	const recommendedAValues = getRecommendedAValues();
 
 	// Check if DNS records are already correctly configured
@@ -63,8 +83,8 @@ const VerifyStep = ({
 	const cnameConfigured =
 		recommendedCnames.length > 0 &&
 		recommendedCnames.some((rec) => currentCnames.includes(rec.value));
-
-	const showARecord = recommendedARecord && !aRecordConfigured;
+	const showARecord =
+		recommendedAValues.length > 0 && !aRecordConfigured && !isSubdomain(domain);
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
@@ -124,7 +144,7 @@ const VerifyStep = ({
 			) : (
 				!isVerified &&
 				domainConfig && (
-					<div className="space-y-4">
+					<div className="custom-scroll px-1 h-full max-h-[300px] space-y-4">
 						{/* TXT Record Configuration for Verification */}
 						{showTXTRecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
