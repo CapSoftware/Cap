@@ -268,7 +268,7 @@ impl WindowImpl {
         unsafe {
             window_dict
                 .find(kCGWindowBounds)
-                .and_then(|v| CGRect::from_dict_representation(&*CFDictionary::from_void(*v)))
+                .and_then(|v| CGRect::from_dict_representation(&CFDictionary::from_void(*v)))
         }
         .map(|rect| LogicalBounds {
             position: LogicalPosition {

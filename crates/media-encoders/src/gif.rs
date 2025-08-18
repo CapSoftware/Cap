@@ -83,7 +83,7 @@ impl GifEncoderWrapper {
 
         let output_path = path.as_ref().to_path_buf();
         let writer_thread = thread::spawn(move || {
-            let file = File::create(output_path).map_err(|e| GifEncodingError::Io(e))?;
+            let file = File::create(output_path).map_err(GifEncodingError::Io)?;
             writer
                 .write(file, &mut gifski::progress::NoProgress {})
                 .map_err(|e| GifEncodingError::Gifski(e.to_string()))
@@ -120,13 +120,7 @@ impl GifEncoderWrapper {
         let expected_total_bytes = expected_bytes_per_row * (self.height as usize);
 
         // Validate frame data size
-        if bytes_per_row < expected_bytes_per_row {
-            return Err(GifEncodingError::InvalidFrameData);
-        }
-
-        // Validate frame data size
-        let required_size = bytes_per_row * (self.height as usize);
-        if frame_data.len() < required_size {
+        if bytes_per_row < expected_bytes_per_row || frame_data.len() < expected_total_bytes {
             return Err(GifEncodingError::InvalidFrameData);
         }
 
