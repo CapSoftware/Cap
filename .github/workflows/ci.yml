@@ -30,7 +30,7 @@ jobs:
               - '.cargo/**'
               - '.github/**'
               - 'crates/**'
-              - 'desktop/src-tauri/**'
+              - 'apps/desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
             tauri-plugins:
