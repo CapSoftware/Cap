@@ -438,7 +438,9 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            match actor_done_rx.await {
+            let res = actor_done_rx.await;
+            info!("recording wait actor done: {:?}", &res);
+            match res {
                 Ok(Ok(_)) => {
                     let _ = finish_upload_tx.send(());
                     let _ = RecordingEvent::Stopped.emit(&app);
@@ -465,7 +467,9 @@ pub async fn start_recording(
                     handle_recording_end(app, None, &mut state).await.ok();
                 }
                 // Actor hasn't errored, it's just finished
-                _ => {}
+                v => {
+                    dbg!(v);
+                }
             }
         }
     });

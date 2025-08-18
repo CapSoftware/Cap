@@ -714,7 +714,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         let config = self.config.clone();
         let display = self.display.clone();
 
-        let _ = self.tokio_handle.block_on(async move {
+        self.tokio_handle.block_on(async move {
             let frame_handler = FrameHandler::spawn(FrameHandler {
                 video_tx,
                 audio_tx,
@@ -763,7 +763,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     content_filter,
                     settings,
                     frame_handler.recipient(),
-                    error_tx,
+                    error_tx.clone(),
                 )
                 .unwrap(),
             );
@@ -777,6 +777,18 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
             loop {
                 use futures::future::Either;
 
+                let check_err = || {
+                    use cidre::ns;
+
+                    Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
+                        "macos screen capture startup error",
+                        ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
+                    ))
+                };
+                if let Err(e) = check_err() {
+                    let _ = error_tx.send(e);
+                }
+
                 match futures::future::select(
                     error_rx.recv_async(),
                     control_signal.receiver.recv_async(),
@@ -785,22 +797,25 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 {
                     Either::Left((Ok(error), _)) => {
                         error!("Error capturing screen: {}", error);
-                        break;
+                        let _ = stop_recipient.ask(StopCapturing).await;
+                        return Err(error.to_string());
                     }
                     Either::Right((Ok(ctrl), _)) => {
                         if let Control::Shutdown = ctrl {
                             let _ = stop_recipient.ask(StopCapturing).await;
-                            break;
+                            return Ok(());
                         }
                     }
                     _ => {
-                        warn!("Screen capture recv channels shutdown, exiting.")
+                        warn!("Screen capture recv channels shutdown, exiting.");
+
+                        let _ = stop_recipient.ask(StopCapturing).await;
+
+                        return Ok(());
                     }
                 }
             }
-        });
-
-        Ok(())
+        })
     }
 }
 
@@ -914,8 +929,19 @@ pub mod macos {
             frame_handler: Recipient<NewFrame>,
             error_tx: Sender<arc::R<ns::Error>>,
         ) -> Result<Self, arc::R<ns::Error>> {
+            let _error_tx = error_tx.clone();
             let capturer_builder = scap_screencapturekit::Capturer::builder(target, settings)
                 .with_output_sample_buf_cb(move |frame| {
+                    let check_err = || {
+                        Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
+                            "macos screen capture frame error",
+                            ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
+                        ))
+                    };
+                    if let Err(e) = check_err() {
+                        let _ = _error_tx.send(e);
+                    }
+
                     let _ = frame_handler.tell(NewFrame(frame)).try_send();
                 })
                 .with_stop_with_err_cb(move |_, err| {

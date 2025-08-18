@@ -207,7 +207,7 @@ pub async fn spawn_studio_recording_actor<'a>(
             }
         };
 
-        info!("recording actor finished");
+        info!("recording actor finished: {:?}", &result);
 
         let _ = done_tx.send(result.map_err(|v| v.to_string()));
     });
@@ -306,18 +306,18 @@ async fn run_actor_iteration(
         } => {
             tokio::select! {
                 result = &mut pipeline_done_rx => {
-                    return match result {
-                        Ok(Ok(())) => {
-                            if let Some(cursor) = &mut pipeline.cursor
-                                && let Some(actor) = cursor.actor.take() {
-                                    actor.stop().await;
-                                }
-
-                            Ok(None)
-                        },
+                    let res = match result {
+                        Ok(Ok(())) => Ok(None),
                         Ok(Err(e)) => Err(StudioRecordingActorError::Other(e)),
                         Err(_) => Err(StudioRecordingActorError::PipelineReceiverDropped),
+                    };
+
+                    if let Some(cursor) = &mut pipeline.cursor
+                        && let Some(actor) = cursor.actor.take() {
+                        actor.stop().await;
                     }
+
+                    return res;
                 },
                 msg = ctrl_rx.recv_async() => {
                     match msg {
@@ -331,7 +331,14 @@ async fn run_actor_iteration(
                                 segment_start_instant,
                             },
                         ),
-                        Err(_) => return Err(StudioRecordingActorError::ControlReceiverDropped),
+                        Err(_) => {
+                            if let Some(cursor) = &mut pipeline.cursor
+                                && let Some(actor) = cursor.actor.take() {
+                                actor.stop().await;
+                            }
+
+                            return Err(StudioRecordingActorError::ControlReceiverDropped)
+                        },
                     }
                 }
             }

@@ -53,8 +53,6 @@ pub fn spawn_cursor_recorder(
     };
     use tracing::{error, info};
 
-    dbg!(&screen_bounds);
-
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
 

@@ -67,6 +67,8 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
+        builder.spawn_source("screen_capture", source.0);
+
         builder.spawn_task("screen_capture_encoder", move |ready| {
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
@@ -97,8 +99,6 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 
             result
         });
-
-        builder.spawn_source("screen_capture", source.0);
 
         Ok((builder, timestamp_rx))
     }
