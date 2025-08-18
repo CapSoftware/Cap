@@ -642,10 +642,7 @@ impl ProjectUniforms {
 
         let camera = options
             .camera_size
-            .filter(|_| {
-                !project.camera.hide
-                    && !matches!(layout.layout_mode, cap_project::LayoutMode::CameraOnly)
-            })
+            .filter(|_| !project.camera.hide && layout.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
@@ -747,7 +744,7 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    opacity: layout.camera_opacity as f32,
+                    opacity: layout.regular_camera_transition_opacity() as f32,
                     _padding: [0.0; 3],
                 }
             });
@@ -1019,14 +1016,16 @@ impl RendererLayers {
             self.cursor.render(&mut pass);
         }
 
-        if uniforms.layout.should_render_camera() {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
-            self.camera.render(&mut pass);
-        }
-
+        // Render camera-only layer when transitioning with CameraOnly mode
         if uniforms.layout.is_transitioning_camera_only() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
+        }
+        
+        // Also render regular camera overlay during transitions when its opacity > 0
+        if uniforms.layout.should_render_camera() && uniforms.layout.regular_camera_transition_opacity() > 0.01 {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.camera.render(&mut pass);
         }
     }
 }
