@@ -1277,6 +1277,7 @@ dependencies = [
  "relative-path",
  "ringbuf",
  "scap-direct3d",
+ "scap-ffmpeg",
  "scap-screencapturekit",
  "screencapturekit",
  "serde",

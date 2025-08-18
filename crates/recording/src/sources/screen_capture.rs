@@ -9,6 +9,7 @@ use flume::Sender;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
+use tracing::info;
 use tracing::{error, warn};
 
 use crate::pipeline::{control::Control, task::PipelineSourceTask};
