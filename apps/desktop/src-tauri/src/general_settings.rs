@@ -98,10 +98,10 @@ pub struct GeneralSettingsStore {
     pub post_deletion_behaviour: PostDeletionBehaviour,
 }
 
+// Initial default based on OS - this will be updated dynamically after GPU initialization
+// to reflect actual composite alpha mode support
 fn default_enable_native_camera_preview() -> bool {
-    // TODO:
-    // cfg!(target_os = "macos")
-    false
+    cfg!(any(target_os = "macos", target_os = "windows"))
 }
 
 fn default_enable_new_recording_flow() -> bool {
@@ -181,6 +181,21 @@ impl GeneralSettingsStore {
             }
             _ => Ok(None),
         }
+    }
+
+    /// Update the native camera preview setting based on GPU composite alpha support.
+    ///
+    /// This method is called after GPU initialization to determine if the hardware
+    /// actually supports transparency via CompositeAlphaMode::PreMultiplied or
+    /// CompositeAlphaMode::PostMultiplied. The native camera preview requires
+    /// transparency support to render properly.
+    pub fn update_camera_preview_for_gpu_support(app: &AppHandle, supports_composite_alpha: bool) -> Result<(), String> {
+        // Only enable on macOS/Windows if GPU actually supports transparency
+        let should_enable = cfg!(any(target_os = "macos", target_os = "windows")) && supports_composite_alpha;
+
+        Self::update(app, |settings| {
+            settings.enable_native_camera_preview = should_enable;
+        })
     }
 
     // i don't trust anyone to not overwrite the whole store lols
