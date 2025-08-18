@@ -21,9 +21,11 @@
 			]
 		},
 		"core:path:allow-resolve-directory",
+
 		"core:path:default",
 		"core:event:default",
 		"core:menu:default",
+		"core:resources:allow-close",
 		"core:window:default",
 		"core:window:allow-close",
 		"core:window:allow-destroy",
