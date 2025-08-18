@@ -118,7 +118,13 @@ impl GifEncoderWrapper {
         let expected_total_bytes = expected_bytes_per_row * (self.height as usize);
 
         // Validate frame data size
-        if frame_data.len() < expected_total_bytes {
+        if bytes_per_row < expected_bytes_per_row {
+            return Err(GifEncodingError::InvalidFrameData);
+        }
+
+        // Validate frame data size
+        let required_size = bytes_per_row * (self.height as usize);
+        if frame_data.len() < required_size {
             return Err(GifEncodingError::InvalidFrameData);
         }
 
