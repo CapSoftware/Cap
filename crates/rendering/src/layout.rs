@@ -1,6 +1,6 @@
 use cap_project::{LayoutMode, LayoutSegment};
 
-pub const LAYOUT_TRANSITION_DURATION: f64 = 0.5;
+pub const LAYOUT_TRANSITION_DURATION: f64 = 0.3;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutSegmentsCursor<'a> {
@@ -111,7 +111,6 @@ impl InterpolatedLayout {
                     ease_in_out(progress as f32) as f64,
                 )
             } else if let Some(prev_segment) = cursor.prev_segment {
-                // Small buffer after segment ends to complete the transition
                 if cursor.time < prev_segment.end + 0.05 {
                     (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
                 } else {
@@ -122,7 +121,6 @@ impl InterpolatedLayout {
             }
         } else {
             if let Some(prev_segment) = cursor.prev_segment {
-                // Small buffer after segment ends to complete the transition
                 if cursor.time < prev_segment.end + 0.05 {
                     (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
                 } else {
@@ -186,8 +184,6 @@ impl InterpolatedLayout {
     }
 
     pub fn is_transitioning_camera_only(&self) -> bool {
-        // Use camera_only layer when CameraOnly mode is involved in the transition
-        // Keep using it until the transition is truly complete to avoid gaps
         matches!(self.from_mode, LayoutMode::CameraOnly)
             || matches!(self.to_mode, LayoutMode::CameraOnly)
     }
@@ -196,22 +192,11 @@ impl InterpolatedLayout {
         if matches!(self.from_mode, LayoutMode::CameraOnly)
             && !matches!(self.to_mode, LayoutMode::CameraOnly)
         {
-            // When transitioning FROM camera-only, keep it visible longer
-            if self.transition_progress < 0.8 {
-                1.0
-            } else {
-                // Quick fade in the last 20% of transition
-                1.0 - (self.transition_progress - 0.8) * 5.0
-            }
+            1.0 - self.transition_progress
         } else if !matches!(self.from_mode, LayoutMode::CameraOnly)
             && matches!(self.to_mode, LayoutMode::CameraOnly)
         {
-            // When transitioning TO camera-only, fade in quickly at the start
-            if self.transition_progress < 0.2 {
-                self.transition_progress * 5.0
-            } else {
-                1.0
-            }
+            self.transition_progress
         } else if matches!(self.from_mode, LayoutMode::CameraOnly)
             && matches!(self.to_mode, LayoutMode::CameraOnly)
         {
@@ -220,36 +205,19 @@ impl InterpolatedLayout {
             0.0
         }
     }
-    
+
     pub fn regular_camera_transition_opacity(&self) -> f64 {
-        // Handle camera overlay opacity during transitions to avoid double rendering
         if matches!(self.from_mode, LayoutMode::CameraOnly)
-            && !matches!(self.to_mode, LayoutMode::CameraOnly)
-        {
-            // When transitioning FROM camera-only, use a sharp cutover to avoid overlap
-            // Start showing regular camera only after camera-only is mostly faded
-            if self.transition_progress > 0.8 {
-                // Fade in quickly in the last 20% of transition
-                ((self.transition_progress - 0.8) * 5.0) * self.camera_opacity
-            } else {
-                0.0
-            }
-        } else if !matches!(self.from_mode, LayoutMode::CameraOnly)
             && matches!(self.to_mode, LayoutMode::CameraOnly)
         {
-            // During transition TO camera-only, fade out the regular camera overlay early
-            if self.transition_progress < 0.2 {
-                (1.0 - self.transition_progress * 5.0) * self.camera_opacity
-            } else {
-                0.0
-            }
-        } else if matches!(self.from_mode, LayoutMode::CameraOnly)
-            || matches!(self.to_mode, LayoutMode::CameraOnly)
-        {
-            // During camera-only mode or transitions between camera-only modes, hide regular camera
             0.0
+        } else if matches!(self.from_mode, LayoutMode::CameraOnly) {
+            let adjusted_progress = (self.transition_progress * 1.5).min(1.0);
+            adjusted_progress * self.camera_opacity
+        } else if matches!(self.to_mode, LayoutMode::CameraOnly) {
+            let adjusted_progress = ((1.0 - self.transition_progress) * 1.43).min(1.0);
+            adjusted_progress * self.camera_opacity
         } else {
-            // Normal operation
             self.camera_opacity
         }
     }
