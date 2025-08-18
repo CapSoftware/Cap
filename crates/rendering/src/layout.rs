@@ -65,6 +65,8 @@ impl InterpolatedLayout {
 
         let (current_mode, next_mode, transition_progress) = if let Some(segment) = cursor.segment {
             let transition_start = segment.start - LAYOUT_TRANSITION_DURATION;
+            let transition_end = segment.end - LAYOUT_TRANSITION_DURATION;
+
             if cursor.time < segment.start && cursor.time >= transition_start {
                 let prev_mode = cursor
                     .prev_segment
@@ -76,6 +78,22 @@ impl InterpolatedLayout {
                     segment.mode.clone(),
                     ease_in_out(progress as f32) as f64,
                 )
+            } else if cursor.time >= transition_end && cursor.time < segment.end {
+                if let Some(next_seg) = cursor.next_segment() {
+                    let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
+                    (
+                        segment.mode.clone(),
+                        next_seg.mode.clone(),
+                        ease_in_out(progress as f32) as f64,
+                    )
+                } else {
+                    let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
+                    (
+                        segment.mode.clone(),
+                        LayoutMode::Default,
+                        ease_in_out(progress as f32) as f64,
+                    )
+                }
             } else {
                 (segment.mode.clone(), segment.mode.clone(), 1.0)
             }

@@ -341,6 +341,7 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Windowing/permissions are handled in Rust; keep UI logic in Solid and avoid mixing IPC with rendering logic.
 
 ## Conventions
+- No code comments: Never add inline, block, or docstring comments in any language. Code must be self-explanatory through naming, types, and structure. Use docs/READMEs for explanations when necessary.
 - Directory naming: lower-case-dashed
 - Components: PascalCase; hooks: camelCase starting with `use`
 - Strict TypeScript; avoid `any`; leverage shared types
