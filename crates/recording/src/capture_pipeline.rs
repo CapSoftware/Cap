@@ -1,4 +1,5 @@
 use cap_media::MediaError;
+use cap_media_encoders::*;
 use cap_media_info::AudioInfo;
 use flume::{Receiver, Sender};
 use std::{

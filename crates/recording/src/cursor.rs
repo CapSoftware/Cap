@@ -61,7 +61,6 @@ pub fn spawn_cursor_recorder(
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
 
-        #[cfg(target_os = "macos")]
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
         // Create cursors directory if it doesn't exist

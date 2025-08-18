@@ -40,8 +40,9 @@ use windows::{
                 DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
                 GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
                 GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
-                GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
-                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint, GetWindowTextLengthW, GetWindowTextW
+                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO,
+                IsIconic, IsWindowVisible, SendMessageW, WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
     },
@@ -54,6 +55,8 @@ use crate::bounds::{
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
+
+unsafe impl Send for DisplayImpl {}
 
 impl DisplayImpl {
     pub fn primary() -> Self {
