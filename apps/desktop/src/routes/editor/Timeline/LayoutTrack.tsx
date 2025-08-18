@@ -56,7 +56,7 @@ export function LayoutTrack(props: {
     }
   });
 
-  const getLayoutIcon = (mode: string) => {
+  const getLayoutIcon = (mode: string | undefined) => {
     switch (mode) {
       case "cameraOnly":
         return <IconLucideVideo class="size-3.5" />;
@@ -67,7 +67,7 @@ export function LayoutTrack(props: {
     }
   };
 
-  const getLayoutLabel = (mode: string) => {
+  const getLayoutLabel = (mode: string | undefined) => {
     switch (mode) {
       case "cameraOnly":
         return "Camera Only";
@@ -343,7 +343,9 @@ export function LayoutTrack(props: {
                       "timeline",
                       "layoutSegments",
                       produce((s) => {
-                        s.sort((a, b) => a.start - b.start);
+                        if (s) {
+                          s.sort((a, b) => a.start - b.start);
+                        }
                       })
                     );
                   }
@@ -444,7 +446,9 @@ export function LayoutTrack(props: {
                       "timeline",
                       "layoutSegments",
                       produce((s) => {
-                        s.sort((a, b) => a.start - b.start);
+                        if (s) {
+                          s.sort((a, b) => a.start - b.start);
+                        }
                       })
                     );
                   }

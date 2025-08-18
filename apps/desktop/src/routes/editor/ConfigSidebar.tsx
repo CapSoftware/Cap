@@ -2173,7 +2173,7 @@ function LayoutSegmentConfig(props: {
           Delete
         </EditorButton>
       </div>
-      <Field name="Layout Mode" icon={<IconLucideMonitor />}>
+      <Field name="Camera Layout" icon={<IconLucideLayout />}>
         <KTabs
           class="space-y-6"
           value={props.segment.mode || "default"}
@@ -2187,42 +2187,63 @@ function LayoutSegmentConfig(props: {
             );
           }}
         >
-          <KTabs.List class="flex flex-row items-center rounded-[0.5rem] relative border">
-            <KTabs.Trigger
-              value="default"
-              class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-            >
-              Default
-            </KTabs.Trigger>
-            <KTabs.Trigger
-              value="cameraOnly"
-              class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-            >
-              Camera Only
-            </KTabs.Trigger>
-            <KTabs.Trigger
-              value="hideCamera"
-              class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-            >
-              Hide Camera
-            </KTabs.Trigger>
-            <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-              <div class="flex-1 bg-gray-3" />
-            </KTabs.Indicator>
+          <KTabs.List class="flex flex-col gap-3">
+            <div class="flex flex-row items-center rounded-[0.5rem] relative border">
+              <KTabs.Trigger
+                value="default"
+                class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+              >
+                Default
+              </KTabs.Trigger>
+              <KTabs.Trigger
+                value="cameraOnly"
+                class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+              >
+                Camera Only
+              </KTabs.Trigger>
+              <KTabs.Trigger
+                value="hideCamera"
+                class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+              >
+                Hide Camera
+              </KTabs.Trigger>
+              <KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+                <div class="flex-1 bg-gray-3" />
+              </KTabs.Indicator>
+            </div>
+            
+            <div class="relative">
+              <div class="absolute -top-3 w-px h-3 bg-gray-3 transition-all duration-200"
+                style={{
+                  left: props.segment.mode === "cameraOnly" 
+                    ? "50%" 
+                    : props.segment.mode === "hideCamera"
+                    ? "83.33%"
+                    : "16.67%"
+                }}
+              />
+              <div class="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-gray-3 rounded-full transition-all duration-200"
+                style={{
+                  left: props.segment.mode === "cameraOnly" 
+                    ? "50%" 
+                    : props.segment.mode === "hideCamera"
+                    ? "83.33%"
+                    : "16.67%"
+                }}
+              />
+              <div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
+                <div class="text-xs text-gray-11 text-center">
+                  {props.segment.mode === "cameraOnly" 
+                    ? "Shows only the camera feed" 
+                    : props.segment.mode === "hideCamera"
+                    ? "Shows only the screen recording"
+                    : "Shows both screen and camera"}
+                </div>
+              </div>
+            </div>
           </KTabs.List>
         </KTabs>
       </Field>
-      <div class="text-xs text-gray-11 mt-2">
-        <p>
-          • <strong>Default:</strong> Shows both screen and camera
-        </p>
-        <p>
-          • <strong>Camera Only:</strong> Shows only the camera feed
-        </p>
-        <p>
-          • <strong>Hide Camera:</strong> Shows only the screen recording
-        </p>
-      </div>
     </>
   );
 }
