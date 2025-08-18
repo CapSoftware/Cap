@@ -303,6 +303,7 @@ async fn set_camera_input(
                 .await
                 .is_err()
                 {
+                    let _ = window.close();
                     return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
                 };
 
