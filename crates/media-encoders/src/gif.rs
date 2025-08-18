@@ -68,6 +68,9 @@ impl GifEncoderWrapper {
         fps: u32,
         quality: GifQuality,
     ) -> Result<Self, GifEncodingError> {
+        if fps == 0 || width == 0 || height == 0 {
+            return Err(GifEncodingError::InvalidFrameData);
+        }
         let settings = Settings {
             width: Some(width),
             height: Some(height),
@@ -75,7 +78,6 @@ impl GifEncoderWrapper {
             fast: quality.fast,
             repeat: Repeat::Infinite,
         };
-
         let (collector, writer) =
             gifski::new(settings).map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
