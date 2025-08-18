@@ -26,6 +26,7 @@ export function Timeline() {
 		totalDuration,
 		editorState,
 		projectActions,
+		meta,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -233,12 +234,14 @@ export function Timeline() {
 					}}
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>
-				<LayoutTrack
-					onDragStateChanged={(v) => {
-						layoutSegmentDragState = v;
-					}}
-					handleUpdatePlayhead={handleUpdatePlayhead}
-				/>
+				<Show when={meta().hasCamera}>
+					<LayoutTrack
+						onDragStateChanged={(v) => {
+							layoutSegmentDragState = v;
+						}}
+						handleUpdatePlayhead={handleUpdatePlayhead}
+					/>
+				</Show>
 			</div>
 		</TimelineContextProvider>
 	);

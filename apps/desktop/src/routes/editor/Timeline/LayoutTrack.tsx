@@ -178,7 +178,7 @@ export function LayoutTrack(props: {
                   layoutSegments.splice(index, 0, {
                     start: time,
                     end: time + maxDuration,
-                    mode: "default",
+                    mode: "cameraOnly",
                   });
                 })
               );
@@ -190,8 +190,11 @@ export function LayoutTrack(props: {
       <For
         each={project.timeline?.layoutSegments}
         fallback={
-          <div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:opacity-50 transition-opacity rounded-xl pointer-events-none">
-            Click to add layout segment
+          <div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+            <div>Click to add layout segment</div>
+            <div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+              (Make the camera full screen, or hide it)
+            </div>
           </div>
         }
       >
@@ -470,7 +473,7 @@ export function LayoutTrack(props: {
               end: time() + maxAvailableDuration(),
             }}
           >
-            <SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#10B981] via-[#34D399] to-[#10B981] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+            <SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#3B82F6] via-[#60A5FA] to-[#3B82F6] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
               <p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
                 +
               </p>

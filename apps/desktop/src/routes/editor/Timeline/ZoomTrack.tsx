@@ -169,8 +169,9 @@ export function ZoomTrack(props: {
 			<For
 				each={project.timeline?.zoomSegments}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:opacity-50 transition-opacity rounded-xl pointer-events-none">
-						Click to add zoom segment
+					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+						<div>Click to add zoom segment</div>
+						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">(Smoothly zoom in on important areas)</div>
 					</div>
 				}
 			>
