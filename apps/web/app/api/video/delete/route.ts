@@ -6,7 +6,6 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerResponse,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
@@ -19,7 +18,7 @@ class Api extends HttpApi.make("Api").add(
 			.addError(HttpApiError.Forbidden)
 			.addError(HttpApiError.NotFound),
 	),
-) { }
+) {}
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(
