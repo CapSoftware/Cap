@@ -353,8 +353,9 @@ export function ClipTrack(
                         const hasOnlyOneSegment = segments().length === 1;
 
                         if (hasOnlyOneSegment) {
-                          // Skip opening clip config for single segments
-                          // The user probably just wants to interact with the timeline normally
+                          // Clear any existing selection (zoom, layout, etc.) when clicking on a clip
+                          // This ensures the sidebar updates properly
+                          setEditorState("timeline", "selection", null);
                         } else {
                           // When there are multiple segments, show the clip configuration
                           setEditorState("timeline", "selection", {
