@@ -5,7 +5,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, uploads, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
@@ -225,9 +225,18 @@ app.delete(
 
 app.post(
 	"/progress",
-	zValidator("query", z.object({ videoId: z.string(), progress: z.number() })),
+	zValidator(
+		"query",
+		z.object({
+			videoId: z.string(),
+			progress: z.number(),
+			// We get this from the client so we can avoid race conditions.
+			// Eg. If this value is older than the value in the DB, we ignore it.
+			updatedAt: z.date({ coerce: true }),
+		}),
+	),
 	async (c) => {
-		const { videoId, progress } = c.req.valid("query");
+		const { videoId, progress, updatedAt } = c.req.valid("query");
 		const user = c.get("user");
 
 		try {
@@ -241,19 +250,27 @@ app.post(
 					{ status: 404 },
 				);
 
-			await db()
-				.insert(uploads)
-				.values({
+			const result = await db()
+				.update(uploads)
+				.set({
+					progress,
+					updatedAt,
+				})
+				.where(
+					and(eq(uploads.videoId, videoId), lt(uploads.updatedAt, updatedAt)),
+				);
+
+			if (result.rowsAffected == 0) {
+				await db().insert(uploads).values({
 					videoId,
 					progress,
-					updatedAt: new Date(),
-				})
-				.onDuplicateKeyUpdate({
-					set: {
-						progress,
-						updatedAt: new Date(),
-					},
+					updatedAt,
 				});
+			}
+
+			if (progress == 100) {
+				// TODO: Remove from DB
+			}
 
 			return c.json(true);
 		} catch (error) {
