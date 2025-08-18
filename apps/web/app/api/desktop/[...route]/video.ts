@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, uploads, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq } from "drizzle-orm";
@@ -108,6 +108,10 @@ app.get(
 					},
 				});
 
+			await db().insert(uploads).values({
+				videoId: idToUse,
+			});
+
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
 					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
@@ -192,6 +196,8 @@ app.delete(
 					{ status: 404 },
 				);
 
+			await db().delete(uploads).where(eq(uploads.videoId, videoId));
+
 			await db()
 				.delete(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
@@ -212,6 +218,46 @@ app.delete(
 			return c.json(true);
 		} catch (error) {
 			console.error("Error in video delete endpoint:", error);
+			return c.json({ error: "Internal server error" }, { status: 500 });
+		}
+	},
+);
+
+app.post(
+	"/progress",
+	zValidator("query", z.object({ videoId: z.string(), progress: z.number() })),
+	async (c) => {
+		const { videoId, progress } = c.req.valid("query");
+		const user = c.get("user");
+
+		try {
+			const video = await db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+			if (!video)
+				return c.json(
+					{ error: true, message: "Video not found" },
+					{ status: 404 },
+				);
+
+			await db()
+				.insert(uploads)
+				.values({
+					videoId,
+					progress,
+					updatedAt: new Date(),
+				})
+				.onDuplicateKeyUpdate({
+					set: {
+						progress,
+						updatedAt: new Date(),
+					},
+				});
+
+			return c.json(true);
+		} catch (error) {
+			console.error("Error in progress update endpoint:", error);
 			return c.json({ error: "Internal server error" }, { status: 500 });
 		}
 	},

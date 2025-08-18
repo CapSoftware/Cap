@@ -1,7 +1,7 @@
 "use client";
 
 import type { userSelectProps } from "@cap/database/auth/session";
-import type { videos } from "@cap/database/schema";
+import { type videos } from "@cap/database/schema";
 import { buildEnv } from "@cap/env";
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
@@ -11,7 +11,7 @@ import clsx from "clsx";
 import { Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { editTitle } from "@/actions/videos/edit-title";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -19,6 +19,9 @@ import { SharingDialog } from "@/app/(org)/dashboard/caps/components/SharingDial
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { usePublicEnv } from "@/utils/public-env";
+import { db } from "@cap/database";
+import { useQuery } from "@tanstack/react-query";
+import { getUploadProgress } from "./server";
 
 export const ShareHeader = ({
 	data,
@@ -211,6 +214,10 @@ export const ShareHeader = ({
 							<p className="mt-1 text-sm text-gray-10">
 								{moment(data.createdAt).fromNow()}
 							</p>
+
+							<Suspense>
+								<UploadProgress videoId={data.id} />
+							</Suspense>
 						</div>
 					</div>
 					{user !== null && (
@@ -269,3 +276,26 @@ export const ShareHeader = ({
 		</>
 	);
 };
+
+const fiveMinutes = 5 * 60 * 1000;
+function UploadProgress({ videoId }: { videoId: string }) {
+	const result = useQuery({
+		queryKey: ["uploadProgress", videoId],
+		queryFn: () => getUploadProgress({ videoId }),
+		refetchInterval: 3000,
+	});
+	if (!result.data) return null;
+
+	const hasUploadFailed =
+		Date.now() - new Date(result.data.updatedAt).getTime() > fiveMinutes;
+
+	return (
+		<p>
+			{hasUploadFailed ? (
+				<span className="text-red-600">Upload failed</span>
+			) : (
+				<span>{result.data?.progress}% </span>
+			)}
+		</p>
+	);
+}
