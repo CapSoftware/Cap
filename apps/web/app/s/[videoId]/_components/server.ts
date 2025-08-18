@@ -12,15 +12,16 @@ export async function getUploadProgress({ videoId }: { videoId: string }) {
 
 	const [result] = await db()
 		.select({
-			progress: Db.uploads.progress,
-			startedAt: Db.uploads.startedAt,
-			updatedAt: Db.uploads.updatedAt,
+			uploaded: Db.videoUploads.uploaded,
+			total: Db.videoUploads.total,
+			startedAt: Db.videoUploads.startedAt,
+			updatedAt: Db.videoUploads.updatedAt,
 		})
-		.from(Db.uploads)
-		.innerJoin(Db.videos, Dz.eq(Db.uploads.videoId, Db.videos.id))
+		.from(Db.videoUploads)
+		.innerJoin(Db.videos, Dz.eq(Db.videoUploads.videoId, Db.videos.id))
 		.where(
 			Dz.and(
-				Dz.eq(Db.uploads.videoId, videoId),
+				Dz.eq(Db.videoUploads.videoId, videoId),
 				Dz.eq(Db.videos.ownerId, user.id),
 			),
 		);

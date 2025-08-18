@@ -282,19 +282,22 @@ function UploadProgress({ videoId }: { videoId: string }) {
 	const result = useQuery({
 		queryKey: ["uploadProgress", videoId],
 		queryFn: () => getUploadProgress({ videoId }),
-		refetchInterval: 3000,
+		// if a result is returned then an upload is in progress.
+		refetchInterval: (query) => (query.state.data ? undefined : 3000),
 	});
 	if (!result.data) return null;
 
 	const hasUploadFailed =
 		Date.now() - new Date(result.data.updatedAt).getTime() > fiveMinutes;
 
+	const progress = (result.data.uploaded / result.data.total) * 100;
+
 	return (
 		<p>
 			{hasUploadFailed ? (
 				<span className="text-red-600">Upload failed</span>
 			) : (
-				<span>{result.data?.progress}% </span>
+				<span>{progress}% </span>
 			)}
 		</p>
 	);

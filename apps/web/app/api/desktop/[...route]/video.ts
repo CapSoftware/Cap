@@ -2,10 +2,10 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, uploads, videos } from "@cap/database/schema";
+import { s3Buckets, videoUploads, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, gt, gte, lt } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
@@ -108,7 +108,7 @@ app.get(
 					},
 				});
 
-			await db().insert(uploads).values({
+			await db().insert(videoUploads).values({
 				videoId: idToUse,
 			});
 
@@ -196,7 +196,7 @@ app.delete(
 					{ status: 404 },
 				);
 
-			await db().delete(uploads).where(eq(uploads.videoId, videoId));
+			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
 
 			await db()
 				.delete(videos)
@@ -226,17 +226,18 @@ app.delete(
 app.post(
 	"/progress",
 	zValidator(
-		"query",
+		"json",
 		z.object({
 			videoId: z.string(),
-			progress: z.number(),
+			uploaded: z.number(),
+			total: z.number(),
 			// We get this from the client so we can avoid race conditions.
 			// Eg. If this value is older than the value in the DB, we ignore it.
-			updatedAt: z.date({ coerce: true }),
+			updatedAt: z.string().pipe(z.coerce.date()),
 		}),
 	),
 	async (c) => {
-		const { videoId, progress, updatedAt } = c.req.valid("query");
+		const { videoId, uploaded, total, updatedAt } = c.req.valid("json");
 		const user = c.get("user");
 
 		try {
@@ -251,25 +252,32 @@ app.post(
 				);
 
 			const result = await db()
-				.update(uploads)
+				.update(videoUploads)
 				.set({
-					progress,
+					uploaded,
+					total,
 					updatedAt,
 				})
 				.where(
-					and(eq(uploads.videoId, videoId), lt(uploads.updatedAt, updatedAt)),
+					and(
+						eq(videoUploads.videoId, videoId),
+						lte(videoUploads.updatedAt, updatedAt),
+					),
 				);
 
 			if (result.rowsAffected == 0) {
-				await db().insert(uploads).values({
+				await db().insert(videoUploads).values({
 					videoId,
-					progress,
+					uploaded,
+					total,
 					updatedAt,
 				});
 			}
 
-			if (progress == 100) {
-				// TODO: Remove from DB
+			if (uploaded === total) {
+				await db()
+					.delete(videoUploads)
+					.where(eq(videoUploads.videoId, videoId));
 			}
 
 			return c.json(true);

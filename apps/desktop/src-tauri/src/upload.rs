@@ -3,6 +3,7 @@
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
+use chrono;
 use flume::Receiver;
 use futures::StreamExt;
 use image::ImageReader;
@@ -138,6 +139,47 @@ pub struct UploadedImage {
 //     pub config: S3UploadMeta,
 // }
 
+// Helper function to send progress updates to the backend API
+fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
+    let progress_percent = (uploaded as f64 / total as f64 * 100.0).round() as u32;
+
+    println!(
+        "SENDING PROGRESS UPDATE {:?} {:?} {:?}",
+        video_id,
+        progress_percent,
+        progress_percent % 5 != 0 && progress_percent != 100
+    );
+
+    // Don't spam the API with too many updates - only send every 5% or at completion
+    if progress_percent % 5 != 0 && progress_percent != 100 {
+        return;
+    }
+
+    let updated_at = chrono::Utc::now().to_rfc3339();
+
+    let app = app.clone();
+    tokio::spawn(async move {
+        let response = app
+            .authed_api_request("/api/desktop/video/progress", |client, url| {
+                client.post(url).json(&json!({
+                    "videoId": video_id,
+                    "uploaded": uploaded,
+                    "total": total,
+                    "updatedAt": updated_at
+                }))
+            })
+            .await;
+
+        if let Ok(ref resp) = response
+            && !resp.status().is_success()
+        {
+            error!("Failed to send progress update: {}", resp.status());
+        } else if let Err(e) = response {
+            error!("Failed to send progress update: {}", e);
+        }
+    });
+}
+
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -180,16 +222,16 @@ pub async fn upload_video(
     let mut bytes_uploaded = 0;
     let progress_stream = reader_stream.inspect({
         let app = app.clone();
+        let video_id = video_id.clone();
         move |chunk| {
-            if bytes_uploaded > 0 {
-                let _ = UploadProgress {
-                    progress: bytes_uploaded as f64 / total_size as f64,
-                }
-                .emit(&app);
-            }
-
             if let Ok(chunk) = chunk {
                 bytes_uploaded += chunk.len();
+                let progress = bytes_uploaded as f64 / total_size as f64;
+
+                // Emit local progress event for UI
+                let _ = UploadProgress { progress }.emit(&app);
+
+                send_progress_update(&app, video_id.clone(), bytes_uploaded as u64, total_size);
             }
         }
     });
@@ -221,6 +263,9 @@ pub async fn upload_video(
 
     if response.status().is_success() {
         println!("Video uploaded successfully");
+
+        // Send final progress update
+        send_progress_update(&app, video_id.clone(), total_size, total_size);
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
             if screenshot_response.status().is_success() {
@@ -727,6 +772,9 @@ impl InstantMultipartUpload {
             }
         }
 
+        // Send final progress update
+        // send_progress_update(&app, &video_id, 1.0);
+
         // Copy link to clipboard early
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -856,6 +904,8 @@ impl InstantMultipartUpload {
                 ));
             }
         };
+
+        send_progress_update(&app, video_id.into(), file_size, expected_pos);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
