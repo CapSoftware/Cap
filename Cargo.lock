@@ -1205,7 +1205,9 @@ dependencies = [
  "cap-project",
  "cidre",
  "ffmpeg-next",
- "gif",
+ "gifski",
+ "imgref",
+ "rgb",
  "thiserror 1.0.69",
  "tracing",
 ]
@@ -2685,6 +2687,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a3d7db9596fecd151c5f638c0ee5d5bd487b6e0ea232e5dc96d5250f6f94b1d"
 dependencies = [
  "crc32fast",
+ "libz-rs-sys",
  "miniz_oxide",
 ]
 
@@ -3143,6 +3146,45 @@ checksum = "4ae047235e33e2829703574b54fdec96bfbad892062d97fed2f76022287de61b"
 dependencies = [
  "color_quant",
  "weezl",
+]
+
+[[package]]
+name = "gif-dispose"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e1aa07391f3d9c279f388cea6faf291555dd891df59bed01d4378583df946ac"
+dependencies = [
+ "gif",
+ "imgref",
+ "rgb",
+]
+
+[[package]]
+name = "gifski"
+version = "1.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c246c795a61d4a2476fb1c8ab70bedfaa825c734882adc40e117fc837df81190"
+dependencies = [
+ "clap",
+ "crossbeam-channel",
+ "crossbeam-utils",
+ "dunce",
+ "gif",
+ "gif-dispose",
+ "imagequant",
+ "imgref",
+ "lodepng",
+ "loop9",
+ "natord",
+ "num-traits",
+ "ordered-channel",
+ "pbr",
+ "quick-error",
+ "resize",
+ "rgb",
+ "wild",
+ "y4m",
+ "yuv",
 ]
 
 [[package]]
@@ -3869,6 +3911,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "imagequant"
+version = "4.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caf5d73b959dfbe5d6b5cd3ca8de5265c7bc58297f20560a60a1d2ba6a19991f"
+dependencies = [
+ "arrayvec",
+ "once_cell",
+ "rayon",
+ "rgb",
+ "thread_local",
+]
+
+[[package]]
 name = "imagesize"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4380,6 +4435,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libz-rs-sys"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "172a788537a2221661b480fee8dc5f96c580eb34fa88764d3205dc356c7e4221"
+dependencies = [
+ "zlib-rs",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4411,6 +4475,18 @@ checksum = "96936507f153605bddfcda068dd804796c84324ed2510809e5b2a624c81da765"
 dependencies = [
  "autocfg",
  "scopeguard",
+]
+
+[[package]]
+name = "lodepng"
+version = "3.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a32335d22e44238e2bb0b4d726964d18952ce1f1279ec3305305d2c61539eb"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "libc",
+ "rgb",
 ]
 
 [[package]]
@@ -4748,6 +4824,12 @@ dependencies = [
  "security-framework-sys",
  "tempfile",
 ]
+
+[[package]]
+name = "natord"
+version = "1.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "308d96db8debc727c3fd9744aac51751243420e46edf401010908da7f8d5e57c"
 
 [[package]]
 name = "ndk"
@@ -5465,6 +5547,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c04f5d74368e4d0dfe06c45c8627c81bd7c317d52762d118fb9b3076f6420fd"
 
 [[package]]
+name = "ordered-channel"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95be4d57809897b5a7539fc15a7dfe0e84141bc3dfaa2e9b1b27caa90acf61ab"
+dependencies = [
+ "crossbeam-channel",
+]
+
+[[package]]
 name = "ordered-float"
 version = "4.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5600,6 +5691,17 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
+name = "pbr"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed5827dfa0d69b6c92493d6c38e633bbaa5937c153d0d7c28bf12313f8c6d514"
+dependencies = [
+ "crossbeam-channel",
+ "libc",
+ "winapi",
+]
 
 [[package]]
 name = "percent-encoding"
@@ -6517,6 +6619,16 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots",
+]
+
+[[package]]
+name = "resize"
+version = "0.8.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87a103d0b47e783f4579149402f7499397ab25540c7a57b2f70487a5d2d20ef0"
+dependencies = [
+ "rayon",
+ "rgb",
 ]
 
 [[package]]
@@ -9918,6 +10030,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wild"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3131afc8c575281e1e80f36ed6a092aa502c08b18ed7524e86fbbb12bb410e1"
+dependencies = [
+ "glob",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10796,6 +10917,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
+name = "y4m"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
 name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10838,6 +10965,16 @@ dependencies = [
  "quote",
  "syn 2.0.104",
  "synstructure",
+]
+
+[[package]]
+name = "yuv"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cbe2d856acbe6d86c0fa6f458b73e962834061ca2f7f94c6e4633afc9efd4d4"
+dependencies = [
+ "num-traits",
+ "rgb",
 ]
 
 [[package]]
@@ -10998,6 +11135,12 @@ dependencies = [
  "indexmap 2.10.0",
  "memchr",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "626bd9fa9734751fc50d6060752170984d7053f5a39061f524cda68023d4db8a"
 
 [[package]]
 name = "zune-core"

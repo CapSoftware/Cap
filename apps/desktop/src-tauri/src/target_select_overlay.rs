@@ -178,7 +178,7 @@ impl WindowFocusManager {
     pub fn destroy<R: tauri::Runtime>(&self, id: &DisplayId, global_shortcut: &GlobalShortcut<R>) {
         let mut tasks = self.tasks.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(task) = tasks.remove(&id.to_string()) {
-            let _ = task.abort();
+            task.abort();
         }
 
         // When all overlay windows are closed cleanup shared resources.
