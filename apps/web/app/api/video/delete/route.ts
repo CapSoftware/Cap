@@ -6,7 +6,6 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerResponse,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
