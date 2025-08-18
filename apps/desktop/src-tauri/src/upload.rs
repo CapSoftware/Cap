@@ -144,7 +144,7 @@ fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total:
     let progress_percent = (uploaded as f64 / total as f64 * 100.0).round() as u32;
 
     println!(
-        "SENDING PROGRESS UPDATE {:?} {:?} {:?}",
+        "\n\nSENDING PROGRESS UPDATE {:?} {:?} {:?}",
         video_id,
         progress_percent,
         progress_percent % 5 != 0 && progress_percent != 100
@@ -176,6 +176,8 @@ fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total:
             error!("Failed to send progress update: {}", resp.status());
         } else if let Err(e) = response {
             error!("Failed to send progress update: {}", e);
+        } else {
+            println!("UPDATED OKAY!\n\n");
         }
     });
 }
@@ -226,11 +228,13 @@ pub async fn upload_video(
         move |chunk| {
             if let Ok(chunk) = chunk {
                 bytes_uploaded += chunk.len();
-                let progress = bytes_uploaded as f64 / total_size as f64;
+            }
 
-                // Emit local progress event for UI
-                let _ = UploadProgress { progress }.emit(&app);
-
+            if bytes_uploaded > 0 {
+                let _ = UploadProgress {
+                    progress: bytes_uploaded as f64 / total_size as f64,
+                }
+                .emit(&app);
                 send_progress_update(&app, video_id.clone(), bytes_uploaded as u64, total_size);
             }
         }
@@ -264,7 +268,6 @@ pub async fn upload_video(
     if response.status().is_success() {
         println!("Video uploaded successfully");
 
-        // Send final progress update
         send_progress_update(&app, video_id.clone(), total_size, total_size);
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
@@ -772,9 +775,6 @@ impl InstantMultipartUpload {
             }
         }
 
-        // Send final progress update
-        // send_progress_update(&app, &video_id, 1.0);
-
         // Copy link to clipboard early
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -906,6 +906,7 @@ impl InstantMultipartUpload {
         };
 
         send_progress_update(&app, video_id.into(), file_size, expected_pos);
+        tokio::time::sleep(Duration::from_secs(30)).await; // TODO
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
