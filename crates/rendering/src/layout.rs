@@ -1,0 +1,202 @@
+use cap_project::{LayoutMode, LayoutSegment};
+
+pub const LAYOUT_TRANSITION_DURATION: f64 = 0.5;
+
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutSegmentsCursor<'a> {
+    time: f64,
+    segment: Option<&'a LayoutSegment>,
+    prev_segment: Option<&'a LayoutSegment>,
+    segments: &'a [LayoutSegment],
+}
+
+impl<'a> LayoutSegmentsCursor<'a> {
+    pub fn new(time: f64, segments: &'a [LayoutSegment]) -> Self {
+        match segments
+            .iter()
+            .position(|s| time >= s.start && time < s.end)
+        {
+            Some(segment_index) => LayoutSegmentsCursor {
+                time,
+                segment: Some(&segments[segment_index]),
+                prev_segment: if segment_index > 0 {
+                    Some(&segments[segment_index - 1])
+                } else {
+                    None
+                },
+                segments,
+            },
+            None => {
+                let prev = segments
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, s)| s.end <= time);
+                LayoutSegmentsCursor {
+                    time,
+                    segment: None,
+                    prev_segment: prev.map(|(_, s)| s),
+                    segments,
+                }
+            }
+        }
+    }
+
+    pub fn next_segment(&self) -> Option<&'a LayoutSegment> {
+        let current_time = self.time;
+        self.segments.iter().find(|s| s.start > current_time)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct InterpolatedLayout {
+    pub camera_opacity: f64,
+    pub screen_opacity: f64,
+    pub camera_scale: f64,
+    pub layout_mode: LayoutMode,
+    pub transition_progress: f64,
+    pub from_mode: LayoutMode,
+    pub to_mode: LayoutMode,
+}
+
+impl InterpolatedLayout {
+    pub fn new(cursor: LayoutSegmentsCursor) -> Self {
+        let ease_in_out = bezier_easing::bezier_easing(0.42, 0.0, 0.58, 1.0).unwrap();
+
+        let (current_mode, next_mode, transition_progress) = if let Some(segment) = cursor.segment {
+            let transition_start = segment.start - LAYOUT_TRANSITION_DURATION;
+            if cursor.time < segment.start && cursor.time >= transition_start {
+                let prev_mode = cursor
+                    .prev_segment
+                    .map(|s| s.mode.clone())
+                    .unwrap_or(LayoutMode::Default);
+                let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
+                (
+                    prev_mode,
+                    segment.mode.clone(),
+                    ease_in_out(progress as f32) as f64,
+                )
+            } else {
+                (segment.mode.clone(), segment.mode.clone(), 1.0)
+            }
+        } else if let Some(next_segment) = cursor.next_segment() {
+            let transition_start = next_segment.start - LAYOUT_TRANSITION_DURATION;
+            if cursor.time >= transition_start {
+                let prev_mode = cursor
+                    .prev_segment
+                    .map(|s| s.mode.clone())
+                    .unwrap_or(LayoutMode::Default);
+                let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
+                (
+                    prev_mode,
+                    next_segment.mode.clone(),
+                    ease_in_out(progress as f32) as f64,
+                )
+            } else if let Some(prev_segment) = cursor.prev_segment {
+                let transition_end = prev_segment.end + LAYOUT_TRANSITION_DURATION;
+                if cursor.time <= transition_end {
+                    let progress = (cursor.time - prev_segment.end) / LAYOUT_TRANSITION_DURATION;
+                    (
+                        prev_segment.mode.clone(),
+                        LayoutMode::Default,
+                        ease_in_out(progress as f32) as f64,
+                    )
+                } else {
+                    (LayoutMode::Default, LayoutMode::Default, 1.0)
+                }
+            } else {
+                (LayoutMode::Default, LayoutMode::Default, 1.0)
+            }
+        } else {
+            if let Some(prev_segment) = cursor.prev_segment {
+                let transition_end = prev_segment.end + LAYOUT_TRANSITION_DURATION;
+                if cursor.time <= transition_end {
+                    let progress = (cursor.time - prev_segment.end) / LAYOUT_TRANSITION_DURATION;
+                    (
+                        prev_segment.mode.clone(),
+                        LayoutMode::Default,
+                        ease_in_out(progress as f32) as f64,
+                    )
+                } else {
+                    (LayoutMode::Default, LayoutMode::Default, 1.0)
+                }
+            } else {
+                (LayoutMode::Default, LayoutMode::Default, 1.0)
+            }
+        };
+
+        let (start_camera_opacity, start_screen_opacity, start_camera_scale) =
+            Self::get_layout_values(&current_mode);
+        let (end_camera_opacity, end_screen_opacity, end_camera_scale) =
+            Self::get_layout_values(&next_mode);
+
+        let camera_opacity = Self::lerp(
+            start_camera_opacity,
+            end_camera_opacity,
+            transition_progress,
+        );
+        let screen_opacity = Self::lerp(
+            start_screen_opacity,
+            end_screen_opacity,
+            transition_progress,
+        );
+        let camera_scale = Self::lerp(start_camera_scale, end_camera_scale, transition_progress);
+
+        InterpolatedLayout {
+            camera_opacity,
+            screen_opacity,
+            camera_scale,
+            layout_mode: if transition_progress > 0.5 {
+                next_mode.clone()
+            } else {
+                current_mode.clone()
+            },
+            transition_progress,
+            from_mode: current_mode,
+            to_mode: next_mode,
+        }
+    }
+
+    fn get_layout_values(mode: &LayoutMode) -> (f64, f64, f64) {
+        match mode {
+            LayoutMode::Default => (1.0, 1.0, 1.0),
+            LayoutMode::CameraOnly => (1.0, 0.0, 1.0),
+            LayoutMode::HideCamera => (0.0, 1.0, 1.0),
+        }
+    }
+
+    fn lerp(start: f64, end: f64, t: f64) -> f64 {
+        start + (end - start) * t
+    }
+
+    pub fn should_render_camera(&self) -> bool {
+        self.camera_opacity > 0.01
+    }
+
+    pub fn should_render_screen(&self) -> bool {
+        self.screen_opacity > 0.01
+    }
+
+    pub fn is_transitioning_camera_only(&self) -> bool {
+        matches!(self.from_mode, LayoutMode::CameraOnly)
+            || matches!(self.to_mode, LayoutMode::CameraOnly)
+    }
+
+    pub fn camera_only_transition_opacity(&self) -> f64 {
+        if matches!(self.from_mode, LayoutMode::CameraOnly)
+            && !matches!(self.to_mode, LayoutMode::CameraOnly)
+        {
+            1.0 - self.transition_progress
+        } else if !matches!(self.from_mode, LayoutMode::CameraOnly)
+            && matches!(self.to_mode, LayoutMode::CameraOnly)
+        {
+            self.transition_progress
+        } else if matches!(self.from_mode, LayoutMode::CameraOnly)
+            && matches!(self.to_mode, LayoutMode::CameraOnly)
+        {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}

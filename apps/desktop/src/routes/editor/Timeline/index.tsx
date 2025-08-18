@@ -12,6 +12,7 @@ import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
+import { type LayoutSegmentDragState, LayoutTrack } from "./LayoutTrack";
 
 const TIMELINE_PADDING = 16;
 
@@ -72,6 +73,7 @@ export function Timeline() {
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
+	let layoutSegmentDragState = { type: "idle" } as LayoutSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
@@ -97,6 +99,8 @@ export function Timeline() {
 				projectActions.deleteZoomSegment(selection.index);
 			else if (selection.type === "clip")
 				projectActions.deleteClipSegment(selection.index);
+			else if (selection.type === "layout")
+				projectActions.deleteLayoutSegment(selection.index);
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			if (!editorState.previewTime) return;
 
@@ -226,6 +230,12 @@ export function Timeline() {
 				<ZoomTrack
 					onDragStateChanged={(v) => {
 						zoomSegmentDragState = v;
+					}}
+					handleUpdatePlayhead={handleUpdatePlayhead}
+				/>
+				<LayoutTrack
+					onDragStateChanged={(v) => {
+						layoutSegmentDragState = v;
 					}}
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>

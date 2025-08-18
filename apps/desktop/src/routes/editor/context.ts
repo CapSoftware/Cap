@@ -122,7 +122,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						"segments",
 						produce((s) => {
 							if (!s) return;
-							return s.splice(segmentIndex, 1);
+							s.splice(segmentIndex, 1);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -135,7 +135,20 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						"zoomSegments",
 						produce((s) => {
 							if (!s) return;
-							return s.splice(segmentIndex, 1);
+							s.splice(segmentIndex, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			deleteLayoutSegment: (segmentIndex: number) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"layoutSegments",
+						produce((s) => {
+							if (!s) return;
+							s.splice(segmentIndex, 1);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -238,7 +251,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				selection: null as
 					| null
 					| { type: "zoom"; index: number }
-					| { type: "clip"; index: number },
+					| { type: "clip"; index: number }
+					| { type: "layout"; index: number },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),

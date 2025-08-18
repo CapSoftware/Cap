@@ -456,11 +456,29 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub enum LayoutMode {
+    Default,
+    CameraOnly,
+    HideCamera,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutSegment {
+    pub start: f64,
+    pub end: f64,
+    pub mode: LayoutMode,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
+    #[serde(default)]
+    pub layout_segments: Vec<LayoutSegment>,
 }
 
 impl TimelineConfiguration {

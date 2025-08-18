@@ -985,6 +985,7 @@ fn project_config_from_recording(
             } else {
                 Vec::new()
             },
+            layout_segments: Vec::new(),
         }),
         ..default_config.unwrap_or_default()
     }
