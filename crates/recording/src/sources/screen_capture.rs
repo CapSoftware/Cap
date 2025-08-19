@@ -203,8 +203,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 show_cursor,
             },
             display,
-            video_info: VideoInfo::from_raw(
-                RawVideoFormat::Bgra,
+            video_info: VideoInfo::from_raw_ffmpeg(
+                if cfg!(windows) { Pixel::RGBA } else { Pixel::BGRA },
                 output_size.width() as u32,
                 output_size.height() as u32,
                 120,
