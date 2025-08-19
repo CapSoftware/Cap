@@ -197,433 +197,448 @@ export default function () {
 				</Show>
 			</Match>
 			<Match when={rawOptions.targetMode === "area"}>
-				{(_) => {
-					const [dragging, setDragging] = createSignal(false);
-					// Track whether the controls should be placed above the selection to avoid window bottom overflow
-					const [placeControlsAbove, setPlaceControlsAbove] =
-						createSignal(false);
-					let controlsEl: HTMLDivElement | undefined;
+				{(_) => (
+					<Show
+						when={targetUnderCursor.display_id === params.displayId}
+						fallback={
+							<div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair bg-black/50" />
+						}
+					>
+						{(_) => {
+							const [dragging, setDragging] = createSignal(false);
+							// Track whether the controls should be placed above the selection to avoid window bottom overflow
+							const [placeControlsAbove, setPlaceControlsAbove] =
+								createSignal(false);
+							let controlsEl: HTMLDivElement | undefined;
 
-					// Recompute placement when bounds change or window resizes
-					createEffect(() => {
-						// Read reactive dependencies
-						const top = bounds.position.y;
-						const height = bounds.size.height;
-						// Measure controls height (fallback to 64px if not yet mounted)
-						const ctrlH = controlsEl?.offsetHeight ?? 64;
-						const margin = 16;
+							// Recompute placement when bounds change or window resizes
+							createEffect(() => {
+								// Read reactive dependencies
+								const top = bounds.position.y;
+								const height = bounds.size.height;
+								// Measure controls height (fallback to 64px if not yet mounted)
+								const ctrlH = controlsEl?.offsetHeight ?? 64;
+								const margin = 16;
 
-						const wouldOverflow =
-							top + height + margin + ctrlH > window.innerHeight;
-						setPlaceControlsAbove(wouldOverflow);
-					});
+								const wouldOverflow =
+									top + height + margin + ctrlH > window.innerHeight;
+								setPlaceControlsAbove(wouldOverflow);
+							});
 
-					// Handle window resize to keep placement responsive
-					createRoot((dispose) => {
-						const onResize = () => {
-							const ctrlH = controlsEl?.offsetHeight ?? 64;
-							const margin = 16;
-							const wouldOverflow =
-								bounds.position.y + bounds.size.height + margin + ctrlH >
-								window.innerHeight;
-							setPlaceControlsAbove(wouldOverflow);
-						};
-						window.addEventListener("resize", onResize);
-						onCleanup(() => {
-							window.removeEventListener("resize", onResize);
-							dispose();
-						});
-					});
-
-					function createOnMouseDown(
-						onDrag: (
-							startBounds: typeof bounds,
-							delta: { x: number; y: number },
-						) => void,
-					) {
-						return (downEvent: MouseEvent) => {
-							const startBounds = {
-								position: { ...bounds.position },
-								size: { ...bounds.size },
-							};
-
-							let animationFrame: number | null = null;
-
+							// Handle window resize to keep placement responsive
 							createRoot((dispose) => {
-								createEventListenerMap(window, {
-									mouseup: () => {
-										if (animationFrame) cancelAnimationFrame(animationFrame);
-										dispose();
-									},
-									mousemove: (moveEvent) => {
-										if (animationFrame) cancelAnimationFrame(animationFrame);
-
-										animationFrame = requestAnimationFrame(() => {
-											onDrag(startBounds, {
-												x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
-												y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
-											});
-										});
-									},
+								const onResize = () => {
+									const ctrlH = controlsEl?.offsetHeight ?? 64;
+									const margin = 16;
+									const wouldOverflow =
+										bounds.position.y + bounds.size.height + margin + ctrlH >
+										window.innerHeight;
+									setPlaceControlsAbove(wouldOverflow);
+								};
+								window.addEventListener("resize", onResize);
+								onCleanup(() => {
+									window.removeEventListener("resize", onResize);
+									dispose();
 								});
 							});
-						};
-					}
 
-					function ResizeHandles() {
-						return (
-							<>
-								{/* Top Left Button */}
-								<ResizeHandle
-									class="cursor-nw-resize"
-									style={{
-										left: `${bounds.position.x + 1}px`,
-										top: `${bounds.position.y + 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const width = startBounds.size.width - delta.x;
-										const limitedWidth = Math.max(width, 150);
+							function createOnMouseDown(
+								onDrag: (
+									startBounds: typeof bounds,
+									delta: { x: number; y: number },
+								) => void,
+							) {
+								return (downEvent: MouseEvent) => {
+									const startBounds = {
+										position: { ...bounds.position },
+										size: { ...bounds.size },
+									};
 
-										const height = startBounds.size.height - delta.y;
-										const limitedHeight = Math.max(height, 150);
-
-										setBounds({
-											position: {
-												x:
-													startBounds.position.x +
-													delta.x -
-													(limitedWidth - width),
-												y:
-													startBounds.position.y +
-													delta.y -
-													(limitedHeight - height),
-											},
-											size: {
-												width: limitedWidth,
-												height: limitedHeight,
-											},
-										});
-									})}
-								/>
-
-								{/* Top Right Button */}
-								<ResizeHandle
-									class="cursor-ne-resize"
-									style={{
-										left: `${bounds.position.x + bounds.size.width - 1}px`,
-										top: `${bounds.position.y + 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const width = startBounds.size.width + delta.x;
-										const limitedWidth = Math.max(width, 150);
-
-										const height = startBounds.size.height - delta.y;
-										const limitedHeight = Math.max(height, 150);
-
-										setBounds({
-											position: {
-												x: startBounds.position.x,
-												y:
-													startBounds.position.y +
-													delta.y -
-													(limitedHeight - height),
-											},
-											size: {
-												width: limitedWidth,
-												height: limitedHeight,
-											},
-										});
-									})}
-								/>
-
-								{/* Bottom Left Button */}
-								<ResizeHandle
-									class="cursor-sw-resize"
-									style={{
-										left: `${bounds.position.x + 1}px`,
-										top: `${bounds.position.y + bounds.size.height - 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const width = startBounds.size.width - delta.x;
-										const limitedWidth = Math.max(width, 150);
-
-										const height = startBounds.size.height + delta.y;
-										const limitedHeight = Math.max(height, 150);
-
-										setBounds({
-											position: {
-												x:
-													startBounds.position.x +
-													delta.x -
-													(limitedWidth - width),
-												y: startBounds.position.y,
-											},
-											size: {
-												width: limitedWidth,
-												height: limitedHeight,
-											},
-										});
-									})}
-								/>
-
-								{/* Bottom Right Button */}
-								<ResizeHandle
-									class="cursor-se-resize"
-									style={{
-										left: `${bounds.position.x + bounds.size.width - 1}px`,
-										top: `${bounds.position.y + bounds.size.height - 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const width = startBounds.size.width + delta.x;
-										const limitedWidth = Math.max(width, 150);
-
-										const height = startBounds.size.height + delta.y;
-										const limitedHeight = Math.max(height, 150);
-
-										setBounds({
-											position: {
-												x: startBounds.position.x,
-												y: startBounds.position.y,
-											},
-											size: {
-												width: limitedWidth,
-												height: limitedHeight,
-											},
-										});
-									})}
-								/>
-
-								{/* Top Edge Button */}
-								<ResizeHandle
-									class="cursor-n-resize"
-									style={{
-										left: `${bounds.position.x + bounds.size.width / 2}px`,
-										top: `${bounds.position.y + 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const height = startBounds.size.height - delta.y;
-										const limitedHeight = Math.max(height, 150);
-
-										setBounds({
-											position: {
-												x: startBounds.position.x,
-												y:
-													startBounds.position.y +
-													delta.y -
-													(limitedHeight - height),
-											},
-											size: {
-												width: startBounds.size.width,
-												height: limitedHeight,
-											},
-										});
-									})}
-								/>
-
-								{/* Right Edge Button */}
-								<ResizeHandle
-									class="cursor-e-resize"
-									style={{
-										left: `${bounds.position.x + bounds.size.width - 1}px`,
-										top: `${bounds.position.y + bounds.size.height / 2}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										setBounds({
-											position: {
-												x: startBounds.position.x,
-												y: startBounds.position.y,
-											},
-											size: {
-												width: Math.max(150, startBounds.size.width + delta.x),
-												height: startBounds.size.height,
-											},
-										});
-									})}
-								/>
-
-								{/* Bottom Edge Button */}
-								<ResizeHandle
-									class="cursor-s-resize"
-									style={{
-										left: `${bounds.position.x + bounds.size.width / 2}px`,
-										top: `${bounds.position.y + bounds.size.height - 1}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										setBounds({
-											position: {
-												x: startBounds.position.x,
-												y: startBounds.position.y,
-											},
-											size: {
-												width: startBounds.size.width,
-												height: Math.max(
-													150,
-													startBounds.size.height + delta.y,
-												),
-											},
-										});
-									})}
-								/>
-
-								{/* Left Edge Button */}
-								<ResizeHandle
-									class="cursor-w-resize"
-									style={{
-										left: `${bounds.position.x + 1}px`,
-										top: `${bounds.position.y + bounds.size.height / 2}px`,
-									}}
-									onMouseDown={createOnMouseDown((startBounds, delta) => {
-										const width = startBounds.size.width - delta.x;
-										const limitedWidth = Math.max(150, width);
-
-										setBounds({
-											position: {
-												x:
-													startBounds.position.x +
-													delta.x -
-													(limitedWidth - width),
-												y: startBounds.position.y,
-											},
-											size: {
-												width: limitedWidth,
-												height: startBounds.size.height,
-											},
-										});
-									})}
-								/>
-							</>
-						);
-					}
-
-					function Occluders() {
-						return (
-							<>
-								{/* Left */}
-								<div
-									class="absolute top-0 bottom-0 left-0 bg-black/50"
-									style={{ width: `${bounds.position.x}px` }}
-								/>
-								{/* Right */}
-								<div
-									class="absolute top-0 right-0 bottom-0 bg-black/50"
-									style={{
-										width: `${
-											window.innerWidth -
-											(bounds.size.width + bounds.position.x)
-										}px`,
-									}}
-								/>
-								{/* Top center */}
-								<div
-									class="absolute top-0 bg-black/50"
-									style={{
-										left: `${bounds.position.x}px`,
-										width: `${bounds.size.width}px`,
-										height: `${bounds.position.y}px`,
-									}}
-								/>
-								{/* Bottom center */}
-								<div
-									class="absolute bottom-0 bg-black/50"
-									style={{
-										left: `${bounds.position.x}px`,
-										width: `${bounds.size.width}px`,
-										height: `${
-											window.innerHeight -
-											(bounds.size.height + bounds.position.y)
-										}px`,
-									}}
-								/>
-							</>
-						);
-					}
-
-					return (
-						<div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair">
-							<Occluders />
-
-							<div
-								class={cx(
-									"flex absolute flex-col items-center",
-									dragging() ? "cursor-grabbing" : "cursor-grab",
-								)}
-								style={{
-									width: `${bounds.size.width}px`,
-									height: `${bounds.size.height}px`,
-									left: `${bounds.position.x}px`,
-									top: `${bounds.position.y}px`,
-								}}
-								onMouseDown={(downEvent) => {
-									setDragging(true);
-									const startPosition = { ...bounds.position };
+									let animationFrame: number | null = null;
 
 									createRoot((dispose) => {
 										createEventListenerMap(window, {
-											mousemove: (moveEvent) => {
-												const newPosition = {
-													x:
-														startPosition.x +
-														moveEvent.clientX -
-														downEvent.clientX,
-													y:
-														startPosition.y +
-														moveEvent.clientY -
-														downEvent.clientY,
-												};
-
-												if (newPosition.x < 0) newPosition.x = 0;
-												if (newPosition.y < 0) newPosition.y = 0;
-												if (
-													newPosition.x + bounds.size.width >
-													window.innerWidth
-												)
-													newPosition.x = window.innerWidth - bounds.size.width;
-												if (
-													newPosition.y + bounds.size.height >
-													window.innerHeight
-												)
-													newPosition.y =
-														window.innerHeight - bounds.size.height;
-
-												_setBounds("position", newPosition);
-											},
 											mouseup: () => {
-												setDragging(false);
+												if (animationFrame)
+													cancelAnimationFrame(animationFrame);
 												dispose();
+											},
+											mousemove: (moveEvent) => {
+												if (animationFrame)
+													cancelAnimationFrame(animationFrame);
+
+												animationFrame = requestAnimationFrame(() => {
+													onDrag(startBounds, {
+														x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
+														y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
+													});
+												});
 											},
 										});
 									});
-								}}
-							>
-								<div
-									ref={controlsEl}
-									class={cx(
-										"flex absolute flex-col items-center m-2",
-										placeControlsAbove() ? "bottom-full" : "top-full",
-									)}
-									style={{ width: `${bounds.size.width}px` }}
-								>
-									<RecordingControls
-										target={{
-											variant: "area",
-											screen: Number(params.displayId),
-											bounds: {
-												x: bounds.position.x,
-												y: bounds.position.y,
-												width: bounds.size.width,
-												height: bounds.size.height,
-											},
+								};
+							}
+
+							function ResizeHandles() {
+								return (
+									<>
+										{/* Top Left Button */}
+										<ResizeHandle
+											class="cursor-nw-resize"
+											style={{
+												left: `${bounds.position.x + 1}px`,
+												top: `${bounds.position.y + 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const width = startBounds.size.width - delta.x;
+												const limitedWidth = Math.max(width, 150);
+
+												const height = startBounds.size.height - delta.y;
+												const limitedHeight = Math.max(height, 150);
+
+												setBounds({
+													position: {
+														x:
+															startBounds.position.x +
+															delta.x -
+															(limitedWidth - width),
+														y:
+															startBounds.position.y +
+															delta.y -
+															(limitedHeight - height),
+													},
+													size: {
+														width: limitedWidth,
+														height: limitedHeight,
+													},
+												});
+											})}
+										/>
+
+										{/* Top Right Button */}
+										<ResizeHandle
+											class="cursor-ne-resize"
+											style={{
+												left: `${bounds.position.x + bounds.size.width - 1}px`,
+												top: `${bounds.position.y + 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const width = startBounds.size.width + delta.x;
+												const limitedWidth = Math.max(width, 150);
+
+												const height = startBounds.size.height - delta.y;
+												const limitedHeight = Math.max(height, 150);
+
+												setBounds({
+													position: {
+														x: startBounds.position.x,
+														y:
+															startBounds.position.y +
+															delta.y -
+															(limitedHeight - height),
+													},
+													size: {
+														width: limitedWidth,
+														height: limitedHeight,
+													},
+												});
+											})}
+										/>
+
+										{/* Bottom Left Button */}
+										<ResizeHandle
+											class="cursor-sw-resize"
+											style={{
+												left: `${bounds.position.x + 1}px`,
+												top: `${bounds.position.y + bounds.size.height - 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const width = startBounds.size.width - delta.x;
+												const limitedWidth = Math.max(width, 150);
+
+												const height = startBounds.size.height + delta.y;
+												const limitedHeight = Math.max(height, 150);
+
+												setBounds({
+													position: {
+														x:
+															startBounds.position.x +
+															delta.x -
+															(limitedWidth - width),
+														y: startBounds.position.y,
+													},
+													size: {
+														width: limitedWidth,
+														height: limitedHeight,
+													},
+												});
+											})}
+										/>
+
+										{/* Bottom Right Button */}
+										<ResizeHandle
+											class="cursor-se-resize"
+											style={{
+												left: `${bounds.position.x + bounds.size.width - 1}px`,
+												top: `${bounds.position.y + bounds.size.height - 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const width = startBounds.size.width + delta.x;
+												const limitedWidth = Math.max(width, 150);
+
+												const height = startBounds.size.height + delta.y;
+												const limitedHeight = Math.max(height, 150);
+
+												setBounds({
+													position: {
+														x: startBounds.position.x,
+														y: startBounds.position.y,
+													},
+													size: {
+														width: limitedWidth,
+														height: limitedHeight,
+													},
+												});
+											})}
+										/>
+
+										{/* Top Edge Button */}
+										<ResizeHandle
+											class="cursor-n-resize"
+											style={{
+												left: `${bounds.position.x + bounds.size.width / 2}px`,
+												top: `${bounds.position.y + 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const height = startBounds.size.height - delta.y;
+												const limitedHeight = Math.max(height, 150);
+
+												setBounds({
+													position: {
+														x: startBounds.position.x,
+														y:
+															startBounds.position.y +
+															delta.y -
+															(limitedHeight - height),
+													},
+													size: {
+														width: startBounds.size.width,
+														height: limitedHeight,
+													},
+												});
+											})}
+										/>
+
+										{/* Right Edge Button */}
+										<ResizeHandle
+											class="cursor-e-resize"
+											style={{
+												left: `${bounds.position.x + bounds.size.width - 1}px`,
+												top: `${bounds.position.y + bounds.size.height / 2}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												setBounds({
+													position: {
+														x: startBounds.position.x,
+														y: startBounds.position.y,
+													},
+													size: {
+														width: Math.max(
+															150,
+															startBounds.size.width + delta.x,
+														),
+														height: startBounds.size.height,
+													},
+												});
+											})}
+										/>
+
+										{/* Bottom Edge Button */}
+										<ResizeHandle
+											class="cursor-s-resize"
+											style={{
+												left: `${bounds.position.x + bounds.size.width / 2}px`,
+												top: `${bounds.position.y + bounds.size.height - 1}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												setBounds({
+													position: {
+														x: startBounds.position.x,
+														y: startBounds.position.y,
+													},
+													size: {
+														width: startBounds.size.width,
+														height: Math.max(
+															150,
+															startBounds.size.height + delta.y,
+														),
+													},
+												});
+											})}
+										/>
+
+										{/* Left Edge Button */}
+										<ResizeHandle
+											class="cursor-w-resize"
+											style={{
+												left: `${bounds.position.x + 1}px`,
+												top: `${bounds.position.y + bounds.size.height / 2}px`,
+											}}
+											onMouseDown={createOnMouseDown((startBounds, delta) => {
+												const width = startBounds.size.width - delta.x;
+												const limitedWidth = Math.max(150, width);
+
+												setBounds({
+													position: {
+														x:
+															startBounds.position.x +
+															delta.x -
+															(limitedWidth - width),
+														y: startBounds.position.y,
+													},
+													size: {
+														width: limitedWidth,
+														height: startBounds.size.height,
+													},
+												});
+											})}
+										/>
+									</>
+								);
+							}
+
+							function Occluders() {
+								return (
+									<>
+										{/* Left */}
+										<div
+											class="absolute top-0 bottom-0 left-0 bg-black/50"
+											style={{ width: `${bounds.position.x}px` }}
+										/>
+										{/* Right */}
+										<div
+											class="absolute top-0 right-0 bottom-0 bg-black/50"
+											style={{
+												width: `${
+													window.innerWidth -
+													(bounds.size.width + bounds.position.x)
+												}px`,
+											}}
+										/>
+										{/* Top center */}
+										<div
+											class="absolute top-0 bg-black/50"
+											style={{
+												left: `${bounds.position.x}px`,
+												width: `${bounds.size.width}px`,
+												height: `${bounds.position.y}px`,
+											}}
+										/>
+										{/* Bottom center */}
+										<div
+											class="absolute bottom-0 bg-black/50"
+											style={{
+												left: `${bounds.position.x}px`,
+												width: `${bounds.size.width}px`,
+												height: `${
+													window.innerHeight -
+													(bounds.size.height + bounds.position.y)
+												}px`,
+											}}
+										/>
+									</>
+								);
+							}
+
+							return (
+								<div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair">
+									<Occluders />
+
+									<div
+										class={cx(
+											"flex absolute flex-col items-center",
+											dragging() ? "cursor-grabbing" : "cursor-grab",
+										)}
+										style={{
+											width: `${bounds.size.width}px`,
+											height: `${bounds.size.height}px`,
+											left: `${bounds.position.x}px`,
+											top: `${bounds.position.y}px`,
 										}}
-									/>
+										onMouseDown={(downEvent) => {
+											setDragging(true);
+											const startPosition = { ...bounds.position };
+
+											createRoot((dispose) => {
+												createEventListenerMap(window, {
+													mousemove: (moveEvent) => {
+														const newPosition = {
+															x:
+																startPosition.x +
+																moveEvent.clientX -
+																downEvent.clientX,
+															y:
+																startPosition.y +
+																moveEvent.clientY -
+																downEvent.clientY,
+														};
+
+														if (newPosition.x < 0) newPosition.x = 0;
+														if (newPosition.y < 0) newPosition.y = 0;
+														if (
+															newPosition.x + bounds.size.width >
+															window.innerWidth
+														)
+															newPosition.x =
+																window.innerWidth - bounds.size.width;
+														if (
+															newPosition.y + bounds.size.height >
+															window.innerHeight
+														)
+															newPosition.y =
+																window.innerHeight - bounds.size.height;
+
+														_setBounds("position", newPosition);
+													},
+													mouseup: () => {
+														setDragging(false);
+														dispose();
+													},
+												});
+											});
+										}}
+									>
+										<div
+											ref={controlsEl}
+											class={cx(
+												"flex absolute flex-col items-center m-2",
+												placeControlsAbove() ? "bottom-full" : "top-full",
+											)}
+											style={{ width: `${bounds.size.width}px` }}
+										>
+											<RecordingControls
+												target={{
+													variant: "area",
+													screen: Number(params.displayId),
+													bounds: {
+														x: bounds.position.x,
+														y: bounds.position.y,
+														width: bounds.size.width,
+														height: bounds.size.height,
+													},
+												}}
+											/>
+										</div>
+									</div>
+
+									<ResizeHandles />
+
+									<p class="z-10 text-xl">Click and drag area to record</p>
 								</div>
-							</div>
-
-							<ResizeHandles />
-
-							<p class="z-10 text-xl">Click and drag area to record</p>
-						</div>
-					);
-				}}
+							);
+						}}
+					</Show>
+				)}
 			</Match>
 		</Switch>
 	);
