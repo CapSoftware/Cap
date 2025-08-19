@@ -270,12 +270,13 @@ async fn set_camera_input(
                 // Ask currently running setup to abort
                 cancel.send(()).await.ok();
 
+                // TODO: We don't care about this because the sender will just remount again.
                 // We can assume a window was already initialized.
                 // Stop it so we can recreate it with the correct `camera_tx`
-                if let Some(win) = CapWindowId::Camera.get(&app_handle) {
-                    println!("WINDOW CLOSE ONE");
-                    win.close().unwrap(); // TODO: Error handling
-                };
+                // if let Some(win) = CapWindowId::Camera.get(&app_handle) {
+                //     println!("WINDOW CLOSE ONE");
+                //     win.close().unwrap(); // TODO: Error handling
+                // };
             } else {
                 app.camera_feed_initialization = Some(shutdown_tx);
             }
@@ -367,9 +368,11 @@ async fn set_camera_input(
                 cancel.send(()).await.ok();
             }
             app.camera_feed.take();
-            if let Some(w) = CapWindowId::Camera.get(&app_handle) {
-                w.close().ok();
-            }
+
+            // TODO: Should be implied by `camera_feed.take()`
+            // if let Some(w) = CapWindowId::Camera.get(&app_handle) {
+            //     w.close().ok();
+            // }
             Ok(true)
         }
     }
@@ -2226,9 +2229,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                         app_state.mic_feed.take();
                                         app_state.camera_feed.take();
 
-                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
-                                            let _ = camera.close();
-                                        }
+                                        // TODO: Implied by `app_state.camera_feed`
+                                        // if let Some(camera) = CapWindowId::Camera.get(&app) {
+                                        //     let _ = camera.close();
+                                        // }
                                     }
                                 });
                             }
@@ -2250,6 +2254,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 app.state::<target_select_overlay::WindowFocusManager>()
                                     .destroy(&display_id, app.global_shortcut());
                             }
+                            // TODO
+                            // CapWindowId::Camera => {
+                            //     app.state::<camera::CameraPreview>().shutdown();
+                            // }
                             _ => {}
                         };
                     }

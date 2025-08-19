@@ -25,7 +25,8 @@ use tokio::{
     sync::{broadcast, oneshot},
     task::JoinHandle,
 };
-use tracing::error;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
@@ -65,13 +66,15 @@ pub struct CameraPreview {
         broadcast::Sender<Option<(u32, u32)>>,
         broadcast::Receiver<Option<(u32, u32)>>,
     ),
+    // TODO: Remove this and rely on `camera_feed.take()`
+    cancel: CancellationToken,
     loading: Arc<AtomicBool>,
     store: Arc<Store<Wry>>,
 
     camera_preview: (
         flume::Sender<RawCameraFrame>,
         flume::Receiver<RawCameraFrame>,
-    ), // Mutex<Option<flume::Sender<RawCameraFrame>>>,
+    ),
 }
 
 impl CameraPreview {
@@ -80,6 +83,7 @@ impl CameraPreview {
 
         Ok(Self {
             reconfigure: broadcast::channel(1),
+            cancel: CancellationToken::new(),
             loading: Arc::new(AtomicBool::new(false)),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
             camera_preview: flume::bounded::<RawCameraFrame>(4), // Mutex::new(None),
@@ -90,19 +94,18 @@ impl CameraPreview {
         self.camera_preview.0.clone()
     }
 
-    pub async fn init_preview_window(
-        &self,
-        window: WebviewWindow,
-        // camera_rx: Receiver<RawCameraFrame>,
-    ) -> anyhow::Result<()> {
+    pub fn shutdown(&self) {
+        println!("DO SHUTDOWN");
+        self.cancel.cancel();
+    }
+
+    pub async fn init_preview_window(&self, window: WebviewWindow) -> anyhow::Result<()> {
         let camera_rx = self.camera_preview.1.clone();
-        // let camera_preview_sender = self.camera_preview.lock().unwrap().clone();
+        let cancel = self.cancel.clone();
 
         self.loading.store(true, Ordering::Relaxed);
 
         let mut renderer = Renderer::init(window.clone()).await?;
-
-        // renderer.device.destroy(); // TODO: What does this do?
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
@@ -127,6 +130,7 @@ impl CameraPreview {
                 return;
             };
 
+            info!("Camera preview initialized!");
             while let Some((frame, reconfigure)) = block_on({
                 let camera_rx = &camera_rx;
                 let reconfigure = &mut reconfigure;
@@ -140,18 +144,19 @@ impl CameraPreview {
 
                     match futures::future::select(
                         pin!(camera_rx.recv_async()),
-                        pin!(reconfigure.recv()),
+                        futures::future::select(pin!(reconfigure.recv()), pin!(cancel.cancelled())),
                     )
                     .await
                     {
                         Either::Left((frame, _)) => frame.ok().map(|f| (Some(f.frame), false)),
-                        Either::Right((event, _)) => {
+                        Either::Right((Either::Left((event, _)), _)) => {
                             if let Ok(Some((width, height))) = event {
                                 window_size = Some((width, height));
                             }
 
                             Some((None, true))
                         }
+                        Either::Right((Either::Right(_), _)) => None,
                     }
                 }
             }) {
@@ -159,6 +164,7 @@ impl CameraPreview {
                     if reconfigure && renderer.refresh_state(&store) || first {
                         first = false;
                         renderer.update_state_uniforms();
+                        println!("WINDOW RESIZE REQUESTED A");
                         true
                     } else if let Some(frame) = frame.as_ref()
                         && renderer.frame_info.update_key_and_should_init((
@@ -168,7 +174,14 @@ impl CameraPreview {
                         ))
                     {
                         aspect_ratio = Some(frame.width() as f32 / frame.height() as f32);
+                        println!(
+                            "NEW SIZE {:?} {:?} {:?}",
+                            frame.width(),
+                            frame.height(),
+                            aspect_ratio
+                        );
 
+                        println!("WINDOW RESIZE REQUESTED B");
                         true
                     } else {
                         false
@@ -182,6 +195,8 @@ impl CameraPreview {
                     });
 
                 if window_resize_required {
+                    println!("DO WINDOW RESIZE");
+
                     renderer.update_camera_aspect_ratio_uniforms(camera_aspect_ratio);
 
                     match renderer.resize_window(camera_aspect_ratio) {
@@ -212,6 +227,11 @@ impl CameraPreview {
                         }
                     },
                 };
+
+                println!(
+                    "INFO {:?} {:?} {:?}",
+                    camera_aspect_ratio, window_width, window_height
+                );
 
                 if let Err(err) = renderer.reconfigure_gpu_surface(window_width, window_height) {
                     error!("Error reconfiguring GPU surface: {err:?}");
@@ -282,6 +302,8 @@ impl CameraPreview {
                 }
             }
 
+            warn!("Camera preview shutdown!");
+            renderer.device.destroy();
             window.close().ok();
         });
 
