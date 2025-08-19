@@ -580,13 +580,7 @@ export function ConfigSidebar() {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
-									// Normalize single or multiple selection to indices array
-									const indices =
-										"indices" in zoomSelection
-											? zoomSelection.indices
-											: [zoomSelection.index];
-
-									const segments = indices
+									const segments = zoomSelection.indices
 										.map((index) => ({
 											index,
 											segment: project.timeline?.zoomSegments?.[index],

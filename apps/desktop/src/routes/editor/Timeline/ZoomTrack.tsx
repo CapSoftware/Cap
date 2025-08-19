@@ -217,44 +217,19 @@ export function ZoomTrack(props: {
 									if (e.ctrlKey || e.metaKey) {
 										if (currentSelection?.type === "zoom") {
 											// If we already have zoom selections
-											if (
-												"indices" in currentSelection &&
-												Array.isArray(currentSelection.indices)
-											) {
-												// Toggle this segment in the selection
-												const newIndices = currentSelection.indices.includes(
-													segmentIndex,
-												)
-													? currentSelection.indices.filter(
-															(idx) => idx !== segmentIndex,
-														)
-													: [...currentSelection.indices, segmentIndex];
+											// Toggle this segment in the selection
+											const newIndices = currentSelection.indices.includes(
+												segmentIndex,
+											)
+												? currentSelection.indices.filter(
+														(idx) => idx !== segmentIndex,
+													)
+												: [...currentSelection.indices, segmentIndex];
 
-												setEditorState(
-													"timeline",
-													"selection",
-													newIndices.length > 0
-														? { type: "zoom", indices: newIndices }
-														: null,
-												);
-											} else if (
-												"index" in currentSelection &&
-												typeof currentSelection.index === "number"
-											) {
-												// Convert single selection to multi-selection
-												const newIndices =
-													currentSelection.index === segmentIndex
-														? [] // Deselect if clicking the same segment
-														: [currentSelection.index, segmentIndex];
-
-												setEditorState(
-													"timeline",
-													"selection",
-													newIndices.length > 0
-														? { type: "zoom", indices: newIndices }
-														: null,
-												);
-											}
+											setEditorState("timeline", "selection", {
+												type: "zoom",
+												indices: newIndices,
+											});
 										} else {
 											// Start new multi-selection
 											setEditorState("timeline", "selection", {
@@ -263,13 +238,11 @@ export function ZoomTrack(props: {
 											});
 										}
 									} else {
-										// Regular single selection
 										setEditorState("timeline", "selection", {
 											type: "zoom",
-											index: segmentIndex,
+											indices: [segmentIndex],
 										});
 									}
-
 									props.handleUpdatePlayhead(e);
 								}
 								props.onDragStateChanged({ type: "idle" });
