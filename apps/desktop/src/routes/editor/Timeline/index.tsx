@@ -11,8 +11,8 @@ import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
-import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 import { type LayoutSegmentDragState, LayoutTrack } from "./LayoutTrack";
+import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
 
@@ -96,16 +96,30 @@ export function Timeline() {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "zoom")
-				projectActions.deleteZoomSegment(selection.index);
-			else if (selection.type === "clip")
+			if (selection.type === "zoom") {
+				// Handle multiple zoom segment deletion
+				if ("indices" in selection && Array.isArray(selection.indices)) {
+					// Use bulk deletion for better performance
+					projectActions.deleteZoomSegments(selection.indices);
+				} else if (
+					"index" in selection &&
+					typeof selection.index === "number"
+				) {
+					// Handle single zoom segment deletion
+					projectActions.deleteZoomSegment(selection.index);
+				}
+			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
-			else if (selection.type === "layout")
+			} else if (selection.type === "layout") {
 				projectActions.deleteLayoutSegment(selection.index);
+			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			if (!editorState.previewTime) return;
 
 			projectActions.splitClipSegment(editorState.previewTime);
+		} else if (e.code === "Escape" && hasNoModifiers) {
+			// Deselect all selected segments
+			setEditorState("timeline", "selection", null);
 		}
 	});
 
@@ -267,7 +281,7 @@ function TimelineMarkings() {
 				{(second) => (
 					<Show when={second > 0}>
 						<div
-							class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-current"
+							class="absolute left-0 bottom-1 w-1 h-1 text-center bg-current rounded-full"
 							style={{
 								transform: `translateX(${
 									(second - transform().position) / secsPerPixel() - 1

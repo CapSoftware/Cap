@@ -141,6 +141,23 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			deleteZoomSegments: (segmentIndices: number[]) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"zoomSegments",
+						produce((s) => {
+							if (!s) return;
+							// Sort indices in descending order to avoid index shifting issues
+							const sortedIndices = [...segmentIndices].sort((a, b) => b - a);
+							sortedIndices.forEach((index) => {
+								s.splice(index, 1);
+							});
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 			deleteLayoutSegment: (segmentIndex: number) => {
 				batch(() => {
 					setProject(
@@ -251,6 +268,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				selection: null as
 					| null
 					| { type: "zoom"; index: number }
+					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; index: number }
 					| { type: "layout"; index: number },
 				transform: {

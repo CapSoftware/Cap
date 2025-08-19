@@ -171,7 +171,9 @@ export function ZoomTrack(props: {
 				fallback={
 					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
 						<div>Click to add zoom segment</div>
-						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">(Smoothly zoom in on important areas)</div>
+						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+							(Smoothly zoom in on important areas)
+						</div>
 					</div>
 				}
 			>
@@ -207,10 +209,67 @@ export function ZoomTrack(props: {
 								resumeHistory();
 								if (!moved) {
 									e.stopPropagation();
-									setEditorState("timeline", "selection", {
-										type: "zoom",
-										index: i(),
-									});
+
+									const currentSelection = editorState.timeline.selection;
+									const segmentIndex = i();
+
+									// Handle multi-selection with Ctrl/Cmd+click
+									if (e.ctrlKey || e.metaKey) {
+										if (currentSelection?.type === "zoom") {
+											// If we already have zoom selections
+											if (
+												"indices" in currentSelection &&
+												Array.isArray(currentSelection.indices)
+											) {
+												// Toggle this segment in the selection
+												const newIndices = currentSelection.indices.includes(
+													segmentIndex,
+												)
+													? currentSelection.indices.filter(
+															(idx) => idx !== segmentIndex,
+														)
+													: [...currentSelection.indices, segmentIndex];
+
+												setEditorState(
+													"timeline",
+													"selection",
+													newIndices.length > 0
+														? { type: "zoom", indices: newIndices }
+														: null,
+												);
+											} else if (
+												"index" in currentSelection &&
+												typeof currentSelection.index === "number"
+											) {
+												// Convert single selection to multi-selection
+												const newIndices =
+													currentSelection.index === segmentIndex
+														? [] // Deselect if clicking the same segment
+														: [currentSelection.index, segmentIndex];
+
+												setEditorState(
+													"timeline",
+													"selection",
+													newIndices.length > 0
+														? { type: "zoom", indices: newIndices }
+														: null,
+												);
+											}
+										} else {
+											// Start new multi-selection
+											setEditorState("timeline", "selection", {
+												type: "zoom",
+												indices: [segmentIndex],
+											});
+										}
+									} else {
+										// Regular single selection
+										setEditorState("timeline", "selection", {
+											type: "zoom",
+											index: segmentIndex,
+										});
+									}
+
 									props.handleUpdatePlayhead(e);
 								}
 								props.onDragStateChanged({ type: "idle" });
@@ -256,7 +315,21 @@ export function ZoomTrack(props: {
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
-						return segmentIndex === selection.index;
+						// Support both single selection (index) and multi-selection (indices)
+						if (
+							"indices" in selection &&
+							Array.isArray(selection.indices) &&
+							segmentIndex !== undefined
+						) {
+							return selection.indices.includes(segmentIndex);
+						} else if (
+							"index" in selection &&
+							typeof selection.index === "number"
+						) {
+							return segmentIndex === selection.index;
+						}
+
+						return false;
 					});
 
 					return (
