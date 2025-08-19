@@ -62,6 +62,11 @@ export const provideOptionalAuth = <A, E, R>(
 ): Effect.Effect<A, E | DatabaseError | Cause.UnknownException, R | Database> =>
 	Effect.gen(function* () {
 		const user = yield* getCurrentUser;
+
+		if (Option.isSome(user))
+			yield* Effect.log(`Providing auth for user ${user.value.id}`)
+
+
 		return yield* user.pipe(
 			Option.map((user) =>
 				CurrentUser.context({
