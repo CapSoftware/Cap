@@ -10,9 +10,10 @@ use futures::{executor::block_on, future::Either};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
+    collections::HashMap,
     pin::pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -20,7 +21,10 @@ use std::{
 };
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
-use tokio::sync::{broadcast, oneshot};
+use tokio::{
+    sync::{broadcast, oneshot},
+    task::JoinHandle,
+};
 use tracing::error;
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
@@ -63,25 +67,42 @@ pub struct CameraPreview {
     ),
     loading: Arc<AtomicBool>,
     store: Arc<Store<Wry>>,
+
+    camera_preview: (
+        flume::Sender<RawCameraFrame>,
+        flume::Receiver<RawCameraFrame>,
+    ), // Mutex<Option<flume::Sender<RawCameraFrame>>>,
 }
 
 impl CameraPreview {
     pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
+        // let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+
         Ok(Self {
             reconfigure: broadcast::channel(1),
             loading: Arc::new(AtomicBool::new(false)),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
+            camera_preview: flume::bounded::<RawCameraFrame>(4), // Mutex::new(None),
         })
+    }
+
+    pub fn get_sender(&self) -> flume::Sender<RawCameraFrame> {
+        self.camera_preview.0.clone()
     }
 
     pub async fn init_preview_window(
         &self,
         window: WebviewWindow,
-        camera_rx: Receiver<RawCameraFrame>,
+        // camera_rx: Receiver<RawCameraFrame>,
     ) -> anyhow::Result<()> {
+        let camera_rx = self.camera_preview.1.clone();
+        // let camera_preview_sender = self.camera_preview.lock().unwrap().clone();
+
         self.loading.store(true, Ordering::Relaxed);
 
         let mut renderer = Renderer::init(window.clone()).await?;
+
+        // renderer.device.destroy(); // TODO: What does this do?
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
@@ -863,4 +884,39 @@ struct WindowUniforms {
 struct CameraUniforms {
     camera_aspect_ratio: f32,
     _padding: f32,
+}
+
+pub struct CameraWindows {
+    windows: HashMap<String, flume::Receiver<()>>,
+}
+
+impl CameraWindows {
+    pub fn register(&self, window: WebviewWindow) {
+        // self.windows.insert(
+        //     window.label(),
+        //     tokio::spawn(async move {
+        //         // TODO
+        //     }),
+        // );
+
+        // tokio::spawn(async move {});
+
+        // window.on_window_event(|event| {
+        //     match event {
+        //         tauri::WindowEvent::Resized(size) => {
+        //             // TODO
+        //         }
+        //         tauri::WindowEvent::Destroyed => {
+        //             // TODO
+        //         }
+        //         _ => {}
+        //     }
+        // });
+
+        todo!();
+    }
+
+    pub fn set_feed(&self, window: WebviewWindow) {
+        todo!();
+    }
 }
