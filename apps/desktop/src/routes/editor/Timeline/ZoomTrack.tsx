@@ -49,6 +49,7 @@ export function ZoomTrack(props: {
 		const segments = project.timeline?.zoomSegments;
 		if (!segments || segments.length === 0) {
 			setHoveringSegment(false);
+			setHoveredTime(undefined);
 		}
 	});
 
@@ -85,7 +86,7 @@ export function ZoomTrack(props: {
 					return;
 				}
 
-				const bounds = e.target.getBoundingClientRect()!;
+				const bounds = e.currentTarget.getBoundingClientRect()!;
 
 				let time =
 					(e.clientX - bounds.left) * secsPerPixel() +
