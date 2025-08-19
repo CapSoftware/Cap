@@ -5,6 +5,19 @@ edition = "2024"
 
 [dependencies]
 wgpu.workspace = true
+bytemuck = { version = "1.14", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[[example]]
+name = "benchmark"
+required-features = []
+
+[features]
+default = []
+async = ["tokio"]
 
 [lints]
 workspace = true

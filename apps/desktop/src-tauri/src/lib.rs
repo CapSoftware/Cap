@@ -4,6 +4,7 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod commands;
 mod deeplink_actions;
 mod editor_window;
 mod export;
@@ -56,7 +57,7 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+
 use std::{
     fs::File,
     future::Future,
@@ -78,7 +79,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::timeout;
+
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
@@ -265,54 +266,74 @@ async fn set_camera_input(
         (Some(id), None) => {
             let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
             if let Some(cancel) = app.camera_feed_initialization.as_ref() {
+                println!("ABORT EXISTING SETUP");
+
                 // Ask currently running setup to abort
                 cancel.send(()).await.ok();
 
+                // TODO: We don't care about this because the sender will just remount again.
                 // We can assume a window was already initialized.
                 // Stop it so we can recreate it with the correct `camera_tx`
-                if let Some(win) = CapWindowId::Camera.get(&app_handle) {
-                    win.close().unwrap(); // TODO: Error handling
-                };
+                // if let Some(win) = CapWindowId::Camera.get(&app_handle) {
+                //     println!("WINDOW CLOSE ONE");
+                //     win.close().unwrap(); // TODO: Error handling
+                // };
             } else {
                 app.camera_feed_initialization = Some(shutdown_tx);
             }
 
-            let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
+            println!("SHOWING WINDOW");
+            // let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
             if let Some(win) = CapWindowId::Main.get(&app_handle) {
                 win.set_focus().ok();
             };
 
-            let camera_tx = if GeneralSettingsStore::get(&app_handle)
+            let native_camera_tx = if GeneralSettingsStore::get(&app_handle)
                 .ok()
                 .and_then(|v| v.map(|v| v.enable_native_camera_preview))
                 .unwrap_or_default()
             {
-                let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
+                // let camera_tx = todo!();
+                // let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
 
-                let prev_err = &mut None;
-                if timeout(Duration::from_secs(3), async {
-                    while let Err(err) = camera_preview
-                        .init_preview_window(window.clone(), camera_rx.clone())
-                        .await
-                    {
-                        error!("Error initializing camera feed: {err}");
-                        *prev_err = Some(err);
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                    }
-                })
-                .await
-                .is_err()
-                {
-                    let _ = window.close();
-                    return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
-                };
+                // window.on_window_event(move |event| {
+                //     println!("WINDOW EVENT: {:?}", event);
+                //     // if let tauri::WindowEvent::Resized(_) = event {
+                //     //     // Take the sender to ensure we only initialize once
+                //     //     if let Some(tx) = renderer_tx_clone.lock().unwrap().take() {
+                //     //         let window_for_init = window_clone.clone();
+                //     //         tokio::spawn(async move {
+                //     //             let result = Renderer::init(window_for_init).await;
+                //     //             let _ = tx.send(result);
+                //     //         });
+                //     //     }
+                //     // }
+                // });
 
-                Some(camera_tx)
+                // let prev_err = &mut None;
+                // if timeout(Duration::from_secs(3), async {
+                //     while let Err(err) = camera_preview
+                //         .init_preview_window(window.clone(), camera_rx.clone())
+                //         .await
+                //     {
+                //         error!("Error initializing camera feed: {err}");
+                //         *prev_err = Some(err);
+                //         tokio::time::sleep(Duration::from_millis(200)).await;
+                //     }
+                // })
+                // .await
+                // .is_err()
+                // {
+                //     let _ = window.close();
+                //     return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
+                // };
+
+                Some(camera_preview.get_sender())
             } else {
                 None
             };
 
-            let legacy_camera_tx = app.camera_tx.clone();
+            let legacy_websocket_camera_tx = app.camera_tx.clone();
             drop(app);
 
             let fut = CameraFeed::init(id);
@@ -327,10 +348,10 @@ async fn set_camera_input(
                     }
 
                     if app.camera_feed.is_none() {
-                        if let Some(camera_tx) = camera_tx {
+                        if let Some(camera_tx) = native_camera_tx {
                             feed.attach(camera_tx);
                         } else {
-                            feed.attach(legacy_camera_tx);
+                            feed.attach(legacy_websocket_camera_tx);
                         }
                         app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                         Ok(true)
@@ -347,10 +368,17 @@ async fn set_camera_input(
             if let Some(cancel) = app.camera_feed_initialization.take() {
                 cancel.send(()).await.ok();
             }
+            println!("USER FEED DESELECT SHUTDOWN");
             app.camera_feed.take();
-            if let Some(w) = CapWindowId::Camera.get(&app_handle) {
-                w.close().ok();
-            }
+
+            // TODO: Should be implied by `camera_feed.take()`
+            // if let Some(w) = CapWindowId::Camera.get(&app_handle) {
+            //     w.close().ok();
+            // }
+
+            // TODO: This shouldn't be needed
+            app.handle.state::<camera::CameraPreview>().shutdown();
+
             Ok(true)
         }
     }
@@ -2207,9 +2235,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                         app_state.mic_feed.take();
                                         app_state.camera_feed.take();
 
-                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
-                                            let _ = camera.close();
-                                        }
+                                        // TODO: Implied by `app_state.camera_feed`
+                                        // if let Some(camera) = CapWindowId::Camera.get(&app) {
+                                        //     let _ = camera.close();
+                                        // }
                                     }
                                 });
                             }
@@ -2231,6 +2260,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 app.state::<target_select_overlay::WindowFocusManager>()
                                     .destroy(&display_id, app.global_shortcut());
                             }
+                            // TODO
+                            // CapWindowId::Camera => {
+                            //     app.state::<camera::CameraPreview>().shutdown();
+                            // }
                             _ => {}
                         };
                     }

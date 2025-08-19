@@ -2,13 +2,15 @@
 #![allow(unused_imports)]
 
 use crate::{
-    App, ArcLock, fake_window,
+    App, ArcLock,
+    camera::CameraPreview,
+    fake_window,
     general_settings::{AppTheme, GeneralSettingsStore},
     permissions,
     target_select_overlay::WindowFocusManager,
 };
 use cap_displays::DisplayId;
-use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
+use cap_media::{feeds::RawCameraFrame, platform::logical_monitor_bounds, sources::CaptureScreen};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -378,6 +380,27 @@ impl ShowCapWindow {
 
                 let window = window_builder.build()?;
 
+                // window.on_window_event(|event| {
+                //     if matches!(event, tauri::WindowEvent::Destroyed) {
+                //         todo!(); // TODO: Cleanup window
+                //     }
+                // });
+
+                let camera_preview = app.state::<CameraPreview>();
+
+                // TODO: Fix this
+                // let camera_preview_sender = camera_preview.camera_preview.lock().unwrap().clone();
+
+                camera_preview
+                    .init_preview_window(window.clone())
+                    .await
+                    .unwrap(); // TODO: Error handling
+                // {
+                //     error!("Error initializing camera feed: {err}");
+                //     *prev_err = Some(err);
+                //     tokio::time::sleep(Duration::from_millis(200)).await;
+                // }
+
                 #[cfg(target_os = "macos")]
                 {
                     _ = window.run_on_main_thread({
@@ -630,7 +653,7 @@ impl ShowCapWindow {
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
-            ShowCapWindow::Camera => CapWindowId::Camera,
+            ShowCapWindow::Camera { .. } => CapWindowId::Camera,
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,

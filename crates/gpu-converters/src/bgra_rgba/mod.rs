@@ -1,30 +1,25 @@
 use wgpu::{self, util::DeviceExt};
 
-use crate::NV12Input;
+use crate::ConversionError;
 
-pub struct NV12ToRGBA {
+pub struct BGRAToRGBA {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl NV12ToRGBA {
-    pub async fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-    ) -> Result<Self, crate::ConversionError> {
-        // Shader for NV12 to RGBA conversion
+impl BGRAToRGBA {
+    pub async fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Self, ConversionError> {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("NV12 to RGBA Converter"),
+            label: Some("BGRA to RGBA Converter"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-                "./shader.wgsl"
+                "shader.wgsl"
             ))),
         });
 
-        // Create pipeline and bind group layout
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("NV12 Converter Bind Group Layout"),
+            label: Some("BGRA Converter Bind Group Layout"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -39,16 +34,6 @@ impl NV12ToRGBA {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
                         format: wgpu::TextureFormat::Rgba8Unorm,
@@ -60,13 +45,13 @@ impl NV12ToRGBA {
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("NV12 Converter Pipeline Layout"),
+            label: Some("BGRA Converter Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("NV12 Converter Pipeline"),
+            label: Some("BGRA Converter Pipeline"),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some("main"),
@@ -84,15 +69,23 @@ impl NV12ToRGBA {
 
     pub fn convert_to_texture(
         &self,
-        input: NV12Input,
+        input_data: &[u8],
         width: u32,
         height: u32,
-    ) -> Result<wgpu::Texture, crate::ConversionError> {
-        // Create textures for Y and UV planes
-        let y_texture = self.device.create_texture_with_data(
+    ) -> Result<wgpu::Texture, ConversionError> {
+        let expected_size = (width * height * 4) as usize;
+        if input_data.len() < expected_size {
+            return Err(ConversionError::InsufficientData {
+                expected: expected_size,
+                actual: input_data.len(),
+            });
+        }
+
+        // Create input texture (BGRA format)
+        let input_texture = self.device.create_texture_with_data(
             &self.queue,
             &wgpu::TextureDescriptor {
-                label: Some("Y Plane Texture"),
+                label: Some("BGRA Input Texture"),
                 size: wgpu::Extent3d {
                     width,
                     height,
@@ -101,37 +94,17 @@ impl NV12ToRGBA {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R8Unorm,
+                format: wgpu::TextureFormat::Bgra8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::MipMajor,
-            input.y_data,
+            input_data,
         );
 
-        let uv_texture = self.device.create_texture_with_data(
-            &self.queue,
-            &wgpu::TextureDescriptor {
-                label: Some("UV Plane Texture"),
-                size: wgpu::Extent3d {
-                    width: width / 2,
-                    height: height / 2,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rg8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::MipMajor,
-            input.uv_data,
-        );
-
-        // Create output texture
+        // Create output texture (RGBA format)
         let output_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("Output Texture"),
+            label: Some("RGBA Output Texture"),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -149,23 +122,17 @@ impl NV12ToRGBA {
 
         // Create bind group
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("NV12 Converter Bind Group"),
+            label: Some("BGRA Converter Bind Group"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(
-                        &y_texture.create_view(&Default::default()),
+                        &input_texture.create_view(&Default::default()),
                     ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &uv_texture.create_view(&Default::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
                     resource: wgpu::BindingResource::TextureView(
                         &output_texture.create_view(&Default::default()),
                     ),
@@ -177,12 +144,12 @@ impl NV12ToRGBA {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("NV12 Conversion Encoder"),
+                label: Some("BGRA Conversion Encoder"),
             });
 
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("NV12 Conversion Pass"),
+                label: Some("BGRA Conversion Pass"),
                 timestamp_writes: None,
             });
             compute_pass.set_pipeline(&self.pipeline);
@@ -197,14 +164,15 @@ impl NV12ToRGBA {
 
     pub fn convert(
         &self,
-        input: NV12Input,
+        input_data: &[u8],
         width: u32,
         height: u32,
-    ) -> Result<Vec<u8>, crate::ConversionError> {
-        let output_texture = self.convert_to_texture(input, width, height)?;
+    ) -> Result<Vec<u8>, ConversionError> {
+        let output_texture = self.convert_to_texture(input_data, width, height)?;
+
         // Create buffer for reading back the results
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Output Buffer"),
+            label: Some("BGRA Output Buffer"),
             size: (width * height * 4) as u64,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
@@ -213,7 +181,7 @@ impl NV12ToRGBA {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("NV12 Readback Encoder"),
+                label: Some("BGRA Readback Encoder"),
             });
 
         // Copy texture to buffer
@@ -248,17 +216,13 @@ impl NV12ToRGBA {
             tx.send(result).unwrap();
         });
 
-        self.device.poll(wgpu::PollType::Wait).map_err(|e| {
-            crate::ConversionError::GPUError(format!("Failed to poll device: {:?}", e))
-        })?;
+        self.device
+            .poll(wgpu::PollType::Wait)
+            .map_err(|e| ConversionError::GPUError(format!("Failed to poll device: {:?}", e)))?;
 
         rx.recv()
-            .map_err(|e| {
-                crate::ConversionError::GPUError(format!("Failed to receive result: {}", e))
-            })?
-            .map_err(|e| {
-                crate::ConversionError::GPUError(format!("Failed to map buffer: {:?}", e))
-            })?;
+            .map_err(|e| ConversionError::GPUError(format!("Failed to receive result: {}", e)))?
+            .map_err(|e| ConversionError::GPUError(format!("Failed to map buffer: {:?}", e)))?;
 
         let data = buffer_slice.get_mapped_range();
         Ok(data.to_vec())

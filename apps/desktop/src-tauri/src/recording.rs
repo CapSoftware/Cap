@@ -5,6 +5,7 @@ use crate::{
     RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
+    camera::CameraPreview,
     create_screenshot,
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
@@ -526,13 +527,24 @@ pub async fn resume_recording(state: MutableState<'_, App>) -> Result<(), String
 #[specta::specta]
 pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Result<(), String> {
     let mut state = state.write().await;
+    println!("STOP RECORDING COMMAND FIRE");
+
+    // TODO: This should be derived.
+    app.state::<CameraPreview>().shutdown();
+
     let Some(current_recording) = state.clear_current_recording() else {
         return Err("Recording not in progress".to_string())?;
     };
 
+    println!("AA");
+
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
 
+    println!("BB");
+
     handle_recording_end(app, Some(completed_recording), &mut state).await?;
+
+    println!("STOP RECORDING COMMAND DONE");
 
     Ok(())
 }
@@ -639,11 +651,15 @@ async fn handle_recording_end(
     if let Some(window) = CapWindowId::Main.get(&handle) {
         window.unminimize().ok();
     } else {
-        if let Some(v) = CapWindowId::Camera.get(&handle) {
-            let _ = v.close();
-        }
+        // if let Some(v) = CapWindowId::Camera.get(&handle) {
+        //     let _ = v.close();
+        // }
+        println!("I WANT YOU TO SHUTDOWN PLZ");
         app.camera_feed.take();
         app.mic_feed.take();
+
+        // TODO: This shouldn't be required
+        handle.state::<crate::camera::CameraPreview>().shutdown();
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
