@@ -18,7 +18,10 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 					Effect.fn(function* (user) {
 						const res = yield* repo.getById(videoId);
 
-						if (Option.isNone(res)) return true;
+						if (Option.isNone(res)) {
+							yield* Effect.log("Video not found. Access granted.")
+							return true;
+						}
 
 						const [video, password] = res.value;
 
@@ -40,11 +43,16 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 								if (
 									Option.isNone(videoSpaceShareMembership) &&
 									Option.isNone(videoOrgShareMembership)
-								)
+								) {
+									yield* Effect.log("Neither org nor space sharing found. Access denied.")
 									return false;
+								}
 							}
 						} else {
-							if (!video.public) return false;
+							if (!video.public) {
+								yield* Effect.log("Video is private and user is not logged in. Access denied.")
+								return false;
+							}
 						}
 
 						yield* Video.verifyPassword(video, password);
@@ -73,4 +81,4 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 			SpacesRepo.Default,
 		],
 	},
-) {}
+) { }
