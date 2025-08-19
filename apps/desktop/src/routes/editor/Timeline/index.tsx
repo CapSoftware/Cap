@@ -100,11 +100,7 @@ export function Timeline() {
 			if (!selection) return;
 
 			if (selection.type === "zoom") {
-				// Handle multiple zoom segment deletion
-				if ("indices" in selection && Array.isArray(selection.indices)) {
-					// Use bulk deletion for better performance
-					projectActions.deleteZoomSegments(selection.indices);
-				}
+				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
 			} else if (selection.type === "layout") {

@@ -254,7 +254,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				interactMode: "seek" as "seek" | "split",
 				selection: null as
 					| null
-					| { type: "zoom"; index: number }
 					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; index: number }
 					| { type: "layout"; index: number },
