@@ -4,6 +4,7 @@ mod auth;
 mod camera;
 mod camera_legacy;
 mod captions;
+mod commands;
 mod deeplink_actions;
 mod editor_window;
 mod export;
