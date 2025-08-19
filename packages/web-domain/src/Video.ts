@@ -41,7 +41,7 @@ export class Video extends Schema.Class<Video>("Video")({
  */
 export class VideoPasswordAttachment extends Context.Tag(
 	"VideoPasswordAttachment",
-)<VideoPasswordAttachment, { password: string }>() {}
+)<VideoPasswordAttachment, { password: Option.Option<string> }>() { }
 
 export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPasswordError>()(
 	"VerifyVideoPasswordError",
@@ -49,7 +49,7 @@ export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPass
 		id: VideoId,
 		cause: Schema.Literal("not-provided", "wrong-password"),
 	},
-) {}
+) { }
 
 export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 	Effect.gen(function* () {
@@ -75,7 +75,7 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"VideoNotFoundError",
 	{},
-) {}
+) { }
 
 export class VideoRpcs extends RpcGroup.make(
 	Rpc.make("VideoDelete", {
@@ -86,4 +86,4 @@ export class VideoRpcs extends RpcGroup.make(
 		payload: VideoId,
 		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
-) {}
+) { }

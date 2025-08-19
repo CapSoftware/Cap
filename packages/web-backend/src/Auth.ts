@@ -3,9 +3,9 @@ import * as Db from "@cap/database/schema";
 import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
 import { HttpApiError, type HttpApp } from "@effect/platform";
 import * as Dz from "drizzle-orm";
-import { Effect, Layer, Option } from "effect";
+import { Cause, Effect, Layer, Option } from "effect";
 
-import { Database } from "./Database";
+import { Database, DatabaseError } from "./Database";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -57,10 +57,11 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 	}),
 );
 
-export const provideOptionalAuth = <E, R>(
-	app: HttpApp.Default<E, R>,
-): HttpApp.Default<
-	E | HttpApiError.Unauthorized | HttpApiError.InternalServerError,
+export const provideOptionalAuth = <A, E, R>(
+	app: Effect.Effect<A, E, R>,
+): Effect.Effect<
+	A,
+	E | DatabaseError | Cause.UnknownException,
 	R | Database
 > =>
 	Effect.gen(function* () {
@@ -77,13 +78,4 @@ export const provideOptionalAuth = <E, R>(
 				onSome: (ctx) => app.pipe(Effect.provide(ctx)),
 			}),
 		);
-	}).pipe(
-		Effect.catchTag(
-			"DatabaseError",
-			() => new HttpApiError.InternalServerError(),
-		),
-		Effect.catchTag(
-			"UnknownException",
-			() => new HttpApiError.InternalServerError(),
-		),
-	);
+	});

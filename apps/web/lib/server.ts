@@ -8,8 +8,9 @@ import {
 	HttpAuthMiddlewareLive,
 	S3Buckets,
 	Videos,
+	VideosPolicy,
 } from "@cap/web-backend";
-import type { HttpAuthMiddleware } from "@cap/web-domain";
+import { Video, type HttpAuthMiddleware } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	type HttpApi,
@@ -17,7 +18,8 @@ import {
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, ManagedRuntime, Option } from "effect";
+import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
 
@@ -31,12 +33,20 @@ const DatabaseLive = Layer.sync(Database, () => ({
 
 const TracingLayer = NodeSdk.layer(getTracingConfig);
 
+const CookiesPasswordLive = Layer.sync(Video.VideoPasswordAttachment, () =>
+	({ password: Option.fromNullable(cookies().get("x-cap-password")?.value) })
+)
+
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
 	Videos.Default,
+	VideosPolicy.Default,
 	Folders.Default,
 	TracingLayer,
+	CookiesPasswordLive
 ).pipe(Layer.provideMerge(DatabaseLive));
+
+export const EffectRuntime = ManagedRuntime.make(Dependencies);
 
 const cors = HttpApiBuilder.middlewareCors({
 	allowedOrigins,

@@ -5,7 +5,6 @@ import {
 	organizationMembers,
 	organizations,
 	sharedVideos,
-	spaceMembers,
 	spaces,
 	spaceVideos,
 	users,
@@ -14,7 +13,7 @@ import {
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { and, eq, type InferSelectModel, sql } from "drizzle-orm";
+import { eq, type InferSelectModel, sql } from "drizzle-orm";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
@@ -24,11 +23,15 @@ import { getVideoAnalytics } from "@/actions/videos/get-analytics";
 import { getDashboardData } from "@/app/(org)/dashboard/dashboard-data";
 import { createNotification } from "@/lib/Notification";
 import { transcribeVideo } from "@/lib/transcribe";
-import { userHasAccessToVideo } from "@/utils/auth";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { ShareHeader } from "./_components/ShareHeader";
 import { Share } from "./Share";
+import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
+import { Effect, Option } from "effect";
+import { Policy, Video } from "@cap/web-domain";
+import { EffectRuntime } from "@/lib/server";
+import { provideOptionalAuth, Videos } from "@cap/web-backend";
 
 export const dynamic = "auto";
 export const dynamicParams = true;
@@ -107,305 +110,250 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	hasPassword?: boolean;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-	const videoId = params.videoId as string;
+const ALLOWED_REFERRERS = [
+	"x.com",
+	"twitter.com",
+	"facebook.com",
+	"fb.com",
+	"slack.com",
+	"notion.so",
+	"linkedin.com",
+];
 
-	console.log(
-		"[generateMetadata] Fetching video metadata for videoId:",
-		videoId,
-	);
-	const query = await db()
-		.select({
-			id: videos.id,
-			public: videos.public,
-			name: videos.name,
-			password: videos.password,
-			ownerId: videos.ownerId,
-			sharedOrganization: {
-				organizationId: sharedVideos.organizationId,
-			},
-			spaceId: spaceVideos.spaceId,
-		})
-		.from(videos)
-		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
-		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.where(eq(videos.id, videoId))
-		.limit(1);
+export function generateMetadata({ params }: Props): Promise<Metadata> {
+	const videoId = params.videoId as Video.VideoId;
 
-	if (query.length === 0) {
-		console.log("[generateMetadata] No video found for videoId:", videoId);
-		return notFound();
-	}
-
-	const video = query[0];
-
-	if (!video) {
-		return notFound();
-	}
-
-	const user = await getCurrentUser();
-
-	const [membership] = await db()
-		.select({ userId: spaceMembers.userId })
-		.from(spaceMembers)
-		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
-		.where(
-			and(
-				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceVideos.videoId, video.id),
-			),
-		)
-		.limit(1);
-
-	const isMember = !!membership?.userId;
-	const userAccess = await userHasAccessToVideo(user, video, isMember);
-
-	const headersList = headers();
-	const referrer = headersList.get("x-referrer") || "";
-
-	const allowedReferrers = [
-		"x.com",
-		"twitter.com",
-		"facebook.com",
-		"fb.com",
-		"slack.com",
-		"notion.so",
-		"linkedin.com",
-	];
-
-	const isAllowedReferrer = allowedReferrers.some((domain) =>
+	const referrer = headers().get("x-referrer") || "";
+	const isAllowedReferrer = ALLOWED_REFERRERS.some((domain) =>
 		referrer.includes(domain),
 	);
 
-	const robotsDirective = isAllowedReferrer
-		? "index, follow"
-		: "noindex, nofollow";
-
-	if (video.public === false && userAccess !== "has-access") {
-		return {
-			title: "Cap: This video is private",
-			description: "This video is private and cannot be shared.",
-			openGraph: {
-				images: [
-					{
-						url: new URL(
-							`/api/video/og?videoId=${videoId}`,
-							buildEnv.NEXT_PUBLIC_WEB_URL,
-						).toString(),
-						width: 1200,
-						height: 630,
+	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+		Effect.map(
+			Option.match({
+				onNone: () => notFound(),
+				onSome: ([video]) => ({
+					title: video.name + " | Cap Recording",
+					description: "Watch this video on Cap",
+					openGraph: {
+						images: [
+							{
+								url: new URL(
+									`/api/video/og?videoId=${videoId}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								width: 1200,
+								height: 630,
+							},
+						],
+						videos: [
+							{
+								url: new URL(
+									`/api/playlist?videoId=${video.id}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								width: 1280,
+								height: 720,
+								type: "video/mp4",
+							},
+						],
 					},
-				],
-				videos: [
-					{
-						url: new URL(
-							`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-							buildEnv.NEXT_PUBLIC_WEB_URL,
-						).toString(),
-						width: 1280,
-						height: 720,
-						type: "video/mp4",
+					twitter: {
+						card: "player",
+						title: video.name + " | Cap Recording",
+						description: "Watch this video on Cap",
+						images: [
+							new URL(
+								`/api/video/og?videoId=${videoId}`,
+								buildEnv.NEXT_PUBLIC_WEB_URL,
+							).toString(),
+						],
+						players: {
+							playerUrl: new URL(
+								`/s/${videoId}`,
+								buildEnv.NEXT_PUBLIC_WEB_URL,
+							).toString(),
+							streamUrl: new URL(
+								`/api/playlist?videoId=${video.id}`,
+								buildEnv.NEXT_PUBLIC_WEB_URL,
+							).toString(),
+							width: 1280,
+							height: 720,
+						},
 					},
-				],
-			},
-			robots: "noindex, nofollow",
-		};
-	}
-
-	if (video.password !== null && userAccess !== "has-access") {
-		return {
-			title: "Cap: Password Protected Video",
-			description: "This video is password protected.",
-			openGraph: {
-				images: [
-					{
-						url: new URL(
-							`/api/video/og?videoId=${videoId}`,
-							buildEnv.NEXT_PUBLIC_WEB_URL,
-						).toString(),
-						width: 1200,
-						height: 630,
+					robots: isAllowedReferrer ? "index, follow" : "noindex, nofollow",
+				}),
+			}),
+		),
+		Effect.catchTags({
+			PolicyDenied: () =>
+				Effect.succeed({
+					title: "Cap: This video is private",
+					description: "This video is private and cannot be shared.",
+					openGraph: {
+						images: [
+							{
+								url: new URL(
+									`/api/video/og?videoId=${videoId}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								width: 1200,
+								height: 630,
+							},
+						],
+						videos: [
+							{
+								url: new URL(
+									`/api/playlist?videoId=${videoId}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								width: 1280,
+								height: 720,
+								type: "video/mp4",
+							},
+						],
 					},
-				],
-			},
-			twitter: {
-				card: "summary_large_image",
-				title: "Cap: Password Protected Video",
-				description: "This video is password protected.",
-				images: [
-					new URL(
-						`/api/video/og?videoId=${videoId}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString(),
-				],
-			},
-			robots: "noindex, nofollow",
-		};
-	}
-
-	return {
-		title: video.name + " | Cap Recording",
-		description: "Watch this video on Cap",
-		openGraph: {
-			images: [
-				{
-					url: new URL(
-						`/api/video/og?videoId=${videoId}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString(),
-					width: 1200,
-					height: 630,
-				},
-			],
-			videos: [
-				{
-					url: new URL(
-						`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-						buildEnv.NEXT_PUBLIC_WEB_URL,
-					).toString(),
-					width: 1280,
-					height: 720,
-					type: "video/mp4",
-				},
-			],
-		},
-		twitter: {
-			card: "player",
-			title: video.name + " | Cap Recording",
-			description: "Watch this video on Cap",
-			images: [
-				new URL(
-					`/api/video/og?videoId=${videoId}`,
-					buildEnv.NEXT_PUBLIC_WEB_URL,
-				).toString(),
-			],
-			players: {
-				playerUrl: new URL(
-					`/s/${videoId}`,
-					buildEnv.NEXT_PUBLIC_WEB_URL,
-				).toString(),
-				streamUrl: new URL(
-					`/api/playlist?userId=${video.ownerId}&videoId=${video.id}`,
-					buildEnv.NEXT_PUBLIC_WEB_URL,
-				).toString(),
-				width: 1280,
-				height: 720,
-			},
-		},
-		robots: robotsDirective,
-	};
+					robots: "noindex, nofollow",
+				}),
+			VerifyVideoPasswordError: () =>
+				Effect.succeed({
+					title: "Cap: Password Protected Video",
+					description: "This video is password protected.",
+					openGraph: {
+						images: [
+							{
+								url: new URL(
+									`/api/video/og?videoId=${videoId}`,
+									buildEnv.NEXT_PUBLIC_WEB_URL,
+								).toString(),
+								width: 1200,
+								height: 630,
+							},
+						],
+					},
+					twitter: {
+						card: "summary_large_image",
+						title: "Cap: Password Protected Video",
+						description: "This video is password protected.",
+						images: [
+							new URL(
+								`/api/video/og?videoId=${videoId}`,
+								buildEnv.NEXT_PUBLIC_WEB_URL,
+							).toString(),
+						],
+					},
+					robots: "noindex, nofollow",
+				}),
+		}),
+		provideOptionalAuth,
+		EffectRuntime.runPromise,
+	);
 }
 
 export default async function ShareVideoPage(props: Props) {
 	const params = props.params;
 	const searchParams = props.searchParams;
-	const videoId = params.videoId as string;
+	const videoId = params.videoId as Video.VideoId;
 
-	const user = await getCurrentUser();
+	return Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
 
-	const [video] = await db()
-		.select({
-			id: videos.id,
-			name: videos.name,
-			ownerId: videos.ownerId,
-			createdAt: videos.createdAt,
-			updatedAt: videos.updatedAt,
-			awsRegion: videos.awsRegion,
-			awsBucket: videos.awsBucket,
-			bucket: videos.bucket,
-			metadata: videos.metadata,
-			public: videos.public,
-			videoStartTime: videos.videoStartTime,
-			audioStartTime: videos.audioStartTime,
-			xStreamInfo: videos.xStreamInfo,
-			jobId: videos.jobId,
-			jobStatus: videos.jobStatus,
-			isScreenshot: videos.isScreenshot,
-			skipProcessing: videos.skipProcessing,
-			transcriptionStatus: videos.transcriptionStatus,
-			password: videos.password,
-			source: videos.source,
-			sharedOrganization: {
-				organizationId: sharedVideos.organizationId,
-			},
-			spaceId: spaceVideos.spaceId,
-		})
-		.from(videos)
-		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.leftJoin(spaceVideos, eq(videos.id, spaceVideos.videoId))
-		.where(eq(videos.id, videoId));
+		const [video] = yield* Effect.promise(() =>
+			db()
+				.select({
+					id: videos.id,
+					name: videos.name,
+					ownerId: videos.ownerId,
+					createdAt: videos.createdAt,
+					updatedAt: videos.updatedAt,
+					awsRegion: videos.awsRegion,
+					awsBucket: videos.awsBucket,
+					bucket: videos.bucket,
+					metadata: videos.metadata,
+					public: videos.public,
+					videoStartTime: videos.videoStartTime,
+					audioStartTime: videos.audioStartTime,
+					xStreamInfo: videos.xStreamInfo,
+					jobId: videos.jobId,
+					jobStatus: videos.jobStatus,
+					isScreenshot: videos.isScreenshot,
+					skipProcessing: videos.skipProcessing,
+					transcriptionStatus: videos.transcriptionStatus,
+					password: videos.password,
+					source: videos.source,
+					sharedOrganization: {
+						organizationId: sharedVideos.organizationId,
+					},
+				})
+				.from(videos)
+				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+				.where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
-	if (user && video && user.id !== video.ownerId) {
-		try {
-			await createNotification({ type: "view", videoId, authorId: user.id });
-		} catch (error) {
-			console.error("Failed to create view notification:", error);
-		}
-	}
-
-	if (!video) {
-		console.log("[ShareVideoPage] No video found for videoId:", videoId);
-		return <p>No video found</p>;
-	}
-
-	const [membership] = await db()
-		.select({ userId: spaceMembers.userId })
-		.from(spaceMembers)
-		.innerJoin(spaceVideos, eq(spaceMembers.spaceId, spaceVideos.spaceId))
-		.where(
-			and(
-				eq(spaceMembers.userId, user?.id ?? ""),
-				eq(spaceVideos.videoId, video.id),
-			),
-		)
-		.limit(1);
-
-	const isMember = !!membership?.userId;
-	const userAccess = await userHasAccessToVideo(user, video, isMember);
-
-	if (userAccess === "private") {
-		return (
-			<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
-				<Logo className="size-32" />
-				<h1 className="mb-2 text-2xl font-semibold">This video is private</h1>
-				<p className="text-gray-400">
-					If you own this video, please <Link href="/login">sign in</Link> to
-					manage sharing.
-				</p>
+		return Option.fromNullable(video);
+	}).pipe(
+		Effect.flatten,
+		Effect.map((video) => ({ needsPassword: false, video }) as const),
+		Effect.catchTag("VerifyVideoPasswordError", () =>
+			Effect.succeed({ needsPassword: true } as const),
+		),
+		Effect.map((data) => (
+			<div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
+				{!data.needsPassword && (
+					<AuthorizedContent video={data.video} searchParams={searchParams} />
+				)}
 			</div>
-		);
-	}
-
-	return (
-		<div className="min-h-screen flex flex-col bg-[#F7F8FA]">
-			<PasswordOverlay
-				isOpen={userAccess === "needs-password"}
-				videoId={video.id}
-			/>
-			{userAccess === "has-access" && (
-				<AuthorizedContent
-					video={video}
-					user={user}
-					searchParams={searchParams}
-				/>
-			)}
-		</div>
+		)),
+		Effect.catchTags({
+			PolicyDenied: () =>
+				Effect.succeed(
+					<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+						<Logo className="size-32" />
+						<h1 className="mb-2 text-2xl font-semibold">
+							This video is private
+						</h1>
+						<p className="text-gray-400">
+							If you own this video, please <Link href="/login">sign in</Link>{" "}
+							to manage sharing.
+						</p>
+					</div>,
+				),
+			NoSuchElementException: () => {
+				console.log("[ShareVideoPage] No video found for videoId:", videoId);
+				return Effect.succeed(<p>No video found</p>);
+			},
+		}),
+		provideOptionalAuth,
+		EffectRuntime.runPromise,
 	);
 }
 
 async function AuthorizedContent({
 	video,
-	user: _user,
 	searchParams,
 }: {
 	video: Omit<InferSelectModel<typeof videos>, "folderId"> & {
 		sharedOrganization: { organizationId: string } | null;
 	};
-	user: MaybePromise<InferSelectModel<typeof users> | null>;
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
-	const user = await _user;
+	// will have already been fetched if auth is required
+	const user = await getCurrentUser();
 	const videoId = video.id;
+
+	if (user && video && user.id !== video.ownerId) {
+		try {
+			await createNotification({
+				type: "view",
+				videoId: video.id,
+				authorId: user.id,
+			});
+		} catch (error) {
+			console.error("Failed to create view notification:", error);
+		}
+	}
+
 	const userId = user?.id;
 	const commentId = searchParams.comment as string | undefined;
 	const replyId = searchParams.reply as string | undefined;
