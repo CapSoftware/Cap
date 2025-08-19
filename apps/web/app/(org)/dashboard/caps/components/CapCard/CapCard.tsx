@@ -19,7 +19,6 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
-import moment from "moment";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useState } from "react";
@@ -104,23 +103,6 @@ export const CapCard = ({
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
 	const router = useRouter();
-
-	const formatDuration = (duration: string) => {
-		if (!duration) return "0 secs";
-
-		const momentDuration = moment.duration(duration, "milliseconds");
-		const totalMinutes = Math.floor(momentDuration.asMinutes());
-		const totalHours = Math.floor(momentDuration.asHours());
-		const seconds = momentDuration.seconds();
-
-		if (totalHours > 0) {
-			return "1 hr";
-		} else if (totalMinutes > 0) {
-			return `${totalMinutes} mins`;
-		} else {
-			return `${seconds} secs`;
-		}
-	};
 
 	const downloadMutation = useMutation({
 		mutationFn: async () => {
@@ -399,18 +381,13 @@ export const CapCard = ({
 							icon={<FontAwesomeIcon icon={faVideo} />}
 							title="Delete Cap"
 							description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
-							confirmLabel="Delete"
+							confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
 							cancelLabel="Cancel"
 							loading={deleteMutation.isPending}
 							onConfirm={() => deleteMutation.mutate()}
 							onCancel={() => setConfirmOpen(false)}
 						/>
 					</div>
-				)}
-				{cap.metadata?.duration && (
-					<p className="text-white leading-0 px-2 py-px rounded-full backdrop-blur-sm absolute z-10 left-3 top-[112px] bg-black/50 text-[10px]">
-						{formatDuration(cap.metadata.duration as string)}
-					</p>
 				)}
 				{!sharedCapCard && onSelectToggle && (
 					<div
@@ -452,6 +429,7 @@ export const CapCard = ({
 					href={`/s/${cap.id}`}
 				>
 					<VideoThumbnail
+						videoDuration={cap.metadata?.duration}
 						imageClass={clsx(
 							anyCapSelected
 								? "opacity-50"
