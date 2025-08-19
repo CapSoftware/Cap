@@ -1,5 +1,5 @@
 import { Policy, Video } from "@cap/web-domain";
-import { Effect, Option } from "effect";
+import { Array, Effect, Option } from "effect";
 
 import { OrganisationsRepo } from "../Organisations/OrganisationsRepo";
 import { SpacesRepo } from "../Spaces/SpacesRepo";
@@ -29,11 +29,18 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 							if (!video.public) {
 								const [videoOrgShareMembership, videoSpaceShareMembership] =
 									yield* Effect.all([
-										orgsRepo.membershipForVideo(userId, video.id),
-										spacesRepo.membershipForVideo(userId, video.id),
+										orgsRepo
+											.membershipForVideo(userId, video.id)
+											.pipe(Effect.map(Array.get(0))),
+										spacesRepo
+											.membershipForVideo(userId, video.id)
+											.pipe(Effect.map(Array.get(0))),
 									]);
 
-								if (!videoSpaceShareMembership || !videoOrgShareMembership)
+								if (
+									Option.isNone(videoSpaceShareMembership) &&
+									Option.isNone(videoOrgShareMembership)
+								)
 									return false;
 							}
 						} else {
@@ -60,6 +67,10 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 
 			return { canView, isOwner };
 		}),
-		dependencies: [VideosRepo.Default, OrganisationsRepo.Default, SpacesRepo.Default],
+		dependencies: [
+			VideosRepo.Default,
+			OrganisationsRepo.Default,
+			SpacesRepo.Default,
+		],
 	},
-) { }
+) {}
