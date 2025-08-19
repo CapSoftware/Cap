@@ -135,11 +135,12 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						"zoomSegments",
 						produce((s) => {
 							if (!s) return;
-							// Sort indices in descending order to avoid index shifting issues
-							const sortedIndices = [...segmentIndices].sort((a, b) => b - a);
-							sortedIndices.forEach((index) => {
-								s.splice(index, 1);
-							});
+							// Normalize: numbers only, in-bounds, deduped, then descending
+							const sorted = [...new Set(segmentIndices)]
+								.filter((i) => Number.isInteger(i) && i >= 0 && i < s.length)
+								.sort((a, b) => b - a);
+							if (sorted.length === 0) return;
+							for (const i of sorted) s.splice(i, 1);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
