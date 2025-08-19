@@ -27,11 +27,11 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 							.where(
 								Dz.and(
 									Dz.eq(Db.organizationMembers.userId, userId),
-									Dz.eq(Db.sharedVideos.id, videoId),
+									Dz.eq(Db.sharedVideos.videoId, videoId),
 								),
 							),
 					),
 			};
 		}),
 	},
-) {}
+) { }
