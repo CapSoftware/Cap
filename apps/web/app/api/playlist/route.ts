@@ -41,7 +41,7 @@ class Api extends HttpApi.make("CapWebApi").add(
 			.addError(HttpApiError.InternalServerError)
 			.addError(HttpApiError.NotFound),
 	),
-) { }
+) {}
 
 const ApiLive = HttpApiBuilder.api(Api).pipe(
 	Layer.provide(

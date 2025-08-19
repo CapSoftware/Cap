@@ -3,14 +3,14 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Exit } from "effect";
+import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
-import { Effect, Exit } from "effect";
-import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, Video } from "@cap/web-domain";
-import * as EffectRuntime from "@/lib/server";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
@@ -33,14 +33,11 @@ export async function getVideoStatus(
 		const videosPolicy = yield* VideosPolicy;
 
 		return yield* Effect.promise(() =>
-			db().select().from(videos).where(eq(videos.id, videoId))
+			db().select().from(videos).where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
-	}).pipe(
-		provideOptionalAuth,
-		EffectRuntime.runPromiseExit,
-	);
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	if (Exit.isFailure(exit)) return { success: false }
+	if (Exit.isFailure(exit)) return { success: false };
 
 	const video = exit.value[0];
 	if (!video) throw new Error("Video not found");

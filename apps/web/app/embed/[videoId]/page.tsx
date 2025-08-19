@@ -9,18 +9,18 @@ import {
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
+import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import * as EffectRuntime from "@/lib/server";
 import { transcribeVideo } from "@/lib/transcribe";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { EmbedVideo } from "./_components/EmbedVideo";
 import { PasswordOverlay } from "./_components/PasswordOverlay";
-import { Effect, Option } from "effect";
-import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
-import { Policy, Video } from "@cap/web-domain";
-import * as EffectRuntime from "@/lib/server";
 
 export const dynamic = "auto";
 export const dynamicParams = true;

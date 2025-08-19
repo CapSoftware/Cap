@@ -19,7 +19,10 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 							.from(Db.organizationMembers)
 							.leftJoin(
 								Db.sharedVideos,
-								Dz.eq(Db.organizationMembers.organizationId, Db.sharedVideos.organizationId),
+								Dz.eq(
+									Db.organizationMembers.organizationId,
+									Db.sharedVideos.organizationId,
+								),
 							)
 							.where(
 								Dz.and(
@@ -31,4 +34,4 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 			};
 		}),
 	},
-) { }
+) {}

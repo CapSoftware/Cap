@@ -3,9 +3,9 @@ import * as Db from "@cap/database/schema";
 import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
 import { HttpApiError, type HttpApp } from "@effect/platform";
 import * as Dz from "drizzle-orm";
-import { Cause, Effect, Layer, Option } from "effect";
+import { type Cause, Effect, Layer, Option } from "effect";
 
-import { Database, DatabaseError } from "./Database";
+import { Database, type DatabaseError } from "./Database";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -59,11 +59,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 export const provideOptionalAuth = <A, E, R>(
 	app: Effect.Effect<A, E, R>,
-): Effect.Effect<
-	A,
-	E | DatabaseError | Cause.UnknownException,
-	R | Database
-> =>
+): Effect.Effect<A, E | DatabaseError | Cause.UnknownException, R | Database> =>
 	Effect.gen(function* () {
 		const user = yield* getCurrentUser;
 		return yield* user.pipe(

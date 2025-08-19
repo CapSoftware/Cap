@@ -1,6 +1,7 @@
 import "server-only";
 
 import { db } from "@cap/database";
+import { decrypt } from "@cap/database/crypto";
 import {
 	Database,
 	DatabaseError,
@@ -10,7 +11,7 @@ import {
 	Videos,
 	VideosPolicy,
 } from "@cap/web-backend";
-import { Video, type HttpAuthMiddleware } from "@cap/web-domain";
+import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	type HttpApi,
@@ -19,11 +20,10 @@ import {
 	HttpServer,
 } from "@effect/platform";
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
-import { cookies } from "next/headers";
 import { isNotFoundError } from "next/dist/client/components/not-found";
+import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
-import { decrypt } from "@cap/database/crypto";
 
 const DatabaseLive = Layer.sync(Database, () => ({
 	execute: (cb) =>
@@ -46,8 +46,7 @@ const CookiePasswordAttachmentLive = Layer.effect(
 		);
 		return { password };
 	}),
-)
-
+);
 
 export const Dependencies = Layer.mergeAll(
 	S3Buckets.Default,
@@ -60,8 +59,12 @@ export const Dependencies = Layer.mergeAll(
 // purposefully not exposed
 const EffectRuntime = ManagedRuntime.make(Dependencies);
 
-export const runPromise = <A, E>(effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>) =>
-	EffectRuntime.runPromiseExit(effect.pipe(Effect.provide(CookiePasswordAttachmentLive))).then(res => {
+export const runPromise = <A, E>(
+	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>,
+) =>
+	EffectRuntime.runPromiseExit(
+		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
+	).then((res) => {
 		if (Exit.isFailure(res)) {
 			if (Cause.isDieType(res.cause) && isNotFoundError(res.cause.defect)) {
 				throw res.cause.defect;
@@ -70,17 +73,25 @@ export const runPromise = <A, E>(effect: Effect.Effect<A, E, Layer.Layer.Success
 			throw res;
 		}
 
-		return res.value
-	})
+		return res.value;
+	});
 
-export const runPromiseExit = <A, E>(effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>) =>
-	EffectRuntime.runPromiseExit(effect.pipe(Effect.provide(CookiePasswordAttachmentLive))).then(res => {
-		if (Exit.isFailure(res) && Cause.isDieType(res.cause) && isNotFoundError(res.cause.defect)) {
+export const runPromiseExit = <A, E>(
+	effect: Effect.Effect<A, E, Layer.Layer.Success<typeof Dependencies>>,
+) =>
+	EffectRuntime.runPromiseExit(
+		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
+	).then((res) => {
+		if (
+			Exit.isFailure(res) &&
+			Cause.isDieType(res.cause) &&
+			isNotFoundError(res.cause.defect)
+		) {
 			throw res.cause.defect;
 		}
 
-		return res
-	})
+		return res;
+	});
 
 const cors = HttpApiBuilder.middlewareCors({
 	allowedOrigins,
@@ -102,6 +113,8 @@ export const apiToHandler = (
 		Layer.provideMerge(Dependencies),
 		Layer.merge(HttpServer.layerContext),
 		Layer.provide(cors),
-		Layer.provide(HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive))),
+		Layer.provide(
+			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
+		),
 		HttpApiBuilder.toWebHandler,
 	);
