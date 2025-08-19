@@ -43,10 +43,10 @@ import {
 	type BackgroundSource,
 	type CameraShape,
 	commands,
+	type LayoutSegment,
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
-	type LayoutSegment,
 } from "~/utils/tauri";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
