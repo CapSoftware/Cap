@@ -56,6 +56,7 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -77,6 +78,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::timeout;
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
@@ -286,10 +288,25 @@ async fn set_camera_input(
                 .unwrap_or_default()
             {
                 let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
-                camera_preview
-                    .init_preview_window(window, camera_rx)
-                    .await
-                    .unwrap();
+
+                let prev_err = &mut None;
+                if timeout(Duration::from_secs(3), async {
+                    while let Err(err) = camera_preview
+                        .init_preview_window(window.clone(), camera_rx.clone())
+                        .await
+                    {
+                        error!("Error initializing camera feed: {err}");
+                        *prev_err = Some(err);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                })
+                .await
+                .is_err()
+                {
+                    let _ = window.close();
+                    return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
+                };
+
                 Some(camera_tx)
             } else {
                 None

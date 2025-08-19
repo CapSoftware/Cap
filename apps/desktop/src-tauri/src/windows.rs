@@ -224,7 +224,7 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    let new_recording_flow = GeneralSettingsStore::get(&app)
+                    let new_recording_flow = GeneralSettingsStore::get(app)
                         .ok()
                         .flatten()
                         .map(|s| s.enable_new_recording_flow)

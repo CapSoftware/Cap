@@ -26,7 +26,7 @@
 		"clean": "find . -name node_modules -o -name .next -o -name .output -o -name .turbo -o -name dist -type d -prune | xargs rm -rf"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.1.4",
+		"@biomejs/biome": "2.2.0",
 		"@clack/prompts": "^0.10.0",
 		"@effect/language-service": "^0.34.0",
 		"dotenv-cli": "latest",

@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cap_media_encoders::GifEncoderWrapper;
+use cap_media_encoders::{GifEncoderWrapper, GifQuality as EncoderGifQuality};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
@@ -11,9 +11,28 @@ use tracing::trace;
 use crate::{ExportError, ExporterBase};
 
 #[derive(Deserialize, Clone, Copy, Debug, Type)]
+pub struct GifQuality {
+    /// Encoding quality from 1-100 (default: 90)
+    pub quality: Option<u8>,
+    /// Whether to prioritize speed over quality (default: false)
+    pub fast: Option<bool>,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, Type)]
 pub struct GifExportSettings {
     pub fps: u32,
     pub resolution_base: XY<u32>,
+    pub quality: Option<GifQuality>,
+}
+
+impl Default for GifExportSettings {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            resolution_base: XY { x: 1920, y: 1080 },
+            quality: None,
+        }
+    }
 }
 
 impl GifExportSettings {
@@ -46,9 +65,24 @@ impl GifExportSettings {
             "Creating GIF encoder at path '{}'",
             gif_output_path.display()
         );
-        let mut gif_encoder =
-            GifEncoderWrapper::new(&gif_output_path, output_size.0, output_size.1, fps)
-                .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
+
+        // Create GIF encoder with quality settings
+        let quality = self
+            .quality
+            .map(|q| EncoderGifQuality {
+                quality: q.quality.unwrap_or(90),
+                fast: q.fast.unwrap_or(false),
+            })
+            .unwrap_or_default();
+
+        let mut gif_encoder = GifEncoderWrapper::new_with_quality(
+            &gif_output_path,
+            output_size.0,
+            output_size.1,
+            fps,
+            quality,
+        )
+        .map_err(|e| format!("Failed to create GIF encoder: {e}"))?;
 
         let encoder_thread = tokio::task::spawn_blocking(move || {
             let mut frame_count = 0;
