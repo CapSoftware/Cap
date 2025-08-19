@@ -57,10 +57,10 @@ export default async function DashboardLayout({
 		activeOrganization = organizationSelect[0];
 	}
 
-	const isSubscribed =
-		(user.stripeSubscriptionId &&
-			user.stripeSubscriptionStatus !== "cancelled") ||
-		!!user.thirdPartyStripeSubscriptionId;
+	const isSubscribed = true;
+	// (user.stripeSubscriptionId &&
+	// 	user.stripeSubscriptionStatus !== "cancelled") ||
+	// !!user.thirdPartyStripeSubscriptionId;
 
 	const theme = cookies().get("theme")?.value ?? "light";
 	const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";

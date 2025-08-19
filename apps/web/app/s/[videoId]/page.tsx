@@ -30,7 +30,7 @@ import { Share } from "./Share";
 import { VideosPolicy } from "@cap/web-backend/src/Videos/VideosPolicy";
 import { Effect, Option } from "effect";
 import { Policy, Video } from "@cap/web-domain";
-import { EffectRuntime } from "@/lib/server";
+import * as EffectRuntime from "@/lib/server";
 import { provideOptionalAuth, Videos } from "@cap/web-backend";
 
 export const dynamic = "auto";

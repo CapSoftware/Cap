@@ -36,6 +36,8 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 								if (!videoSpaceShareMembership || !videoOrgShareMembership)
 									return false;
 							}
+						} else {
+							if (!video.public) return false;
 						}
 
 						yield* Video.verifyPassword(video, password);

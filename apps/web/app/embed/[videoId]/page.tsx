@@ -20,7 +20,7 @@ import { PasswordOverlay } from "./_components/PasswordOverlay";
 import { Effect, Option } from "effect";
 import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
 import { Policy, Video } from "@cap/web-domain";
-import { EffectRuntime } from "@/lib/server";
+import * as EffectRuntime from "@/lib/server";
 
 export const dynamic = "auto";
 export const dynamicParams = true;

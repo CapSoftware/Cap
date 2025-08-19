@@ -1,17 +1,16 @@
 "use server";
 
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { eq } from "drizzle-orm";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
-import { Cause, Effect, Exit, Option } from "effect";
+import { Effect, Exit } from "effect";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, Video } from "@cap/web-domain";
-import { EffectRuntime } from "@/lib/server";
+import * as EffectRuntime from "@/lib/server";
 
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 

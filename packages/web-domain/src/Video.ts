@@ -59,13 +59,13 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 
 		if (Option.isNone(password)) return;
 
-		if (Option.isNone(passwordAttachment))
+		if (Option.isNone(passwordAttachment) || Option.isNone(passwordAttachment.value.password))
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "not-provided",
 			});
 
-		if (passwordAttachment.value.password !== password.value)
+		if (passwordAttachment.value.password.value !== password.value)
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "wrong-password",
