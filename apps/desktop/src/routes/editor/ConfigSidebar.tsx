@@ -1590,7 +1590,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 										<RadioGroup.ItemInput class="peer" />
 										<RadioGroup.ItemControl
 											class={cx(
-												"cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 outline-blue-9 transition-colors duration-100",
+												"cursor-pointer size-6 shrink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 transition-colors duration-100",
 												item.x === "left"
 													? "left-2"
 													: item.x === "right"
