@@ -101,6 +101,9 @@ function Page() {
 	createUpdateCheck();
 
 	onMount(async () => {
+		// We don't want the target select overlay on launch
+		setOptions({ targetMode: null });
+
 		// Enforce window size with multiple safeguards
 		const currentWindow = getCurrentWindow();
 
