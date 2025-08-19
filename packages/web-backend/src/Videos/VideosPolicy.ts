@@ -41,11 +41,19 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 									]);
 
 								if (
-									Option.isNone(videoSpaceShareMembership) &&
-									Option.isNone(videoOrgShareMembership)
+									Option.isNone(videoOrgShareMembership) &&
+									Option.isNone(videoSpaceShareMembership)
 								) {
 									yield* Effect.log("Neither org nor space sharing found. Access denied.")
 									return false;
+								}
+
+								if (Option.isSome(videoOrgShareMembership)) {
+									yield* Effect.log("Org sharing found.")
+								}
+
+								if (Option.isSome(videoSpaceShareMembership)) {
+									yield* Effect.log("Space sharing found.")
 								}
 							}
 						} else {
