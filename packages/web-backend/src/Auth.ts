@@ -64,8 +64,7 @@ export const provideOptionalAuth = <A, E, R>(
 		const user = yield* getCurrentUser;
 
 		if (Option.isSome(user))
-			yield* Effect.log(`Providing auth for user ${user.value.id}`)
-
+			yield* Effect.log(`Providing auth for user ${user.value.id}`);
 
 		return yield* user.pipe(
 			Option.map((user) =>

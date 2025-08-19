@@ -34,4 +34,4 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 			};
 		}),
 	},
-) { }
+) {}

@@ -19,7 +19,7 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 						const res = yield* repo.getById(videoId);
 
 						if (Option.isNone(res)) {
-							yield* Effect.log("Video not found. Access granted.")
+							yield* Effect.log("Video not found. Access granted.");
 							return true;
 						}
 
@@ -44,21 +44,25 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 									Option.isNone(videoOrgShareMembership) &&
 									Option.isNone(videoSpaceShareMembership)
 								) {
-									yield* Effect.log("Neither org nor space sharing found. Access denied.")
+									yield* Effect.log(
+										"Neither org nor space sharing found. Access denied.",
+									);
 									return false;
 								}
 
 								if (Option.isSome(videoOrgShareMembership)) {
-									yield* Effect.log("Org sharing found.")
+									yield* Effect.log("Org sharing found.");
 								}
 
 								if (Option.isSome(videoSpaceShareMembership)) {
-									yield* Effect.log("Space sharing found.")
+									yield* Effect.log("Space sharing found.");
 								}
 							}
 						} else {
 							if (!video.public) {
-								yield* Effect.log("Video is private and user is not logged in. Access denied.")
+								yield* Effect.log(
+									"Video is private and user is not logged in. Access denied.",
+								);
 								return false;
 							}
 						}
@@ -89,4 +93,4 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 			SpacesRepo.Default,
 		],
 	},
-) { }
+) {}
