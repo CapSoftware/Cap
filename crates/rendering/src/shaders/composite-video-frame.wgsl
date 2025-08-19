@@ -148,7 +148,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
 
     let final_color = accum / weight_sum;
-    let blurred = vec4(final_color.rgb, base_color.a * uniforms.opacity);
+    let blurred = vec4(final_color.rgb, base_color.a);
     return mix(shadow_color, blurred, blurred.a);
 }
 

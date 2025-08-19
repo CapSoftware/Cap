@@ -78,7 +78,10 @@ export function Timeline() {
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
-		if (zoomSegmentDragState.type !== "moving") {
+		if (
+			zoomSegmentDragState.type !== "moving" &&
+			layoutSegmentDragState.type !== "moving"
+		) {
 			setEditorState(
 				"playbackTime",
 				Math.min(

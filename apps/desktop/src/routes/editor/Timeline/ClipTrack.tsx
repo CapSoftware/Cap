@@ -58,7 +58,10 @@ function WaveformCanvas(props: {
 
     ctx.moveTo(0, h);
 
-    const norm = (w: number) => 1.0 - Math.max(w + gain, -60) / -60;
+    const norm = (w: number) => {
+      const ww = Number.isFinite(w) ? w : -60;
+      return 1.0 - Math.max(ww + gain, -60) / -60;
+    };
 
     for (
       let segmentTime = props.segment.start;
@@ -68,13 +71,17 @@ function WaveformCanvas(props: {
       const index = Math.floor(segmentTime * 10);
       const xTime = index / 10;
 
-      const amplitude = norm(waveform[index]) * maxAmplitude;
+      const currentDb =
+        typeof waveform[index] === "number" ? waveform[index] : -60;
+      const amplitude = norm(currentDb) * maxAmplitude;
 
       const x = (xTime - props.segment.start) / secsPerPixel();
       const y = h - amplitude;
 
       const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
-      const prevAmplitude = norm(waveform[index - 1]) * maxAmplitude;
+      const prevDb =
+        typeof waveform[index - 1] === "number" ? waveform[index - 1] : -60;
+      const prevAmplitude = norm(prevDb) * maxAmplitude;
       const prevY = h - prevAmplitude;
 
       const cpX1 = prevX + step / 2;

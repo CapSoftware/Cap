@@ -229,6 +229,11 @@ export function LayoutTrack(props: {
 										index: i(),
 									});
 									props.handleUpdatePlayhead(e);
+								} else {
+									setEditorState("timeline", "selection", {
+										type: "layout",
+										index: i(),
+									});
 								}
 								props.onDragStateChanged({ type: "idle" });
 								setTrackState("draggingSegment", false);

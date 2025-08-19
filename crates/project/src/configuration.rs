@@ -456,9 +456,10 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
-#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug)]
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum LayoutMode {
+    #[default]
     Default,
     CameraOnly,
     HideCamera,
@@ -469,6 +470,7 @@ pub enum LayoutMode {
 pub struct LayoutSegment {
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
     pub mode: LayoutMode,
 }
 
