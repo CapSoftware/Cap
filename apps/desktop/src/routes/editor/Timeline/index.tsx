@@ -12,6 +12,7 @@ import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
+import { BlurTrack,type BlurSegmentDragState } from "./BlurTrack";
 
 const TIMELINE_PADDING = 16;
 
@@ -66,12 +67,14 @@ export function Timeline() {
 						},
 					],
 					zoomSegments: [],
+					blurSegments: [],
 				};
 			}),
 		);
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
+	let blurSegmentDragState = { type: "idle" } as BlurSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
@@ -84,6 +87,7 @@ export function Timeline() {
 				),
 			);
 		}
+
 	}
 
 	createEventListener(window, "keydown", (e) => {
@@ -229,6 +233,12 @@ export function Timeline() {
 					}}
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>
+
+				<BlurTrack onDragStateChanged={(v) => {
+						blurSegmentDragState = v;
+					}}
+					handleUpdatePlayhead={handleUpdatePlayhead} />
+
 			</div>
 		</TimelineContextProvider>
 	);

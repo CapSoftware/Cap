@@ -22,6 +22,7 @@ import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
+import { BlurOverlay } from "./BlurOverlay";
 
 export function Player() {
 	const {
@@ -373,6 +374,7 @@ function PreviewCanvas() {
 								width={currentFrame().width}
 								height={currentFrame().data.height}
 							/>
+							<BlurOverlay/>
 						</div>
 					);
 				}}
@@ -380,6 +382,7 @@ function PreviewCanvas() {
 		</div>
 	);
 }
+
 
 function Time(props: { seconds: number; fps?: number; class?: string }) {
 	return (

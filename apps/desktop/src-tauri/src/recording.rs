@@ -25,7 +25,7 @@ use cap_media::{
 use cap_project::{
     CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    BlurSegment,ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
@@ -985,6 +985,7 @@ fn project_config_from_recording(
             } else {
                 Vec::new()
             },
+         blur_segments:Some(Vec::new())
         }),
         ..default_config.unwrap_or_default()
     }

@@ -4,14 +4,14 @@ use cap_project::{
     ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
-use core::f64;
+use core::{f64, time};
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
 use futures::FutureExt;
 use futures::future::OptionFuture;
 use layers::{
-    Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
+    Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,SelectiveBlurLayer
 };
 use specta::Type;
 use spring_mass_damper::SpringMassDamperSimulationConfig;
@@ -19,16 +19,18 @@ use std::{collections::HashMap, sync::Arc};
 use std::{path::PathBuf, time::Instant};
 use tokio::sync::mpsc;
 use tracing::error;
-
 mod composite_frame;
 mod coord;
-mod cursor_interpolation;
+mod cursor_interpolation;   
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
 mod spring_mass_damper;
 mod zoom;
+mod selective_blur_pipeline;
+
+
 
 pub use coord::*;
 pub use decoder::DecodedFrame;
@@ -823,6 +825,7 @@ pub struct RendererLayers {
     camera: CameraLayer,
     #[allow(unused)]
     captions: CaptionsLayer,
+    selective_blur:SelectiveBlurLayer
 }
 
 impl RendererLayers {
@@ -834,6 +837,7 @@ impl RendererLayers {
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
             captions: CaptionsLayer::new(device, queue),
+            selective_blur:SelectiveBlurLayer::new(device),
         }
     }
 
@@ -902,6 +906,8 @@ impl RendererLayers {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         session: &mut RenderSession,
+        uniforms: &ProjectUniforms, // Add this parameter
+        current_time: f32, // Add this parameter
     ) {
         macro_rules! render_pass {
             ($view:expr, $load:expr) => {
@@ -952,6 +958,16 @@ impl RendererLayers {
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
+        }
+        {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.selective_blur.render(
+                &mut pass,
+                device,
+                session.current_texture_view(),
+                uniforms,
+                current_time,
+            );
         }
 
         // {
@@ -1076,7 +1092,7 @@ async fn produce_frame(
         }),
     );
 
-    layers.render(&constants.device, &mut encoder, session);
+    layers.render(&constants.device, &mut encoder, session,&uniforms);
 
     finish_encoder(
         session,

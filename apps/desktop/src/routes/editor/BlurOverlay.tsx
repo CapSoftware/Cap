@@ -1,0 +1,192 @@
+import { createElementBounds } from "@solid-primitives/bounds";
+import { createEventListenerMap } from "@solid-primitives/event-listener";
+import { createRoot, createSignal, For, Show } from "solid-js";
+import { cx } from "cva";
+import { useEditorContext } from "./context";
+
+
+interface BlurRectangleProps {
+    rect: { x: number; y: number; width: number; height: number };
+    style: { left: string; top: string; width: string; height: string; filter?: string };
+    onUpdate: (rect: { x: number; y: number; width: number; height: number }) => void;
+    containerBounds: { width?: number | null; height?: number | null };
+    blurAmount: number;
+    isEditing: boolean;
+  }
+  
+export function BlurOverlay() {
+  const { project, setProject, editorState } = useEditorContext();
+  
+  const [canvasContainerRef, setCanvasContainerRef] = createSignal<HTMLDivElement>();
+  const containerBounds = createElementBounds(canvasContainerRef);
+
+  const currentTime = () => editorState.previewTime ?? editorState.playbackTime ?? 0;
+
+  const activeBlurSegmentsWithIndex = () => {
+    return (project.timeline?.blurSegments || []).map((segment, index) => ({ segment, index })).filter(
+      ({ segment }) => currentTime() >= segment.start && currentTime() <= segment.end
+    );
+  };
+
+  const updateBlurRect = (index: number, rect: { x: number; y: number; width: number; height: number }) => {
+    setProject("timeline", "blurSegments", index, "rect", rect);
+  };
+
+  const isSelected = (index: number) => {
+    const selection = editorState.timeline.selection;
+    return selection?.type === "blur" && selection.index === index;
+  };
+
+  return (
+    <div
+      ref={setCanvasContainerRef}
+      class="absolute inset-0 pointer-events-none"
+    >
+      <For each={activeBlurSegmentsWithIndex()}>
+        {({ segment, index }) => {
+          // Convert normalized coordinates to pixel coordinates
+          const rectStyle = () => {
+            const containerWidth = containerBounds.width ?? 1;
+            const containerHeight = containerBounds.height ?? 1;
+            
+            return {
+              left: `${segment.rect.x * containerWidth}px`,
+              top: `${segment.rect.y * containerHeight}px`,
+              width: `${segment.rect.width * containerWidth}px`,
+              height: `${segment.rect.height * containerHeight}px`,
+            };
+          };
+
+          return (
+            <BlurRectangle
+              rect={segment.rect}
+              style={rectStyle()}
+              blurAmount={segment.blur_amount || 0}
+              onUpdate={(newRect) => updateBlurRect(index, newRect)}
+              containerBounds={containerBounds}
+              isEditing={isSelected(index)}
+            />
+          );
+        }}
+      </For>
+    </div>
+  );
+}
+
+
+
+function BlurRectangle(props: BlurRectangleProps) {
+  const handleMouseDown = (e: MouseEvent, action: 'move' | 'resize', corner?: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const containerWidth = props.containerBounds.width ?? 1;
+    const containerHeight = props.containerBounds.height ?? 1;
+    
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startRect = { ...props.rect };
+
+    createRoot((dispose) => {
+      createEventListenerMap(window, {
+        mousemove: (moveEvent: MouseEvent) => {
+          const deltaX = (moveEvent.clientX - startX) / containerWidth;
+          const deltaY = (moveEvent.clientY - startY) / containerHeight;
+
+          let newRect = { ...startRect };
+
+          if (action === 'move') {
+            newRect.x = Math.max(0, Math.min(1 - newRect.width, startRect.x + deltaX));
+            newRect.y = Math.max(0, Math.min(1 - newRect.height, startRect.y + deltaY));
+          } else if (action === 'resize') {
+            switch (corner) {
+              case 'nw': // Northwest corner
+                newRect.x = Math.max(0, startRect.x + deltaX);
+                newRect.y = Math.max(0, startRect.y + deltaY);
+                newRect.width = startRect.width - deltaX;
+                newRect.height = startRect.height - deltaY;
+                break;
+              case 'ne': // Northeast corner
+                newRect.y = Math.max(0, startRect.y + deltaY);
+                newRect.width = startRect.width + deltaX;
+                newRect.height = startRect.height - deltaY;
+                break;
+              case 'sw': // Southwest corner
+                newRect.x = Math.max(0, startRect.x + deltaX);
+                newRect.width = startRect.width - deltaX;
+                newRect.height = startRect.height + deltaY;
+                break;
+              case 'se': // Southeast corner
+                newRect.width = startRect.width + deltaX;
+                newRect.height = startRect.height + deltaY;
+                break;
+            }
+
+            // Ensure minimum size
+            newRect.width = Math.max(0.05, newRect.width);
+            newRect.height = Math.max(0.05, newRect.height);
+            
+            // Ensure within bounds
+            newRect.x = Math.max(0, Math.min(1 - newRect.width, newRect.x));
+            newRect.y = Math.max(0, Math.min(1 - newRect.height, newRect.y));
+            newRect.width = Math.min(1 - newRect.x, newRect.width);
+            newRect.height = Math.min(1 - newRect.y, newRect.height);
+          }
+
+          props.onUpdate(newRect);
+        },
+        mouseup: () => {
+          dispose();
+        },
+      });
+    });
+  };
+
+  return (
+    <div
+      class={cx(
+        "absolute",
+        props.isEditing ? "pointer-events-auto border-2 border-blue-400 bg-blue-400/20" : "pointer-events-none border-none bg-transparent"
+      )}
+      style={{
+        ...props.style,
+        "backdrop-filter": `blur(${props.blurAmount}px)`,
+        "-webkit-backdrop-filter": `blur(${props.blurAmount}px)`, // Fallback for WebKit browsers
+      }}
+    >
+      <Show when={props.isEditing}>
+        {/* Main draggable area */}
+        <div
+          class="absolute inset-0 cursor-move"
+          onMouseDown={(e) => handleMouseDown(e, 'move')}
+        />
+        
+        {/* Resize handles */}
+        <div
+          class="absolute -top-1 -left-1 w-3 h-3 bg-blue-400 border border-white cursor-nw-resize rounded-full"
+          onMouseDown={(e) => handleMouseDown(e, 'resize', 'nw')}
+        />
+        <div
+          class="absolute -top-1 -right-1 w-3 h-3 bg-blue-400 border border-white cursor-ne-resize rounded-full"
+          onMouseDown={(e) => handleMouseDown(e, 'resize', 'ne')}
+        />
+        <div
+          class="absolute -bottom-1 -left-1 w-3 h-3 bg-blue-400 border border-white cursor-sw-resize rounded-full"
+          onMouseDown={(e) => handleMouseDown(e, 'resize', 'sw')}
+        />
+        <div
+          class="absolute -bottom-1 -right-1 w-3 h-3 bg-blue-400 border border-white cursor-se-resize rounded-full"
+          onMouseDown={(e) => handleMouseDown(e, 'resize', 'se')}
+        />
+        
+        {/* Center label */}
+        {/* <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div class="px-2 py-1 bg-blue-500 text-white text-xs rounded shadow-lg">
+            <IconCapBlur class="inline w-3 h-3 mr-1" />
+            Blur Area
+          </div>
+        </div> */}
+      </Show>
+    </div>
+  );
+}

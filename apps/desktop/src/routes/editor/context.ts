@@ -141,6 +141,19 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			deleteBlurSegment: (segmentIndex: number) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"blurSegments",
+						produce((s) => {
+							if (!s) return;
+							return s.splice(segmentIndex, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
 		};
 
 		createEffect(
@@ -238,7 +251,8 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				selection: null as
 					| null
 					| { type: "zoom"; index: number }
-					| { type: "clip"; index: number },
+					| { type: "clip"; index: number }
+					| { type: "blur"; index: number },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),

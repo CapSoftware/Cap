@@ -46,6 +46,7 @@ import {
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
+	type BlurSegment,
 } from "~/utils/tauri";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import { CaptionsTab } from "./CaptionsTab";
@@ -585,6 +586,28 @@ export function ConfigSidebar() {
 									/>
 								)}
 							</Show>
+							
+						<Show
+							when={(() => {
+								const blurSelection = selection();
+								if (blurSelection.type !== "blur") return;
+
+								const segment =
+									project.timeline?.blurSegments?.[blurSelection.index];
+								if (!segment) return;
+
+								return { selection: blurSelection, segment };
+							})()}
+						>
+							{(value) => (
+								<BlurSegmentConfig
+									segment={value().segment}
+									segmentIndex={value().selection.index}
+								/>
+							)}
+						</Show>
+
+							
 							<Show
 								when={(() => {
 									const clipSegment = selection();
@@ -1970,6 +1993,153 @@ function ZoomSegmentConfig(props: {
 						</Show>
 					</KTabs.Content>
 				</KTabs>
+			</Field>
+		</>
+	);
+}
+
+function BlurSegmentConfig(props: {
+	segmentIndex: number;
+	segment: BlurSegment;
+}) {
+	const {
+		project,
+		setProject,
+		editorInstance,
+		setEditorState,
+		projectHistory,
+		projectActions,
+	} = useEditorContext();
+
+	return (
+		<>
+			<div class="flex flex-row justify-between items-center">
+				<div class="flex gap-2 items-center">
+					<EditorButton
+						onClick={() => setEditorState("timeline", "selection", null)}
+						leftIcon={<IconLucideCheck />}
+					>
+						Done
+					</EditorButton>
+				</div>
+				<EditorButton
+					variant="danger"
+					onClick={() => {
+						projectActions.deleteBlurSegment(props.segmentIndex);
+					}}
+					leftIcon={<IconCapTrash />}
+				>
+					Delete
+				</EditorButton>
+			</div>
+			
+			<Field name="Blur Intensity" icon={<IconCapBlur />}>
+				<Slider
+					value={[props.segment.blur_amount]}
+					onChange={(v) =>
+						setProject(
+							"timeline",
+							"blurSegments",
+							props.segmentIndex,
+							"blur_amount",
+							v[0],
+						)
+					}
+					minValue={0}
+					maxValue={20}
+					step={0.1}
+					formatTooltip="px"
+				/>
+			</Field>
+
+			<Field name="Blur Area" icon={<IconCapBgBlur />}>
+				<div class="space-y-4">
+					<div class="flex gap-2">
+						<div class="flex-1">
+							<label class="text-xs text-gray-11">X Position</label>
+							<Slider
+								value={[props.segment.rect.x * 100]}
+								onChange={(v) =>
+									setProject(
+										"timeline",
+										"blurSegments",
+										props.segmentIndex,
+										"rect",
+										"x",
+										v[0] / 100,
+									)
+								}
+								minValue={0}
+								maxValue={100}
+								step={0.1}
+								formatTooltip="%"
+							/>
+						</div>
+						<div class="flex-1">
+							<label class="text-xs text-gray-11">Y Position</label>
+							<Slider
+								value={[props.segment.rect.y * 100]}
+								onChange={(v) =>
+									setProject(
+										"timeline",
+										"blurSegments",
+										props.segmentIndex,
+										"rect",
+										"y",
+										v[0] / 100,
+									)
+								}
+								minValue={0}
+								maxValue={100}
+								step={0.1}
+								formatTooltip="%"
+							/>
+						</div>
+					</div>
+					
+					<div class="flex gap-2">
+						<div class="flex-1">
+							<label class="text-xs text-gray-11">Width</label>
+							<Slider
+								value={[props.segment.rect.width * 100]}
+								onChange={(v) =>
+									setProject(
+										"timeline",
+										"blurSegments",
+										props.segmentIndex,
+										"rect",
+										"width",
+										v[0] / 100,
+									)
+								}
+								minValue={1}
+								maxValue={100}
+								step={0.1}
+								formatTooltip="%"
+							/>
+						</div>
+						<div class="flex-1">
+							<label class="text-xs text-gray-11">Height</label>
+							<Slider
+								value={[props.segment.rect.height * 100]}
+								onChange={(v) =>
+									setProject(
+										"timeline",
+										"blurSegments",
+										props.segmentIndex,
+										"rect",
+										"height",
+										v[0] / 100,
+									)
+								}
+								minValue={1}
+								maxValue={100}
+								step={0.1}
+								formatTooltip="%"
+							/>
+						</div>
+					</div>
+				</div>
 			</Field>
 		</>
 	);

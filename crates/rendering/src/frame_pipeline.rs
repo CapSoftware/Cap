@@ -3,6 +3,7 @@ use wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 use crate::{ProjectUniforms, RenderSession, RenderingError};
 
+
 // pub struct FramePipelineState<'a> {
 //     pub constants: &'a RenderVideoConstants,
 //     pub uniforms: &'a ProjectUniforms,

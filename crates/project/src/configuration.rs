@@ -449,6 +449,25 @@ pub struct ZoomSegment {
     pub mode: ZoomMode,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Rect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug, Type)]
+pub struct BlurSegment {
+    pub start:f32,
+    pub end: f32,
+    pub blur_amount: Option<f32>,
+    pub rect: Rect,
+}
+
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum ZoomMode {
@@ -461,6 +480,8 @@ pub enum ZoomMode {
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
+    pub blur_segments: Option<Vec<BlurSegment>>,
+
 }
 
 impl TimelineConfiguration {
