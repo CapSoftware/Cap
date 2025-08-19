@@ -300,6 +300,9 @@ export function ConfigSidebar() {
 			</KTabs.List>
 			<div
 				ref={scrollRef}
+				style={{
+					"--margin-top-scroll": "5px",
+				}}
 				class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] h-full"
 			>
 				<BackgroundConfig scrollRef={scrollRef} />
@@ -573,7 +576,12 @@ export function ConfigSidebar() {
 			</div>
 			<Show when={editorState.timeline.selection}>
 				{(selection) => (
-					<div class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in">
+					<div
+						style={{
+							"--margin-top-scroll": "5px",
+						}}
+						class="absolute custom-scroll p-5 inset-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
+					>
 						<Suspense>
 							<Show
 								when={(() => {
@@ -1796,7 +1804,10 @@ function ZoomSegmentConfig(props: {
 
 	return (
 		<>
-			<Field name="Zoom Amount" icon={<IconLucideSearch />}>
+			<Field
+				name={`Zoom ${props.segmentIndex + 1}`}
+				icon={<IconLucideSearch />}
+			>
 				<Slider
 					value={[props.segment.amount]}
 					onChange={(v) =>

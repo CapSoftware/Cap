@@ -216,15 +216,20 @@ export function ZoomTrack(props: {
 									// Handle multi-selection with Ctrl/Cmd+click
 									if (e.ctrlKey || e.metaKey) {
 										if (currentSelection?.type === "zoom") {
-											// If we already have zoom selections
-											// Toggle this segment in the selection
-											const newIndices = currentSelection.indices.includes(
-												segmentIndex,
-											)
-												? currentSelection.indices.filter(
-														(idx) => idx !== segmentIndex,
-													)
-												: [...currentSelection.indices, segmentIndex];
+											// Normalize to indices[] from either indices[] or legacy index
+											const baseIndices =
+												"indices" in currentSelection &&
+												Array.isArray(currentSelection.indices)
+													? currentSelection.indices
+													: "index" in currentSelection &&
+															typeof currentSelection.index === "number"
+														? [currentSelection.index]
+														: [];
+
+											const exists = baseIndices.includes(segmentIndex);
+											const newIndices = exists
+												? baseIndices.filter((idx) => idx !== segmentIndex)
+												: [...baseIndices, segmentIndex];
 
 											setEditorState("timeline", "selection", {
 												type: "zoom",

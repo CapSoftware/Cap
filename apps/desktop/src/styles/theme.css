@@ -151,6 +151,7 @@
 .custom-scroll {
 	margin-right: 3px; /* Add margin to create space between scrollbar and window edge */
 	overflow-y: scroll;
+	margin-top: var(--margin-top-scroll);
 }
 
 .custom-scroll::-webkit-scrollbar {
