@@ -214,8 +214,15 @@ const TAB_IDS = {
 } as const;
 
 export function ConfigSidebar() {
-	const { project, setProject, editorInstance, editorState, meta } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		setEditorState,
+		projectActions,
+		editorInstance,
+		editorState,
+		meta,
+	} = useEditorContext();
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -573,25 +580,69 @@ export function ConfigSidebar() {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
-									// Only show config panel for single zoom segment selection
-									if (
-										!("index" in zoomSelection) ||
-										typeof zoomSelection.index !== "number"
-									)
-										return;
+									// Normalize single or multiple selection to indices array
+									const indices =
+										"indices" in zoomSelection
+											? zoomSelection.indices
+											: [zoomSelection.index];
 
-									const segment =
-										project.timeline?.zoomSegments?.[zoomSelection.index];
-									if (!segment) return;
+									const segments = indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.zoomSegments?.[index],
+										}))
+										.filter(
+											(item): item is { index: number; segment: ZoomSegment } =>
+												item.segment !== undefined,
+										);
 
-									return { selection: zoomSelection, segment };
+									if (segments.length === 0) return;
+									return { selection: zoomSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<ZoomSegmentConfig
-										segment={value().segment}
-										segmentIndex={value().selection.index}
-									/>
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} zoom{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() => {
+													projectActions.deleteZoomSegments(
+														value().segments.map((s) => s.index),
+													);
+												}}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<For each={value().segments}>
+											{(item) => (
+												<div class="p-4 rounded-lg border border-gray-200">
+													<ZoomSegmentConfig
+														segment={item.segment}
+														segmentIndex={item.index}
+													/>
+												</div>
+											)}
+										</For>
+									</div>
 								)}
 							</Show>
 							<Show
@@ -941,9 +992,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													) {
 														const selectedWallpaper = wallpapers()?.find((w) =>
 															(
-																project.background.source as {
-																	path?: string;
-																}
+																project.background.source as { path?: string }
 															).path?.includes(w.id),
 														);
 														// Only use wallpaper URL if it exists
@@ -1315,10 +1364,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 														createRoot((dispose) =>
 															createEventListenerMap(window, {
-																mouseup: () => {
-																	dispose();
-																	resumeHistory();
-																},
+																mouseup: () => dispose(),
 																mousemove: (moveEvent) => {
 																	const rawNewAngle =
 																		Math.round(
@@ -1542,7 +1588,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 										<RadioGroup.ItemInput class="peer" />
 										<RadioGroup.ItemControl
 											class={cx(
-												"cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-9 transition-colors duration-100",
+												"cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 outline-blue-9 transition-colors duration-100",
 												item.x === "left"
 													? "left-2"
 													: item.x === "right"
@@ -1756,25 +1802,6 @@ function ZoomSegmentConfig(props: {
 
 	return (
 		<>
-			<div class="flex flex-row justify-between items-center">
-				<div class="flex gap-2 items-center">
-					<EditorButton
-						onClick={() => setEditorState("timeline", "selection", null)}
-						leftIcon={<IconLucideCheck />}
-					>
-						Done
-					</EditorButton>
-				</div>
-				<EditorButton
-					variant="danger"
-					onClick={() => {
-						projectActions.deleteZoomSegment(props.segmentIndex);
-					}}
-					leftIcon={<IconCapTrash />}
-				>
-					Delete
-				</EditorButton>
-			</div>
 			<Field name="Zoom Amount" icon={<IconLucideSearch />}>
 				<Slider
 					value={[props.segment.amount]}
@@ -1830,12 +1857,14 @@ function ZoomSegmentConfig(props: {
 							when={(() => {
 								const m = props.segment.mode;
 								if (m === "auto") return;
+
 								return m.manual;
 							})()}
 						>
 							{(mode) => {
 								const start = createMemo<number>((prev) => {
 									if (projectHistory.isPaused()) return prev;
+
 									return props.segment.start;
 								}, 0);
 
@@ -1979,7 +2008,7 @@ function ZoomSegmentConfig(props: {
 											const bounds =
 												downEvent.currentTarget.getBoundingClientRect();
 
-											createRoot((dispose) => {
+											createRoot((dispose) =>
 												createEventListenerMap(window, {
 													mouseup: () => dispose(),
 													mousemove: (moveEvent) => {
@@ -2009,21 +2038,13 @@ function ZoomSegmentConfig(props: {
 															},
 														);
 													},
-												});
-											});
+												}),
+											);
 										}}
 									>
-										<div
-											class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
-											style={{
-												left: `calc(${mode().x * 100}% + ${
-													2 + mode().x * -6
-												}px)`,
-												top: `calc(${mode().y * 100}% + ${
-													2 + mode().y * -6
-												}px)`,
-											}}
-										/>
+										<div class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1">
+											<div class="size-1.5 bg-gray-5 rounded-full" />
+										</div>
 										<div class="overflow-hidden relative rounded-lg border border-gray-3 bg-gray-2">
 											<canvas
 												ref={canvasRef}
@@ -2097,59 +2118,6 @@ function ClipSegmentConfig(props: {
 				/>
 			</ComingSoonTooltip>
 		</>
-	);
-}
-
-function RgbInput(props: {
-	value: [number, number, number];
-	onChange: (value: [number, number, number]) => void;
-}) {
-	const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
-	let prevHex = rgbToHex(props.value);
-
-	let colorInput!: HTMLInputElement;
-
-	return (
-		<div class="flex flex-row items-center gap-[0.75rem] relative">
-			<button
-				type="button"
-				class="size-[2rem] rounded-[0.5rem]"
-				style={{
-					"background-color": rgbToHex(props.value),
-				}}
-				onClick={() => colorInput.click()}
-			/>
-			<input
-				ref={colorInput}
-				type="color"
-				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
-				onChange={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
-				}}
-			/>
-			<TextInput
-				class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
-				value={text()}
-				onFocus={() => {
-					prevHex = rgbToHex(props.value);
-				}}
-				onInput={(e) => {
-					setText(e.currentTarget.value);
-
-					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
-				}}
-				onBlur={(e) => {
-					const value = hexToRgb(e.target.value);
-					if (value) props.onChange(value);
-					else {
-						setText(prevHex);
-						props.onChange(hexToRgb(text())!);
-					}
-				}}
-			/>
-		</div>
 	);
 }
 
@@ -2256,6 +2224,59 @@ function LayoutSegmentConfig(props: {
 				</KTabs>
 			</Field>
 		</>
+	);
+}
+
+function RgbInput(props: {
+	value: [number, number, number];
+	onChange: (value: [number, number, number]) => void;
+}) {
+	const [text, setText] = createWritableMemo(() => rgbToHex(props.value));
+	let prevHex = rgbToHex(props.value);
+
+	let colorInput!: HTMLInputElement;
+
+	return (
+		<div class="flex flex-row items-center gap-[0.75rem] relative">
+			<button
+				type="button"
+				class="size-[2rem] rounded-[0.5rem]"
+				style={{
+					"background-color": rgbToHex(props.value),
+				}}
+				onClick={() => colorInput.click()}
+			/>
+			<input
+				ref={colorInput}
+				type="color"
+				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				onChange={(e) => {
+					const value = hexToRgb(e.target.value);
+					if (value) props.onChange(value);
+				}}
+			/>
+			<TextInput
+				class="w-[4.60rem] p-[0.375rem] text-gray-12 text-[13px] border rounded-[0.5rem] bg-gray-1 outline-none focus:ring-1 transition-shadows duration-200 focus:ring-gray-500 focus:ring-offset-1 focus:ring-offset-gray-200"
+				value={text()}
+				onFocus={() => {
+					prevHex = rgbToHex(props.value);
+				}}
+				onInput={(e) => {
+					setText(e.currentTarget.value);
+
+					const value = hexToRgb(e.target.value);
+					if (value) props.onChange(value);
+				}}
+				onBlur={(e) => {
+					const value = hexToRgb(e.target.value);
+					if (value) props.onChange(value);
+					else {
+						setText(prevHex);
+						props.onChange(hexToRgb(text())!);
+					}
+				}}
+			/>
+		</div>
 	);
 }
 
