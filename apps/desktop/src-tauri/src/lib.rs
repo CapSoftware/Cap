@@ -56,7 +56,7 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+
 use std::{
     fs::File,
     future::Future,
@@ -78,7 +78,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::timeout;
+
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
@@ -367,7 +367,7 @@ async fn set_camera_input(
             if let Some(cancel) = app.camera_feed_initialization.take() {
                 cancel.send(()).await.ok();
             }
-            pritnln!("USER FEED DESELECT SHUTDOWN");
+            println!("USER FEED DESELECT SHUTDOWN");
             app.camera_feed.take();
 
             // TODO: Should be implied by `camera_feed.take()`

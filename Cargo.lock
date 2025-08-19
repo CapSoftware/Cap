@@ -985,6 +985,7 @@ dependencies = [
  "cap-export",
  "cap-fail",
  "cap-flags",
+ "cap-gpu-converters",
  "cap-media",
  "cap-project",
  "cap-recording",
@@ -1144,6 +1145,8 @@ dependencies = [
 name = "cap-gpu-converters"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "tokio",
  "wgpu",
 ]
 
@@ -8846,6 +8849,7 @@ dependencies = [
  "io-uring",
  "libc",
  "mio 1.0.4",
+ "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "slab",

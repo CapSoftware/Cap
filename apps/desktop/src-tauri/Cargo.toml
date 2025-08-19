@@ -89,6 +89,7 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 cap-displays = { path = "../../../crates/displays" }
+cap-gpu-converters = { path = "../../../crates/gpu-converters" }
 
 flume.workspace = true
 tracing-subscriber = "0.3.19"

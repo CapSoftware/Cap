@@ -1,5 +1,5 @@
-@group(0) @binding(0) var y_plane: texture_2d<u32>;
-@group(0) @binding(1) var uv_plane: texture_2d<u32>;
+@group(0) @binding(0) var y_plane: texture_2d<f32>;
+@group(0) @binding(1) var uv_plane: texture_2d<f32>;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
 
 @compute @workgroup_size(8, 8)

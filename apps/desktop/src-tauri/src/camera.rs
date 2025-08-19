@@ -1,11 +1,12 @@
 use anyhow::Context;
+use cap_gpu_converters::{CameraFormat, CameraInput, GPUCameraConverter, ScalingQuality};
 use cap_media::feeds::RawCameraFrame;
 use ffmpeg::{
     format::{self, Pixel},
     frame,
     software::scaling,
 };
-use flume::Receiver;
+
 use futures::{executor::block_on, future::Either};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -13,7 +14,7 @@ use std::{
     collections::HashMap,
     pin::pin,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -21,10 +22,7 @@ use std::{
 };
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
-use tokio::{
-    sync::{broadcast, oneshot},
-    task::JoinHandle,
-};
+use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
@@ -117,7 +115,25 @@ impl CameraPreview {
             let mut window_size = None;
             let mut resampler_frame = Cached::default();
             let mut aspect_ratio = None;
-            let Ok(mut scaler) = scaling::Context::get(
+
+            // Initialize GPU converter
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create GPU runtime");
+            let mut gpu_converter = match rt.block_on(GPUCameraConverter::new()) {
+                Ok(converter) => {
+                    info!("GPU camera converter initialized successfully");
+                    Some(converter)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to initialize GPU converter, using ffmpeg fallback: {}",
+                        e
+                    );
+                    None
+                }
+            };
+
+            // Fallback ffmpeg scaler
+            let mut fallback_scaler = match scaling::Context::get(
                 Pixel::RGBA,
                 1,
                 1,
@@ -125,9 +141,12 @@ impl CameraPreview {
                 1,
                 1,
                 scaling::Flags::empty(),
-            )
-            .map_err(|err| error!("Error initializing ffmpeg scaler: {err:?}")) else {
-                return;
+            ) {
+                Ok(scaler) => Some(scaler),
+                Err(err) => {
+                    error!("Error initializing ffmpeg scaler: {err:?}");
+                    None
+                }
             };
 
             info!("Camera preview initialized!");
@@ -252,38 +271,67 @@ impl CameraPreview {
                             loading = false;
                         }
 
-                        let resampler_frame = resampler_frame
-                            .get_or_init((output_width, output_height), frame::Video::empty);
+                        // Convert ffmpeg pixel format to our format enum
+                        let camera_format = match frame.format() {
+                            Pixel::NV12 => CameraFormat::NV12,
+                            Pixel::UYVY422 => CameraFormat::UYVY,
+                            Pixel::YUYV422 => CameraFormat::YUYV,
+                            Pixel::YUV420P => CameraFormat::YUV420P,
+                            Pixel::BGRA => CameraFormat::BGRA,
+                            Pixel::RGB24 => CameraFormat::RGB24,
+                            Pixel::RGBA => CameraFormat::RGBA,
+                            _ => CameraFormat::Unknown,
+                        };
 
-                        scaler.cached(
-                            frame.format(),
-                            frame.width(),
-                            frame.height(),
-                            format::Pixel::RGBA,
-                            output_width,
-                            output_height,
-                            ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
-                        );
+                        // Try GPU conversion first
+                        if let Some(ref mut converter) = gpu_converter {
+                            let frame_data = frame.data(0);
+                            let camera_input = CameraInput::new(
+                                frame_data,
+                                camera_format,
+                                frame.width(),
+                                frame.height(),
+                            )
+                            .with_stride(frame.stride(0) as u32);
 
-                        if let Err(err) = scaler.run(&frame, resampler_frame) {
-                            error!("Error rescaling frame with ffmpeg: {err:?}");
-                            continue;
+                            match rt.block_on(converter.convert_and_scale(
+                                &camera_input,
+                                output_width,
+                                output_height,
+                                ScalingQuality::Good,
+                            )) {
+                                Ok(rgba_data) => Some((rgba_data, output_width * 4)),
+                                Err(e) => {
+                                    warn!("GPU conversion failed, falling back to ffmpeg: {}", e);
+                                    // Fall back to ffmpeg
+                                    gpu_to_ffmpeg_fallback(
+                                        &mut fallback_scaler,
+                                        &mut resampler_frame,
+                                        &frame,
+                                        output_width,
+                                        output_height,
+                                    )
+                                }
+                            }
+                        } else {
+                            // Use ffmpeg fallback
+                            gpu_to_ffmpeg_fallback(
+                                &mut fallback_scaler,
+                                &mut resampler_frame,
+                                &frame,
+                                output_width,
+                                output_height,
+                            )
                         }
-
-                        Some((
-                            resampler_frame.data(0).to_vec(),
-                            resampler_frame.stride(0) as u32,
-                        ))
                     } else if loading {
                         let (buffer, stride) = render_solid_frame(
                             [0x11, 0x11, 0x11, 0xFF], // #111111
                             output_width,
                             output_height,
                         );
-
                         Some((buffer, stride))
                     } else {
-                        None // This will reuse the existing texture
+                        None
                     };
 
                     renderer.render(
@@ -299,6 +347,42 @@ impl CameraPreview {
                     if let Err(err) = renderer.window.show() {
                         error!("Failed to show camera preview window: {}", err);
                     }
+                }
+            }
+
+            fn gpu_to_ffmpeg_fallback(
+                scaler: &mut Option<scaling::Context>,
+                resampler_frame: &mut Cached<(u32, u32), frame::Video>,
+                frame: &frame::Video,
+                output_width: u32,
+                output_height: u32,
+            ) -> Option<(Vec<u8>, u32)> {
+                if let Some(scaler) = scaler {
+                    let resampler_frame = resampler_frame
+                        .get_or_init((output_width, output_height), frame::Video::empty);
+
+                    scaler.cached(
+                        frame.format(),
+                        frame.width(),
+                        frame.height(),
+                        format::Pixel::RGBA,
+                        output_width,
+                        output_height,
+                        ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
+                    );
+
+                    if let Err(err) = scaler.run(&frame, resampler_frame) {
+                        error!("Error rescaling frame with ffmpeg: {err:?}");
+                        return None;
+                    }
+
+                    Some((
+                        resampler_frame.data(0).to_vec(),
+                        resampler_frame.stride(0) as u32,
+                    ))
+                } else {
+                    error!("No scaler available for fallback");
+                    None
                 }
             }
 
@@ -903,7 +987,7 @@ pub struct CameraWindows {
 }
 
 impl CameraWindows {
-    pub fn register(&self, window: WebviewWindow) {
+    pub fn register(&self, _window: WebviewWindow) {
         // self.windows.insert(
         //     window.label(),
         //     tokio::spawn(async move {
@@ -928,7 +1012,7 @@ impl CameraWindows {
         todo!();
     }
 
-    pub fn set_feed(&self, window: WebviewWindow) {
+    pub fn set_feed(&self, _window: WebviewWindow) {
         todo!();
     }
 }

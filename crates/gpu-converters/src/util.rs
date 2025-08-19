@@ -14,6 +14,7 @@ pub fn read_buffer_to_vec(
     Ok(data.to_vec())
 }
 
+#[allow(dead_code)]
 pub fn copy_texture_to_buffer_command(
     device: &wgpu::Device,
     texture: &wgpu::Texture,
