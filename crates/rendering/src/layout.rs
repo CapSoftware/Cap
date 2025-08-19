@@ -57,6 +57,9 @@ pub struct InterpolatedLayout {
     pub transition_progress: f64,
     pub from_mode: LayoutMode,
     pub to_mode: LayoutMode,
+    pub screen_blur: f64,
+    pub camera_only_zoom: f64,
+    pub camera_only_blur: f64,
 }
 
 impl InterpolatedLayout {
@@ -148,6 +151,48 @@ impl InterpolatedLayout {
         );
         let camera_scale = Self::lerp(start_camera_scale, end_camera_scale, transition_progress);
 
+        let screen_blur = if matches!(current_mode, LayoutMode::CameraOnly)
+            || matches!(next_mode, LayoutMode::CameraOnly)
+        {
+            if matches!(current_mode, LayoutMode::CameraOnly)
+                && !matches!(next_mode, LayoutMode::CameraOnly)
+            {
+                Self::lerp(1.0, 0.0, transition_progress)
+            } else if !matches!(current_mode, LayoutMode::CameraOnly)
+                && matches!(next_mode, LayoutMode::CameraOnly)
+            {
+                transition_progress
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        let camera_only_zoom = if matches!(next_mode, LayoutMode::CameraOnly)
+            && !matches!(current_mode, LayoutMode::CameraOnly)
+        {
+            Self::lerp(1.1, 1.0, transition_progress)
+        } else if matches!(current_mode, LayoutMode::CameraOnly)
+            && !matches!(next_mode, LayoutMode::CameraOnly)
+        {
+            Self::lerp(1.0, 1.1, transition_progress)
+        } else {
+            1.0
+        };
+
+        let camera_only_blur = if matches!(next_mode, LayoutMode::CameraOnly)
+            && !matches!(current_mode, LayoutMode::CameraOnly)
+        {
+            Self::lerp(1.0, 0.0, transition_progress)
+        } else if matches!(current_mode, LayoutMode::CameraOnly)
+            && !matches!(next_mode, LayoutMode::CameraOnly)
+        {
+            transition_progress
+        } else {
+            0.0
+        };
+
         InterpolatedLayout {
             camera_opacity,
             screen_opacity,
@@ -160,13 +205,16 @@ impl InterpolatedLayout {
             transition_progress,
             from_mode: current_mode,
             to_mode: next_mode,
+            screen_blur,
+            camera_only_zoom,
+            camera_only_blur,
         }
     }
 
     fn get_layout_values(mode: &LayoutMode) -> (f64, f64, f64) {
         match mode {
             LayoutMode::Default => (1.0, 1.0, 1.0),
-            LayoutMode::CameraOnly => (1.0, 0.0, 1.0),
+            LayoutMode::CameraOnly => (1.0, 1.0, 1.0),
             LayoutMode::HideCamera => (0.0, 1.0, 1.0),
         }
     }
@@ -180,7 +228,7 @@ impl InterpolatedLayout {
     }
 
     pub fn should_render_screen(&self) -> bool {
-        self.screen_opacity > 0.01
+        true
     }
 
     pub fn is_transitioning_camera_only(&self) -> bool {
@@ -207,16 +255,20 @@ impl InterpolatedLayout {
     }
 
     pub fn regular_camera_transition_opacity(&self) -> f64 {
-        if matches!(self.from_mode, LayoutMode::CameraOnly)
+        if matches!(self.to_mode, LayoutMode::CameraOnly)
+            && !matches!(self.from_mode, LayoutMode::CameraOnly)
+        {
+            let fast_fade = (1.0 - self.transition_progress * 1.5).max(0.0);
+            fast_fade * self.camera_opacity
+        } else if matches!(self.from_mode, LayoutMode::CameraOnly)
+            && !matches!(self.to_mode, LayoutMode::CameraOnly)
+        {
+            let fast_fade = (self.transition_progress * 1.5).min(1.0);
+            fast_fade * self.camera_opacity
+        } else if matches!(self.from_mode, LayoutMode::CameraOnly)
             && matches!(self.to_mode, LayoutMode::CameraOnly)
         {
             0.0
-        } else if matches!(self.from_mode, LayoutMode::CameraOnly) {
-            let adjusted_progress = (self.transition_progress * 1.5).min(1.0);
-            adjusted_progress * self.camera_opacity
-        } else if matches!(self.to_mode, LayoutMode::CameraOnly) {
-            let adjusted_progress = ((1.0 - self.transition_progress) * 1.43).min(1.0);
-            adjusted_progress * self.camera_opacity
         } else {
             self.camera_opacity
         }

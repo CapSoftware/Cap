@@ -617,7 +617,7 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount,
+                motion_blur_amount: (motion_blur_amount + layout.screen_blur as f32 * 0.8).min(1.0),
                 camera_motion_blur_amount: 0.0,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -759,10 +759,13 @@ impl ProjectUniforms {
                 let aspect = frame_size[0] / frame_size[1];
                 let output_aspect = output_size[0] / output_size[1];
 
-                // Always fill the entire output
-                let size = output_size;
+                let zoom_factor = layout.camera_only_zoom as f32;
+                let size = [output_size[0] * zoom_factor, output_size[1] * zoom_factor];
 
-                let position = [0.0, 0.0];
+                let position = [
+                    (output_size[0] - size[0]) / 2.0,
+                    (output_size[1] - size[1]) / 2.0,
+                ];
 
                 let target_bounds = [
                     position[0],
@@ -780,7 +783,7 @@ impl ProjectUniforms {
                     let crop_x = (frame_size[0] - visible_width) / 2.0;
                     [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
                 } else {
-                    // Camera is taller than output - crop top and bottom  
+                    // Camera is taller than output - crop top and bottom
                     let visible_height = frame_size[0] / output_aspect;
                     let crop_y = (frame_size[1] - visible_height) / 2.0;
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
@@ -799,7 +802,7 @@ impl ProjectUniforms {
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: 0.0,
+                    camera_motion_blur_amount: layout.camera_only_blur as f32 * 0.5,
                     shadow: 0.0,
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
@@ -1021,9 +1024,11 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
         }
-        
+
         // Also render regular camera overlay during transitions when its opacity > 0
-        if uniforms.layout.should_render_camera() && uniforms.layout.regular_camera_transition_opacity() > 0.01 {
+        if uniforms.layout.should_render_camera()
+            && uniforms.layout.regular_camera_transition_opacity() > 0.01
+        {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
         }
