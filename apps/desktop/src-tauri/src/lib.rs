@@ -282,7 +282,7 @@ async fn set_camera_input(
             }
 
             println!("SHOWING WINDOW");
-            let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
+            // let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
             if let Some(win) = CapWindowId::Main.get(&app_handle) {
                 win.set_focus().ok();
             };
@@ -373,6 +373,10 @@ async fn set_camera_input(
             // if let Some(w) = CapWindowId::Camera.get(&app_handle) {
             //     w.close().ok();
             // }
+
+            // TODO: This shouldn't be needed
+            app.handle.state::<camera::CameraPreview>().shutdown();
+
             Ok(true)
         }
     }

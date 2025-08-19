@@ -356,15 +356,6 @@ struct Renderer {
 impl Renderer {
     /// Initialize a new renderer for a specific Tauri window.
     async fn init(window: WebviewWindow) -> anyhow::Result<Self> {
-        let size = window
-            .inner_size()
-            .with_context(|| "Error getting the window size")?
-            .to_logical(
-                window
-                    .scale_factor()
-                    .with_context(|| "Error getting the window scale")?,
-            );
-
         let (tx, rx) = oneshot::channel();
         window
             .run_on_main_thread({
@@ -560,15 +551,14 @@ impl Renderer {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: swapchain_format,
-            width: size.width,
-            height: size.height,
+            // These will be sorted out by the main event loop
+            width: 0,
+            height: 0,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-
-        surface.configure(&device, &surface_config);
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
