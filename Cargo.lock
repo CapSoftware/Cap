@@ -1001,6 +1001,7 @@ dependencies = [
  "device_query",
  "dirs",
  "dotenvy_macro",
+ "ffmpeg-next",
  "flume",
  "futures",
  "futures-intrusive",

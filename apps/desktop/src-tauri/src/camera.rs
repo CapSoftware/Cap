@@ -156,7 +156,7 @@ impl CameraPreview {
             let mut first = true;
             let mut loading = true;
             let mut window_size = None;
-            let mut resampler_frame = Cached::default();
+            // let mut resampler_frame = Cached::default();
             let mut aspect_ratio = None;
             let mut frame_count = 0u64;
 
@@ -423,32 +423,34 @@ impl CameraPreview {
                                         frame_count, e
                                     );
                                     // Fall back to ffmpeg
-                                    gpu_to_ffmpeg_fallback(
-                                        &mut fallback_scaler,
-                                        &mut resampler_frame,
-                                        &frame,
-                                        output_width,
-                                        output_height,
-                                    )
+                                    // gpu_to_ffmpeg_fallback(
+                                    //     &mut fallback_scaler,
+                                    //     &mut resampler_frame,
+                                    //     &frame,
+                                    //     output_width,
+                                    //     output_height,
+                                    // )
+                                    todo!()
                                 }
                             }
                         } else {
                             // Use ffmpeg fallback
-                            let result = gpu_to_ffmpeg_fallback(
-                                &mut fallback_scaler,
-                                &mut resampler_frame,
-                                &frame,
-                                output_width,
-                                output_height,
-                            );
-                            if frame_count % 30 == 1 {
-                                info!(
-                                    "FFmpeg fallback used for frame #{}, result: {}",
-                                    frame_count,
-                                    result.is_some()
-                                );
-                            }
-                            result
+                            // let result = gpu_to_ffmpeg_fallback(
+                            //     &mut fallback_scaler,
+                            //     &mut resampler_frame,
+                            //     &frame,
+                            //     output_width,
+                            //     output_height,
+                            // );
+                            // if frame_count % 30 == 1 {
+                            //     info!(
+                            //         "FFmpeg fallback used for frame #{}, result: {}",
+                            //         frame_count,
+                            //         result.is_some()
+                            //     );
+                            // }
+                            // result
+                            todo!()
                         }
                     } else if loading {
                         let (buffer, stride) = render_solid_frame(
