@@ -140,7 +140,6 @@ export default async function EmbedVideoPage(props: Props) {
 					isScreenshot: videos.isScreenshot,
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
-					password: videos.password,
 					source: videos.source,
 					folderId: videos.folderId,
 					sharedOrganization: {
@@ -189,7 +188,7 @@ async function EmbedContent({
 	video,
 	autoplay,
 }: {
-	video: typeof videos.$inferSelect & {
+	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: string } | null;
 	};
 	autoplay: boolean;

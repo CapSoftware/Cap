@@ -279,7 +279,6 @@ export default async function ShareVideoPage(props: Props) {
 					isScreenshot: videos.isScreenshot,
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
-					password: videos.password,
 					source: videos.source,
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
@@ -333,7 +332,7 @@ async function AuthorizedContent({
 	video,
 	searchParams,
 }: {
-	video: Omit<InferSelectModel<typeof videos>, "folderId"> & {
+	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
