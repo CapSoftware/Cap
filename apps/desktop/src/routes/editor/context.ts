@@ -128,19 +128,6 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
-			deleteZoomSegment: (segmentIndex: number) => {
-				batch(() => {
-					setProject(
-						"timeline",
-						"zoomSegments",
-						produce((s) => {
-							if (!s) return;
-							s.splice(segmentIndex, 1);
-						}),
-					);
-					setEditorState("timeline", "selection", null);
-				});
-			},
 			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
 					setProject(

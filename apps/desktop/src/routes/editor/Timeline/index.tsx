@@ -104,12 +104,6 @@ export function Timeline() {
 				if ("indices" in selection && Array.isArray(selection.indices)) {
 					// Use bulk deletion for better performance
 					projectActions.deleteZoomSegments(selection.indices);
-				} else if (
-					"index" in selection &&
-					typeof selection.index === "number"
-				) {
-					// Handle single zoom segment deletion
-					projectActions.deleteZoomSegment(selection.index);
 				}
 			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
