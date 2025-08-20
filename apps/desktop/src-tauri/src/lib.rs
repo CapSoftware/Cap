@@ -1169,7 +1169,7 @@ async fn upload_exported_video(
             false,
             video_id,
             Some(meta.pretty_name.clone()),
-            Some(duration.to_string()),
+            Some(metadata.duration.to_string()),
         )
         .await
     }
