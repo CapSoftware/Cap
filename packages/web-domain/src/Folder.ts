@@ -13,7 +13,7 @@ export type FolderColor = (typeof FolderColor)["Type"];
 export class NotFoundError extends Schema.TaggedError<NotFoundError>()(
 	"FolderNotFoundError",
 	{},
-) { }
+) {}
 
 export class Folder extends Schema.Class<Folder>("Folder")({
 	id: FolderId,
@@ -23,7 +23,7 @@ export class Folder extends Schema.Class<Folder>("Folder")({
 	createdById: Schema.String,
 	spaceId: Schema.OptionFromNullOr(Schema.String),
 	parentId: Schema.OptionFromNullOr(FolderId),
-}) { }
+}) {}
 
 export class FolderRpcs extends RpcGroup.make(
 	Rpc.make("FolderDelete", {
@@ -40,4 +40,4 @@ export class FolderRpcs extends RpcGroup.make(
 		success: Folder,
 		error: Schema.Union(NotFoundError, InternalError),
 	}).middleware(RpcAuthMiddleware),
-) { }
+) {}

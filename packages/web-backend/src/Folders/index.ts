@@ -1,11 +1,10 @@
+import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
 import { CurrentUser, Folder, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-
 import { Database, type DatabaseError } from "../Database";
 import { FoldersPolicy } from "./FoldersPolicy";
-import { nanoId } from "@cap/database/helpers";
 
 export class Folders extends Effect.Service<Folders>()("Folders", {
 	effect: Effect.gen(function* () {
@@ -95,15 +94,17 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					createdById: user.id,
 					spaceId: data.spaceId,
 					parentId: data.parentId,
-				}
+				};
 
-				yield* db.execute(db => db.insert(Db.folders).values({
-					...folder,
-					spaceId: Option.getOrNull(folder.spaceId),
-					parentId: Option.getOrNull(folder.parentId),
-				}));
+				yield* db.execute((db) =>
+					db.insert(Db.folders).values({
+						...folder,
+						spaceId: Option.getOrNull(folder.spaceId),
+						parentId: Option.getOrNull(folder.parentId),
+					}),
+				);
 
-				return new Folder.Folder(folder)
+				return new Folder.Folder(folder);
 			}),
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
@@ -123,4 +124,4 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 		};
 	}),
 	dependencies: [FoldersPolicy.Default],
-}) { }
+}) {}

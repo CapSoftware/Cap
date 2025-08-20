@@ -9,11 +9,16 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
+import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { Option } from "effect";
+import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,
@@ -21,11 +26,6 @@ import {
 	RedFolder,
 	YellowFolder,
 } from "../../../caps/components/Folders";
-import { useEffectMutation } from "@/lib/EffectRuntime";
-import { Folder } from "@cap/web-domain";
-import { Option } from "effect";
-import { withRpc } from "@/lib/Rpcs";
-import { useRouter } from "next/navigation";
 
 interface Props {
 	open: boolean;

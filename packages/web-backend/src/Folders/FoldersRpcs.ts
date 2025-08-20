@@ -17,12 +17,15 @@ export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 							() => new InternalError({ type: "database" }),
 						),
 					),
-			FolderCreate: data => folders.create(data).pipe(
-				Effect.catchTag(
-					"DatabaseError",
-					() => new InternalError({ type: "database" }),
-				),
-			),
+			FolderCreate: (data) =>
+				folders
+					.create(data)
+					.pipe(
+						Effect.catchTag(
+							"DatabaseError",
+							() => new InternalError({ type: "database" }),
+						),
+					),
 		};
 	}),
 );
