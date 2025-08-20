@@ -24,11 +24,12 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 				Effect.flatMap(
 					Option.match({
 						onNone: () => new UnauthenticatedError(),
-						onSome: user => Effect.succeed({
-							id: user.id,
-							email: user.email,
-							activeOrgId: user.activeOrganizationId,
-						}),
+						onSome: (user) =>
+							Effect.succeed({
+								id: user.id,
+								email: user.email,
+								activeOrgId: user.activeOrganizationId,
+							}),
 					}),
 				),
 			),
