@@ -233,6 +233,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 												<span className="mr-3 text-gray-12">Users:</span>
 												<div className="flex items-center">
 													<button
+													type="button"
 														onClick={() =>
 															proQuantity > 1 && setProQuantity(proQuantity - 1)
 														}
@@ -246,6 +247,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 														className="mx-auto w-6 text-sm tabular-nums text-center text-gray-12"
 													/>
 													<button
+														type="button"
 														onClick={() => setProQuantity(proQuantity + 1)}
 														className="flex justify-center items-center w-8 h-8 rounded-r-md bg-gray-4 hover:bg-gray-5"
 													>
@@ -265,6 +267,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 										{proLoading ? "Loading..." : "Upgrade to Cap Pro"}
 									</Button>
 									<button
+														type="button"
 										className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
 										onClick={() => onOpenChange(false)}
 									>
@@ -277,7 +280,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 								<div className="grid grid-cols-1 gap-8 md:grid-cols-2">
 									{proFeatures.map((feature, index) => (
 										<div
-											key={index}
+											key={index.toString()}
 											className="flex flex-col justify-center items-center"
 										>
 											<div className="mb-3.5 bg-gray-5 rounded-full size-10 flex items-center justify-center">

@@ -1,6 +1,5 @@
 "use client";
 
-import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
 import {
 	faArrowLeft,
@@ -343,19 +342,6 @@ export function LoginForm() {
 							.
 						</motion.p>
 					</motion.div>
-					{emailSent && (
-						<motion.button
-							layout
-							className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
-							onClick={() => {
-								setEmailSent(false);
-								setEmail("");
-								setLoading(false);
-							}}
-						>
-							Click to restart sign in process
-						</motion.button>
-					)}
 				</Suspense>
 			</motion.div>
 		</motion.div>
@@ -438,11 +424,7 @@ const NormalLogin = ({
 					disabled={loading || emailSent}
 					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
 				>
-					{emailSent
-						? NODE_ENV === "development"
-							? "Email sent to your terminal"
-							: "Email sent to your inbox"
-						: "Login with email"}
+					Login with email
 				</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">

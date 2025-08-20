@@ -167,10 +167,10 @@ export function VerifyOTPForm({
 				</p>
 			</div>
 
-			<div className="flex justify-center gap-2 mb-6">
+			<div className="flex gap-2 justify-center mb-6">
 				{code.map((digit, index) => (
 					<input
-						key={index}
+						key={index.toString()}
 						ref={(el) => (inputRefs.current[index] = el)}
 						type="text"
 						inputMode="numeric"
@@ -188,7 +188,7 @@ export function VerifyOTPForm({
 								.replace(/\D/g, "");
 							handleChange(0, pastedData);
 						}}
-						className="w-12 h-14 text-center text-xl font-semibold bg-gray-1 border border-gray-5 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+						className="w-12 h-14 text-xl font-semibold text-center rounded-lg border transition-all bg-gray-1 border-gray-5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
 						disabled={handleVerify.isPending || handleVerify.isSuccess}
 					/>
 				))}
@@ -197,6 +197,7 @@ export function VerifyOTPForm({
 			<Button
 				variant="primary"
 				className="w-full"
+				spinner={isVerifying}
 				onClick={() => handleVerify.mutate()}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
@@ -208,7 +209,7 @@ export function VerifyOTPForm({
 					type="button"
 					onClick={() => handleResend.mutate()}
 					disabled={handleResend.isPending}
-					className="text-sm text-gray-10 hover:text-gray-12 underline transition-colors"
+					className="text-sm underline transition-colors text-gray-10 hover:text-gray-12"
 				>
 					{handleResend.isPending
 						? "Sending..."
