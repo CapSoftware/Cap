@@ -3,7 +3,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
@@ -162,12 +162,10 @@ app.post(
 						size: z.number(),
 					}),
 				),
-				durationInSecs: z.string().optional(),
-				bandwidth: z.string().optional(),
-				resolution: z.string().optional(),
-				videoCodec: z.string().optional(),
-				audioCodec: z.string().optional(),
-				framerate: z.string().optional(),
+				durationInSecs: z.coerce.number().optional(),
+				width: z.coerce.number().optional(),
+				height: z.coerce.number().optional(),
+				fps: z.coerce.number().optional(),
 			})
 			.and(
 				z.union([
@@ -275,24 +273,21 @@ app.post(
 						console.error(`Warning: Unable to verify object: ${headError}`);
 					}
 
-					const videoMetadata: VideoMetadata = {
-						duration: body.durationInSecs,
-						bandwidth: body.bandwidth,
-						resolution: body.resolution,
-						videoCodec: body.videoCodec,
-						audioCodec: body.audioCodec,
-						framerate: body.framerate,
-					};
+					const videoIdFromFileKey = fileKey.split("/")[1];
 
-					if (Object.values(videoMetadata).length > 1 && "videoId" in body)
+					const videoIdToUse =
+						"videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (videoIdToUse)
 						await db()
 							.update(videos)
 							.set({
-								metadata: videoMetadata,
+								duration: sql`COALESCE(${body.durationInSecs}, duration)`,
+								width: sql`COALESCE(${body.width}, width)`,
+								height: sql`COALESCE(${body.height}, height)`,
+								fps: sql`COALESCE(${body.fps}, fps)`,
 							})
-							.where(eq(videos.id, body.videoId));
+							.where(eq(videos.id, videoIdToUse));
 
-					const videoIdFromFileKey = fileKey.split("/")[1];
 					if (videoIdFromFileKey) {
 						try {
 							await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {

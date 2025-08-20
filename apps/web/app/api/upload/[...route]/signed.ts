@@ -7,7 +7,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createBucketProvider } from "@/utils/s3";
@@ -22,15 +22,11 @@ app.post(
 		"json",
 		z
 			.object({
-				durationInSecs: z.string().optional(),
-				bandwidth: z.string().optional(),
-				resolution: z.string().optional(),
-				videoCodec: z.string().optional(),
-				audioCodec: z.string().optional(),
-				framerate: z.string().optional(),
 				method: z.union([z.literal("post"), z.literal("put")]).default("post"),
-				// legacy
-				duration: z.string().optional(),
+				durationInSecs: z.coerce.number().optional(),
+				width: z.coerce.number().optional(),
+				height: z.coerce.number().optional(),
+				fps: z.coerce.number().optional(),
 			})
 			.and(
 				z.union([
@@ -42,16 +38,8 @@ app.post(
 	),
 	async (c) => {
 		const user = c.get("user");
-		const {
-			durationInSecs: duration,
-			bandwidth,
-			resolution,
-			videoCodec,
-			audioCodec,
-			framerate,
-			method,
-			...body
-		} = c.req.valid("json");
+		const { durationInSecs, width, height, fps, method, ...body } =
+			c.req.valid("json");
 
 		const fileKey = parseVideoIdOrFileKey(user.id, body);
 
@@ -128,11 +116,9 @@ app.post(
 				const Fields = {
 					"Content-Type": contentType,
 					"x-amz-meta-userid": user.id,
-					"x-amz-meta-duration": duration ?? "",
-					"x-amz-meta-bandwidth": bandwidth ?? "",
-					"x-amz-meta-resolution": resolution ?? "",
-					"x-amz-meta-videocodec": videoCodec ?? "",
-					"x-amz-meta-audiocodec": audioCodec ?? "",
+					"x-amz-meta-duration": durationInSecs
+						? durationInSecs.toString()
+						: "",
 				};
 
 				data = bucket.getPresignedPostUrl(fileKey, { Fields, Expires: 1800 });
@@ -143,11 +129,7 @@ app.post(
 						ContentType: contentType,
 						Metadata: {
 							userid: user.id,
-							duration: duration ?? "",
-							bandwidth: bandwidth ?? "",
-							resolution: resolution ?? "",
-							videocodec: videoCodec ?? "",
-							audiocodec: audioCodec ?? "",
+							duration: durationInSecs ? durationInSecs.toString() : "",
 						},
 					},
 					{ expiresIn: 1800 },
@@ -158,25 +140,21 @@ app.post(
 
 			console.log("Presigned URL created successfully");
 
-			const videoMetadata: VideoMetadata = {
-				duration,
-				bandwidth,
-				resolution,
-				videoCodec,
-				audioCodec,
-				framerate,
-			};
+			// After successful presigned URL creation, trigger revalidation
+			const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
 
-			if (Object.values(videoMetadata).length > 1 && "videoIn" in body)
+			const videoIdToUse = "videoId" in body ? body.videoId : videoIdFromKey;
+			if (videoIdToUse)
 				await db()
 					.update(videos)
 					.set({
-						metadata: videoMetadata,
+						duration: sql`COALESCE(${durationInSecs}, duration)`,
+						width: sql`COALESCE(${width}, width)`,
+						height: sql`COALESCE(${height}, height)`,
+						fps: sql`COALESCE(${fps}, fps)`,
 					})
-					.where(eq(videos.id, body.videoId));
+					.where(eq(videos.id, videoIdToUse));
 
-			// After successful presigned URL creation, trigger revalidation
-			const videoIdFromKey = fileKey.split("/")[1]; // Assuming fileKey format is userId/videoId/...
 			if (videoIdFromKey) {
 				try {
 					await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {
