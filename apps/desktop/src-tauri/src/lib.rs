@@ -1123,7 +1123,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    let screen_metadata = get_video_metadata(path.clone()).await.map_err(|e| {
+    let metadata = get_video_metadata(path.clone()).await.map_err(|e| {
         sentry::capture_message(
             &format!("Failed to get video metadata: {e}"),
             sentry::Level::Error,
@@ -1133,15 +1133,7 @@ async fn upload_exported_video(
             .to_string()
     })?;
 
-    let camera_metadata = get_video_metadata(path.clone()).await.ok();
-
-    let duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    if !auth.is_upgraded() && duration > 300.0 {
+    if !auth.is_upgraded() && metadata.duration > 300.0 {
         return Ok(UploadResult::UpgradeRequired);
     }
 
@@ -1191,7 +1183,7 @@ async fn upload_exported_video(
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
-        Some(duration.to_string()),
+        Some((metadata.duration * 1000.0).to_string()),
     )
     .await
     {

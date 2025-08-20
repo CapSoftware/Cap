@@ -435,7 +435,8 @@ impl TimelineSegment {
         }
     }
 
-    fn duration(&self) -> f64 {
+    /// in seconds
+    pub fn duration(&self) -> f64 {
         (self.end - self.start) / self.timescale
     }
 }
