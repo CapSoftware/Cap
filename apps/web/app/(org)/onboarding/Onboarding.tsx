@@ -11,36 +11,34 @@ export const Onboarding = () => {
 	const router = useRouter();
 	const [firstNameInput, setFirstNameInput] = useState("");
 	const [lastNameInput, setLastNameInput] = useState("");
-	const [loading, setLoading] = useState(false);
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-	const onboardingMutate = useMutation({
-		mutationFn: async () => {
-			setLoading(true);
-			const response = await fetch("/api/settings/onboarding", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({ firstNameInput, lastNameInput }),
-			});
-			return response;
-		},
+	const onboardingRequest = async () => {
+		const response = await fetch("/api/settings/onboarding", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ firstNameInput, lastNameInput }),
+		});
+		return response;
+	};
+
+	const { mutate: onboardingMutate, isPending } = useMutation({
+		mutationFn: async () => await onboardingRequest(),
 		onSuccess: async (response) => {
-			setLoading(false);
-			router.push("/dashboard");
 			const data = await response.json();
+			router.push("/dashboard");
 			if (!data.isMemberOfOrganization) setShowUpgradeModal(true);
 		},
 		onError: () => {
-			setLoading(false);
 			toast.error("Failed to complete onboarding");
 		},
 	});
 
 	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		onboardingMutate.mutate();
+		onboardingMutate();
 	};
 
 	return (
@@ -74,12 +72,12 @@ export const Onboarding = () => {
 					</div>
 				</div>
 				<Button
-					disabled={!firstNameInput || loading}
+					disabled={!firstNameInput || !lastNameInput || isPending}
 					className="mx-auto mt-6 w-full"
 					type="submit"
-					spinner={loading}
+					spinner={isPending}
 				>
-					{loading ? "Submitting..." : "Submit"}
+					{isPending ? "Submitting..." : "Submit"}
 				</Button>
 			</form>
 
