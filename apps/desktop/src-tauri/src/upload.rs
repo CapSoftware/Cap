@@ -329,6 +329,7 @@ pub async fn create_or_get_video(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PresignedS3PutRequest {
     video_id: String,
     subpath: String,
@@ -338,6 +339,7 @@ pub struct PresignedS3PutRequest {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum PresignedS3PutRequestMethod {
     #[allow(unused)]
     Post,

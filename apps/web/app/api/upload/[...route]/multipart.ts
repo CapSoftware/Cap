@@ -1,4 +1,4 @@
-import { db } from "@cap/database";
+import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
@@ -9,6 +9,7 @@ import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { createBucketProvider } from "@/utils/s3";
 import { parseVideoIdOrFileKey } from "../utils";
+import { stringOrNumberOptional } from "@/utils/zod";
 
 export const app = new Hono().use(withAuth);
 
@@ -162,10 +163,10 @@ app.post(
 						size: z.number(),
 					}),
 				),
-				durationInSecs: z.coerce.number().optional(),
-				width: z.coerce.number().optional(),
-				height: z.coerce.number().optional(),
-				fps: z.coerce.number().optional(),
+				durationInSecs: stringOrNumberOptional,
+				width: stringOrNumberOptional,
+				height: stringOrNumberOptional,
+				fps: stringOrNumberOptional,
 			})
 			.and(
 				z.union([
@@ -281,10 +282,10 @@ app.post(
 						await db()
 							.update(videos)
 							.set({
-								duration: sql`COALESCE(${body.durationInSecs}, duration)`,
-								width: sql`COALESCE(${body.width}, width)`,
-								height: sql`COALESCE(${body.height}, height)`,
-								fps: sql`COALESCE(${body.fps}, fps)`,
+								duration: updateIfDefined(body.durationInSecs, videos.duration),
+								width: updateIfDefined(body.width, videos.width),
+								height: updateIfDefined(body.height, videos.height),
+								fps: updateIfDefined(body.fps, videos.fps),
 							})
 							.where(eq(videos.id, videoIdToUse));
 

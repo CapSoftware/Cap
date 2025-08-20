@@ -145,6 +145,7 @@ export async function getVideosByFolderId(folderId: string) {
 			name: videos.name,
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
+			duration: videos.duration,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`

@@ -2,7 +2,7 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
-import { db } from "@cap/database";
+import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
@@ -13,6 +13,7 @@ import { z } from "zod";
 import { createBucketProvider } from "@/utils/s3";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
+import { stringOrNumberOptional } from "@/utils/zod";
 
 export const app = new Hono().use(withAuth);
 
@@ -23,10 +24,10 @@ app.post(
 		z
 			.object({
 				method: z.union([z.literal("post"), z.literal("put")]).default("post"),
-				durationInSecs: z.coerce.number().optional(),
-				width: z.coerce.number().optional(),
-				height: z.coerce.number().optional(),
-				fps: z.coerce.number().optional(),
+				durationInSecs: stringOrNumberOptional,
+				width: stringOrNumberOptional,
+				height: stringOrNumberOptional,
+				fps: stringOrNumberOptional,
 			})
 			.and(
 				z.union([
@@ -148,10 +149,10 @@ app.post(
 				await db()
 					.update(videos)
 					.set({
-						duration: sql`COALESCE(${durationInSecs}, duration)`,
-						width: sql`COALESCE(${width}, width)`,
-						height: sql`COALESCE(${height}, height)`,
-						fps: sql`COALESCE(${fps}, fps)`,
+						duration: updateIfDefined(durationInSecs, videos.duration),
+						width: updateIfDefined(width, videos.width),
+						height: updateIfDefined(height, videos.height),
+						fps: updateIfDefined(fps, videos.fps),
 					})
 					.where(eq(videos.id, videoIdToUse));
 

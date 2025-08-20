@@ -12,6 +12,7 @@ import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 
 import { withAuth } from "../../utils";
+import { stringOrNumberOptional } from "@/utils/zod";
 
 export const app = new Hono().use(withAuth);
 
@@ -26,10 +27,10 @@ app.get(
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
 			name: z.string().optional(),
-			durationInSecs: z.coerce.number().optional(),
-			width: z.coerce.number().optional(),
-			height: z.coerce.number().optional(),
-			fps: z.coerce.number().optional(),
+			durationInSecs: stringOrNumberOptional,
+			width: stringOrNumberOptional,
+			height: stringOrNumberOptional,
+			fps: stringOrNumberOptional,
 		}),
 	),
 	async (c) => {
