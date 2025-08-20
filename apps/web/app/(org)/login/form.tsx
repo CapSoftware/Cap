@@ -96,8 +96,6 @@ export function LoginForm() {
 				});
 				const data = await response.json();
 
-				console.log(data);
-
 				if (data.url) {
 					window.location.href = data.url;
 				}
@@ -247,7 +245,6 @@ export function LoginForm() {
 											e.preventDefault();
 											if (!email) return;
 
-											console.log({ lastEmailSentTime });
 											// Check if we're rate limited on the client side
 											if (lastEmailSentTime) {
 												const timeSinceLastRequest =
