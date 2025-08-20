@@ -12,7 +12,7 @@ use std::{
 };
 
 use windows::{
-    Foundation::TypedEventHandler,
+    Foundation::{TypedEventHandler, Metadata::ApiInformation},
     Graphics::{
         Capture::{Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem},
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
@@ -48,7 +48,7 @@ use windows::{
             DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_QUIT,
         },
     },
-    core::{IInspectable, Interface},
+    core::{IInspectable, Interface, HSTRING},
 };
 
 #[derive(Default, Clone, Copy, Debug)]
@@ -76,9 +76,32 @@ impl PixelFormat {
 pub struct Settings {
     pub is_border_required: Option<bool>,
     pub is_cursor_capture_enabled: Option<bool>,
-    pub pixel_format: PixelFormat,
     pub min_update_interval: Option<Duration>,
+    pub pixel_format: PixelFormat,
     pub crop: Option<D3D11_BOX>,
+}
+
+impl Settings {
+	pub fn can_is_border_required(&self) -> windows::core::Result<bool> {
+		Ok(ApiInformation::IsPropertyPresent(
+			&HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+			&HSTRING::from("IsCursorCaptureEnabled"),
+		))
+	}
+
+	pub fn can_is_cursor_capture_enabled(&self) -> windows::core::Result<bool> {
+		Ok(ApiInformation::IsPropertyPresent(
+			&HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+			&HSTRING::from("IsBorderRequired"),
+		))
+	}
+
+	pub fn can_min_update_interval(&self) -> windows::core::Result<bool> {
+		Ok(ApiInformation::IsPropertyPresent(
+			&HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
+			&HSTRING::from("MinUpdateInterval"),
+		))
+	}
 }
 
 pub struct Capturer {
