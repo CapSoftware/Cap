@@ -8,6 +8,7 @@ windows = { workspace = true, features = [
 	"System",
 	"Graphics_Capture",
 	"Graphics_DirectX_Direct3D11",
+	"Foundation_Metadata",
 	"Win32_Graphics_Gdi",
 	"Win32_Graphics_Direct3D",
 	"Win32_Graphics_Direct3D11",
