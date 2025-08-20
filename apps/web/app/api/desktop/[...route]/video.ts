@@ -10,9 +10,8 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
-
-import { withAuth } from "../../utils";
 import { stringOrNumberOptional } from "@/utils/zod";
+import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
 

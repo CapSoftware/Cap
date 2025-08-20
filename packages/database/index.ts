@@ -1,7 +1,7 @@
 import { serverEnv } from "@cap/env";
 import { Client, type Config } from "@planetscale/database";
 import { sql } from "drizzle-orm";
-import { AnyMySqlColumn } from "drizzle-orm/mysql-core";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/planetscale-serverless";
 
 function createDrizzle() {
