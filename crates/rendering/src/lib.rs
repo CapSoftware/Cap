@@ -959,22 +959,46 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
         }
-        {
-            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+        if !active_blur_segments(uniforms, current_time).is_empty() {
+            // Start a new render pass that WRITES to the OTHER texture.
+            let mut pass = render_pass!(session.other_texture_view(), wgpu::LoadOp::Load);
+
             self.selective_blur.render(
                 &mut pass,
                 device,
+                // READ from the CURRENT texture.
                 session.current_texture_view(),
                 uniforms,
                 current_time,
             );
+
+            // IMPORTANT: After the pass is done, swap the textures.
+            // The blurred result is now the "current" texture.
+            drop(pass);
+            session.swap_textures();
         }
+
 
         // {
         //     let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
         //     self.captions.render(&mut pass);
         // }
     }
+}
+
+fn active_blur_segments(uniforms: &ProjectUniforms, current_time: f32) -> Vec<&cap_project::BlurSegment> {
+    uniforms
+        .project
+        .timeline
+        .as_ref()
+        .and_then(|t| t.blur_segments.as_ref())
+        .map(|segments| {
+            segments
+                .iter()
+                .filter(|segment| current_time >= segment.start as f32 && current_time <= segment.end as f32)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub struct RenderSession {
@@ -1092,7 +1116,7 @@ async fn produce_frame(
         }),
     );
 
-    layers.render(&constants.device, &mut encoder, session,&uniforms);
+    layers.render(&constants.device, &mut encoder, session,&uniforms,segment_frames.recording_time);
 
     finish_encoder(
         session,

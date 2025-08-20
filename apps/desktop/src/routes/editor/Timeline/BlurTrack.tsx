@@ -2,7 +2,6 @@ import {
     createEventListener,
     createEventListenerMap,
 } from "@solid-primitives/event-listener";
-import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
     batch,
@@ -13,7 +12,6 @@ import {
     Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
-import { commands } from "~/utils/tauri";
 import { useEditorContext } from "../context";
 import {
     useSegmentContext,
@@ -39,33 +37,8 @@ export function BlurTrack(props: {
     const [hoveringSegment, setHoveringSegment] = createSignal(false);
     const [hoveredTime, setHoveredTime] = createSignal<number>();
 
-    const handleGenerateBlurSegments = async () => {
-        try {
-            const blurSegments = await commands.generateBlurSegmentsFromClicks();
-            setProject("timeline", "blurSegments", blurSegments);
-        } catch (error) {
-            console.error("Failed to generate blur segments:", error);
-        }
-    };
-
     return (
         <TrackRoot
-            onContextMenu={async (e) => {
-                if (!import.meta.env.DEV) return;
-
-                e.preventDefault();
-                const menu = await Menu.new({
-                    id: "blur-track-options",
-                    items: [
-                        {
-                            id: "generateBlurSegments",
-                            text: "Generate blur segments from clicks",
-                            action: handleGenerateBlurSegments,
-                        },
-                    ],
-                });
-                menu.popup();
-            }}
             onMouseMove={(e) => {
                 if (hoveringSegment()) {
                     setHoveredTime(undefined);
@@ -161,7 +134,8 @@ export function BlurTrack(props: {
 
                     const blurPercentage = () => {
                         const amount = segment.blur_amount;
-                        return `${amount.toFixed(1)}x`;
+                        // Handle potential null or undefined amount
+                        return amount ? `${amount.toFixed(1)}x` : '...';
                     };
 
                     const blurSegments = () => project.timeline!.blurSegments!;
@@ -249,7 +223,7 @@ export function BlurTrack(props: {
                             ? "wobble-wrapper border-blue-400"
                             : "border-transparent",
                         )}
-                      
+
                             innerClass="ring-red-5"
                             segment={segment}
                             onMouseEnter={() => {
@@ -299,7 +273,7 @@ export function BlurTrack(props: {
                                             "timeline",
                                             "blurSegments",
                                             produce((s) => {
-                                                s.sort((a, b) => a.start - b.start);
+                                                s?.sort((a, b) => a.start - b.start);
                                             }),
                                         );
                                     },
@@ -337,10 +311,11 @@ export function BlurTrack(props: {
                                         else if (newEnd > value.maxEnd)
                                             delta = value.maxEnd - value.original.end;
 
-                                        setProject("timeline", "blurSegments", i(), {
+                                        setProject("timeline", "blurSegments", i(), (prev) => ({
+                                            ...prev,
                                             start: value.original.start + delta,
                                             end: value.original.end + delta,
-                                        });
+                                        }));
                                     },
                                 )}
                             >
@@ -352,7 +327,8 @@ export function BlurTrack(props: {
                                             <div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 fade-in">
                                                 <span class="opacity-70">Blur</span>
                                                 <div class="flex gap-1 items-center text-md">
-                                                    <IconCapBlur class="size-3.5" />{" "}
+                                                    {/* Assuming you have an IconCapBlur component */}
+                                                    {/* <IconCapBlur class="size-3.5" />{" "} */}
                                                     {blurPercentage()}{" "}
                                                 </div>
                                             </div>
@@ -399,7 +375,7 @@ export function BlurTrack(props: {
                                             "timeline",
                                             "blurSegments",
                                             produce((s) => {
-                                                s.sort((a, b) => a.start - b.start);
+                                                s?.sort((a, b) => a.start - b.start);
                                             }),
                                         );
                                     },

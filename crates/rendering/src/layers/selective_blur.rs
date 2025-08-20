@@ -13,6 +13,8 @@ pub struct SelectiveBlurLayer {
 impl SelectiveBlurLayer {
     pub fn new(device: &wgpu::Device) -> Self {
         let pipeline = SelectiveBlurPipeline::new(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        
+        // High-quality sampler for smooth blur
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Selective Blur Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -21,6 +23,7 @@ impl SelectiveBlurLayer {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: 1,
             ..Default::default()
         });
 
@@ -43,28 +46,39 @@ impl SelectiveBlurLayer {
             .map(|segments| {
                 segments
                     .iter()
-                    .filter(|segment| current_time >= segment.start && current_time <= segment.end)
+                    .filter(|segment| {
+                        current_time >= segment.start as f32 && 
+                        current_time <= segment.end as f32
+                    })
                     .collect()
             })
             .unwrap_or_default();
 
-        if active_segments.is_empty() {
-            return;
-        }
-
         let gpu_blur_segments: Vec<GpuBlurSegment> = active_segments
             .iter()
-            .map(|segment| GpuBlurSegment {
-                rect: [
-                    segment.rect.x as f32,
-                    segment.rect.y as f32, 
-                    segment.rect.width as f32,
-                    segment.rect.height as f32,
-                ],
-                blur_amount: segment.blur_amount.unwrap_or(8.0),
-                _padding: [0.0; 3],
+            .filter(|segment| segment.blur_amount.unwrap_or(0.0) >= 0.01)
+            .map(|segment| {
+                // Convert from 0-1 slider range to shader-appropriate values
+                let blur_intensity = segment.blur_amount.unwrap_or(0.0) as f32;
+                
+                let shader_blur_amount = blur_intensity * 8.0;
+                
+                GpuBlurSegment {
+                    rect: [
+                        segment.rect.x as f32,
+                        segment.rect.y as f32,
+                        segment.rect.width as f32,
+                        segment.rect.height as f32,
+                    ],
+                    blur_amount: shader_blur_amount,
+                    _padding: [0.0; 3],
+                }
             })
             .collect();
+       
+        if gpu_blur_segments.is_empty() {
+            return;
+        }
 
         let blur_uniforms = SelectiveBlurUniforms {
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
@@ -72,40 +86,13 @@ impl SelectiveBlurLayer {
             _padding: 0.0,
         };
 
-        let uniforms_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Selective Blur Uniforms"),
-            contents: cast_slice(&[blur_uniforms]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
-        let segments_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Blur Segments Buffer"),
-            contents: cast_slice(&gpu_blur_segments),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Selective Blur Bind Group"),
-            layout: &self.pipeline.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniforms_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(input_texture_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: segments_buffer.as_entire_binding(),
-                },
-            ],
-        });
+        let bind_group = self.pipeline.create_bind_group(
+            device,
+            &blur_uniforms,
+            input_texture_view,
+            &self.sampler,
+            &gpu_blur_segments,
+        );
 
         pass.set_pipeline(&self.pipeline.render_pipeline);
         pass.set_bind_group(0, &bind_group, &[]);

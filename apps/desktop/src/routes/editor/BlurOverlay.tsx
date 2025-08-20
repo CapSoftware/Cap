@@ -21,6 +21,7 @@ export function BlurOverlay() {
   const containerBounds = createElementBounds(canvasContainerRef);
 
   const currentTime = () => editorState.previewTime ?? editorState.playbackTime ?? 0;
+  
 
   const activeBlurSegmentsWithIndex = () => {
     return (project.timeline?.blurSegments || []).map((segment, index) => ({ segment, index })).filter(
@@ -86,7 +87,7 @@ function BlurRectangle(props: BlurRectangleProps) {
     const startX = e.clientX;
     const startY = e.clientY;
     const startRect = { ...props.rect };
-
+  
     createRoot((dispose) => {
       createEventListenerMap(window, {
         mousemove: (moveEvent: MouseEvent) => {
@@ -96,42 +97,35 @@ function BlurRectangle(props: BlurRectangleProps) {
           let newRect = { ...startRect };
 
           if (action === 'move') {
+            // Clamp the new position to stay within the 0.0 to 1.0 bounds
             newRect.x = Math.max(0, Math.min(1 - newRect.width, startRect.x + deltaX));
             newRect.y = Math.max(0, Math.min(1 - newRect.height, startRect.y + deltaY));
           } else if (action === 'resize') {
-            switch (corner) {
-              case 'nw': // Northwest corner
-                newRect.x = Math.max(0, startRect.x + deltaX);
-                newRect.y = Math.max(0, startRect.y + deltaY);
-                newRect.width = startRect.width - deltaX;
-                newRect.height = startRect.height - deltaY;
-                break;
-              case 'ne': // Northeast corner
-                newRect.y = Math.max(0, startRect.y + deltaY);
-                newRect.width = startRect.width + deltaX;
-                newRect.height = startRect.height - deltaY;
-                break;
-              case 'sw': // Southwest corner
-                newRect.x = Math.max(0, startRect.x + deltaX);
-                newRect.width = startRect.width - deltaX;
-                newRect.height = startRect.height + deltaY;
-                break;
-              case 'se': // Southeast corner
-                newRect.width = startRect.width + deltaX;
-                newRect.height = startRect.height + deltaY;
-                break;
-            }
+            // --- This resize logic needs the bounds check ---
+            let right = startRect.x + startRect.width;
+            let bottom = startRect.y + startRect.height;
 
-            // Ensure minimum size
-            newRect.width = Math.max(0.05, newRect.width);
-            newRect.height = Math.max(0.05, newRect.height);
-            
-            // Ensure within bounds
-            newRect.x = Math.max(0, Math.min(1 - newRect.width, newRect.x));
-            newRect.y = Math.max(0, Math.min(1 - newRect.height, newRect.y));
-            newRect.width = Math.min(1 - newRect.x, newRect.width);
-            newRect.height = Math.min(1 - newRect.y, newRect.height);
+            if (corner?.includes('w')) { // West (left) handles
+              newRect.x = Math.max(0, startRect.x + deltaX);
+              newRect.width = right - newRect.x;
+            }
+            if (corner?.includes('n')) { // North (top) handles
+              newRect.y = Math.max(0, startRect.y + deltaY);
+              newRect.height = bottom - newRect.y;
+            }
+            if (corner?.includes('e')) { // East (right) handles
+              right = Math.min(1, right + deltaX);
+              newRect.width = right - newRect.x;
+            }
+            if (corner?.includes('s')) { // South (bottom) handles
+              bottom = Math.min(1, bottom + deltaY);
+              newRect.height = bottom - newRect.y;
+            }
           }
+          
+          // Ensure minimum size after any operation
+          if (newRect.width < 0.05) newRect.width = 0.05;
+          if (newRect.height < 0.05) newRect.height = 0.05;
 
           props.onUpdate(newRect);
         },
@@ -141,7 +135,7 @@ function BlurRectangle(props: BlurRectangleProps) {
       });
     });
   };
-
+  const scaledBlurAmount = () => (props.blurAmount ?? 0) * 20;
   return (
     <div
       class={cx(
@@ -150,8 +144,8 @@ function BlurRectangle(props: BlurRectangleProps) {
       )}
       style={{
         ...props.style,
-        "backdrop-filter": `blur(${props.blurAmount}px)`,
-        "-webkit-backdrop-filter": `blur(${props.blurAmount}px)`, // Fallback for WebKit browsers
+        "backdrop-filter": `blur(${scaledBlurAmount()}px)`,
+        "-webkit-backdrop-filter": `blur(${scaledBlurAmount()}px)`,
       }}
     >
       <Show when={props.isEditing}>

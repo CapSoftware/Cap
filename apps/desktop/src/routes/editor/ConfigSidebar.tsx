@@ -2034,8 +2034,9 @@ function BlurSegmentConfig(props: {
 			</div>
 			
 			<Field name="Blur Intensity" icon={<IconCapBlur />}>
-				<Slider
-					value={[props.segment.blur_amount]}
+			<Slider
+					
+					value={[props.segment.blur_amount ?? 0]}
 					onChange={(v) =>
 						setProject(
 							"timeline",
@@ -2045,10 +2046,11 @@ function BlurSegmentConfig(props: {
 							v[0],
 						)
 					}
+					
 					minValue={0}
-					maxValue={20}
-					step={0.1}
-					formatTooltip="px"
+					maxValue={1} 
+					step={0.01} 
+					formatTooltip={(value) => `${Math.round(value * 100)}%`} 
 				/>
 			</Field>
 
