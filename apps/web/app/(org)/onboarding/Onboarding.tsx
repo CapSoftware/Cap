@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -9,43 +10,37 @@ import { UpgradeModal } from "@/components/UpgradeModal";
 export const Onboarding = () => {
 	const router = useRouter();
 	const [firstNameInput, setFirstNameInput] = useState("");
+	const [lastNameInput, setLastNameInput] = useState("");
 	const [loading, setLoading] = useState(false);
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-		e.preventDefault();
-
-		setLoading(true);
-
-		const formData = new FormData(e.currentTarget);
-		const firstName = formData.get("firstName") as string;
-		const lastName = formData.get("lastName") as string;
-
-		try {
+	const onboardingMutate = useMutation({
+		mutationFn: async () => {
+			setLoading(true);
 			const response = await fetch("/api/settings/onboarding", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify({ firstName, lastName }),
+				body: JSON.stringify({ firstNameInput, lastNameInput }),
 			});
-
-			if (response.ok) {
-				const data = await response.json();
-
-				if (!data.isMemberOfOrganization) setShowUpgradeModal(true);
-
-				toast.success("Name updated successfully");
-				router.push("/dashboard");
-			} else {
-				toast.error("Failed to update name");
-			}
-		} catch (error) {
-			console.error("Error updating name:", error);
-			toast.error("An error occurred while updating name");
-		} finally {
+			return response;
+		},
+		onSuccess: async (response) => {
 			setLoading(false);
-		}
+			router.push("/dashboard");
+			const data = await response.json();
+			if (!data.isMemberOfOrganization) setShowUpgradeModal(true);
+		},
+		onError: () => {
+			setLoading(false);
+			toast.error("Failed to complete onboarding");
+		},
+	});
+
+	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		onboardingMutate.mutate();
 	};
 
 	return (
@@ -72,16 +67,19 @@ export const Onboarding = () => {
 							id="lastName"
 							name="lastName"
 							placeholder="Last name"
+							required
+							value={lastNameInput}
+							onChange={(e) => setLastNameInput(e.target.value)}
 						/>
 					</div>
 				</div>
 				<Button
-					disabled={!firstNameInput}
+					disabled={!firstNameInput || loading}
 					className="mx-auto mt-6 w-full"
 					type="submit"
 					spinner={loading}
 				>
-					Complete
+					{loading ? "Submitting..." : "Submit"}
 				</Button>
 			</form>
 
