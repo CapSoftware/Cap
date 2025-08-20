@@ -25,7 +25,7 @@ pub async fn main() {
                     LogicalSize::new(450.0, 400.0)
                 )
             },
-            capture_system_audio: false,
+            capture_system_audio: true,
             mic_feed: &None,
         },
         None,

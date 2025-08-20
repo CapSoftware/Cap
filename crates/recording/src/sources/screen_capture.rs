@@ -352,7 +352,6 @@ mod windows {
                 last_log: Instant,
                 frame_events: VecDeque<(Instant, bool)>,
                 video_tx: Sender<(ffmpeg::frame::Video, f64)>,
-                audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
             }
 
             impl Actor for FrameHandler {
@@ -502,7 +501,6 @@ mod windows {
                 let frame_handler = FrameHandler::spawn(FrameHandler {
                     capturer: capturer.downgrade(),
                     video_tx,
-                    audio_tx,
                     start_time,
                     frame_events: Default::default(),
                     frames_dropped: Default::default(),
@@ -572,9 +570,11 @@ mod windows {
                     .send()
                     .await;
 
-                let audio_capture = WindowsAudioCapture::spawn(WindowsAudioCapture::new().unwrap());
+                if let Some(audio_tx) = audio_tx {
+                    let audio_capture = WindowsAudioCapture::spawn(WindowsAudioCapture::new(audio_tx, start_time).unwrap());
 
-                let _ = audio_capture.ask(audio::StartCapturing).send().await;
+                    let _ = audio_capture.ask(audio::StartCapturing).send().await;
+                }
 
                 let _ = ready_signal.send(Ok(()));
 
@@ -685,37 +685,44 @@ mod windows {
     use audio::WindowsAudioCapture;
     pub mod audio {
         use super::*;
+        use scap_cpal::*;
+        use scap_ffmpeg::*;
         use cpal::traits::StreamTrait;
 
         #[derive(Actor)]
         pub struct WindowsAudioCapture {
-            stream: cpal::Stream,
+            capturer: scap_cpal::Capturer,
         }
 
         impl WindowsAudioCapture {
-            pub fn new() -> Result<Self, &'static str> {
-                let host = cpal::default_host();
-                let output_device = host.default_output_device().ok_or("Device not available")?;
-                let supported_config = output_device
-                    .default_output_config()
-                    .map_err(|_| "Failed to get default output config")?;
-                let config = supported_config.clone().into();
+            pub fn new(audio_tx: Sender<(ffmpeg::frame::Audio, f64)>, start_time: SystemTime) -> Result<Self, &'static str> {
+            	let mut i = 0;
+            	let capturer = scap_cpal::create_capturer(
+		            move |data, _: &cpal::InputCallbackInfo, config| {
+						use scap_ffmpeg::*;
 
-                let stream = output_device
-                    .build_input_stream_raw(
-                        &config,
-                        supported_config.sample_format(),
-                        move |data, _: &cpal::InputCallbackInfo| {
-                            dbg!(data.len());
-                        },
-                        move |e| {
-                            dbg!(e);
-                        },
-                        None,
-                    )
-                    .unwrap();
+						let timestamp = SystemTime::now();
+						let mut ff_frame = data.as_ffmpeg(config);
 
-                Ok(Self { stream })
+						let Ok(elapsed) = timestamp.duration_since(start_time) else {
+							warn!("Skipping audio frame {i} as elapsed time is invalid");
+							return;
+						};
+
+						ff_frame.set_pts(Some(
+							(elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64
+						));
+
+						let _ = audio_tx.send((ff_frame, elapsed.as_secs_f64()));
+						i += 1;
+		            },
+		            move |e| {
+				        dbg!(e);
+		            },
+             	)?;
+
+
+                Ok(Self { capturer })
             }
         }
 
@@ -729,7 +736,7 @@ mod windows {
                 msg: StartCapturing,
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
-                self.stream.play().map_err(|_| "failed to start stream")?;
+                self.capturer.play().map_err(|_| "failed to start stream")?;
 
                 Ok(())
             }
