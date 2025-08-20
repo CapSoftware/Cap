@@ -32,15 +32,14 @@ struct VertexOutput {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-    // Generate a full-screen triangle with consistent UV mapping
-    // (0,0) = top-left, (1,1) = bottom-right (matches frontend)
+    
     var positions = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -1.0), // Bottom-left in clip space
         vec2<f32>( 3.0, -1.0), // Far bottom-right in clip space
         vec2<f32>(-1.0,  3.0)  // Far top-left in clip space
     );
     
-    // Fixed UV coordinates - consistent mapping
+  
     var uvs = array<vec2<f32>, 3>(
         vec2<f32>(0.0, 1.0), // Bottom-left in texture space
         vec2<f32>(2.0, 1.0), // Far bottom-right in texture space
@@ -53,10 +52,7 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     return VertexOutput(vec4<f32>(pos, 0.0, 1.0), uv);
 }
 
-/**
- * @function apply_blur
- * Performs Gaussian blur with proper sampling
- */
+
 fn apply_blur(uv: vec2<f32>, blur_amount: f32) -> vec4<f32> {
     let pixel_size = 1.0 / uniforms.output_size;
     var color = vec4<f32>(0.0);
@@ -72,8 +68,7 @@ fn apply_blur(uv: vec2<f32>, blur_amount: f32) -> vec4<f32> {
             let offset = vec2<f32>(f32(x), f32(y)) * pixel_size;
             let sample_pos = uv + offset;
             
-            // Sample from anywhere in the texture, not restricted to rectangle
-            // This allows blur to sample from outside the blur region
+            
             let sample_uv = clamp(sample_pos, vec2<f32>(0.0), vec2<f32>(1.0));
             
             let dist_sq = f32(x * x + y * y);
@@ -89,7 +84,7 @@ fn apply_blur(uv: vec2<f32>, blur_amount: f32) -> vec4<f32> {
 
 @fragment
 fn fs_main(frag_in: VertexOutput) -> @location(0) vec4<f32> {
-    // Check if current pixel is inside any blur rectangle
+   
     for (var i: u32 = 0u; i < uniforms.blur_segments_count; i = i + 1u) {
         let segment = blur_segments[i];
         let rect = segment.rect;
@@ -103,6 +98,5 @@ fn fs_main(frag_in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // If pixel is not in any blur rectangle, return original color
     return textureSample(t_input, s_input, frag_in.uv);
 }
