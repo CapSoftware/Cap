@@ -106,10 +106,6 @@ export default async function CapsPage({
 		redirect("/login");
 	}
 
-	if (!user.name || user.name.length <= 1) {
-		redirect("/onboarding");
-	}
-
 	const userId = user.id;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;

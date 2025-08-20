@@ -1,48 +1,46 @@
 "use client";
 
 import { Button, Input } from "@cap/ui";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { UpgradeModal } from "@/components/UpgradeModal";
 
 export const Onboarding = () => {
-	const router = useRouter();
-	const [firstNameInput, setFirstNameInput] = useState("");
 	const [loading, setLoading] = useState(false);
+	const [firstName, setFirstName] = useState("");
+	const [lastName, setLastName] = useState("");
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+
+	const onboardingRequest = async () => {
+		const response = await fetch("/api/settings/onboarding", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({ firstName, lastName }),
+		});
+
+		if (!response.ok) {
+			throw new Error(`HTTP error! status: ${response.status}`);
+		}
+
+		return response.json();
+	};
 
 	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-
-		setLoading(true);
-
-		const formData = new FormData(e.currentTarget);
-		const firstName = formData.get("firstName") as string;
-		const lastName = formData.get("lastName") as string;
-
 		try {
-			const response = await fetch("/api/settings/onboarding", {
-				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({ firstName, lastName }),
-			});
+			setLoading(true);
+			const response = await onboardingRequest();
 
-			if (response.ok) {
-				const data = await response.json();
-
-				if (!data.isMemberOfOrganization) setShowUpgradeModal(true);
-
-				toast.success("Name updated successfully");
-				router.push("/dashboard");
+			if (!response.isMemberOfOrganization) {
+				setShowUpgradeModal(true);
 			} else {
-				toast.error("Failed to update name");
+				// Force complete page reload to bypass React cache
+				window.location.replace("/dashboard");
 			}
-		} catch (error) {
-			console.error("Error updating name:", error);
-			toast.error("An error occurred while updating name");
+		} catch {
+			toast.error("Failed to complete onboarding");
 		} finally {
 			setLoading(false);
 		}
@@ -62,8 +60,8 @@ export const Onboarding = () => {
 							placeholder="First name"
 							name="firstName"
 							required
-							value={firstNameInput}
-							onChange={(e) => setFirstNameInput(e.target.value)}
+							value={firstName}
+							onChange={(e) => setFirstName(e.target.value)}
 						/>
 					</div>
 					<div className="flex flex-col space-y-1">
@@ -72,16 +70,19 @@ export const Onboarding = () => {
 							id="lastName"
 							name="lastName"
 							placeholder="Last name"
+							required
+							value={lastName}
+							onChange={(e) => setLastName(e.target.value)}
 						/>
 					</div>
 				</div>
 				<Button
-					disabled={!firstNameInput}
+					disabled={!firstName || !lastName || loading}
 					className="mx-auto mt-6 w-full"
 					type="submit"
 					spinner={loading}
 				>
-					Complete
+					{loading ? "Submitting..." : "Submit"}
 				</Button>
 			</form>
 
@@ -90,7 +91,7 @@ export const Onboarding = () => {
 				onOpenChange={(open) => {
 					setShowUpgradeModal(open);
 					if (!open) {
-						router.push("/dashboard");
+						window.location.replace("/dashboard");
 					}
 				}}
 			/>
