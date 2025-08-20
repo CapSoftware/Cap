@@ -281,22 +281,11 @@ export function LayoutTrack(props: {
 						return segmentIndex === selection.index;
 					});
 
-					const segmentColor = () => {
-						switch (segment.mode) {
-							case "cameraOnly":
-								return "from-[#E3701B] via-[#FF9D57] to-[#E3701B]";
-							case "hideCamera":
-								return "from-[#EF4444] via-[#F87171] to-[#EF4444]";
-							default:
-								return "from-[#069962] via-[#2FD49C] to-[#069962]";
-						}
-					};
-
 					return (
 						<SegmentRoot
 							class={cx(
 								"border transition-colors duration-200 hover:border-gray-12 group",
-								`bg-gradient-to-r ${segmentColor()} shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]`,
+								`bg-gradient-to-r from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]`,
 								isSelected()
 									? "wobble-wrapper border-gray-12"
 									: "border-transparent",
