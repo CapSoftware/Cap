@@ -3,6 +3,7 @@
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
+use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
 use futures::StreamExt;
 use image::ImageReader;
@@ -10,7 +11,6 @@ use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use specta::Type;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -76,50 +76,16 @@ impl S3UploadMeta {
     // }
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3UploadBody {
-    video_id: String,
-    subpath: String,
-}
-
-#[derive(serde::Serialize)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct S3VideoMeta {
     #[serde(rename = "durationInSecs")]
-    pub duration_in_secs: String,
-    pub bandwidth: String,
-    pub resolution: String,
-    pub video_codec: String,
-    pub audio_codec: String,
-    pub framerate: String,
+    pub duration_in_secs: f64,
+    pub width: u32,
+    pub height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
 }
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3VideoUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-    #[serde(flatten)]
-    meta: S3VideoMeta,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3ImageUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-}
-
-// #[derive(serde::Serialize)]
-// #[serde(rename_all = "camelCase")]
-// struct S3AudioUploadBody {
-//     #[serde(flatten)]
-//     base: S3UploadBody,
-//     duration: String,
-//     audio_codec: String,
-//     is_mp3: bool,
-// }
 
 pub struct UploadedVideo {
     pub link: String,
@@ -145,25 +111,26 @@ pub async fn upload_video(
     file_path: PathBuf,
     existing_config: Option<S3UploadMeta>,
     screenshot_path: Option<PathBuf>,
-    duration: Option<String>,
+    meta: Option<S3VideoMeta>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id.clone()), None, duration).await?,
+        None => create_or_get_video(app, false, Some(video_id.clone()), None, meta).await?,
     };
 
-    let body = S3VideoUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: video_id.clone(),
             subpath: "result.mp4".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: Some(build_video_meta(&file_path)?),
         },
-        meta: build_video_meta(&file_path)?,
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let file = tokio::fs::File::open(&file_path)
         .await
@@ -266,14 +233,16 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     let client = reqwest::Client::new();
     let s3_config = create_or_get_video(app, true, None, None, None).await?;
 
-    let body = S3ImageUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: file_name,
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
         },
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
@@ -315,7 +284,7 @@ pub async fn create_or_get_video(
     is_screenshot: bool,
     video_id: Option<String>,
     name: Option<String>,
-    duration: Option<String>,
+    meta: Option<S3VideoMeta>,
 ) -> Result<S3UploadMeta, String> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
@@ -329,8 +298,13 @@ pub async fn create_or_get_video(
         s3_config_url.push_str(&format!("&name={name}"));
     }
 
-    if let Some(duration) = duration {
-        s3_config_url.push_str(&format!("&duration={duration}"));
+    if let Some(meta) = meta {
+        s3_config_url.push_str(&format!("&durationInSecs={}", meta.duration_in_secs));
+        s3_config_url.push_str(&format!("&width={}", meta.width));
+        s3_config_url.push_str(&format!("&height={}", meta.height));
+        if let Some(fps) = meta.fps {
+            s3_config_url.push_str(&format!("&fps={}", fps));
+        }
     }
 
     let response = app
@@ -354,7 +328,23 @@ pub async fn create_or_get_video(
     Ok(config)
 }
 
-async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<String, String> {
+#[derive(Serialize)]
+pub struct PresignedS3PutRequest {
+    video_id: String,
+    subpath: String,
+    method: PresignedS3PutRequestMethod,
+    #[serde(flatten)]
+    meta: Option<S3VideoMeta>,
+}
+
+#[derive(Serialize)]
+pub enum PresignedS3PutRequestMethod {
+    #[allow(unused)]
+    Post,
+    Put,
+}
+
+async fn presigned_s3_put(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
     #[derive(Deserialize, Debug)]
     struct Data {
         url: String,
@@ -368,10 +358,7 @@ async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<Strin
 
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            let mut body_json = json!(body);
-            let a = body_json.as_object_mut().unwrap();
-            a.insert("method".to_string(), json!("put"));
-            client.post(url).json(&json!(body_json))
+            client.post(url).json(&body)
         })
         .await
         .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
@@ -398,37 +385,15 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
 
     let video_codec = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
-    let video_codec_name = video_codec.id();
     let video = video_codec.decoder().video().unwrap();
-    let width = video.width();
-    let height = video.height();
-    let frame_rate = video
-        .frame_rate()
-        .map(|fps| fps.to_string())
-        .unwrap_or("-".into());
-    let bit_rate = video.bit_rate();
-
-    let audio_codec_name = input
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .map(|audio_stream| {
-            ffmpeg::codec::context::Context::from_parameters(audio_stream.parameters())
-                .map(|c| c.id())
-                .map_err(|e| format!("Unable to read audio codec information: {e}"))
-        })
-        .transpose()?;
 
     Ok(S3VideoMeta {
-        duration_in_secs: input.duration().to_string(),
-        resolution: format!("{width}x{height}"),
-        framerate: frame_rate,
-        bandwidth: bit_rate.to_string(),
-        video_codec: format!("{video_codec_name:?}")
-            .replace("Id::", "")
-            .to_lowercase(),
-        audio_codec: audio_codec_name
-            .map(|name| format!("{name:?}").replace("Id::", "").to_lowercase())
-            .unwrap_or_default(),
+        duration_in_secs: input.duration() as f64 / AV_TIME_BASE as f64,
+        width: video.width(),
+        height: video.height(),
+        fps: video
+            .frame_rate()
+            .map(|v| (v.numerator() as f32 / v.denominator() as f32)),
     })
 }
 
@@ -464,14 +429,16 @@ pub async fn prepare_screenshot_upload(
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
 ) -> Result<reqwest::Response, String> {
-    let body = S3ImageUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: "screenshot/screen-capture.jpg".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
         },
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let compressed_image = compress_image(screenshot_path).await?;
 
@@ -1022,12 +989,10 @@ impl InstantMultipartUpload {
                         "videoId": video_id,
                         "uploadId": upload_id,
                         "parts": uploaded_parts,
-                        "duration": metadata.as_ref().map(|m| m.duration_in_secs.clone()),
-                        "bandwidth": metadata.as_ref().map(|m| m.bandwidth.clone()),
-                        "resolution": metadata.as_ref().map(|m| m.resolution.clone()),
-                        "videoCodec": metadata.as_ref().map(|m| m.video_codec.clone()),
-                        "audioCodec": metadata.as_ref().map(|m| m.audio_codec.clone()),
-                        "framerate": metadata.as_ref().map(|m| m.framerate.clone()),
+                        "durationInSecs": metadata.as_ref().map(|m| m.duration_in_secs),
+                        "width": metadata.as_ref().map(|m| m.width),
+                        "height": metadata.as_ref().map(|m| m.height),
+                        "fps": metadata.as_ref().map(|m| m.fps),
                     }))
             })
             .await
