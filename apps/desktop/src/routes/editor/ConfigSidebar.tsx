@@ -2191,8 +2191,8 @@ function ZoomSegmentConfig(props: {
 										<div
 											class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
 											style={{
-												left: `${states.manual.x * 100}%`,
-												top: `${states.manual.y * 100}%`,
+												left: `${mode().x * 100}%`,
+												top: `${mode().y * 100}%`,
 											}}
 										>
 											<div class="size-1.5 bg-gray-5 rounded-full" />
