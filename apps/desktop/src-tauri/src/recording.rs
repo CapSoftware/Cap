@@ -76,10 +76,10 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn resume(&self) -> Result<(), RecordingError> {
+    pub async fn resume(&self) -> Result<(), String> {
         match self {
-            Self::Instant { handle, .. } => handle.resume().await,
-            Self::Studio { handle, .. } => handle.resume().await,
+            Self::Instant { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
+            Self::Studio { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
         }
     }
 
@@ -468,7 +468,7 @@ pub async fn start_recording(
                 }
                 // Actor hasn't errored, it's just finished
                 v => {
-                    dbg!(v);
+                    info!("recording actor ended: {v:?}");
                 }
             }
         }

@@ -41,7 +41,7 @@ enum StudioRecordingActorState {
 
 pub enum StudioRecordingActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
-    Resume(oneshot::Sender<Result<(), RecordingError>>),
+    Resume(oneshot::Sender<Result<(), CreateSegmentPipelineError>>),
     Stop(oneshot::Sender<Result<CompletedStudioRecording, RecordingError>>),
     Cancel(oneshot::Sender<Result<(), RecordingError>>),
 }
@@ -111,7 +111,7 @@ impl StudioRecordingHandle {
         send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Pause)
     }
 
-    pub async fn resume(&self) -> Result<(), RecordingError> {
+    pub async fn resume(&self) -> Result<(), CreateSegmentPipelineError> {
         send_message!(self.ctrl_tx, StudioRecordingActorControlMessage::Resume)
     }
 
@@ -120,13 +120,22 @@ impl StudioRecordingHandle {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SpawnStudioRecordingError {
+    #[error("{0}")]
+    Media(#[from] MediaError),
+    #[error("{0}")]
+    PipelineCreationError(#[from] CreateSegmentPipelineError),
+}
+
 pub async fn spawn_studio_recording_actor<'a>(
     id: String,
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs<'a>,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     custom_cursor_capture: bool,
-) -> Result<(StudioRecordingHandle, oneshot::Receiver<Result<(), String>>), RecordingError> {
+) -> Result<(StudioRecordingHandle, oneshot::Receiver<Result<(), String>>), SpawnStudioRecordingError>
+{
     ensure_dir(&recording_dir)?;
 
     let (done_tx, done_rx) = oneshot::channel();
@@ -608,7 +617,7 @@ impl SegmentPipelineFactory {
             StudioRecordingPipeline,
             oneshot::Receiver<Result<(), String>>,
         ),
-        RecordingError,
+        CreateSegmentPipelineError,
     > {
         let result = create_segment_pipeline(
             &self.segments_dir,
@@ -632,6 +641,20 @@ impl SegmentPipelineFactory {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum CreateSegmentPipelineError {
+    #[error("NoDisplay")]
+    NoDisplay,
+    #[error("NoBounds")]
+    NoBounds,
+    #[error("Actor/{0}")]
+    Actor(#[from] ActorError),
+    #[error("{0}")]
+    Recording(#[from] RecordingError),
+    #[error("{0}")]
+    Media(#[from] MediaError),
+}
+
 #[tracing::instrument(skip_all, name = "segment", fields(index = index))]
 #[allow(clippy::too_many_arguments)]
 async fn create_segment_pipeline(
@@ -652,7 +675,7 @@ async fn create_segment_pipeline(
         StudioRecordingPipeline,
         oneshot::Receiver<Result<(), String>>,
     ),
-    RecordingError,
+    CreateSegmentPipelineError,
 > {
     let system_audio = if capture_system_audio {
         let (tx, rx) = flume::bounded(64);
@@ -661,8 +684,12 @@ async fn create_segment_pipeline(
         (None, None)
     };
 
-    let display = capture_target.display().unwrap(); // TODO: fix
-    let display_bounds = display.logical_bounds();
+    let display = capture_target
+        .display()
+        .ok_or(CreateSegmentPipelineError::NoDisplay)?;
+    let crop_bounds = capture_target
+        .logical_bounds()
+        .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
     let (screen_source, screen_rx) = create_screen_capture(
         &capture_target,
@@ -861,7 +888,7 @@ async fn create_segment_pipeline(
 
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
-            display_bounds,
+            crop_bounds,
             display,
             cursors_dir.to_path_buf(),
             prev_cursors,
@@ -875,9 +902,12 @@ async fn create_segment_pipeline(
         }
     });
 
-    let (mut pipeline, pipeline_done_rx) = pipeline_builder.build().await?;
+    let (mut pipeline, pipeline_done_rx) = pipeline_builder
+        .build()
+        .await
+        .map_err(RecordingError::from)?;
 
-    pipeline.play().await?;
+    pipeline.play().await.map_err(RecordingError::from)?;
 
     info!("pipeline playing");
 
