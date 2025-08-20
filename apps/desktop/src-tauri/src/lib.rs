@@ -1169,7 +1169,7 @@ async fn upload_exported_video(
             false,
             video_id,
             Some(meta.pretty_name.clone()),
-            Some((metadata.duration * 1000.0).to_string()),
+            Some(metadata.duration.to_string()),
         )
         .await
     }
@@ -1183,7 +1183,7 @@ async fn upload_exported_video(
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
-        Some((metadata.duration * 1000.0).to_string()),
+        Some(metadata.duration.to_string()),
     )
     .await
     {

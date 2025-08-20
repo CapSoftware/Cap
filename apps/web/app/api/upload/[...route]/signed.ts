@@ -22,13 +22,15 @@ app.post(
 		"json",
 		z
 			.object({
-				duration: z.string().optional(),
+				durationInSecs: z.string().optional(),
 				bandwidth: z.string().optional(),
 				resolution: z.string().optional(),
 				videoCodec: z.string().optional(),
 				audioCodec: z.string().optional(),
 				framerate: z.string().optional(),
 				method: z.union([z.literal("post"), z.literal("put")]).default("post"),
+				// legacy
+				duration: z.string().optional(),
 			})
 			.and(
 				z.union([
@@ -41,7 +43,7 @@ app.post(
 	async (c) => {
 		const user = c.get("user");
 		const {
-			duration,
+			durationInSecs: duration,
 			bandwidth,
 			resolution,
 			videoCodec,

@@ -162,7 +162,7 @@ app.post(
 						size: z.number(),
 					}),
 				),
-				duration: z.string().optional(),
+				durationInSecs: z.string().optional(),
 				bandwidth: z.string().optional(),
 				resolution: z.string().optional(),
 				videoCodec: z.string().optional(),
@@ -276,7 +276,7 @@ app.post(
 					}
 
 					const videoMetadata: VideoMetadata = {
-						duration: body.duration,
+						duration: body.durationInSecs,
 						bandwidth: body.bandwidth,
 						resolution: body.resolution,
 						videoCodec: body.videoCodec,

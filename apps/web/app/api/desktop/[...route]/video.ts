@@ -20,7 +20,10 @@ app.get(
 	zValidator(
 		"query",
 		z.object({
+			// This field was a mixture of seconds and milliseconds in a faulty update 😅
 			duration: z.coerce.number().optional(),
+			durationInSecs: z.coerce.number().optional(),
+			durationModern: z.coerce.number().optional(),
 			recordingMode: z
 				.union([z.literal("hls"), z.literal("desktopMP4")])
 				.optional(),
@@ -31,8 +34,13 @@ app.get(
 	),
 	async (c) => {
 		try {
-			const { duration, recordingMode, isScreenshot, videoId, name } =
-				c.req.valid("query");
+			const {
+				durationInSecs: duration,
+				recordingMode,
+				isScreenshot,
+				videoId,
+				name,
+			} = c.req.valid("query");
 			const user = c.get("user");
 
 			console.log("Video create request:", {
@@ -45,7 +53,7 @@ app.get(
 
 			const isUpgraded = user.stripeSubscriptionStatus === "active";
 
-			if (!isUpgraded && duration && duration > 300)
+			if (!isUpgraded && duration && duration > /* 5 min */ 5 * 60)
 				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			const [customBucket] = await db()

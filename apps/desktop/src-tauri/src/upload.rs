@@ -86,7 +86,8 @@ struct S3UploadBody {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct S3VideoMeta {
-    pub duration: String,
+    #[serde(rename = "durationInSecs")]
+    pub duration_in_secs: String,
     pub bandwidth: String,
     pub resolution: String,
     pub video_codec: String,
@@ -395,8 +396,6 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         .best(ffmpeg::media::Type::Video)
         .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
 
-    let duration_millis = input.duration() as f64 / 1000.;
-
     let video_codec = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
     let video_codec_name = video_codec.id();
@@ -420,7 +419,7 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         .transpose()?;
 
     Ok(S3VideoMeta {
-        duration: duration_millis.to_string(),
+        duration_in_secs: input.duration().to_string(),
         resolution: format!("{width}x{height}"),
         framerate: frame_rate,
         bandwidth: bit_rate.to_string(),
@@ -1023,7 +1022,7 @@ impl InstantMultipartUpload {
                         "videoId": video_id,
                         "uploadId": upload_id,
                         "parts": uploaded_parts,
-                        "duration": metadata.as_ref().map(|m| m.duration.clone()),
+                        "duration": metadata.as_ref().map(|m| m.duration_in_secs.clone()),
                         "bandwidth": metadata.as_ref().map(|m| m.bandwidth.clone()),
                         "resolution": metadata.as_ref().map(|m| m.resolution.clone()),
                         "videoCodec": metadata.as_ref().map(|m| m.video_codec.clone()),
