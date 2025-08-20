@@ -21,13 +21,15 @@ import { createStore, reconcile } from "solid-js/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
+	DisplayId,
 	events,
+	LogicalBounds,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
 
 export default function () {
-	const [params] = useSearchParams<{ displayId: string }>();
+	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 
 	const [targetUnderCursor, setTargetUnderCursor] =
@@ -42,7 +44,7 @@ export default function () {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const [bounds, _setBounds] = createStore({
+	const [bounds, _setBounds] = createStore<LogicalBounds>({
 		position: { x: 0, y: 0 },
 		size: { width: 400, height: 300 },
 	});
@@ -96,7 +98,7 @@ export default function () {
 								<RecordingControls
 									target={{
 										variant: "screen",
-										id: getDisplayId(params.displayId),
+										id: params.displayId!,
 									}}
 								/>
 							</div>
@@ -145,7 +147,7 @@ export default function () {
 								<RecordingControls
 									target={{
 										variant: "window",
-										id: Number(windowUnderCursor.id),
+										id: windowUnderCursor.id,
 									}}
 								/>
 
@@ -535,13 +537,8 @@ export default function () {
 									<RecordingControls
 										target={{
 											variant: "area",
-											screen: Number(params.displayId),
-											bounds: {
-												x: bounds.position.x,
-												y: bounds.position.y,
-												width: bounds.size.width,
-												height: bounds.size.height,
-											},
+											screen: params.displayId!,
+											bounds,
 										}}
 									/>
 								</div>

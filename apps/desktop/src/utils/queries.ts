@@ -85,7 +85,7 @@ export const getPermissions = queryOptions({
 });
 
 export function createOptionsQuery() {
-	const PERSIST_KEY = "recording-options-query";
+	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
 		captureTarget: ScreenCaptureTarget;
 		micName: string | null;
@@ -96,7 +96,7 @@ export function createOptionsQuery() {
 		/** @deprecated */
 		cameraLabel: string | null;
 	}>({
-		captureTarget: { variant: "screen", id: 0 },
+		captureTarget: { variant: "screen", id: "0" },
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",

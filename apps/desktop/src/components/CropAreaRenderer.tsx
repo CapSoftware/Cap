@@ -6,11 +6,11 @@ import {
 	type ParentProps,
 } from "solid-js";
 import { createHiDPICanvasContext } from "~/utils/canvas";
-import type { Bounds } from "~/utils/tauri";
+import type { LogicalBounds } from "~/utils/tauri";
 
 type DrawContext = {
 	ctx: CanvasRenderingContext2D;
-	bounds: Bounds;
+	bounds: LogicalBounds;
 	radius: number;
 	prefersDark: boolean;
 	highlighted: boolean;
@@ -24,7 +24,10 @@ function drawHandles({
 	highlighted,
 	selected,
 }: DrawContext) {
-	const { x, y, width, height } = bounds;
+	const {
+		position: { x, y },
+		size: { width, height },
+	} = bounds;
 	const minSizeForSideHandles = 100;
 
 	ctx.strokeStyle = selected
@@ -82,44 +85,36 @@ function drawHandles({
 	// Center handles
 	const handleLength = 35;
 	const sideHandleDistance = 0;
-	const centerX = bounds.x + bounds.width / 2;
-	const centerY = bounds.y + bounds.height / 2;
+	const centerX = x + width / 2;
+	const centerY = y + height / 2;
 
 	ctx.beginPath();
 
 	// top center
-	ctx.moveTo(centerX - handleLength / 2, bounds.y - sideHandleDistance);
-	ctx.lineTo(centerX + handleLength / 2, bounds.y - sideHandleDistance);
+	ctx.moveTo(centerX - handleLength / 2, y - sideHandleDistance);
+	ctx.lineTo(centerX + handleLength / 2, y - sideHandleDistance);
 
 	// bottom center
-	ctx.moveTo(
-		centerX - handleLength / 2,
-		bounds.y + bounds.height + sideHandleDistance,
-	);
-	ctx.lineTo(
-		centerX + handleLength / 2,
-		bounds.y + bounds.height + sideHandleDistance,
-	);
+	ctx.moveTo(centerX - handleLength / 2, y + height + sideHandleDistance);
+	ctx.lineTo(centerX + handleLength / 2, y + height + sideHandleDistance);
 
 	// left center
-	ctx.moveTo(bounds.x - sideHandleDistance, centerY - handleLength / 2);
-	ctx.lineTo(bounds.x - sideHandleDistance, centerY + handleLength / 2);
+	ctx.moveTo(x - sideHandleDistance, centerY - handleLength / 2);
+	ctx.lineTo(x - sideHandleDistance, centerY + handleLength / 2);
 
 	// right center
-	ctx.moveTo(
-		bounds.x + bounds.width + sideHandleDistance,
-		centerY - handleLength / 2,
-	);
-	ctx.lineTo(
-		bounds.x + bounds.width + sideHandleDistance,
-		centerY + handleLength / 2,
-	);
+	ctx.moveTo(x + width + sideHandleDistance, centerY - handleLength / 2);
+	ctx.lineTo(x + width + sideHandleDistance, centerY + handleLength / 2);
 
 	ctx.stroke();
 }
 
 // Rule of thirds guide lines and center crosshair
-function drawGuideLines({ ctx, bounds, prefersDark }: DrawContext) {
+function drawGuideLines({
+	ctx,
+	bounds: { position, size },
+	prefersDark,
+}: DrawContext) {
 	ctx.strokeStyle = prefersDark
 		? "rgba(255, 255, 255, 0.5)"
 		: "rgba(0, 0, 0, 0.5)";
@@ -129,23 +124,23 @@ function drawGuideLines({ ctx, bounds, prefersDark }: DrawContext) {
 	// Rule of thirds
 	ctx.beginPath();
 	for (let i = 1; i < 3; i++) {
-		const x = bounds.x + (bounds.width * i) / 3;
-		ctx.moveTo(x, bounds.y);
-		ctx.lineTo(x, bounds.y + bounds.height);
+		const x = position.x + (size.width * i) / 3;
+		ctx.moveTo(x, position.y);
+		ctx.lineTo(x, position.y + size.height);
 	}
 	ctx.stroke();
 
 	ctx.beginPath();
 	for (let i = 1; i < 3; i++) {
-		const y = bounds.y + (bounds.height * i) / 3;
-		ctx.moveTo(bounds.x, y);
-		ctx.lineTo(bounds.x + bounds.width, y);
+		const y = position.y + (size.height * i) / 3;
+		ctx.moveTo(position.x, y);
+		ctx.lineTo(position.x + size.width, y);
 	}
 	ctx.stroke();
 
 	// Center crosshair
-	const centerX = Math.round(bounds.x + bounds.width / 2);
-	const centerY = Math.round(bounds.y + bounds.height / 2);
+	const centerX = Math.round(position.x + size.width / 2);
+	const centerY = Math.round(position.y + size.height / 2);
 
 	ctx.setLineDash([]);
 	ctx.lineWidth = 2;
@@ -165,7 +160,7 @@ function drawGuideLines({ ctx, bounds, prefersDark }: DrawContext) {
 // Main draw function
 function draw(
 	ctx: CanvasRenderingContext2D,
-	bounds: Bounds,
+	{ position, size }: LogicalBounds,
 	radius: number,
 	guideLines: boolean,
 	showHandles: boolean,
@@ -173,10 +168,10 @@ function draw(
 	selected: boolean,
 	prefersDark: boolean,
 ) {
-	if (bounds.width <= 0 || bounds.height <= 0) return;
+	if (size.width <= 0 || size.height <= 0) return;
 	const drawContext: DrawContext = {
 		ctx,
-		bounds,
+		bounds: { position, size },
 		radius,
 		prefersDark,
 		highlighted,
@@ -195,16 +190,16 @@ function draw(
 	ctx.shadowBlur = 200;
 	ctx.shadowOffsetY = 25;
 	ctx.beginPath();
-	ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+	ctx.roundRect(position.x, position.y, size.width, size.height, radius);
 	ctx.fill();
 	ctx.restore();
 
 	if (showHandles) drawHandles(drawContext);
 
 	ctx.beginPath();
-	ctx.roundRect(bounds.x, bounds.y, bounds.width, bounds.height, radius);
+	ctx.roundRect(position.x, position.y, size.width, size.height, radius);
 	ctx.clip();
-	ctx.clearRect(bounds.x, bounds.y, bounds.width, bounds.height);
+	ctx.clearRect(position.x, position.y, size.width, size.height);
 
 	if (guideLines) drawGuideLines(drawContext);
 
@@ -213,7 +208,7 @@ function draw(
 
 export default function CropAreaRenderer(
 	props: ParentProps<{
-		bounds: Bounds;
+		bounds: LogicalBounds;
 		guideLines?: boolean;
 		handles?: boolean;
 		borderRadius?: number;
@@ -255,15 +250,20 @@ export default function CropAreaRenderer(
 		createEffect(() => {
 			if (lastAnimationFrameId) cancelAnimationFrame(lastAnimationFrameId);
 
-			const { x, y, width, height } = props.bounds;
-			const { guideLines, handles, borderRadius, highlighted, selected } =
-				props;
+			const {
+				guideLines,
+				handles,
+				borderRadius,
+				highlighted,
+				selected,
+				bounds: { ...bounds },
+			} = props;
 
 			const prefersDark = prefersDarkScheme();
 			lastAnimationFrameId = requestAnimationFrame(() =>
 				draw(
 					ctx,
-					{ x, y, width, height },
+					bounds,
 					borderRadius || 0,
 					guideLines || false,
 					handles || false,

@@ -65,10 +65,14 @@ export default function CaptureArea() {
 				variant: "area",
 				screen: target.id,
 				bounds: {
-					x: crop.position.x,
-					y: crop.position.y,
-					width: crop.size.x,
-					height: crop.size.y,
+					position: {
+						x: crop.position.x,
+						y: crop.position.y,
+					},
+					size: {
+						width: crop.size.x,
+						height: crop.size.y,
+					},
 				},
 			}),
 		);

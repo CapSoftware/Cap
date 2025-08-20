@@ -37,7 +37,6 @@ import {
 } from "~/utils/queries";
 import {
 	type CameraInfo,
-	type CaptureScreen,
 	commands,
 	type DeviceOrModelID,
 	events,
@@ -173,33 +172,43 @@ function Page() {
 			if (!rawOptions.cameraID) return undefined;
 			return findCamera(cameras.data || [], rawOptions.cameraID);
 		},
-
 		micName: () => mics.data?.find((name) => name === rawOptions.micName),
-		target: (): ScreenCaptureTarget => {
+		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
-				case "screen":
-					return { variant: "screen", id: options.screen()?.id ?? -1 };
-				case "window":
-					return { variant: "window", id: options.window()?.id ?? -1 };
-				case "area":
+				case "screen": {
+					const screen = options.screen();
+					if (!screen) return;
+					return { variant: "screen", id: screen.id };
+				}
+				case "window": {
+					const window = options.window();
+					if (!window) return;
+					return { variant: "window", id: window.id };
+				}
+				case "area": {
+					const screen = options.screen();
+					if (!screen) return;
 					return {
 						variant: "area",
 						bounds: rawOptions.captureTarget.bounds,
-						screen: options.screen()?.id ?? -1,
+						screen: screen.id,
 					};
+				}
 			}
 		},
 	};
 
 	// if target is window and no windows are available, switch to screen capture
 	createEffect(() => {
-		if (options.target().variant === "window" && windows.data?.length === 0) {
+		const target = options.target();
+		if (!target) return;
+		const screen = options.screen();
+		if (!screen) return;
+
+		if (target.variant === "window" && windows.data?.length === 0) {
 			setOptions(
 				"captureTarget",
-				reconcile({
-					variant: "screen",
-					id: options.screen()?.id ?? -1,
-				}),
+				reconcile({ variant: "screen", id: screen.id }),
 			);
 		}
 	});

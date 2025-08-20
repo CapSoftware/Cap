@@ -363,7 +363,16 @@ export type FileType = "recording" | "screenshot"
 export type Flags = { captions: boolean }
 export type FramesRendered = { renderedCount: number; totalFrames: number; type: "FramesRendered" }
 export type GeneralSettingsStore = { instanceId?: string; uploadIndividualFiles?: boolean; hideDockIcon?: boolean; hapticsEnabled?: boolean; autoCreateShareableLink?: boolean; enableNotifications?: boolean; disableAutoOpenLinks?: boolean; hasCompletedStartup?: boolean; theme?: AppTheme; commercialLicense?: CommercialLicense | null; lastVersion?: string | null; windowTransparency?: boolean; postStudioRecordingBehaviour?: PostStudioRecordingBehaviour; mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour; customCursorCapture?: boolean; serverUrl?: string; recordingCountdown?: number | null; enableNativeCameraPreview: boolean; autoZoomOnClicks?: boolean; enableNewRecordingFlow: boolean; postDeletionBehaviour?: PostDeletionBehaviour }
-export type GifExportSettings = { fps: number; resolution_base: XY<number> }
+export type GifExportSettings = { fps: number; resolution_base: XY<number>; quality: GifQuality | null }
+export type GifQuality = { 
+/**
+ * Encoding quality from 1-100 (default: 90)
+ */
+quality: number | null; 
+/**
+ * Whether to prioritize speed over quality (default: false)
+ */
+fast: boolean | null }
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic"
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted"
 export type Hotkey = { code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean }

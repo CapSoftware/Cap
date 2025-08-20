@@ -36,7 +36,7 @@ import {
 } from "~/utils/queries";
 import {
 	type CameraInfo,
-	type CaptureScreen,
+	CaptureDisplay,
 	type CaptureWindow,
 	commands,
 	events,
@@ -143,7 +143,7 @@ function Page() {
 	// allowing us to define fallbacks if the selected options aren't actually available
 	const options = {
 		screen: () => {
-			let screen: CaptureScreen | undefined;
+			let screen: CaptureDisplay | undefined;
 
 			if (rawOptions.captureTarget.variant === "screen") {
 				const screenId = rawOptions.captureTarget.id;
@@ -407,7 +407,7 @@ function Page() {
 					>
 						<div class="flex-1 bg-gray-2" />
 					</div>
-					<TargetSelect<CaptureScreen>
+					<TargetSelect<CaptureDisplay>
 						options={_screens() ?? []}
 						onChange={(value) => {
 							if (!value) return;
@@ -594,7 +594,7 @@ function createUpdateCheck() {
 
 function AreaSelectButton(props: {
 	targetVariant: "screen" | "area" | "other";
-	screen: CaptureScreen | undefined;
+	screen: CaptureDisplay | undefined;
 	onChange(area?: number): void;
 }) {
 	const [areaSelection, setAreaSelection] = createStore({ pending: false });

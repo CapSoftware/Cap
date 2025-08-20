@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use serde::{Deserialize, Serialize};
 use specta::Type;
 

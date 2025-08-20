@@ -2,14 +2,12 @@ use cap_displays::{
     Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
 };
-use cap_media_info::{AudioInfo, RawVideoFormat, VideoInfo};
-use cpal::traits::{DeviceTrait, HostTrait};
-use ffmpeg::{format::Sample, sys::AV_TIME_BASE_Q};
+use cap_media_info::{AudioInfo, VideoInfo};
+use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
-use tracing::info;
 use tracing::{error, warn};
 
 use crate::pipeline::{control::Control, task::PipelineSourceTask};
@@ -180,6 +178,14 @@ struct Config {
     show_cursor: bool,
 }
 
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum ScreenCaptureInitError {
+    #[error("NoDisplay")]
+    NoDisplay,
+    #[error("PhysicalSize")]
+    PhysicalSize,
+}
+
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
@@ -190,13 +196,16 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         start_time: SystemTime,
         tokio_handle: tokio::runtime::Handle,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("media::screen_capture::init");
 
-        let fps = max_fps.min(target.display().unwrap().refresh_rate() as u32);
+        let display = target.display().ok_or(ScreenCaptureInitError::NoDisplay)?;
 
-        let output_size = target.physical_size().unwrap();
-        let display = target.display().unwrap();
+        let fps = max_fps.min(display.refresh_rate() as u32);
+
+        let output_size = target
+            .physical_size()
+            .ok_or(ScreenCaptureInitError::PhysicalSize)?;
 
         Ok(Self {
             config: Config {
@@ -209,7 +218,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 TCaptureFormat::pixel_format(),
                 output_size.width() as u32,
                 output_size.height() as u32,
-                120,
+                fps,
             ),
             video_tx,
             audio_tx,
@@ -571,7 +580,9 @@ mod windows {
                     .await;
 
                 if let Some(audio_tx) = audio_tx {
-                    let audio_capture = WindowsAudioCapture::spawn(WindowsAudioCapture::new(audio_tx, start_time).unwrap());
+                    let audio_capture = WindowsAudioCapture::spawn(
+                        WindowsAudioCapture::new(audio_tx, start_time).unwrap(),
+                    );
 
                     let _ = audio_capture.ask(audio::StartCapturing).send().await;
                 }
@@ -685,9 +696,9 @@ mod windows {
     use audio::WindowsAudioCapture;
     pub mod audio {
         use super::*;
+        use cpal::traits::StreamTrait;
         use scap_cpal::*;
         use scap_ffmpeg::*;
-        use cpal::traits::StreamTrait;
 
         #[derive(Actor)]
         pub struct WindowsAudioCapture {
@@ -695,32 +706,34 @@ mod windows {
         }
 
         impl WindowsAudioCapture {
-            pub fn new(audio_tx: Sender<(ffmpeg::frame::Audio, f64)>, start_time: SystemTime) -> Result<Self, &'static str> {
-            	let mut i = 0;
-            	let capturer = scap_cpal::create_capturer(
-		            move |data, _: &cpal::InputCallbackInfo, config| {
-						use scap_ffmpeg::*;
+            pub fn new(
+                audio_tx: Sender<(ffmpeg::frame::Audio, f64)>,
+                start_time: SystemTime,
+            ) -> Result<Self, &'static str> {
+                let mut i = 0;
+                let capturer = scap_cpal::create_capturer(
+                    move |data, _: &cpal::InputCallbackInfo, config| {
+                        use scap_ffmpeg::*;
 
-						let timestamp = SystemTime::now();
-						let mut ff_frame = data.as_ffmpeg(config);
+                        let timestamp = SystemTime::now();
+                        let mut ff_frame = data.as_ffmpeg(config);
 
-						let Ok(elapsed) = timestamp.duration_since(start_time) else {
-							warn!("Skipping audio frame {i} as elapsed time is invalid");
-							return;
-						};
+                        let Ok(elapsed) = timestamp.duration_since(start_time) else {
+                            warn!("Skipping audio frame {i} as elapsed time is invalid");
+                            return;
+                        };
 
-						ff_frame.set_pts(Some(
-							(elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64
-						));
+                        ff_frame.set_pts(Some(
+                            (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
+                        ));
 
-						let _ = audio_tx.send((ff_frame, elapsed.as_secs_f64()));
-						i += 1;
-		            },
-		            move |e| {
-				        dbg!(e);
-		            },
-             	)?;
-
+                        let _ = audio_tx.send((ff_frame, elapsed.as_secs_f64()));
+                        i += 1;
+                    },
+                    move |e| {
+                        dbg!(e);
+                    },
+                )?;
 
                 Ok(Self { capturer })
             }
@@ -829,8 +842,7 @@ mod macos {
                                     .send((sample_buffer.retained(), relative_time))
                                     .is_err()
                             {
-                                // error!("Pipeline is unreachable. Shutting down recording.");
-                                // return ControlFlow::Continue(());
+                                warn!("Pipeline is unreachable");
                             }
                         }
                         scap_screencapturekit::Frame::Audio(_) => {
@@ -904,7 +916,11 @@ mod macos {
                     start_time_f64,
                 });
 
-                let content_filter = display.raw_handle().as_content_filter().await.unwrap();
+                let content_filter = display
+                    .raw_handle()
+                    .as_content_filter()
+                    .await
+                    .ok_or_else(|| "Failed to get content filter".to_string())?;
 
                 let size = config.target.physical_size().unwrap();
                 let mut settings = scap_screencapturekit::StreamCfgBuilder::default()

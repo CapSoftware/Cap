@@ -1,32 +1,42 @@
 use cpal::{
-    InputCallbackInfo, PlayStreamError, Stream, StreamConfig, StreamError, traits::StreamTrait,
+    BuildStreamError, DefaultStreamConfigError, InputCallbackInfo, PlayStreamError, Stream,
+    StreamConfig, StreamError, traits::StreamTrait,
 };
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum CapturerError {
+    #[error("NoDevice")]
+    NoDevice,
+    #[error("DefaultConfig: {0}")]
+    DefaultConfig(#[from] DefaultStreamConfigError),
+    #[error("BuildStream: {0}")]
+    BuildStream(#[from] BuildStreamError),
+}
 
 pub fn create_capturer(
     mut data_callback: impl FnMut(&cpal::Data, &InputCallbackInfo, &StreamConfig) + Send + 'static,
     error_callback: impl FnMut(StreamError) + Send + 'static,
-) -> Result<Capturer, &'static str> {
+) -> Result<Capturer, CapturerError> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
     let host = cpal::default_host();
-    let output_device = host.default_output_device().ok_or("Device not available")?;
-    let supported_config = output_device
-        .default_output_config()
-        .map_err(|_| "Failed to get default output config")?;
+    let output_device = host
+        .default_output_device()
+        .ok_or(CapturerError::NoDevice)?;
+    let supported_config = output_device.default_output_config()?;
     let config = supported_config.clone().into();
 
-    let stream = output_device
-        .build_input_stream_raw(
-            &config,
-            supported_config.sample_format(),
-            {
-                let config = config.clone();
-                move |data, info: &InputCallbackInfo| data_callback(data, info, &config)
-            },
-            error_callback,
-            None,
-        )
-        .map_err(|_| "failed to build input stream")?;
+    let stream = output_device.build_input_stream_raw(
+        &config,
+        supported_config.sample_format(),
+        {
+            let config = config.clone();
+            move |data, info: &InputCallbackInfo| data_callback(data, info, &config)
+        },
+        error_callback,
+        None,
+    )?;
 
     Ok(Capturer { stream, config })
 }

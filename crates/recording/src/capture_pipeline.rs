@@ -1,5 +1,5 @@
 use cap_media::MediaError;
-use cap_media_encoders::*;
+
 use cap_media_info::AudioInfo;
 use flume::{Receiver, Sender};
 use std::{
@@ -384,5 +384,5 @@ pub async fn create_screen_capture(
     )
     .await
     .map(|v| (v, video_rx))
-    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e)))
+    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e.to_string())))
 }

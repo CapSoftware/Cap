@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 cpal.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true
