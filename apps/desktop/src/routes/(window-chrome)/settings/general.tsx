@@ -301,8 +301,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 						),
 				},
 				{
-					label: "After deleting recording",
-					description: "What happens to the window after deleting a recording",
+					label: "After deleting recording behaviour",
+					description:
+						"Should Cap reopen after deleting an in progress recording?",
 					type: "select",
 					get value() {
 						return settings.postDeletionBehaviour ?? "doNothing";
@@ -338,6 +339,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		return (
 			<Setting label={label} description={description}>
 				<button
+					type="button"
 					class="flex flex-row gap-1 text-xs bg-gray-3 items-center px-2.5 py-1.5 rounded-md border border-gray-4"
 					onClick={async () => {
 						const currentValue = getValue();
@@ -451,14 +453,16 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 															{ text: "10 seconds", value: 10 },
 														],
 													);
-												} else if (item.label === "After deleting recording") {
+												} else if (
+													item.label === "After deleting recording behaviour"
+												) {
 													return renderRecordingSelect(
 														item.label,
 														item.description,
 														() => item.value,
 														item.onChange,
 														[
-															{ text: "Do Nothing", value: "exit" },
+															{ text: "Do Nothing", value: "doNothing" },
 															{
 																text: "Reopen Recording Window",
 																value: "reopenRecordingWindow",

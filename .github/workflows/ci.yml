@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      tauri-plugins: ${{ steps.filter.outputs.tauri-plugins }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,9 +30,12 @@ jobs:
               - '.cargo/**'
               - '.github/**'
               - 'crates/**'
-              - 'desktop/src-tauri/**'
+              - 'apps/desktop/src-tauri/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
+            tauri-plugins:
+              - 'Cargo.lock'
+              - 'pnpm-lock.yaml'
 
   typecheck:
     name: Typecheck
@@ -55,7 +59,9 @@ jobs:
       - name: Setup Biome
         uses: biomejs/setup-biome@v2
         with:
-          version: latest
+          # Don't use `latest` as Biome throws an error when it doesn't match the
+          # schema version in the config file.
+          version: 2.2.0
 
       - name: Run Biome
         run: biome ci . --linter-enabled=false
@@ -93,8 +99,6 @@ jobs:
         with:
           shared-key: ${{ matrix.settings.target }}
 
-      - uses: ./.github/actions/setup-js
-
       - name: Create .env file in root
         run: |
           echo "VITE_ENVIRONMENT=production" >> .env
@@ -112,8 +116,8 @@ jobs:
           cat .env >> $GITHUB_ENV
 
       - name: Run setup
-        run: |
-          pnpm cap-setup
+        shell: bash
+        run: node scripts/setup.js
 
       - name: Run Clippy
         uses: actions-rs-plus/clippy-check@v2
@@ -146,6 +150,9 @@ jobs:
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
     runs-on: ${{ matrix.settings.runner }}
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ secrets.TURBO_TEAM }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -189,3 +196,21 @@ jobs:
           pnpm tauri build --debug --target ${{ matrix.settings.target }} --no-bundle
         env:
           RUST_TARGET_TRIPLE: ${{ matrix.settings.target }}
+
+  tauri-plugins:
+    name: Verify Tauri plugin versions
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.tauri-plugins == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 20
+
+      - name: Run verify
+        shell: bash
+        run: node scripts/check-tauri-plugin-versions.js

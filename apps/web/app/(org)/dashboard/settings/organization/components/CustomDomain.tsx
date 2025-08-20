@@ -72,7 +72,7 @@ export function CustomDomain() {
 				icon={<FontAwesomeIcon icon={faGlobe} />}
 				description={`Are you sure you want to remove this custom domain: ${orgCustomDomain}?`}
 				onConfirm={handleRemoveDomain}
-				confirmLabel="Remove"
+				confirmLabel={removeDomainMutation.isPending ? "Removing..." : "Remove"}
 				cancelLabel="Cancel"
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
@@ -95,7 +95,7 @@ export function CustomDomain() {
 									className="text-red-200 size-3"
 									icon={faExclamationCircle}
 								/>
-								<p className="text-white text-xs">
+								<p className="text-xs text-white">
 									Custom domains are not available in development mode
 								</p>
 							</div>
@@ -145,8 +145,8 @@ export function CustomDomain() {
 					type="submit"
 					size="sm"
 					className="min-w-fit"
-					spinner={removeDomainMutation.isPending}
-					disabled={removeDomainMutation.isPending}
+					spinner={isVerified ? removeDomainMutation.isPending : undefined}
+					disabled={isVerified ? removeDomainMutation.isPending : undefined}
 					variant="dark"
 					onClick={async (e) => {
 						e.preventDefault();

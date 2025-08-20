@@ -1,5 +1,6 @@
 import * as S3 from "@aws-sdk/client-s3";
 import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
+import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
 import { Config, Context, Effect, Layer, Option } from "effect";
@@ -55,21 +56,30 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				forcePathStyle: defaultConfigs.forcePathStyle,
 			});
 
-		const createBucketClient = (bucket: S3Bucket.S3Bucket) =>
-			new S3.S3Client({
-				endpoint: bucket.endpoint.pipe(Option.getOrUndefined),
-				region: bucket.region,
+		const createBucketClient = async (bucket: S3Bucket.S3Bucket) => {
+			const endpoint = await (() => {
+				const v = bucket.endpoint.pipe(Option.getOrUndefined);
+				if (!v) return;
+				return decrypt(v);
+			})();
+
+			const config = {
+				endpoint,
+				region: await decrypt(bucket.region),
 				credentials: {
-					accessKeyId: bucket.accessKeyId,
-					secretAccessKey: bucket.secretAccessKey,
+					accessKeyId: await decrypt(bucket.accessKeyId),
+					secretAccessKey: await decrypt(bucket.secretAccessKey),
 				},
 				forcePathStyle:
-					bucket.endpoint.pipe(
+					Option.fromNullable(endpoint).pipe(
 						Option.map((e) => e.endsWith("s3.amazonaws.com")),
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
-			});
+			};
+			console.log({ config });
+			return new S3.S3Client(config);
+		};
 
 		const defaultBucketAccess = S3BucketAccess.Default;
 
@@ -137,8 +147,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 				if (Option.isNone(customBucket)) {
 					const provider = Layer.succeed(S3BucketClientProvider, {
-						getInternal: () => createDefaultClient(true),
-						getPublic: () => createDefaultClient(false),
+						getInternal: Effect.succeed(createDefaultClient(true)),
+						getPublic: Effect.succeed(createDefaultClient(false)),
 						bucket: defaultConfigs.bucket,
 					});
 
@@ -150,9 +160,15 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					layer = defaultBucketAccess.pipe(
 						Layer.merge(
 							Layer.succeed(S3BucketClientProvider, {
-								getInternal: () => createBucketClient(customBucket.value),
-								getPublic: () => createBucketClient(customBucket.value),
-								bucket: customBucket.value.name,
+								getInternal: Effect.promise(() =>
+									createBucketClient(customBucket.value),
+								),
+								getPublic: Effect.promise(() =>
+									createBucketClient(customBucket.value),
+								),
+								bucket: yield* Effect.promise(() =>
+									decrypt(customBucket.value.name),
+								),
 							}),
 						),
 					);

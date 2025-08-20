@@ -70,17 +70,13 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						).pipe(Effect.provide(S3ProviderLayer));
 					}).pipe(
 						provideOptionalAuth,
+						Effect.tapErrorCause(Effect.logError),
 						Effect.catchTags({
 							VerifyVideoPasswordError: () => new HttpApiError.Forbidden(),
 							PolicyDenied: () => new HttpApiError.Unauthorized(),
-							DatabaseError: (e) =>
-								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
-								),
-							S3Error: (e) =>
-								Effect.logError(e).pipe(
-									Effect.andThen(() => new HttpApiError.InternalServerError()),
-								),
+							DatabaseError: () => new HttpApiError.InternalServerError(),
+							S3Error: () => new HttpApiError.InternalServerError(),
+							UnknownException: () => new HttpApiError.InternalServerError(),
 						}),
 					),
 				);
@@ -133,6 +129,8 @@ const getPlaylistResponse = (
 				);
 		}
 
+		yield* Effect.log("Resolving path with custom bucket");
+
 		const videoPrefix = `${video.ownerId}/${video.id}/video/`;
 		const audioPrefix = `${video.ownerId}/${video.id}/audio/`;
 
@@ -160,6 +158,9 @@ const getPlaylistResponse = (
 					headers: CACHE_CONTROL_HEADERS,
 				});
 			} else if (video.source.type === "desktopMP4") {
+				yield* Effect.log(
+					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
+				);
 				return yield* s3
 					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
 					.pipe(Effect.map(HttpServerResponse.redirect));
@@ -197,13 +198,9 @@ const getPlaylistResponse = (
 				const generatedPlaylist = generateMasterPlaylist(
 					videoMetadata?.Metadata?.resolution ?? "",
 					videoMetadata?.Metadata?.bandwidth ?? "",
-					`${serverEnv().WEB_URL}/api/playlist?userId=${
-						video.ownerId
-					}&videoId=${video.id}&videoType=video`,
+					`${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=video`,
 					audioMetadata
-						? `${serverEnv().WEB_URL}/api/playlist?userId=${
-								video.ownerId
-							}&videoId=${video.id}&videoType=audio`
+						? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=audio`
 						: null,
 				);
 

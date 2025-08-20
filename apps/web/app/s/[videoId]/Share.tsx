@@ -77,7 +77,10 @@ const useVideoStatus = (
 	return useQuery({
 		queryKey: ["videoStatus", videoId],
 		queryFn: async (): Promise<VideoStatusResult> => {
-			return await getVideoStatus(videoId);
+			const res = await getVideoStatus(videoId);
+			if ("success" in res && res.success === false)
+				throw new Error("Failed to fetch video status");
+			return res as VideoStatusResult;
 		},
 		initialData: initialData
 			? {

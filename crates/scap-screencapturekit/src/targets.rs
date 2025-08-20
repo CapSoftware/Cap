@@ -171,7 +171,7 @@ impl Window {
         let windows = content
             .windows()
             .iter()
-            .filter_map(|window| Some(Self::from_sc(window)))
+            .map(Self::from_sc)
             .collect::<Vec<_>>();
 
         Ok(windows)

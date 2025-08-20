@@ -84,7 +84,7 @@ export const SelectedCapsBar = ({
 							} cap${
 								selectedCaps.length === 1 ? "" : "s"
 							}? This action cannot be undone.`}
-							confirmLabel="Delete"
+							confirmLabel={isDeleting ? "Deleting..." : "Delete"}
 							cancelLabel="Cancel"
 							confirmVariant="dark"
 							loading={isDeleting}

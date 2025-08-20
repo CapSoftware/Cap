@@ -45,6 +45,7 @@ function createServerEnv() {
 			GROQ_API_KEY: z.string().optional(),
 			INTERCOM_SECRET: z.string().optional(),
 			CAP_VIDEOS_DEFAULT_PUBLIC: boolString(true),
+			CAP_ALLOWED_SIGNUP_DOMAINS: z.string().optional(),
 			VERCEL_ENV: z
 				.union([
 					z.literal("production"),

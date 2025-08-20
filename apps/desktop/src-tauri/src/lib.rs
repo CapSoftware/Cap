@@ -56,6 +56,7 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -77,8 +78,10 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::timeout;
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::EditorWindowIds;
@@ -285,10 +288,25 @@ async fn set_camera_input(
                 .unwrap_or_default()
             {
                 let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
-                camera_preview
-                    .init_preview_window(window, camera_rx)
-                    .await
-                    .unwrap();
+
+                let prev_err = &mut None;
+                if timeout(Duration::from_secs(3), async {
+                    while let Err(err) = camera_preview
+                        .init_preview_window(window.clone(), camera_rx.clone())
+                        .await
+                    {
+                        error!("Error initializing camera feed: {err}");
+                        *prev_err = Some(err);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                })
+                .await
+                .is_err()
+                {
+                    let _ = window.close();
+                    return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
+                };
+
                 Some(camera_tx)
             } else {
                 None
@@ -1987,13 +2005,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    #[cfg(debug_assertions)]
-    specta_builder
-        .export(
-            specta_typescript::Typescript::default(),
-            "../src/utils/tauri.ts",
-        )
-        .expect("Failed to export typescript bindings");
+    // #[cfg(debug_assertions)]
+    // specta_builder
+    //     .export(
+    //         specta_typescript::Typescript::default(),
+    //         "../src/utils/tauri.ts",
+    //     )
+    //     .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
@@ -2004,6 +2022,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     #[allow(unused_mut)]
     let mut builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            trace!("Single instance invoked with args {args:?}");
+
+            // This is also handled as a deeplink on some platforms (eg macOS), see deeplink_actions
             let Some(cap_file) = args
                 .iter()
                 .find(|arg| arg.ends_with(".cap"))

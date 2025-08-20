@@ -381,7 +381,7 @@ export const CapCard = ({
 							icon={<FontAwesomeIcon icon={faVideo} />}
 							title="Delete Cap"
 							description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
-							confirmLabel="Delete"
+							confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
 							cancelLabel="Cancel"
 							loading={deleteMutation.isPending}
 							onConfirm={() => deleteMutation.mutate()}
@@ -429,6 +429,7 @@ export const CapCard = ({
 					href={`/s/${cap.id}`}
 				>
 					<VideoThumbnail
+						videoDuration={cap.metadata?.duration}
 						imageClass={clsx(
 							anyCapSelected
 								? "opacity-50"

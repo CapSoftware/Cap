@@ -1,10 +1,13 @@
 "use server";
 
 import { db } from "@cap/database";
-import { getCurrentUser } from "@cap/database/auth/session";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
+import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Exit } from "effect";
+import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
@@ -22,24 +25,23 @@ export interface VideoStatusResult {
 }
 
 export async function getVideoStatus(
-	videoId: string,
-): Promise<VideoStatusResult> {
-	const user = await getCurrentUser();
+	videoId: Video.VideoId,
+): Promise<VideoStatusResult | { success: false }> {
+	if (!videoId) throw new Error("Video ID not provided");
 
-	if (!user) {
-		throw new Error("Authentication required");
-	}
+	const exit = await Effect.gen(function* () {
+		const videosPolicy = yield* VideosPolicy;
 
-	if (!videoId) {
-		throw new Error("Video ID not provided");
-	}
+		return yield* Effect.promise(() =>
+			db().select().from(videos).where(eq(videos.id, videoId)),
+		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
+	}).pipe(provideOptionalAuth, EffectRuntime.runPromiseExit);
 
-	const result = await db().select().from(videos).where(eq(videos.id, videoId));
-	if (result.length === 0 || !result[0]) {
-		throw new Error("Video not found");
-	}
+	if (Exit.isFailure(exit)) return { success: false };
 
-	const video = result[0];
+	const video = exit.value[0];
+	if (!video) throw new Error("Video not found");
+
 	const metadata: VideoMetadata = (video.metadata as VideoMetadata) || {};
 
 	if (!video.transcriptionStatus) {

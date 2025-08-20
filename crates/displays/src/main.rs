@@ -29,7 +29,7 @@ fn main() {
         }
 
         // Check if this is the main display
-        let main_display_id = cap_displays::Display::list().get(0).map(|d| d.id());
+        let main_display_id = cap_displays::Display::list().first().map(|d| d.id());
 
         if let Some(main_id) = main_display_id {
             if display.id() == main_id {
@@ -90,18 +90,18 @@ fn main() {
     }
 
     println!("\n=== Topmost Window Icon Test ===");
-    if let Some(topmost) = cap_displays::Window::get_topmost_at_cursor() {
-        if let Some(owner) = topmost.owner_name() {
-            println!("Testing icon extraction for: {}", owner);
+    if let Some(topmost) = cap_displays::Window::get_topmost_at_cursor()
+        && let Some(owner) = topmost.owner_name()
+    {
+        println!("Testing icon extraction for: {}", owner);
 
-            match topmost.app_icon() {
-                Some(icon_data) => {
-                    println!("  ✅ Icon found: {} bytes", icon_data.len());
-                    println!("    Format: PNG (Raw bytes)");
-                    println!("    Size: {} bytes", icon_data.len());
-                }
-                None => println!("  ❌ No icon found"),
+        match topmost.app_icon() {
+            Some(icon_data) => {
+                println!("  ✅ Icon found: {} bytes", icon_data.len());
+                println!("    Format: PNG (Raw bytes)");
+                println!("    Size: {} bytes", icon_data.len());
             }
+            None => println!("  ❌ No icon found"),
         }
     }
 
@@ -120,11 +120,11 @@ fn main() {
         relevant_windows.sort_by(|a, b| b.1.cmp(&a.1));
 
         // Print current topmost window info
-        if let Some((topmost_window, level)) = relevant_windows.first() {
-            if let Some(owner) = topmost_window.owner_name() {
-                print!("\rTopmost: {} (level: {})    ", owner, level);
-                std::io::Write::flush(&mut std::io::stdout()).unwrap();
-            }
+        if let Some((topmost_window, level)) = relevant_windows.first()
+            && let Some(owner) = topmost_window.owner_name()
+        {
+            print!("\rTopmost: {} (level: {})    ", owner, level);
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
         }
 
         std::thread::sleep(Duration::from_millis(100));

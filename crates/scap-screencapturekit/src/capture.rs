@@ -60,18 +60,10 @@ impl sc::stream::DelegateImpl for CapturerCallbacks {
 type DidOutputSampleBufCallback = Box<dyn FnMut(Frame)>;
 type StreamDidStopwithErrCallback = Box<dyn FnMut(&sc::Stream, &ns::Error)>;
 
+#[derive(Default)]
 pub struct CapturerCallbacksInner {
     did_output_sample_buf_cb: Option<DidOutputSampleBufCallback>,
     did_stop_with_err_cb: Option<StreamDidStopwithErrCallback>,
-}
-
-impl Default for CapturerCallbacksInner {
-    fn default() -> Self {
-        Self {
-            did_output_sample_buf_cb: None,
-            did_stop_with_err_cb: None,
-        }
-    }
 }
 
 pub struct Capturer {
