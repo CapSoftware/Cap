@@ -1,5 +1,5 @@
 import { db } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
@@ -309,6 +309,12 @@ app.post(
 							console.error("Failed to revalidate page:", revalidateError);
 						}
 					}
+
+					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (videoId)
+						await db()
+							.delete(videoUploads)
+							.where(eq(videoUploads.videoId, videoId));
 
 					return c.json({
 						location: result.Location,

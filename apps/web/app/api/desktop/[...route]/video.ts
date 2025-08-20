@@ -2,10 +2,10 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videoUploads, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
@@ -108,6 +108,10 @@ app.get(
 					},
 				});
 
+			await db().insert(videoUploads).values({
+				videoId: idToUse,
+			});
+
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
 					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
@@ -192,6 +196,8 @@ app.delete(
 					{ status: 404 },
 				);
 
+			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+
 			await db()
 				.delete(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
@@ -212,6 +218,76 @@ app.delete(
 			return c.json(true);
 		} catch (error) {
 			console.error("Error in video delete endpoint:", error);
+			return c.json({ error: "Internal server error" }, { status: 500 });
+		}
+	},
+);
+
+app.post(
+	"/progress",
+	zValidator(
+		"json",
+		z.object({
+			videoId: z.string(),
+			uploaded: z.number(),
+			total: z.number(),
+			// We get this from the client so we can avoid race conditions.
+			// Eg. If this value is older than the value in the DB, we ignore it.
+			updatedAt: z.string().pipe(z.coerce.date()),
+		}),
+	),
+	async (c) => {
+		const { videoId, uploaded, total, updatedAt } = c.req.valid("json");
+		const user = c.get("user");
+
+		try {
+			const video = await db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+			if (!video)
+				return c.json(
+					{ error: true, message: "Video not found" },
+					{ status: 404 },
+				);
+
+			console.log("\n\n\n\nPROGRESS", videoId, total, uploaded, updatedAt);
+
+			const result = await db()
+				.update(videoUploads)
+				.set({
+					uploaded,
+					total,
+					updatedAt,
+				})
+				.where(
+					and(
+						eq(videoUploads.videoId, videoId),
+						// lte(videoUploads.updatedAt, updatedAt), // TODO: bring this back
+					),
+				);
+
+			console.log("ATTEMPTED UPDATE", result);
+
+			if (result.rowsAffected === 0) {
+				const result2 = await db().insert(videoUploads).values({
+					videoId,
+					uploaded,
+					total,
+					updatedAt,
+				});
+
+				console.log("ATTEMPTED INSERT", result2);
+			}
+
+			if (uploaded === total)
+				await db()
+					.delete(videoUploads)
+					.where(eq(videoUploads.videoId, videoId));
+
+			return c.json(true);
+		} catch (error) {
+			console.error("Error in progress update endpoint:", error);
 			return c.json({ error: "Internal server error" }, { status: 500 });
 		}
 	},
