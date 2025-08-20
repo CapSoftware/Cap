@@ -13,12 +13,12 @@ import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
 import { trackEvent } from "@/app/utils/analytics";
-import { signIn } from "next-auth/react";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);

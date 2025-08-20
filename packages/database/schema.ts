@@ -1,8 +1,8 @@
 import type { Folder } from "@cap/web-domain";
 import {
+	boolean,
 	customType,
 	datetime,
-	boolean,
 	float,
 	index,
 	int,
@@ -10,6 +10,7 @@ import {
 	mysqlTable,
 	text,
 	timestamp,
+	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
@@ -125,7 +126,7 @@ export const sessions = mysqlTable(
 	(table) => ({
 		sessionTokenIndex: uniqueIndex("session_token_idx").on(table.sessionToken),
 		userIdIndex: index("user_id_idx").on(table.userId),
-	})
+	}),
 );
 
 export const verificationTokens = mysqlTable("verification_tokens", {
@@ -155,7 +156,7 @@ export const organizations = mysqlTable(
 	(table) => ({
 		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
 		customDomainIndex: index("custom_domain_idx").on(table.customDomain),
-	})
+	}),
 );
 
 export const organizationMembers = mysqlTable(
@@ -173,9 +174,9 @@ export const organizationMembers = mysqlTable(
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		userIdOrganizationIdIndex: index("user_id_organization_id_idx").on(
 			table.userId,
-			table.organizationId
+			table.organizationId,
 		),
-	})
+	}),
 );
 
 export const organizationInvites = mysqlTable(
@@ -195,10 +196,10 @@ export const organizationInvites = mysqlTable(
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		invitedEmailIndex: index("invited_email_idx").on(table.invitedEmail),
 		invitedByUserIdIndex: index("invited_by_user_id_idx").on(
-			table.invitedByUserId
+			table.invitedByUserId,
 		),
 		statusIndex: index("status_idx").on(table.status),
-	})
+	}),
 );
 
 export const folders = mysqlTable(
@@ -224,7 +225,7 @@ export const folders = mysqlTable(
 		createdByIdIndex: index("created_by_id_idx").on(table.createdById),
 		parentIdIndex: index("parent_id_idx").on(table.parentId),
 		spaceIdIndex: index("space_id_idx").on(table.spaceId),
-	})
+	}),
 );
 
 export const videos = mysqlTable(
@@ -267,7 +268,7 @@ export const videos = mysqlTable(
 		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
 		publicIndex: index("is_public_idx").on(table.public),
 		folderIdIndex: index("folder_id_idx").on(table.folderId),
-	})
+	}),
 );
 
 export const sharedVideos = mysqlTable(
@@ -283,13 +284,13 @@ export const sharedVideos = mysqlTable(
 		videoIdIndex: index("video_id_idx").on(table.videoId),
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		sharedByUserIdIndex: index("shared_by_user_id_idx").on(
-			table.sharedByUserId
+			table.sharedByUserId,
 		),
 		videoIdOrganizationIdIndex: index("video_id_organization_id_idx").on(
 			table.videoId,
-			table.organizationId
+			table.organizationId,
 		),
-	})
+	}),
 );
 
 export const comments = mysqlTable(
@@ -309,9 +310,9 @@ export const comments = mysqlTable(
 		videoIdIndex: index("video_id_idx").on(table.videoId),
 		authorIdIndex: index("author_id_idx").on(table.authorId),
 		parentCommentIdIndex: index("parent_comment_id_idx").on(
-			table.parentCommentId
+			table.parentCommentId,
 		),
-	})
+	}),
 );
 
 export const notifications = mysqlTable(
@@ -344,13 +345,13 @@ export const notifications = mysqlTable(
 		createdAtIndex: index("created_at_idx").on(table.createdAt),
 		recipientReadIndex: index("recipient_read_idx").on(
 			table.recipientId,
-			table.readAt
+			table.readAt,
 		),
 		recipientCreatedIndex: index("recipient_created_idx").on(
 			table.recipientId,
-			table.createdAt
+			table.createdAt,
 		),
-	})
+	}),
 );
 
 export const s3Buckets = mysqlTable("s3_buckets", {
@@ -434,7 +435,7 @@ export const organizationsRelations = relations(
 		sharedVideos: many(sharedVideos),
 		organizationInvites: many(organizationInvites),
 		spaces: many(spaces),
-	})
+	}),
 );
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -446,9 +447,9 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const verificationTokensRelations = relations(
 	verificationTokens,
-	({ }) => ({
+	({}) => ({
 		// No relations defined
-	})
+	}),
 );
 
 export const organizationMembersRelations = relations(
@@ -462,7 +463,7 @@ export const organizationMembersRelations = relations(
 			fields: [organizationMembers.organizationId],
 			references: [organizations.id],
 		}),
-	})
+	}),
 );
 
 export const organizationInvitesRelations = relations(
@@ -476,7 +477,7 @@ export const organizationInvitesRelations = relations(
 			fields: [organizationInvites.invitedByUserId],
 			references: [users.id],
 		}),
-	})
+	}),
 );
 
 export const videosRelations = relations(videos, ({ one, many }) => ({
@@ -526,7 +527,7 @@ export const spaces = mysqlTable(
 	(table) => ({
 		organizationIdIndex: index("organization_id_idx").on(table.organizationId),
 		createdByIdIndex: index("created_by_id_idx").on(table.createdById),
-	})
+	}),
 );
 
 export const spaceMembers = mysqlTable(
@@ -544,9 +545,9 @@ export const spaceMembers = mysqlTable(
 		userIdIndex: index("user_id_idx").on(table.userId),
 		spaceIdUserIdIndex: index("space_id_user_id_idx").on(
 			table.spaceId,
-			table.userId
+			table.userId,
 		),
-	})
+	}),
 );
 
 export const spaceVideos = mysqlTable(
@@ -566,9 +567,9 @@ export const spaceVideos = mysqlTable(
 		addedByIdIndex: index("added_by_id_idx").on(table.addedById),
 		spaceIdVideoIdIndex: index("space_id_video_id_idx").on(
 			table.spaceId,
-			table.videoId
+			table.videoId,
 		),
-	})
+	}),
 );
 
 export const spacesRelations = relations(spaces, ({ one, many }) => ({

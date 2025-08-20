@@ -1,4 +1,5 @@
 import { serverEnv } from "@cap/env";
+import crypto from "crypto";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextAuthOptions } from "next-auth";
@@ -6,15 +7,13 @@ import { getServerSession as _getServerSession } from "next-auth";
 import type { Adapter } from "next-auth/adapters";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
-import WorkOSProvider from "next-auth/providers/workos";
 import type { Provider } from "next-auth/providers/index";
-import { dub } from "../dub";
-import crypto from "crypto";
-
+import WorkOSProvider from "next-auth/providers/workos";
 import { db } from "../";
+import { dub } from "../dub";
 import { sendEmail } from "../emails/config";
-import { organizationMembers, organizations, users } from "../schema";
 import { nanoId } from "../helpers";
+import { organizationMembers, organizations, users } from "../schema";
 import { DrizzleAdapter } from "./drizzle-adapter";
 
 export const config = {

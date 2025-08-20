@@ -72,8 +72,8 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				.where(
 					and(
 						eq(accounts.providerAccountId, providerAccountId),
-						eq(accounts.provider, provider)
-					)
+						eq(accounts.provider, provider),
+					),
 				)
 				.limit(1);
 			const row = rows[0];
@@ -116,8 +116,8 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				.where(
 					and(
 						eq(accounts.providerAccountId, providerAccountId),
-						eq(accounts.provider, provider)
-					)
+						eq(accounts.provider, provider),
+					),
 				);
 		},
 		async createSession(data) {
@@ -201,7 +201,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 						// you may update other fields as necessary
 					})
 					.where(
-						eq(verificationTokens.identifier, verificationToken.identifier)
+						eq(verificationTokens.identifier, verificationToken.identifier),
 					);
 
 				// Return the updated token
@@ -209,7 +209,7 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 					.select()
 					.from(verificationTokens)
 					.where(
-						eq(verificationTokens.identifier, verificationToken.identifier)
+						eq(verificationTokens.identifier, verificationToken.identifier),
 					)
 					.limit(1)
 					.then((rows) => rows[0]);
@@ -245,8 +245,8 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				.where(
 					and(
 						eq(verificationTokens.token, token),
-						eq(verificationTokens.identifier, identifier)
-					)
+						eq(verificationTokens.identifier, identifier),
+					),
 				);
 			return row;
 		},

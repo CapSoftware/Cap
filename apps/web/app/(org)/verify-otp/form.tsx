@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
 import { Button, LogoBadge } from "@cap/ui";
-import { motion } from "framer-motion";
-import { signIn } from "next-auth/react";
-import Link from "next/link";
-import { toast } from "sonner";
 import { faArrowLeft } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
 export function VerifyOTPForm({
 	email,
