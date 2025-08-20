@@ -7,7 +7,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { createBucketProvider } from "@/utils/s3";
@@ -154,7 +154,7 @@ app.post(
 						height: updateIfDefined(height, videos.height),
 						fps: updateIfDefined(fps, videos.fps),
 					})
-					.where(eq(videos.id, videoIdToUse));
+					.where(and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)));
 
 			if (videoIdFromKey) {
 				try {

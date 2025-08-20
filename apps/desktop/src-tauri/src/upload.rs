@@ -387,7 +387,10 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
 
     let video_codec = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
-    let video = video_codec.decoder().video().unwrap();
+    let video = video_codec
+        .decoder()
+        .video()
+        .map_err(|e| format!("Unable to get video decoder: {e}"))?;
 
     Ok(S3VideoMeta {
         duration_in_secs: input.duration() as f64 / AV_TIME_BASE as f64,

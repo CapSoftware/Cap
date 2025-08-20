@@ -326,6 +326,7 @@ export default async function SharedCapsPage({
 						videos.createdAt,
 						videos.metadata,
 						users.name,
+						videos.duration,
 					)
 					.orderBy(
 						desc(

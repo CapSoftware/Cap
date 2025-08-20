@@ -36,4 +36,4 @@ export const db = () => {
 
 // Use the incoming value if one exists, else fallback to the DBs existing value.
 export const updateIfDefined = <T>(v: T | undefined, col: AnyMySqlColumn) =>
-	sql`COALESCE(${v ?? sql`NULL`}, ${col})`;
+	sql`COALESCE(${v === undefined ? sql`NULL` : v}, ${col})`;
