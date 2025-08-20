@@ -17,8 +17,6 @@ interface VideoThumbnailProps {
 }
 
 const formatDuration = (durationSecs: number) => {
-	console.log("FORMAT DURATION", durationSecs);
-
 	const momentDuration = moment.duration(durationSecs, "seconds");
 
 	const totalHours = Math.floor(momentDuration.asHours());

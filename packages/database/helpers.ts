@@ -1,4 +1,3 @@
-import { sql } from "drizzle-orm";
 import { customAlphabet } from "nanoid";
 
 export const nanoIdLength = 15;

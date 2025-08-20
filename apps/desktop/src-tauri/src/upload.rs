@@ -486,6 +486,16 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 // const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartCompleteResponse<'a> {
+    video_id: &'a str,
+    upload_id: &'a str,
+    parts: &'a [UploadedPart],
+    #[serde(flatten)]
+    meta: Option<S3VideoMeta>,
+}
+
 pub struct InstantMultipartUpload {
     pub handle: tokio::task::JoinHandle<Result<(), String>>,
 }
@@ -985,17 +995,14 @@ impl InstantMultipartUpload {
 
         let complete_response = match app
             .authed_api_request("/api/upload/multipart/complete", |c, url| {
-                c.post(url)
-                    .header("Content-Type", "application/json")
-                    .json(&serde_json::json!({
-                        "videoId": video_id,
-                        "uploadId": upload_id,
-                        "parts": uploaded_parts,
-                        "durationInSecs": metadata.as_ref().map(|m| m.duration_in_secs),
-                        "width": metadata.as_ref().map(|m| m.width),
-                        "height": metadata.as_ref().map(|m| m.height),
-                        "fps": metadata.as_ref().map(|m| m.fps),
-                    }))
+                c.post(url).header("Content-Type", "application/json").json(
+                    &MultipartCompleteResponse {
+                        video_id,
+                        upload_id,
+                        parts: uploaded_parts,
+                        meta: metadata,
+                    },
+                )
             })
             .await
         {
