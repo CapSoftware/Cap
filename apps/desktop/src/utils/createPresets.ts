@@ -26,7 +26,7 @@ export function createPresets() {
 		query,
 		createPreset: async (preset: CreatePreset) => {
 			const config = { ...preset.config };
-			// @ts-ignore we reeeally don't want the timeline in the preset
+			// @ts-expect-error we reeeally don't want the timeline in the preset
 			config.timeline = undefined;
 
 			await updatePresets((store) => {
