@@ -24,6 +24,7 @@ import {
 	createRoot,
 	createSignal,
 	For,
+	Index,
 	on,
 	onMount,
 	Show,
@@ -598,7 +599,10 @@ export function ConfigSidebar() {
 												item.segment !== undefined,
 										);
 
-									if (segments.length === 0) return;
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
 									return { selection: zoomSelection, segments };
 								})()}
 							>
@@ -634,16 +638,34 @@ export function ConfigSidebar() {
 												Delete
 											</EditorButton>
 										</div>
-										<For each={value().segments}>
-											{(item) => (
-												<div class="p-4 rounded-lg border border-gray-200">
-													<ZoomSegmentConfig
-														segment={item.segment}
-														segmentIndex={item.index}
-													/>
+										<Show
+											when={value().segments.length === 1}
+											fallback={
+												<div class="grid grid-cols-3 gap-4">
+													<Index each={value().segments}>
+														{(item, index) => (
+															<div class="p-2.5 rounded-lg border border-gray-4 bg-gray-3">
+																<ZoomSegmentPreview
+																	segment={item().segment}
+																	segmentIndex={index}
+																/>
+															</div>
+														)}
+													</Index>
 												</div>
-											)}
-										</For>
+											}
+										>
+											<For each={value().segments}>
+												{(item) => (
+													<div class="p-4 rounded-lg border border-gray-200">
+														<ZoomSegmentConfig
+															segment={item.segment}
+															segmentIndex={item.index}
+														/>
+													</div>
+												)}
+											</For>
+										</Show>
 									</div>
 								)}
 							</Show>
@@ -1781,6 +1803,125 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	);
 }
 
+function ZoomSegmentPreview(props: {
+	segmentIndex: number;
+	segment: ZoomSegment;
+}) {
+	const { project, editorInstance } = useEditorContext();
+
+	const start = createMemo(() => props.segment.start);
+
+	const segmentIndex = createMemo(() => {
+		const st = start();
+		const i = project.timeline?.segments.findIndex(
+			(s) => s.start <= st && s.end > st,
+		);
+		if (i === undefined || i === -1) return 0;
+		return i;
+	});
+
+	const relativeTime = createMemo(() => {
+		const st = start();
+		const segment = project.timeline?.segments[segmentIndex()];
+		if (!segment) return 0;
+		return Math.max(0, st - segment.start);
+	});
+
+	const video = document.createElement("video");
+	createEffect(() => {
+		const path = convertFileSrc(
+			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+		);
+		video.src = path;
+		video.preload = "auto";
+		video.load();
+	});
+
+	createEffect(() => {
+		const t = relativeTime();
+		if (t === undefined) return;
+
+		if (video.readyState >= 2) {
+			video.currentTime = t;
+		} else {
+			const handleCanPlay = () => {
+				video.currentTime = t;
+				video.removeEventListener("canplay", handleCanPlay);
+			};
+			video.addEventListener("canplay", handleCanPlay);
+		}
+	});
+
+	const render = () => {
+		if (!canvasRef || video.readyState < 2) return;
+
+		const ctx = canvasRef.getContext("2d");
+		if (!ctx) return;
+
+		ctx.imageSmoothingEnabled = false;
+		ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
+
+		const raw = editorInstance.recordings.segments[0].display;
+		const croppedPosition = project.background.crop?.position || { x: 0, y: 0 };
+		const croppedSize = project.background.crop?.size || {
+			x: raw.width,
+			y: raw.height,
+		};
+
+		ctx.drawImage(
+			video,
+			croppedPosition.x,
+			croppedPosition.y,
+			croppedSize.x,
+			croppedSize.y,
+			0,
+			0,
+			canvasRef.width,
+			canvasRef.height,
+		);
+	};
+
+	const [loaded, setLoaded] = createSignal(false);
+	video.onloadeddata = () => {
+		setLoaded(true);
+		render();
+	};
+	video.onseeked = render;
+	video.onerror = () => {
+		setTimeout(() => video.load(), 100);
+	};
+
+	let canvasRef!: HTMLCanvasElement;
+
+	return (
+		<>
+			<div class="space-y-1.5">
+				<div class="text-xs font-medium text-center text-gray-12">
+					Zoom {props.segmentIndex + 1}
+				</div>
+				<div class="overflow-hidden relative rounded border aspect-video border-gray-3 bg-gray-3">
+					<canvas
+						ref={canvasRef}
+						width={160}
+						height={90}
+						data-loaded={loaded()}
+						class="w-full h-full opacity-0 transition-opacity data-[loaded='true']:opacity-100 duration-200"
+					/>
+					<Show when={!loaded()}>
+						<p class="flex absolute inset-0 justify-center items-center text-xs text-gray-11">
+							Loading...
+						</p>
+					</Show>
+				</div>
+			</div>
+			<div class="flex gap-1 justify-center items-center mt-3 w-full text-xs text-center text-gray-11">
+				<IconLucideSearch class="size-3" />
+				<p>{props.segment.amount.toFixed(1)}x</p>
+			</div>
+		</>
+	);
+}
+
 function ZoomSegmentConfig(props: {
 	segmentIndex: number;
 	segment: ZoomSegment;
@@ -1792,7 +1933,6 @@ function ZoomSegmentConfig(props: {
 		editorInstance,
 		setEditorState,
 		projectHistory,
-		projectActions,
 	} = useEditorContext();
 
 	const states = {
@@ -1902,6 +2042,7 @@ function ZoomSegmentConfig(props: {
 										}/content/segments/segment-${segmentIndex()}/display.mp4`,
 									);
 									video.src = path;
+									video.preload = "auto";
 									// Force reload if video fails to load
 									video.load();
 								});
@@ -2047,7 +2188,13 @@ function ZoomSegmentConfig(props: {
 											);
 										}}
 									>
-										<div class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1">
+										<div
+											class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
+											style={{
+												left: `${states.manual.x * 100}%`,
+												top: `${states.manual.y * 100}%`,
+											}}
+										>
 											<div class="size-1.5 bg-gray-5 rounded-full" />
 										</div>
 										<div class="overflow-hidden relative rounded-lg border border-gray-3 bg-gray-2">
