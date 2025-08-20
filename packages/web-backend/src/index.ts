@@ -1,9 +1,10 @@
 import "server-only";
 
-export * from "./Rpcs";
 export * from "./Auth";
-export { Videos } from "./Videos";
+export * from "./Database";
+export { Folders } from "./Folders";
+export * from "./Rpcs";
 export { S3Buckets } from "./S3Buckets";
 export { S3BucketAccess } from "./S3Buckets/S3BucketAccess";
-export { Folders } from "./Folders";
-export * from "./Database";
+export { Videos } from "./Videos";
+export { VideosPolicy } from "./Videos/VideosPolicy";

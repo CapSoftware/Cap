@@ -1,7 +1,5 @@
 "use client";
 
-import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
-import { trackEvent } from "@/app/utils/analytics";
 import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
 import {
@@ -13,12 +11,14 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
-import { signIn } from "next-auth/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { getOrganizationSSOData } from "@/actions/organization/get-organization-sso-data";
+import { trackEvent } from "@/app/utils/analytics";
+import { signIn } from "next-auth/react";
 
 const MotionInput = motion(Input);
 const MotionLogoBadge = motion(LogoBadge);

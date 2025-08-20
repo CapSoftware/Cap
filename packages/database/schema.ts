@@ -1,21 +1,20 @@
+import type { Folder } from "@cap/web-domain";
 import {
 	customType,
 	datetime,
+	boolean,
+	float,
+	index,
 	int,
 	json,
 	mysqlTable,
 	text,
 	timestamp,
-	index,
-	boolean,
-	uniqueIndex,
 	varchar,
-	float,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
-import { Folder } from "@cap/web-domain";
 import { nanoIdLength } from "./helpers";
-import { VideoMetadata } from "./types";
+import type { VideoMetadata } from "./types";
 
 const nanoId = customType<{ data: string; notNull: true }>({
 	dataType() {
@@ -83,7 +82,7 @@ export const users = mysqlTable(
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
-	})
+	}),
 );
 
 export const accounts = mysqlTable(
@@ -108,9 +107,9 @@ export const accounts = mysqlTable(
 	(table) => ({
 		userIdIndex: index("user_id_idx").on(table.userId),
 		providerAccountIdIndex: index("provider_account_id_idx").on(
-			table.providerAccountId
+			table.providerAccountId,
 		),
-	})
+	}),
 );
 
 export const sessions = mysqlTable(

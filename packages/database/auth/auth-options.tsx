@@ -1,24 +1,21 @@
+import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
-import { DrizzleAdapter } from "./drizzle-adapter";
+import { cookies } from "next/headers";
 import type { NextAuthOptions } from "next-auth";
+import { getServerSession as _getServerSession } from "next-auth";
+import type { Adapter } from "next-auth/adapters";
 import EmailProvider from "next-auth/providers/email";
 import GoogleProvider from "next-auth/providers/google";
 import WorkOSProvider from "next-auth/providers/workos";
-import CredentialsProvider from "next-auth/providers/credentials";
-import { serverEnv } from "@cap/env";
-import type { Adapter } from "next-auth/adapters";
 import type { Provider } from "next-auth/providers/index";
-import { cookies } from "next/headers";
-import { getServerSession as _getServerSession } from "next-auth";
 import { dub } from "../dub";
 import crypto from "crypto";
 
 import { db } from "../";
-import { users, organizations, organizationMembers } from "../schema";
-import { nanoId } from "../helpers";
 import { sendEmail } from "../emails/config";
-import { LoginLink } from "../emails/login-link";
-import { generateOTP } from "./otp";
+import { organizationMembers, organizations, users } from "../schema";
+import { nanoId } from "../helpers";
+import { DrizzleAdapter } from "./drizzle-adapter";
 
 export const config = {
 	maxDuration: 120,

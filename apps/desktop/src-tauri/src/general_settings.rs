@@ -99,9 +99,8 @@ pub struct GeneralSettingsStore {
 }
 
 fn default_enable_native_camera_preview() -> bool {
-    // TODO:
-    // cfg!(target_os = "macos")
-    false
+    // This will help us with testing it
+    cfg!(all(debug_assertions, target_os = "macos"))
 }
 
 fn default_enable_new_recording_flow() -> bool {

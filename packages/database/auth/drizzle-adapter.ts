@@ -1,9 +1,9 @@
-import { nanoId } from "../helpers";
+import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import { and, eq } from "drizzle-orm";
-import { accounts, sessions, users, verificationTokens } from "../schema";
-import type { Adapter } from "next-auth/adapters";
 import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
-import { stripe, STRIPE_AVAILABLE } from "@cap/utils";
+import type { Adapter } from "next-auth/adapters";
+import { nanoId } from "../helpers";
+import { accounts, sessions, users, verificationTokens } from "../schema";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 	return {

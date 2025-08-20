@@ -13,242 +13,243 @@
 @tailwind utilities;
 
 :root {
-  /* Light theme variables */
-  --gray-50: #ffffff; /* Pure white background */
-  --gray-100: #f8f9fb; /* Soft background */
-  --gray-200: #e4e6ed; /* Light borders/dividers */
-  --gray-300: #c7ccda; /* Subtle highlights */
-  --gray-400: #868e9f; /* Secondary text - slightly softened */
-  --gray-450: #4a4a4a; /* Adjusted to maintain balance */
-  --gray-500: #161b26; /* Primary text - deep, rich contrast */
+	/* Light theme variables */
+	--gray-50: #ffffff; /* Pure white background */
+	--gray-100: #f8f9fb; /* Soft background */
+	--gray-200: #e4e6ed; /* Light borders/dividers */
+	--gray-300: #c7ccda; /* Subtle highlights */
+	--gray-400: #868e9f; /* Secondary text - slightly softened */
+	--gray-450: #4a4a4a; /* Adjusted to maintain balance */
+	--gray-500: #161b26; /* Primary text - deep, rich contrast */
 
-  --gray-50-transparent-50: rgba(255, 255, 255, 0.5);
-  --gray-100-transparent-50: rgba(248, 249, 251, 0.5);
-  --gray-200-transparent-50: rgba(228, 230, 237, 0.5);
-  --gray-300-transparent-50: rgba(207, 210, 214, 0.5);
-  --gray-400-transparent-50: rgba(134, 138, 143, 0.5);
-  --gray-450-transparent-50: rgba(234, 236, 239, 0.5);
-  --gray-500-transparent-50: rgba(22, 27, 38, 0.5);
+	--gray-50-transparent-50: rgba(255, 255, 255, 0.5);
+	--gray-100-transparent-50: rgba(248, 249, 251, 0.5);
+	--gray-200-transparent-50: rgba(228, 230, 237, 0.5);
+	--gray-300-transparent-50: rgba(207, 210, 214, 0.5);
+	--gray-400-transparent-50: rgba(134, 138, 143, 0.5);
+	--gray-450-transparent-50: rgba(234, 236, 239, 0.5);
+	--gray-500-transparent-50: rgba(22, 27, 38, 0.5);
 
-  --transparent-window: rgba(255, 255, 255, 0.7);
+	--transparent-window: rgba(255, 255, 255, 0.7);
 
-  --text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
-  --text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
-  --text-tertiary: rgba(18, 22, 31, 0.65); /* Descriptions */
+	--text-primary: rgba(18, 22, 31, 0.95); /* Section titles, headings */
+	--text-secondary: rgba(18, 22, 31, 0.85); /* Important labels */
+	--text-tertiary: rgba(18, 22, 31, 0.65); /* Descriptions */
 
-  --black-transparent-5: rgba(18, 22, 31, 0.05);
-  --black-transparent-10: rgba(18, 22, 31, 0.1);
-  --black-transparent-20: rgba(18, 22, 31, 0.2);
-  --black-transparent-40: rgba(18, 22, 31, 0.4);
-  --black-transparent-60: rgba(18, 22, 31, 0.6);
-  --black-transparent-80: rgba(18, 22, 31, 0.8);
+	--black-transparent-5: rgba(18, 22, 31, 0.05);
+	--black-transparent-10: rgba(18, 22, 31, 0.1);
+	--black-transparent-20: rgba(18, 22, 31, 0.2);
+	--black-transparent-40: rgba(18, 22, 31, 0.4);
+	--black-transparent-60: rgba(18, 22, 31, 0.6);
+	--black-transparent-80: rgba(18, 22, 31, 0.8);
 
-  --white-transparent-5: rgba(255, 255, 255, 0.05);
-  --white-transparent-10: rgba(255, 255, 255, 0.1);
-  --white-transparent-20: rgba(255, 255, 255, 0.2);
-  --white-transparent-40: rgba(255, 255, 255, 0.4);
-  --white-transparent-60: rgba(255, 255, 255, 0.6);
-  --white-transparent-80: rgba(255, 255, 255, 0.8);
+	--white-transparent-5: rgba(255, 255, 255, 0.05);
+	--white-transparent-10: rgba(255, 255, 255, 0.1);
+	--white-transparent-20: rgba(255, 255, 255, 0.2);
+	--white-transparent-40: rgba(255, 255, 255, 0.4);
+	--white-transparent-60: rgba(255, 255, 255, 0.6);
+	--white-transparent-80: rgba(255, 255, 255, 0.8);
 
-  --solid-white: #ffffff;
+	--solid-white: #ffffff;
 
-  --blue-50: #ebf1ff;
-  --blue-100: #adc9ff;
-  --blue-200: #85adff;
-  --blue-300: #4785ff;
-  --blue-400: #3f75e0;
-  --blue-500: rgb(54, 102, 197);
+	--blue-50: #ebf1ff;
+	--blue-100: #adc9ff;
+	--blue-200: #85adff;
+	--blue-300: #4785ff;
+	--blue-400: #3f75e0;
+	--blue-500: rgb(54, 102, 197);
 
-  --blue-transparent-0: rgba(34, 64, 122, 0);
-  --blue-transparent-10: rgba(34, 64, 122, 0.1);
-  --blue-transparent-20: rgba(34, 64, 122, 0.2);
+	--blue-transparent-0: rgba(34, 64, 122, 0);
+	--blue-transparent-10: rgba(34, 64, 122, 0.1);
+	--blue-transparent-20: rgba(34, 64, 122, 0.2);
 
-  --red-50: #ffebee;
-  --red-100: #ffadbb;
-  --red-200: #ff8599;
-  --red-300: #ff4766;
-  --red-400: #e03f5a;
+	--red-50: #ffebee;
+	--red-100: #ffadbb;
+	--red-200: #ff8599;
+	--red-300: #ff4766;
+	--red-400: #e03f5a;
 
-  --red-transparent-20: rgba(255, 71, 102, 0.2);
+	--red-transparent-20: rgba(255, 71, 102, 0.2);
 
-  --shadow-s: 0px 8px 16px 0px rgba(18, 22, 31, 0.04);
+	--shadow-s: 0px 8px 16px 0px rgba(18, 22, 31, 0.04);
 }
 
 /* Dark theme variables */
 :root.dark {
-  /* Main background colors */
-  --gray-50: #141414; /* Main background - slightly darker */
-  --gray-100: #181818; /* Secondary background */
-  --gray-200: #222222; /* Borders and dividers */
-  --gray-300: #323232; /* Subtle highlights */
-  --gray-400: #868686; /* Secondary text - slightly softer */
-  --gray-450: #eaeaea; /* Adjusted to be more balanced */
-  --gray-500: #ffffff; /* Primary text - titles/headings */
+	/* Main background colors */
+	--gray-50: #141414; /* Main background - slightly darker */
+	--gray-100: #181818; /* Secondary background */
+	--gray-200: #222222; /* Borders and dividers */
+	--gray-300: #323232; /* Subtle highlights */
+	--gray-400: #868686; /* Secondary text - slightly softer */
+	--gray-450: #eaeaea; /* Adjusted to be more balanced */
+	--gray-500: #ffffff; /* Primary text - titles/headings */
 
-  --gray-50-transparent-50: rgba(20, 20, 20, 0.5);
-  --gray-100-transparent-50: rgba(24, 24, 24, 0.5);
-  --gray-200-transparent-50: rgba(34, 34, 34, 0.5);
-  --gray-300-transparent-50: rgba(50, 50, 50, 0.5);
-  --gray-400-transparent-50: rgba(134, 134, 134, 0.5);
-  --gray-450-transparent-50: rgba(234, 234, 234, 0.5);
-  --gray-500-transparent-50: rgba(255, 255, 255, 0.5);
+	--gray-50-transparent-50: rgba(20, 20, 20, 0.5);
+	--gray-100-transparent-50: rgba(24, 24, 24, 0.5);
+	--gray-200-transparent-50: rgba(34, 34, 34, 0.5);
+	--gray-300-transparent-50: rgba(50, 50, 50, 0.5);
+	--gray-400-transparent-50: rgba(134, 134, 134, 0.5);
+	--gray-450-transparent-50: rgba(234, 234, 234, 0.5);
+	--gray-500-transparent-50: rgba(255, 255, 255, 0.5);
 
-  --transparent-window: rgba(22, 22, 22, 0.7);
+	--transparent-window: rgba(22, 22, 22, 0.7);
 
-  /* Add new variables for text hierarchy */
-  --text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
-  --text-secondary: rgba(255, 255, 255, 0.85); /* Important labels */
-  --text-tertiary: rgba(255, 255, 255, 0.65); /* Descriptions */
+	/* Add new variables for text hierarchy */
+	--text-primary: rgba(255, 255, 255, 0.95); /* Section titles, headings */
+	--text-secondary: rgba(255, 255, 255, 0.85); /* Important labels */
+	--text-tertiary: rgba(255, 255, 255, 0.65); /* Descriptions */
 
-  /* Transparent overlays - adjusted for better contrast */
-  --black-transparent-5: rgba(255, 255, 255, 0.05);
-  --black-transparent-10: rgba(255, 255, 255, 0.1);
-  --black-transparent-20: rgba(255, 255, 255, 0.2);
-  --black-transparent-40: rgba(255, 255, 255, 0.4);
-  --black-transparent-60: rgba(255, 255, 255, 0.6);
-  --black-transparent-80: rgba(255, 255, 255, 0.8);
+	/* Transparent overlays - adjusted for better contrast */
+	--black-transparent-5: rgba(255, 255, 255, 0.05);
+	--black-transparent-10: rgba(255, 255, 255, 0.1);
+	--black-transparent-20: rgba(255, 255, 255, 0.2);
+	--black-transparent-40: rgba(255, 255, 255, 0.4);
+	--black-transparent-60: rgba(255, 255, 255, 0.6);
+	--black-transparent-80: rgba(255, 255, 255, 0.8);
 
-  /* White transparencies */
-  --white-transparent-5: rgba(18, 22, 31, 0.05);
-  --white-transparent-10: rgba(18, 22, 31, 0.1);
-  --white-transparent-20: rgba(18, 22, 31, 0.2);
-  --white-transparent-40: rgba(18, 22, 31, 0.4);
-  --white-transparent-60: rgba(18, 22, 31, 0.6);
-  --white-transparent-80: rgba(18, 22, 31, 0.8);
+	/* White transparencies */
+	--white-transparent-5: rgba(18, 22, 31, 0.05);
+	--white-transparent-10: rgba(18, 22, 31, 0.1);
+	--white-transparent-20: rgba(18, 22, 31, 0.2);
+	--white-transparent-40: rgba(18, 22, 31, 0.4);
+	--white-transparent-60: rgba(18, 22, 31, 0.6);
+	--white-transparent-80: rgba(18, 22, 31, 0.8);
 
-  --solid-white: #ffffff;
+	--solid-white: #ffffff;
 
-  /* Accent colors remain mostly the same but adjusted for dark theme */
-  --blue-50: #1a2438;
-  --blue-100: #243352;
-  --blue-200: #2e426b;
-  --blue-300: #4785ff;
-  --blue-400: #5c8fff;
+	/* Accent colors remain mostly the same but adjusted for dark theme */
+	--blue-50: #1a2438;
+	--blue-100: #243352;
+	--blue-200: #2e426b;
+	--blue-300: #4785ff;
+	--blue-400: #5c8fff;
 
-  --blue-transparent-10: rgba(71, 133, 255, 0.1);
-  --blue-transparent-20: rgba(71, 133, 255, 0.2);
+	--blue-transparent-10: rgba(71, 133, 255, 0.1);
+	--blue-transparent-20: rgba(71, 133, 255, 0.2);
 
-  --red-50: #2c1a1e;
-  --red-100: #52232c;
-  --red-200: #6b2c39;
-  --red-300: #ff4766;
-  --red-400: #ff5c7a;
+	--red-50: #2c1a1e;
+	--red-100: #52232c;
+	--red-200: #6b2c39;
+	--red-300: #ff4766;
+	--red-400: #ff5c7a;
 
-  --red-transparent-20: rgba(255, 71, 102, 0.2);
+	--red-transparent-20: rgba(255, 71, 102, 0.2);
 
-  --shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
+	--shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
 }
 
 [data-transparent-window] {
-  background: transparent !important;
+	background: transparent !important;
 }
 
 [data-transparent-window] body {
-  background: transparent !important;
+	background: transparent !important;
 }
 
 /* Custom scrollbar */
 .custom-scroll {
-  margin-right: 3px; /* Add margin to create space between scrollbar and window edge */
-  overflow-y: scroll;
+	margin-right: 3px; /* Add margin to create space between scrollbar and window edge */
+	overflow-y: scroll;
+	margin-top: var(--margin-top-scroll);
 }
 
 .custom-scroll::-webkit-scrollbar {
-  width: 7px;
-  background-color: transparent;
+	width: 7px;
+	background-color: transparent;
 }
 
 .custom-scroll::-webkit-scrollbar-thumb {
-  background-color: var(--gray-300);
-  width: 7px;
-  border-radius: 500px;
+	background-color: var(--gray-300);
+	width: 7px;
+	border-radius: 500px;
 }
 
 /* Ensure transparent windows stay transparent in dark mode */
 .dark [data-transparent-window],
 .dark [data-transparent-window] body {
-  background: transparent !important;
+	background: transparent !important;
 }
 
 .custom-scroll::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-  background-color: transparent;
+	width: 4px;
+	height: 4px;
+	background-color: transparent;
 }
 
 .hide-scroll::-webkit-scrollbar {
-  display: none;
+	display: none;
 }
 
 .custom-scroll::-webkit-scrollbar-thumb {
-  background-color: var(--gray-300);
-  width: 4px;
-  border-radius: 500px;
+	background-color: var(--gray-300);
+	width: 4px;
+	border-radius: 500px;
 }
 
 @keyframes bounce {
-  0%,
-  100% {
-    transform: translateY(-15%);
-    animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
-  }
-  50% {
-    transform: none;
-    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
-  }
+	0%,
+	100% {
+		transform: translateY(-15%);
+		animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
+	}
+	50% {
+		transform: none;
+		animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+	}
 }
 
 .bounce {
-  animation: bounce 1s ease-in-out forwards;
-  animation-iteration-count: infinite;
+	animation: bounce 1s ease-in-out forwards;
+	animation-iteration-count: infinite;
 }
 
 /* SVG path animation */
 
 @keyframes svgpathframes {
-  0% {
-    stroke-dasharray: 100;
-    stroke-dashoffset: 100;
-  }
-  50% {
-  }
-  100% {
-    stroke-dashoffset: 0;
-  }
+	0% {
+		stroke-dasharray: 100;
+		stroke-dashoffset: 100;
+	}
+	50% {
+	}
+	100% {
+		stroke-dashoffset: 0;
+	}
 }
 
 .svgpathanimation {
-  stroke-dasharray: 100;
-  stroke-dashoffset: 100;
-  animation: svgpathframes 1s ease-in-out forwards;
+	stroke-dasharray: 100;
+	stroke-dashoffset: 100;
+	animation: svgpathframes 1s ease-in-out forwards;
 }
 
 .svgpathanimationrepeat {
-  animation: svgpathframes 1s ease-in-out forwards;
-  animation-iteration-count: infinite;
+	animation: svgpathframes 1s ease-in-out forwards;
+	animation-iteration-count: infinite;
 }
 
 /* Tabs container with mask-based fade-out effect */
 
 .tabs-mask-content {
-  -webkit-mask-image: linear-gradient(
-    to right,
-    transparent,
-    black 24px,
-    black calc(100% - 24px),
-    transparent
-  );
-  mask-image: linear-gradient(
-    to right,
-    transparent,
-    black 24px,
-    black calc(100% - 24px),
-    transparent
-  );
+	-webkit-mask-image: linear-gradient(
+		to right,
+		transparent,
+		black 24px,
+		black calc(100% - 24px),
+		transparent
+	);
+	mask-image: linear-gradient(
+		to right,
+		transparent,
+		black 24px,
+		black calc(100% - 24px),
+		transparent
+	);
 }
 
 @layer utilities {
-  .platform-windows .overflow-y-auto {
-    @apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
-  }
+	.platform-windows .overflow-y-auto {
+		@apply scrollbar-thin scrollbar-track-transparent scrollbar-thumb-black-transparent-40;
+	}
 }
