@@ -8,6 +8,11 @@ mod direct3d;
 #[cfg(windows)]
 pub use direct3d::*;
 
+#[cfg(windows)]
+mod cpal;
+#[cfg(windows)]
+pub use cpal::*;
+
 pub trait AsFFmpeg {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError>;
 }

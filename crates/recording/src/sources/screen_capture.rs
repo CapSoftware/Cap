@@ -271,46 +271,6 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
         .collect()
 }
 
-// fn scap_audio_to_ffmpeg(scap_frame: scap::frame::AudioFrame) -> ffmpeg::frame::Audio {
-//     use ffmpeg::format::Sample;
-//     use scap::frame::AudioFormat;
-
-//     let format_typ = if scap_frame.is_planar() {
-//         ffmpeg::format::sample::Type::Planar
-//     } else {
-//         ffmpeg::format::sample::Type::Packed
-//     };
-
-//     let mut ffmpeg_frame = ffmpeg::frame::Audio::new(
-//         match scap_frame.format() {
-//             AudioFormat::F32 => Sample::F32(format_typ),
-//             AudioFormat::F64 => Sample::F64(format_typ),
-//             AudioFormat::I16 => Sample::I16(format_typ),
-//             AudioFormat::I32 => Sample::I32(format_typ),
-//             AudioFormat::U8 => Sample::U8(format_typ),
-//             _ => panic!("Unsupported sample format"),
-//         },
-//         scap_frame.sample_count(),
-//         ffmpeg::ChannelLayout::default(scap_frame.channels() as i32),
-//     );
-
-//     if scap_frame.is_planar() {
-//         for i in 0..scap_frame.planes() {
-//             ffmpeg_frame
-//                 .plane_data_mut(i as usize)
-//                 .copy_from_slice(scap_frame.plane_data(i as usize));
-//         }
-//     } else {
-//         ffmpeg_frame
-//             .data_mut(0)
-//             .copy_from_slice(scap_frame.raw_data());
-//     }
-
-//     ffmpeg_frame.set_rate(scap_frame.rate());
-
-//     ffmpeg_frame
-// }
-
 use kameo::prelude::*;
 
 pub struct StopCapturing;
@@ -324,8 +284,7 @@ pub enum StopCapturingError {
 mod windows {
     use super::*;
     use ::windows::{
-    	Graphics::Capture::GraphicsCaptureItem,
-    	Win32::Graphics::Direct3D11::D3D11_BOX
+        Graphics::Capture::GraphicsCaptureItem, Win32::Graphics::Direct3D11::D3D11_BOX,
     };
     use cap_displays::bounds::{PhysicalBounds, PhysicalPosition};
     use scap_ffmpeg::*;
@@ -476,7 +435,7 @@ mod windows {
                     };
 
                     msg.ff_frame.set_pts(Some(
-                        (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64
+                        (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
                     ));
 
                     let now = Instant::now();
@@ -590,12 +549,12 @@ mod windows {
                         );
 
                         settings.crop = Some(D3D11_BOX {
-	                        left: position.x() as u32,
-	                        top: position.y() as u32,
-	                        right: (position.x() + size.width()) as u32,
-	                        bottom: (position.y() + size.height()) as u32,
-	                        front: 0,
-	                        back: 1,
+                            left: position.x() as u32,
+                            top: position.y() as u32,
+                            right: (position.x() + size.width()) as u32,
+                            bottom: (position.y() + size.height()) as u32,
+                            front: 0,
+                            back: 1,
                         });
 
                         display.try_as_capture_item().unwrap()
@@ -725,55 +684,57 @@ mod windows {
 
     use audio::WindowsAudioCapture;
     pub mod audio {
-    	use super::*;
-    	use cpal::traits::StreamTrait;
+        use super::*;
+        use cpal::traits::StreamTrait;
 
-    	#[derive(Actor)]
-	    pub struct WindowsAudioCapture {
-	    	stream: cpal::Stream
-	    }
+        #[derive(Actor)]
+        pub struct WindowsAudioCapture {
+            stream: cpal::Stream,
+        }
 
-	    impl WindowsAudioCapture {
-	        pub fn new() -> Result<Self, &'static str> {
-	        	let host = cpal::default_host();
-	         	let output_device = host.default_output_device().ok_or("Device not available")?;
-	          	let supported_config = output_device.default_output_config().map_err(|_| "Failed to get default output config")?;
-	           	let config = supported_config.clone().into();
-kkk
-	            let stream = output_device.build_input_stream_raw(
-	            	&config,
-	            	supported_config.sample_format(),
-	                move |data, _: &cpal::InputCallbackInfo| {
-	                	dbg!(data.len());
-	                },
-					move |e| {
-						dbg!(e);
-					},
-					None,
-	            ).unwrap();
+        impl WindowsAudioCapture {
+            pub fn new() -> Result<Self, &'static str> {
+                let host = cpal::default_host();
+                let output_device = host.default_output_device().ok_or("Device not available")?;
+                let supported_config = output_device
+                    .default_output_config()
+                    .map_err(|_| "Failed to get default output config")?;
+                let config = supported_config.clone().into();
 
-	            Ok(Self {
-	            	stream
-	            })
-	        }
-	    }
+                let stream = output_device
+                    .build_input_stream_raw(
+                        &config,
+                        supported_config.sample_format(),
+                        move |data, _: &cpal::InputCallbackInfo| {
+                            dbg!(data.len());
+                        },
+                        move |e| {
+                            dbg!(e);
+                        },
+                        None,
+                    )
+                    .unwrap();
 
-		pub struct StartCapturing;
+                Ok(Self { stream })
+            }
+        }
 
-	    impl Message<StartCapturing> for WindowsAudioCapture {
-			type Reply = Result<(), &'static str>;
+        pub struct StartCapturing;
 
-	        async fn handle(
-	            &mut self,
-	            msg: StartCapturing,
-	            ctx: &mut Context<Self, Self::Reply>,
-	        ) -> Self::Reply {
-				self.stream.play().map_err(|_| "failed to start stream")?;
+        impl Message<StartCapturing> for WindowsAudioCapture {
+            type Reply = Result<(), &'static str>;
 
-				Ok(())
-	        }
-	    }
-	}
+            async fn handle(
+                &mut self,
+                msg: StartCapturing,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                self.stream.play().map_err(|_| "failed to start stream")?;
+
+                Ok(())
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -790,6 +751,10 @@ mod macos {
     #[cfg(target_os = "macos")]
     impl ScreenCaptureFormat for CMSampleBufferCapture {
         type VideoFormat = cidre::arc::R<cidre::cm::SampleBuf>;
+
+        fn pixel_format() -> ffmpeg::format::Pixel {
+            ffmpeg::format::Pixel::BGRA
+        }
 
         fn audio_info() -> AudioInfo {
             AudioInfo::new(

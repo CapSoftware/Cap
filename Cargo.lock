@@ -882,6 +882,7 @@ dependencies = [
  "objc2-app-kit",
  "relative-path",
  "ringbuf",
+ "scap-cpal",
  "scap-direct3d",
  "scap-ffmpeg",
  "scap-screencapturekit",
@@ -4702,8 +4703,10 @@ version = "0.1.0"
 dependencies = [
  "cap-displays",
  "cidre 0.11.0",
+ "cpal 0.16.0",
  "ffmpeg-next",
  "futures",
+ "scap-cpal",
  "scap-direct3d",
  "scap-screencapturekit",
  "tokio",
