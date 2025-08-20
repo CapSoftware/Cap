@@ -1,12 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
+# members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
+members = ["crates/*"]
 
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
+# cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
+cpal = "0.16"
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
 	"macros",

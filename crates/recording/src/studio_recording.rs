@@ -253,7 +253,11 @@ async fn run_actor_iteration(
         actor: &mut StudioRecordingActor,
         segment_start_time: f64,
     ) -> Result<(Cursors, u32), RecordingError> {
+        tracing::info!("pipeline shuting down");
+
         pipeline.inner.shutdown().await?;
+
+        tracing::info!("pipeline shutdown");
 
         let segment_stop_time = current_time_f64();
 
@@ -396,6 +400,8 @@ async fn run_actor_iteration(
                     )
                     .await;
 
+                    println!("Bruh");
+
                     match shutdown(pipeline, &mut actor, segment_start_time).await {
                         Ok((cursors, _)) => stop_recording(actor, cursors).await,
                         Err(e) => Err(e),
@@ -403,6 +409,8 @@ async fn run_actor_iteration(
                 }
                 State::Paused { cursors, .. } => stop_recording(actor, cursors).await,
             };
+
+            println!("recording successfully stopped");
 
             send_response!(tx, result);
             None

@@ -239,7 +239,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
         let mut screen_encoder = MP4File::init(
             "screen",
             output_path,
-            |o| H264Encoder::builder("screen", screen_config).build(o),
+            |o| H264Encoder::builder("screen", dbg!(screen_config)).build(o),
             |_| None,
         )
         .map_err(|e| MediaError::Any(e.to_string().into()))?;
@@ -256,6 +256,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
                     timestamp_tx.send(frame.1).unwrap();
                 }
+                // dbg!(frame.1);
                 screen_encoder.queue_video_frame(frame.0);
             }
             screen_encoder.finish();

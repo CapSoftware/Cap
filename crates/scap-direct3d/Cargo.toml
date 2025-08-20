@@ -21,6 +21,7 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 cap-displays = { path = "../displays" }
+scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 [lints]
 workspace = true

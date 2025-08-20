@@ -8,6 +8,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use windows::{
@@ -21,13 +22,14 @@ use windows::{
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
-                D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE, D3D11_MAP_READ_WRITE,
-                D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-                D3D11_USAGE_STAGING, D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
-                ID3D11Texture2D,
+                D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
+                D3D11_CPU_ACCESS_FLAG, D3D11_CPU_ACCESS_READ, D3D11_CPU_ACCESS_WRITE,
+                D3D11_MAP_READ_WRITE, D3D11_MAPPED_SUBRESOURCE, D3D11_RESOURCE_MISC_FLAG,
+                D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+                D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
-                Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC},
+                Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
                 IDXGIDevice,
             },
             Gdi::{HMONITOR, MONITOR_DEFAULTTONULL, MonitorFromPoint},
@@ -59,7 +61,13 @@ pub enum PixelFormat {
 impl PixelFormat {
     pub fn as_directx(&self) -> DirectXPixelFormat {
         match self {
-            PixelFormat::R8G8B8A8Unorm => DirectXPixelFormat::R8G8B8A8UIntNormalized,
+            Self::R8G8B8A8Unorm => DirectXPixelFormat::R8G8B8A8UIntNormalized,
+        }
+    }
+
+    pub fn as_dxgi(&self) -> DXGI_FORMAT {
+        match self {
+            Self::R8G8B8A8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
         }
     }
 }
@@ -69,6 +77,8 @@ pub struct Settings {
     pub is_border_required: Option<bool>,
     pub is_cursor_capture_enabled: Option<bool>,
     pub pixel_format: PixelFormat,
+    pub min_update_interval: Option<Duration>,
+    pub crop: Option<D3D11_BOX>,
 }
 
 pub struct Capturer {
@@ -200,6 +210,7 @@ impl<'a> Frame<'a> {
 
         let texture = texture.unwrap();
 
+        // Copies GPU only texture to CPU-mappable texture
         unsafe {
             self.d3d_context.CopyResource(&texture, &self.texture);
         };
@@ -342,7 +353,43 @@ fn run(
             .map_err(|_| "Failed to set cursor capture enabled")?;
     }
 
-    let _frame_arrived_token = frame_pool
+    if let Some(min_update_interval) = settings.min_update_interval {
+        session
+            .SetMinUpdateInterval(min_update_interval.into())
+            .map_err(|_| "Failed to set min update interval")?;
+    }
+
+    let crop_data = settings
+        .crop
+        .map(|crop| {
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: (crop.right - crop.left),
+                Height: (crop.bottom - crop.top),
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: settings.pixel_format.as_dxgi(),
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+
+            let mut texture = None;
+            unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }?;
+
+            Ok::<_, windows::core::Error>((
+                texture.ok_or(windows::core::Error::from_hresult(S_FALSE))?,
+                crop,
+            ))
+        })
+        .transpose()
+        .map_err(|_| "Failed to create crop texture")?;
+
+    frame_pool
         .FrameArrived(
             &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
                 move |frame_pool, _| {
@@ -361,26 +408,51 @@ fn run(
                     let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
                     let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
 
-                    (callback)(Frame {
-                        width: size.Width as u32,
-                        height: size.Height as u32,
-                        pixel_format: settings.pixel_format,
-                        inner: frame,
-                        texture,
-                        d3d_context: &d3d_context,
-                        d3d_device: &d3d_device,
-                    })
+                    let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                        unsafe {
+                            d3d_context.CopySubresourceRegion(
+                                &cropped_texture,
+                                0,
+                                0,
+                                0,
+                                0,
+                                &texture,
+                                0,
+                                Some(&crop),
+                            );
+                        }
+
+                        Frame {
+                            width: crop.right - crop.left,
+                            height: crop.bottom - crop.top,
+                            pixel_format: settings.pixel_format,
+                            inner: frame,
+                            texture: cropped_texture,
+                            d3d_context: &d3d_context,
+                            d3d_device: &d3d_device,
+                        }
+                    } else {
+                        Frame {
+                            width: size.Width as u32,
+                            height: size.Height as u32,
+                            pixel_format: settings.pixel_format,
+                            inner: frame,
+                            texture,
+                            d3d_context: &d3d_context,
+                            d3d_device: &d3d_device,
+                        }
+                    };
+
+                    (callback)(frame)
                 },
             ),
         )
         .map_err(|_| "Failed to register frame arrived handler")?;
 
-    let _ = item.Closed(
-        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
-            closed_callback();
-            Ok(())
-        }),
-    );
+    item.Closed(
+        &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| closed_callback()),
+    )
+    .map_err(|_| "Failed to register closed handler")?;
 
     session
         .StartCapture()

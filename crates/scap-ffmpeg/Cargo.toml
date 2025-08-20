@@ -7,11 +7,14 @@ edition = "2024"
 ffmpeg = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-scap-direct3d = { path = "../scap-direct3d" }
+scap-direct3d = { optional = true, path = "../scap-direct3d" }
+scap-cpal = { optional = true, path = "../scap-cpal" }
+
 windows = { workspace = true, features = [] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-scap-screencapturekit = { path = "../scap-screencapturekit" }
+scap-screencapturekit = { optional = true, path = "../scap-screencapturekit" }
+
 cidre = { workspace = true }
 
 [dev-dependencies]

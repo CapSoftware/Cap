@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use cap_displays::Display;
+use cap_displays::{Display, bounds::{LogicalBounds, LogicalSize, LogicalPosition}};
 use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
 
 #[tokio::main]
@@ -18,8 +18,12 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Screen {
-                id: Display::primary().id(),
+            capture_target: ScreenCaptureTarget::Area {
+                screen: Display::primary().id(),
+                bounds: LogicalBounds::new(
+                    LogicalPosition::new(0.0, 0.0),
+                    LogicalSize::new(450.0, 400.0)
+                )
             },
             capture_system_audio: false,
             mic_feed: &None,
