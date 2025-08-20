@@ -233,7 +233,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 												<span className="mr-3 text-gray-12">Users:</span>
 												<div className="flex items-center">
 													<button
-													type="button"
+														type="button"
 														onClick={() =>
 															proQuantity > 1 && setProQuantity(proQuantity - 1)
 														}
@@ -267,7 +267,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 										{proLoading ? "Loading..." : "Upgrade to Cap Pro"}
 									</Button>
 									<button
-														type="button"
+										type="button"
 										className="mt-2 w-full max-w-sm h-14 text-base rounded-xl hover:underline text-gray-11 hover:text-gray-12"
 										onClick={() => onOpenChange(false)}
 									>
