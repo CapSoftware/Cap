@@ -1,8 +1,10 @@
-#![cfg(windows)]
+use cpal::{
+    InputCallbackInfo, PlayStreamError, Stream, StreamConfig, StreamError, traits::StreamTrait,
+};
 
 pub fn create_capturer(
-    data_callback: impl FnMut(&cpal::Data, &cpal::InputCallbackInfo) + Send + 'static,
-    error_callback: impl FnMut(cpal::StreamError) + Send + 'static,
+    mut data_callback: impl FnMut(&cpal::Data, &InputCallbackInfo, &StreamConfig) + Send + 'static,
+    error_callback: impl FnMut(StreamError) + Send + 'static,
 ) -> Result<Capturer, &'static str> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -17,27 +19,29 @@ pub fn create_capturer(
         .build_input_stream_raw(
             &config,
             supported_config.sample_format(),
-            move |data, _: &cpal::InputCallbackInfo| {
-                dbg!(data.len());
+            {
+                let config = config.clone();
+                move |data, info: &InputCallbackInfo| data_callback(data, info, &config)
             },
-            move |e| {
-                dbg!(e);
-            },
+            error_callback,
             None,
         )
         .map_err(|_| "failed to build input stream")?;
 
-    Ok(Capturer { stream })
+    Ok(Capturer { stream, config })
 }
 
 pub struct Capturer {
-    stream: cpal::Stream,
+    stream: Stream,
+    config: StreamConfig,
 }
 
 impl Capturer {
-    pub fn play(&self) -> Result<(), cpal::PlayStreamError> {
-        use cpal::traits::StreamTrait;
-
+    pub fn play(&self) -> Result<(), PlayStreamError> {
         self.stream.play()
+    }
+
+    pub fn config(&self) -> &StreamConfig {
+        &self.config
     }
 }
