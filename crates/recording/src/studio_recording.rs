@@ -686,7 +686,7 @@ async fn create_segment_pipeline(
         .display()
         .ok_or(CreateSegmentPipelineError::NoDisplay)?;
     let crop_bounds = capture_target
-        .display_relative_physical_bounds()
+        .cursor_crop()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
     let (screen_source, screen_rx) = create_screen_capture(

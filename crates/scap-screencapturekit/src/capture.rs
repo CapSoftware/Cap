@@ -27,7 +27,6 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
             let frame = match kind {
                 sc::OutputType::Screen => {
                     let Some(image_buf) = sample_buf.image_buf().map(|v| v.retained()) else {
-                        warn!("Screen sample buffer has no image buffer");
                         return;
                     };
 

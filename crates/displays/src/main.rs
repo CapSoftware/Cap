@@ -1,13 +1,17 @@
 use std::time::Duration;
 
 use cap_displays::{Display, Window};
-use windows::Win32::UI::HiDpi::{
-    PROCESS_DPI_UNAWARE, PROCESS_PER_MONITOR_DPI_AWARE, PROCESS_SYSTEM_DPI_AWARE,
-    SetProcessDpiAwareness,
-};
 
 fn main() {
-    unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{
+            PROCESS_DPI_UNAWARE, PROCESS_PER_MONITOR_DPI_AWARE, PROCESS_SYSTEM_DPI_AWARE,
+            SetProcessDpiAwareness,
+        };
+
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+    }
 
     for display in Display::list() {
         dbg!(display.name());
@@ -15,6 +19,7 @@ fn main() {
         let display = display.raw_handle();
 
         dbg!(display.physical_bounds());
+        dbg!(display.physical_size());
         dbg!(display.logical_size());
     }
 

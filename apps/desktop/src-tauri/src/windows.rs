@@ -256,7 +256,12 @@ impl ShowCapWindow {
                 };
 
                 let size = display.physical_size().unwrap();
-                let position = display.physical_position().unwrap();
+
+                #[cfg(target_os = "macos")]
+                let position = display.raw_handle().logical_position();
+
+                #[cfg(windows)]
+                let position = display.raw_handle().physical_position().unwrap();
 
                 let mut window_builder = self
                     .window_builder(
@@ -398,7 +403,12 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let pos = display.physical_position().unwrap();
+                #[cfg(target_os = "macos")]
+                let position = display.raw_handle().logical_position();
+
+                #[cfg(windows)]
+                let position = display.raw_handle().physical_position().unwrap();
+
                 let bounds = display.physical_size().unwrap();
 
                 let mut window_builder = self
@@ -412,7 +422,7 @@ impl ShowCapWindow {
                     .content_protected(true)
                     .skip_taskbar(true)
                     .inner_size(bounds.width(), bounds.height())
-                    .position(pos.x(), pos.y())
+                    .position(position.x(), position.y())
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -443,7 +453,14 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                if let Some(bounds) = display.physical_bounds() {
+                if let Some(bounds) = display.raw_handle().logical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
+
+                #[cfg(windows)]
+                if let Some(bounds) = display.raw_handle().physical_bounds() {
                     window_builder = window_builder
                         .inner_size(bounds.size().width(), bounds.size().height())
                         .position(bounds.position().x(), bounds.position().y());
@@ -716,26 +733,31 @@ trait MonitorExt {
 
 impl MonitorExt for Display {
     fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
-        let Some(bounds) = self.physical_bounds() else {
-            return false;
-        };
+        return false;
 
-        let left = bounds.position().x() as i32;
-        let right = left + bounds.size().width() as i32;
-        let top = bounds.position().y() as i32;
-        let bottom = top + bounds.size().height() as i32;
+        #[cfg(windows)]
+        {
+            let Some(bounds) = self.raw_handle().physical_bounds() else {
+                return false;
+            };
 
-        [
-            (position.x, position.y),
-            (position.x + size.width as i32, position.y),
-            (position.x, position.y + size.height as i32),
-            (
-                position.x + size.width as i32,
-                position.y + size.height as i32,
-            ),
-        ]
-        .into_iter()
-        .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+            let left = bounds.position().x() as i32;
+            let right = left + bounds.size().width() as i32;
+            let top = bounds.position().y() as i32;
+            let bottom = top + bounds.size().height() as i32;
+
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
     }
 }
 

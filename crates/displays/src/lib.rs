@@ -45,14 +45,6 @@ impl Display {
         self.0.physical_size()
     }
 
-    pub fn physical_position(&self) -> Option<PhysicalPosition> {
-        self.0.physical_position()
-    }
-
-    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
-        self.0.physical_bounds()
-    }
-
     pub fn logical_size(&self) -> Option<LogicalSize> {
         self.0.logical_size()
     }
@@ -135,14 +127,6 @@ impl Window {
         self.0.physical_size()
     }
 
-    pub fn physical_position(&self) -> Option<PhysicalSize> {
-        self.0.physical_size()
-    }
-
-    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
-        self.0.physical_bounds()
-    }
-
     pub fn logical_size(&self) -> Option<LogicalSize> {
         self.0.logical_size()
     }
@@ -169,30 +153,47 @@ impl Window {
 
     pub fn display_relative_logical_bounds(&self) -> Option<LogicalBounds> {
         let display = self.display()?;
-        let display_physical_bounds = display.physical_bounds()?;
-        let display_logical_size = display.logical_size()?;
-        let window_physical_bounds = self.physical_bounds()?;
 
-        let scale = display_logical_size.width() / display_physical_bounds.size().width;
+        #[cfg(target_os = "macos")]
+        {
+            let display_logical_bounds = display.raw_handle().logical_bounds()?;
+            let window_logical_bounds = self.raw_handle().logical_bounds()?;
 
-        let display_relative_physical_bounds = PhysicalBounds::new(
-            PhysicalPosition::new(
-                window_physical_bounds.position().x - display_physical_bounds.position().x,
-                window_physical_bounds.position().y - display_physical_bounds.position().y,
-            ),
-            window_physical_bounds.size(),
-        );
+            Some(LogicalBounds::new(
+                LogicalPosition::new(
+                    window_logical_bounds.position().x() - display_logical_bounds.position().x(),
+                    window_logical_bounds.position().y() - display_logical_bounds.position().y(),
+                ),
+                window_logical_bounds.size(),
+            ))
+        }
 
-        Some(LogicalBounds::new(
-            LogicalPosition::new(
-                display_relative_physical_bounds.position().x() * scale,
-                display_relative_physical_bounds.position().y() * scale,
-            ),
-            LogicalSize::new(
-                display_relative_physical_bounds.size().width() * scale,
-                display_relative_physical_bounds.size().height() * scale,
-            ),
-        ))
+        #[cfg(windows)]
+        {
+            let display_physical_bounds = display.raw_handle().physical_bounds()?;
+            let window_physical_bounds: PhysicalBounds = self.physical_bounds().raw_handle()?;
+
+            let scale = display_logical_size.width() / display_physical_bounds.size().width;
+
+            let display_relative_physical_bounds = PhysicalBounds::new(
+                PhysicalPosition::new(
+                    window_physical_bounds.position().x - display_physical_bounds.position().x,
+                    window_physical_bounds.position().y - display_physical_bounds.position().y,
+                ),
+                window_physical_bounds.size(),
+            );
+
+            Some(LogicalBounds::new(
+                LogicalPosition::new(
+                    display_relative_physical_bounds.position().x() * scale,
+                    display_relative_physical_bounds.position().y() * scale,
+                ),
+                LogicalSize::new(
+                    display_relative_physical_bounds.size().width() * scale,
+                    display_relative_physical_bounds.size().height() * scale,
+                ),
+            ))
+        }
     }
 }
 

@@ -34,7 +34,7 @@ tracing.workspace = true
 device_query = "4.0.1"
 image = "0.25.2"
 either = "1.13.0"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.19" }
 relative-path = "1.9.3"
 futures = { workspace = true }
 tokio-util = "0.7.15"

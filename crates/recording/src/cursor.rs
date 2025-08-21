@@ -1,3 +1,4 @@
+use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_displays::bounds::{LogicalBounds, PhysicalBounds};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
@@ -36,7 +37,7 @@ impl CursorActor {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    crop_bounds: PhysicalBounds,
+    crop_bounds: CursorCropBounds,
     display: cap_displays::Display,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
@@ -137,7 +138,7 @@ pub fn spawn_cursor_recorder(
                 let cropped_norm_pos = position
                     .relative_to_display(display)?
                     .normalize()?
-                    .with_crop(crop_bounds.position(), crop_bounds.size());
+                    .with_crop(crop_bounds);
 
                 Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
             });

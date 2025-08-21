@@ -57,6 +57,8 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output_path: PathBuf,
     ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError> {
         let screen_config = source.0.info();
+        tracing::info!("screen config: {:?}", screen_config);
+
         let mut screen_encoder = cap_media_encoders::MP4AVAssetWriterEncoder::init(
             "screen",
             screen_config,
@@ -235,7 +237,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
-        use cap_media_encoders::{MP4File, H264Encoder};
+        use cap_media_encoders::{H264Encoder, MP4File};
 
         let screen_config = source.0.info();
         let mut screen_encoder = MP4File::init(
@@ -282,7 +284,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
-        use cap_media_encoders::{MP4File, H264Encoder, AACEncoder, AudioEncoder};
+        use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
 
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);

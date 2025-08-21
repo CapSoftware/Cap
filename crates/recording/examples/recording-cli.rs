@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use cap_displays::Window;
+use cap_displays::{Display, Window};
 use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
 
 #[tokio::main]
@@ -21,6 +21,10 @@ pub async fn main() {
 
     println!("Recording to directory '{}'", dir.path().display());
 
+    for display in Display::list() {
+        display.name();
+    }
+
     let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
         dir.path().into(),
@@ -28,7 +32,7 @@ pub async fn main() {
             capture_target: ScreenCaptureTarget::Window {
                 id: Window::list()
                     .into_iter()
-                    .find(|w| w.name().unwrap_or_default().contains("Firefox"))
+                    .find(|w| w.owner_name().unwrap_or_default().contains("Brave"))
                     .unwrap()
                     .id(),
             },

@@ -1,14 +1,14 @@
 use cap_displays::{
     Display,
-    bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
+    bounds::{LogicalBounds, PhysicalPosition, PhysicalSize},
 };
 use device_query::{DeviceQuery, DeviceState};
 
+// Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawCursorPosition {
-    // inner: PhysicalPosition,
-    pub x: i32,
-    pub y: i32,
+    x: i32,
+    y: i32,
 }
 
 impl RawCursorPosition {
@@ -30,28 +30,34 @@ impl RawCursorPosition {
 // relative to display using top-left origin
 #[derive(Clone, Copy)]
 pub struct RelativeCursorPosition {
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-    pub(crate) display: Display,
+    x: i32,
+    y: i32,
+    display: Display,
 }
 
 impl RelativeCursorPosition {
     pub fn from_raw(raw: RawCursorPosition, display: Display) -> Option<Self> {
-        let physical_bounds = display.physical_bounds()?;
+        #[cfg(windows)]
+        {
+            let physical_bounds = display.physical_bounds()?;
 
-        Some(Self {
-            x: raw.x - physical_bounds.position().x() as i32,
-            y: raw.y - physical_bounds.position().y() as i32,
-            display,
-        })
-    }
+            return Some(Self {
+                x: raw.x - physical_bounds.position().x() as i32,
+                y: raw.y - physical_bounds.position().y() as i32,
+                display,
+            });
+        }
 
-    pub fn x(&self) -> i32 {
-        self.x
-    }
+        #[cfg(target_os = "macos")]
+        {
+            let logical_bounds = display.raw_handle().logical_bounds()?;
 
-    pub fn y(&self) -> i32 {
-        self.y
+            return Some(Self {
+                x: raw.x - logical_bounds.position().x() as i32,
+                y: raw.y - logical_bounds.position().y() as i32,
+                display,
+            });
+        }
     }
 
     pub fn display(&self) -> &Display {
@@ -59,16 +65,37 @@ impl RelativeCursorPosition {
     }
 
     pub fn normalize(&self) -> Option<NormalizedCursorPosition> {
-        let bounds = self.display().physical_bounds()?;
-        let size = bounds.size();
+        #[cfg(windows)]
+        {
+            let bounds = self.display().physical_bounds()?;
+            let size = bounds.size();
 
-        Some(NormalizedCursorPosition {
-            x: self.x as f64 / size.width(),
-            y: self.y as f64 / size.height(),
-            crop_position: bounds.position(),
-            crop_size: size,
-            display: self.display,
-        })
+            Some(NormalizedCursorPosition {
+                x: self.x as f64 / size.width(),
+                y: self.y as f64 / size.height(),
+                crop_position: bounds.position(),
+                crop_size: size,
+                display: self.display,
+            })
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let bounds = self.display().raw_handle().logical_bounds()?;
+            let size = bounds.size();
+
+            Some(NormalizedCursorPosition {
+                x: self.x as f64 / size.width(),
+                y: self.y as f64 / size.height(),
+                crop: CursorCropBounds {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size.width(),
+                    height: size.height(),
+                },
+                display: self.display,
+            })
+        }
     }
 }
 
@@ -81,12 +108,49 @@ impl std::fmt::Debug for RelativeCursorPosition {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+/// Needs to be logical coordinates on macOS and physical on Windows
+/// This type is opqaue on purpose as the logical/physical invariants need to hold
+pub struct CursorCropBounds {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl CursorCropBounds {
+    #[cfg(target_os = "macos")]
+    pub fn new_macos(bounds: LogicalBounds) -> Self {
+        Self {
+            x: bounds.position().x(),
+            y: bounds.position().y(),
+            width: bounds.size().width(),
+            height: bounds.size().height(),
+        }
+    }
+
+    pub fn x(&self) -> f64 {
+        self.x
+    }
+
+    pub fn y(&self) -> f64 {
+        self.y
+    }
+
+    pub fn width(&self) -> f64 {
+        self.width
+    }
+
+    pub fn height(&self) -> f64 {
+        self.height
+    }
+}
+
 pub struct NormalizedCursorPosition {
-    pub(crate) x: f64,
-    pub(crate) y: f64,
-    pub(crate) crop_position: PhysicalPosition,
-    pub(crate) crop_size: PhysicalSize,
-    pub(crate) display: Display,
+    x: f64,
+    y: f64,
+    crop: CursorCropBounds,
+    display: Display,
 }
 
 impl NormalizedCursorPosition {
@@ -102,25 +166,22 @@ impl NormalizedCursorPosition {
         &self.display
     }
 
-    pub fn crop_position(&self) -> PhysicalPosition {
-        self.crop_position
+    pub fn crop(&self) -> CursorCropBounds {
+        self.crop
     }
 
-    pub fn crop_size(&self) -> PhysicalSize {
-        self.crop_size
-    }
+    pub fn with_crop(&self, crop: CursorCropBounds) -> Self {
+        dbg!(self.x, self.y, self.crop, crop);
 
-    pub fn with_crop(&self, position: PhysicalPosition, size: PhysicalSize) -> Self {
         let raw_px = (
-            self.x * self.crop_size.width() + self.crop_position.x(),
-            self.y * self.crop_size.height() + self.crop_position.y(),
+            self.x * self.crop.width + self.crop.x,
+            self.y * self.crop.height + self.crop.y,
         );
 
         Self {
-            x: (raw_px.0 - position.x()) / size.width(),
-            y: (raw_px.1 - position.y()) / size.height(),
-            crop_position: position,
-            crop_size: size,
+            x: (raw_px.0 - crop.x) / crop.width,
+            y: (raw_px.1 - crop.y) / crop.height,
+            crop,
             display: self.display,
         }
     }

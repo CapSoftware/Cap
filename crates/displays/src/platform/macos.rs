@@ -1,6 +1,7 @@
 use std::{ffi::c_void, str::FromStr};
 
 use cidre::{arc, ns, sc};
+use cocoa::appkit::NSScreen;
 use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
@@ -13,7 +14,9 @@ use core_graphics::{
     },
 };
 
-use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use crate::bounds::{
+    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+};
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -44,13 +47,13 @@ impl DisplayImpl {
         Self::list().into_iter().find(|d| d.0.id == parsed_id)
     }
 
-    pub fn logical_size(&self) -> LogicalSize {
+    pub fn logical_size(&self) -> Option<LogicalSize> {
         let rect = unsafe { CGDisplayBounds(self.0.id) };
 
-        LogicalSize {
+        Some(LogicalSize {
             width: rect.size.width,
             height: rect.size.height,
-        }
+        })
     }
 
     pub fn logical_position(&self) -> LogicalPosition {
@@ -62,32 +65,33 @@ impl DisplayImpl {
         }
     }
 
-    pub fn logical_bounds(&self) -> LogicalBounds {
-        LogicalBounds {
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        Some(LogicalBounds {
             position: self.logical_position(),
-            size: self.logical_size(),
-        }
+            size: self.logical_size()?,
+        })
     }
 
     pub fn get_containing_cursor() -> Option<Self> {
         let cursor = get_cursor_position()?;
 
         Self::list().into_iter().find(|display| {
+            let Some(logical_size) = display.logical_size() else {
+                return false;
+            };
+
             let bounds = LogicalBounds {
                 position: display.logical_position(),
-                size: display.logical_size(),
+                size: logical_size,
             };
             bounds.contains_point(cursor)
         })
     }
 
-    pub fn physical_size(&self) -> PhysicalSize {
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
         let mode = unsafe { CGDisplayCopyDisplayMode(self.0.id) };
         if mode.is_null() {
-            return PhysicalSize {
-                width: 0.0,
-                height: 0.0,
-            };
+            return None;
         }
 
         let width = unsafe { core_graphics::display::CGDisplayModeGetPixelWidth(mode) };
@@ -95,10 +99,14 @@ impl DisplayImpl {
 
         unsafe { core_graphics::display::CGDisplayModeRelease(mode) };
 
-        PhysicalSize {
+        Some(PhysicalSize {
             width: width as f64,
             height: height as f64,
-        }
+        })
+    }
+
+    pub fn scale(&self) -> Option<f64> {
+        Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -116,10 +124,31 @@ impl DisplayImpl {
 
     pub fn name(&self) -> Option<String> {
         use cocoa::appkit::NSScreen;
+        use cocoa::base::id;
+        use cocoa::foundation::NSString;
+        use objc::{msg_send, *};
+        use std::ffi::CStr;
+
+        unsafe {
+            if let Some(ns_screen) = self.as_ns_screen() {
+                let name: id = msg_send![ns_screen, localizedName];
+                if !name.is_null() {
+                    let name = CStr::from_ptr(NSString::UTF8String(name))
+                        .to_string_lossy()
+                        .to_string();
+                    return Some(name);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn as_ns_screen(&self) -> Option<*mut objc::runtime::Object> {
+        use cocoa::appkit::NSScreen;
         use cocoa::base::{id, nil};
         use cocoa::foundation::{NSArray, NSDictionary, NSString};
         use objc::{msg_send, *};
-        use std::ffi::CStr;
 
         unsafe {
             let screens = NSScreen::screens(nil);
@@ -137,13 +166,7 @@ impl DisplayImpl {
                 let num_value: u32 = msg_send![num, unsignedIntValue];
 
                 if num_value == self.0.id {
-                    let name: id = msg_send![screen, localizedName];
-                    if !name.is_null() {
-                        let name = CStr::from_ptr(NSString::UTF8String(name))
-                            .to_string_lossy()
-                            .to_string();
-                        return Some(name);
-                    }
+                    return Some(screen);
                 }
             }
         }
@@ -335,11 +358,15 @@ impl WindowImpl {
         })
     }
 
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        Some(self.logical_bounds()?.size())
+    }
+
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         let logical_bounds = self.logical_bounds()?;
         let display = self.display()?;
 
-        let scale = display.physical_size().width() / display.logical_size().width();
+        let scale = display.physical_size()?.width() / display.logical_size()?.width();
 
         Some(PhysicalSize {
             width: logical_bounds.size().width() * scale,

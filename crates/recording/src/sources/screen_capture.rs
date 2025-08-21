@@ -1,3 +1,4 @@
+use cap_cursor_capture::CursorCropBounds;
 use cap_displays::{
     Display, DisplayId, Window, WindowId,
     bounds::{
@@ -77,42 +78,86 @@ impl ScreenCaptureTarget {
         }
     }
 
-    pub fn display_relative_physical_bounds(&self) -> Option<PhysicalBounds> {
+    pub fn cursor_crop(&self) -> Option<CursorCropBounds> {
         match self {
-            Self::Screen { .. } => Some(PhysicalBounds::new(
-                PhysicalPosition::new(0.0, 0.0),
-                self.physical_size()?,
-            )),
+            Self::Screen { .. } => {
+                #[cfg(target_os = "macos")]
+                {
+                    let display = self.display()?;
+                    return Some(CursorCropBounds::new_macos(LogicalBounds::new(
+                        LogicalPosition::new(0.0, 0.0),
+                        display.raw_handle().logical_size()?,
+                    )));
+                }
+
+                #[cfg(windows)]
+                {
+                    return Some(PhysicalBounds::new(
+                        PhysicalPosition::new(0.0, 0.0),
+                        self.physical_size()?,
+                    ));
+                }
+            }
             Self::Window { id } => {
                 let window = Window::from_id(id)?;
-                let display_bounds = self.display()?.physical_bounds()?;
-                let window_bounds = window.physical_bounds()?;
+                let display = self.display()?;
 
-                Some(PhysicalBounds::new(
-                    PhysicalPosition::new(
-                        window_bounds.position().x() - display_bounds.position().x(),
-                        window_bounds.position().y() - display_bounds.position().y(),
-                    ),
-                    PhysicalSize::new(window_bounds.size().width(), window_bounds.size().height()),
-                ))
+                #[cfg(target_os = "macos")]
+                {
+                    let display_position = display.raw_handle().logical_position();
+                    let window_bounds = window.raw_handle().logical_bounds()?;
+
+                    return Some(CursorCropBounds::new_macos(LogicalBounds::new(
+                        LogicalPosition::new(
+                            window_bounds.position().x() - display_position.x(),
+                            window_bounds.position().y() - display_position.y(),
+                        ),
+                        window_bounds.size(),
+                    )));
+                }
+
+                #[cfg(windows)]
+                {
+                    let display_bounds = self.display()?.physical_bounds()?;
+                    let window_bounds = window.physical_bounds()?;
+
+                    return Some(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            window_bounds.position().x() - display_bounds.position().x(),
+                            window_bounds.position().y() - display_bounds.position().y(),
+                        ),
+                        PhysicalSize::new(
+                            window_bounds.size().width(),
+                            window_bounds.size().height(),
+                        ),
+                    ));
+                }
             }
             Self::Area { bounds, .. } => {
-                let display = self.display()?;
-                let display_bounds = display.physical_bounds()?;
-                let display_logical_size = display.logical_size()?;
+                #[cfg(target_os = "macos")]
+                {
+                    return Some(CursorCropBounds::new_macos(*bounds));
+                }
 
-                let scale = display_bounds.size().width() / display_logical_size.width();
+                #[cfg(windows)]
+                {
+                    let display = self.display()?;
+                    let display_bounds = display.physical_bounds()?;
+                    let display_logical_size = display.logical_size()?;
 
-                Some(PhysicalBounds::new(
-                    PhysicalPosition::new(
-                        bounds.position().x() * scale,
-                        bounds.position().y() * scale,
-                    ),
-                    PhysicalSize::new(
-                        bounds.size().width() * scale,
-                        bounds.size().height() * scale,
-                    ),
-                ))
+                    let scale = display_bounds.size().width() / display_logical_size.width();
+
+                    return Some(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            bounds.position().x() * scale,
+                            bounds.position().y() * scale,
+                        ),
+                        PhysicalSize::new(
+                            bounds.size().width() * scale,
+                            bounds.size().height() * scale,
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -193,10 +238,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Config {
     display: DisplayId,
+    #[cfg(windows)]
     crop_bounds: Option<PhysicalBounds>,
+    #[cfg(target_os = "macos")]
+    crop_bounds: Option<LogicalBounds>,
     fps: u32,
     show_cursor: bool,
 }
@@ -231,43 +279,81 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             ScreenCaptureTarget::Window { id } => {
                 let window = Window::from_id(&id).unwrap();
 
-                let raw_display_position = display.physical_position().unwrap();
-                let raw_window_bounds = window.physical_bounds().unwrap();
+                #[cfg(target_os = "macos")]
+                {
+                    let raw_display_bounds = display.raw_handle().logical_bounds().unwrap();
+                    let raw_window_bounds = window.raw_handle().logical_bounds().unwrap();
 
-                Some(PhysicalBounds::new(
-                    PhysicalPosition::new(
-                        raw_window_bounds.position().x() - raw_display_position.x(),
-                        raw_window_bounds.position().y() - raw_display_position.y(),
-                    ),
-                    raw_window_bounds.size(),
-                ))
+                    Some(LogicalBounds::new(
+                        LogicalPosition::new(
+                            raw_window_bounds.position().x() - raw_display_bounds.position().x(),
+                            raw_window_bounds.position().y() - raw_display_bounds.position().y(),
+                        ),
+                        raw_window_bounds.size(),
+                    ))
+                }
+
+                #[cfg(windows)]
+                {
+                    let raw_display_position = display.raw_handle().physical_position().unwrap();
+                    let raw_window_bounds = window.physical_bounds().unwrap();
+
+                    Some(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            raw_window_bounds.position().x() - raw_display_position.x(),
+                            raw_window_bounds.position().y() - raw_display_position.y(),
+                        ),
+                        raw_window_bounds.size(),
+                    ))
+                }
             }
             ScreenCaptureTarget::Area {
                 bounds: relative_bounds,
                 ..
             } => {
-                let raw_display_size = display.physical_size().unwrap();
-                let logical_display_size = display.logical_size().unwrap();
+                #[cfg(target_os = "macos")]
+                {
+                    Some(*relative_bounds)
+                }
 
-                Some(PhysicalBounds::new(
-                    PhysicalPosition::new(
-                        (relative_bounds.position().x() / logical_display_size.width())
-                            * raw_display_size.width(),
-                        (relative_bounds.position().y() / logical_display_size.height())
-                            * raw_display_size.height(),
-                    ),
-                    PhysicalSize::new(
-                        (relative_bounds.size().width() / logical_display_size.width())
-                            * raw_display_size.width(),
-                        (relative_bounds.size().height() / logical_display_size.height())
-                            * raw_display_size.height(),
-                    ),
-                ))
+                #[cfg(windows)]
+                {
+                    let raw_display_size = display.physical_size().unwrap();
+                    let logical_display_size = display.logical_size().unwrap();
+
+                    Some(PhysicalBounds::new(
+                        PhysicalPosition::new(
+                            (relative_bounds.position().x() / logical_display_size.width())
+                                * raw_display_size.width(),
+                            (relative_bounds.position().y() / logical_display_size.height())
+                                * raw_display_size.height(),
+                        ),
+                        PhysicalSize::new(
+                            (relative_bounds.size().width() / logical_display_size.width())
+                                * raw_display_size.width(),
+                            (relative_bounds.size().height() / logical_display_size.height())
+                                * raw_display_size.height(),
+                        ),
+                    ))
+                }
             }
         };
 
         let output_size = crop_bounds
-            .map(|b| b.size())
+            .and_then(|b| {
+                #[cfg(target_os = "macos")]
+                {
+                    let logical_size = b.size();
+                    let scale = display.raw_handle().scale()?;
+                    Some(PhysicalSize::new(
+                        logical_size.width() * scale,
+                        logical_size.height() * scale,
+                    ))
+                }
+
+                #[cfg(windows)]
+                Some(b.size())
+            })
             .or_else(|| display.physical_size())
             .unwrap();
 
@@ -950,7 +1036,6 @@ mod macos {
             let video_tx = self.video_tx.clone();
             let audio_tx = self.audio_tx.clone();
             let config = self.config.clone();
-            let display = self.display.clone();
 
             self.tokio_handle.block_on(async move {
                 let frame_handler = FrameHandler::spawn(FrameHandler {
@@ -961,13 +1046,29 @@ mod macos {
                     start_time_f64,
                 });
 
+                let display = Display::from_id(&config.display).unwrap();
+
                 let content_filter = display
                     .raw_handle()
                     .as_content_filter()
                     .await
                     .ok_or_else(|| "Failed to get content filter".to_string())?;
 
-                let size = config.target.physical_size().unwrap();
+                let size = {
+                    let logical_size = config
+                        .crop_bounds
+                        .map(|bounds| bounds.size())
+                        .or_else(|| display.logical_size())
+                        .unwrap();
+
+                    let scale = display.physical_size().unwrap().width()
+                        / display.logical_size().unwrap().width();
+
+                    PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
+                };
+
+                tracing::info!("size: {:?}", size);
+
                 let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
                     .with_width(size.width() as usize)
                     .with_height(size.height() as usize)
@@ -977,19 +1078,8 @@ mod macos {
 
                 settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
 
-                let crop_bounds = match &config.target {
-                    ScreenCaptureTarget::Window { id } => Some(
-                        Window::from_id(&id)
-                            .unwrap()
-                            .raw_handle()
-                            .logical_bounds()
-                            .unwrap(),
-                    ),
-                    ScreenCaptureTarget::Area { bounds, .. } => Some(bounds.clone()),
-                    _ => None,
-                };
-
-                if let Some(crop_bounds) = crop_bounds {
+                if let Some(crop_bounds) = config.crop_bounds {
+                    tracing::info!("crop bounds: {:?}", crop_bounds);
                     settings.set_src_rect(cg::Rect::new(
                         crop_bounds.position().x(),
                         crop_bounds.position().y(),
