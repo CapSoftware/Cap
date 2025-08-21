@@ -15,6 +15,7 @@ interface CapCardAnalyticsProps {
 	capId: string;
 	displayCount: number;
 	totalComments: number;
+	isLoadingAnalytics: boolean;
 	totalReactions: number;
 }
 

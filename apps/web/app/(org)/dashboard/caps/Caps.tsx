@@ -81,8 +81,10 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const { data: analyticsData } = useQuery({
-		queryKey: ["analytics", data.map((video) => video.id)],
+	const videoIds = data.map((video) => video.id).sort();
+
+	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+		queryKey: ["analytics", videoIds],
 		queryFn: async () => {
 			if (!dubApiKeyEnabled || data.length === 0) {
 				return {};
@@ -122,8 +124,8 @@ export const Caps = ({
 
 			return analyticsData;
 		},
-		staleTime: 30000, // 30 seconds
 		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 	});
 
 	const analytics = analyticsData || {};
@@ -331,6 +333,7 @@ export const Caps = ({
 								}}
 								userId={user?.id}
 								customDomain={customDomain}
+								isLoadingAnalytics={isLoadingAnalytics}
 								domainVerified={domainVerified}
 								isSelected={selectedCaps.includes(cap.id)}
 								anyCapSelected={anyCapSelected}
