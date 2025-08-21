@@ -1,10 +1,10 @@
 use super::*;
 use cidre::*;
+use kameo::prelude::*;
 
 #[derive(Debug)]
 pub struct CMSampleBufferCapture;
 
-#[cfg(target_os = "macos")]
 impl ScreenCaptureFormat for CMSampleBufferCapture {
     type VideoFormat = cidre::arc::R<cidre::cm::SampleBuf>;
 
@@ -22,7 +22,6 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
     }
 }
 
-#[cfg(target_os = "macos")]
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
     fn run(
         &mut self,
