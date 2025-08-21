@@ -644,21 +644,8 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 	// set padding if background is selected
 	const ensurePaddingForBackground = () => {
-		if ((project.background.padding ?? 0) === 0) {
+		if (project.background.padding === 0)
 			setProject("background", "padding", 10);
-		}
-	};
-
-	// this will run when user select a background tab
-	const handleBackgroundTabChange = (tab: BackgroundSource["type"]) => {
-		switch (tab) {
-			case "image":
-			case "color":
-			case "gradient":
-			case "wallpaper":
-				ensurePaddingForBackground();
-				break;
-		}
 	};
 
 	// Validate background source path on mount
@@ -803,7 +790,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					value={project.background.source.type}
 					onChange={(v) => {
 						const tab = v as BackgroundSource["type"];
-						handleBackgroundTabChange(tab);
+						ensurePaddingForBackground();
 						switch (tab) {
 							case "image": {
 								setProject("background", "source", {
