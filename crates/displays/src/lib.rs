@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::str::FromStr;
 
-use crate::bounds::{LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition};
+use crate::bounds::{LogicalPosition, LogicalSize};
 
 #[derive(Clone, Copy)]
 pub struct Display(DisplayImpl);

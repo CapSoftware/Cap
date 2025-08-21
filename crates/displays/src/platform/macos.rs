@@ -15,7 +15,7 @@ use core_graphics::{
 };
 
 use crate::bounds::{
-    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+    LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize,
 };
 
 #[derive(Clone, Copy)]
@@ -123,7 +123,7 @@ impl DisplayImpl {
     }
 
     pub fn name(&self) -> Option<String> {
-        use cocoa::appkit::NSScreen;
+        
         use cocoa::base::id;
         use cocoa::foundation::NSString;
         use objc::{msg_send, *};

@@ -1,6 +1,5 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_displays::bounds::{LogicalBounds, PhysicalBounds};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;

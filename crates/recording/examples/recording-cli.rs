@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use cap_displays::{Display, Window};
+use cap_displays::Display;
 use cap_recording::{
     RecordingBaseInputs,
     screen_capture::ScreenCaptureTarget,
-    sources::{ScreenCaptureSource, list_displays, list_windows},
 };
 
 #[tokio::main]

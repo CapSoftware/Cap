@@ -1,7 +1,7 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_displays::{
     Display, DisplayId, Window, WindowId,
-    bounds::{LogicalBounds, LogicalPosition, PhysicalBounds, PhysicalPosition, PhysicalSize},
+    bounds::{LogicalBounds, LogicalPosition, PhysicalSize},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
@@ -9,7 +9,7 @@ use flume::Sender;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 use crate::pipeline::{control::Control, task::PipelineSourceTask};
 

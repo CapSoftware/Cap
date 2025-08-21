@@ -1,9 +1,6 @@
 #[cfg(target_os = "windows")]
 use cap_displays::bounds::PhysicalBounds;
-use cap_displays::{
-    Display,
-    bounds::{LogicalBounds, PhysicalPosition, PhysicalSize},
-};
+use cap_displays::{Display, bounds::LogicalBounds};
 use device_query::{DeviceQuery, DeviceState};
 
 // Physical on Windows, Logical on macOS

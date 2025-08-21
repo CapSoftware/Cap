@@ -11,7 +11,7 @@ use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
     DisplayId, WindowId,
     bounds::{
-        LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+        LogicalBounds, PhysicalSize,
     },
 };
 use serde::Serialize;
