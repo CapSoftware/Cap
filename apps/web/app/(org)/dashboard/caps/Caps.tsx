@@ -114,22 +114,14 @@ export const Caps = ({
 			const results = await Promise.allSettled(analyticsPromises);
 			const analyticsData: Record<string, number> = {};
 
-			console.log({
-				analyticsData,
-			});
-
 			results.forEach((result) => {
 				if (result.status === "fulfilled" && result.value) {
 					analyticsData[result.value.videoId] = result.value.count;
 				}
 			});
 
-			console.log(results, "results");
-
 			return analyticsData;
 		},
-		staleTime: 30000, // 30 seconds
-		refetchOnWindowFocus: false,
 	});
 
 	const analytics = analyticsData || {};
