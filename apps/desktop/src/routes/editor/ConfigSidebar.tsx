@@ -745,6 +745,12 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 			}));
 	});
 
+	// set padding if background is selected
+	const ensurePaddingForBackground = () => {
+		if (project.background.padding === 0)
+			setProject("background", "padding", 10);
+	};
+
 	// Validate background source path on mount
 	onMount(async () => {
 		if (
@@ -887,6 +893,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					value={project.background.source.type}
 					onChange={(v) => {
 						const tab = v as BackgroundSource["type"];
+						ensurePaddingForBackground();
 						switch (tab) {
 							case "image": {
 								setProject("background", "source", {
@@ -1118,6 +1125,8 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									// Get the raw path without any URL prefixes
 
 									debouncedSetProject(wallpaper.rawPath);
+
+									ensurePaddingForBackground();
 								} catch (err) {
 									toast.error("Failed to set wallpaper");
 								}

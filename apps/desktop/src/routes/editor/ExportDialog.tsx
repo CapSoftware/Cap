@@ -73,17 +73,17 @@ export const EXPORT_TO_OPTIONS = [
 	{
 		label: "File",
 		value: "file",
-		icon: <IconCapFile class="text-gray-12 size-4" />,
+		icon: <IconCapFile class="text-gray-12 size-3.5" />,
 	},
 	{
 		label: "Clipboard",
 		value: "clipboard",
-		icon: <IconCapCopy class="text-gray-12 size-4" />,
+		icon: <IconCapCopy class="text-gray-12 size-3.5" />,
 	},
 	{
 		label: "Shareable link",
 		value: "link",
-		icon: <IconCapLink class="text-gray-12 size-4" />,
+		icon: <IconCapLink class="text-gray-12 size-3.5" />,
 	},
 ] as const;
 
@@ -169,9 +169,9 @@ export function ExportDialog() {
 	}));
 
 	const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
-		file: <IconCapFile class="text-gray-1 size-4" />,
-		clipboard: <IconCapCopy class="text-gray-1 size-4" />,
-		link: <IconCapLink class="text-gray-1 size-4" />,
+		file: <IconCapFile class="text-gray-1 size-3.5" />,
+		clipboard: <IconCapCopy class="text-gray-1 size-3.5" />,
+		link: <IconCapLink class="text-gray-1 size-3.5" />,
 	};
 
 	const copy = createMutation(() => ({
@@ -373,7 +373,7 @@ export function ExportDialog() {
 		<>
 			<Show when={exportState.type === "idle"}>
 				<DialogContent
-					title="Export"
+					title="Export Cap"
 					confirm={
 						<>
 							{settings.exportTo === "link" && !auth.data ? (
@@ -481,7 +481,7 @@ export function ExportDialog() {
 											<Button
 												onClick={() => setSettings("exportTo", option.value)}
 												class={cx(
-													"flex gap-2 items-center",
+													"flex flex-1 gap-2 items-center text-nowrap",
 													settings.exportTo === option.value && selectedStyle,
 												)}
 												variant="secondary"
