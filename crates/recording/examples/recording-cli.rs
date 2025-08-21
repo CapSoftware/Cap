@@ -1,10 +1,7 @@
 use std::time::Duration;
 
 use cap_displays::Display;
-use cap_recording::{
-    RecordingBaseInputs,
-    screen_capture::ScreenCaptureTarget,
-};
+use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
 
 #[tokio::main]
 pub async fn main() {
@@ -37,7 +34,7 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Screen {
+            capture_target: ScreenCaptureTarget::Display {
                 id: Display::list()[1].id(),
             },
             // ScreenCaptureTarget::Window {

@@ -33,7 +33,7 @@ impl RecordStart {
             (Some(id), _) => cap_recording::screen_capture::list_displays()
                 .into_iter()
                 .find(|s| s.0.id == id)
-                .map(|(s, _)| ScreenCaptureTarget::Screen { id: s.id })
+                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                 .ok_or(format!("Screen with id '{id}' not found")),
             (_, Some(id)) => cap_recording::screen_capture::list_windows()
                 .into_iter()

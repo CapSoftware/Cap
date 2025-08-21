@@ -468,7 +468,7 @@ async fn get_current_recording(
             .current_recording()
             .map(|r| {
                 let target = match r.capture_target() {
-                    ScreenCaptureTarget::Screen { id } => {
+                    ScreenCaptureTarget::Display { id } => {
                         CurrentRecordingTarget::Screen { id: id.clone() }
                     }
                     ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {

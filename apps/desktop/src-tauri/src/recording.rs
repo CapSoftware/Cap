@@ -121,13 +121,6 @@ impl InProgressRecording {
             Self::Studio { handle, .. } => handle.cancel().await,
         }
     }
-
-    // pub fn bounds(&self) -> &Bounds {
-    //     match self {
-    //         Self::Instant { handle, .. } => &handle.bounds,
-    //         Self::Studio { handle, .. } => &handle.bounds,
-    //     }
-    // }
 }
 
 pub enum CompletedRecording {
@@ -239,7 +232,7 @@ pub async fn start_recording(
         match inputs.capture_target.clone() {
             ScreenCaptureTarget::Area { .. } => title.unwrap_or_else(|| "Area".to_string()),
             ScreenCaptureTarget::Window { .. } => title.unwrap_or_else(|| "Window".to_string()),
-            ScreenCaptureTarget::Screen { .. } => title.unwrap_or_else(|| "Screen".to_string()),
+            ScreenCaptureTarget::Display { .. } => title.unwrap_or_else(|| "Screen".to_string()),
         }
     };
 

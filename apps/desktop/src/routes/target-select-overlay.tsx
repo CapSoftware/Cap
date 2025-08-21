@@ -80,7 +80,7 @@ export default function () {
 
 	return (
 		<Switch>
-			<Match when={rawOptions.targetMode === "screen"}>
+			<Match when={rawOptions.targetMode === "display"}>
 				{(_) => (
 					<Show when={targetUnderCursor.screen} keyed>
 						{(screenUnderCursor) => (
@@ -96,10 +96,7 @@ export default function () {
 								</span>
 
 								<RecordingControls
-									target={{
-										variant: "screen",
-										id: params.displayId!,
-									}}
+									target={{ variant: "display", id: params.displayId! }}
 								/>
 							</div>
 						)}

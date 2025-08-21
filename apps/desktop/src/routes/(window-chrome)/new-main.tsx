@@ -146,7 +146,7 @@ function Page() {
 		screen: () => {
 			let screen;
 
-			if (rawOptions.captureTarget.variant === "screen") {
+			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
 				screen =
 					screens.data?.find((s) => s.id === screenId) ?? screens.data?.[0];
@@ -175,10 +175,10 @@ function Page() {
 		micName: () => mics.data?.find((name) => name === rawOptions.micName),
 		target: (): ScreenCaptureTarget | undefined => {
 			switch (rawOptions.captureTarget.variant) {
-				case "screen": {
+				case "display": {
 					const screen = options.screen();
 					if (!screen) return;
-					return { variant: "screen", id: screen.id };
+					return { variant: "display", id: screen.id };
 				}
 				case "window": {
 					const window = options.window();
@@ -208,7 +208,7 @@ function Page() {
 		if (target.variant === "window" && windows.data?.length === 0) {
 			setOptions(
 				"captureTarget",
-				reconcile({ variant: "screen", id: screen.id }),
+				reconcile({ variant: "display", id: screen.id }),
 			);
 		}
 	});
@@ -293,12 +293,14 @@ function Page() {
 			</WindowChromeHeader>
 			<div class="flex flex-row items-stretch gap-1.5 w-full text-xs text-gray-11">
 				<TargetTypeButton
-					selected={rawOptions.targetMode === "screen"}
+					selected={rawOptions.targetMode === "display"}
 					Component={IconMdiMonitor}
 					onClick={() =>
-						setOptions("targetMode", (v) => (v === "screen" ? null : "screen"))
+						setOptions("targetMode", (v) =>
+							v === "display" ? null : "display",
+						)
 					}
-					name="Screen"
+					name="display"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "window"}

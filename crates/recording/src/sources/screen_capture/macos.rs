@@ -22,104 +22,109 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
     }
 }
 
+#[derive(Actor)]
+struct FrameHandler {
+    start_time_unix: f64,
+    start_cmtime: f64,
+    start_time_f64: f64,
+    video_tx: Sender<(arc::R<cm::SampleBuf>, f64)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+}
+
+impl Message<NewFrame> for FrameHandler {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: NewFrame,
+        _: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let frame = msg.0;
+        let sample_buffer = frame.sample_buf();
+
+        let frame_time = sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
+        let unix_timestamp = self.start_time_unix + frame_time - self.start_cmtime;
+        let relative_time = unix_timestamp - self.start_time_f64;
+
+        match &frame {
+            scap_screencapturekit::Frame::Screen(frame) => {
+                if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
+                    return;
+                }
+
+                let check_skip_send = || {
+                    cap_fail::fail_err!("media::sources::screen_capture::skip_send", ());
+
+                    Ok::<(), ()>(())
+                };
+
+                if check_skip_send().is_ok()
+                    && self
+                        .video_tx
+                        .send((sample_buffer.retained(), relative_time))
+                        .is_err()
+                {
+                    warn!("Pipeline is unreachable");
+                }
+            }
+            scap_screencapturekit::Frame::Audio(_) => {
+                use ffmpeg::ChannelLayout;
+
+                let res = || {
+                    cap_fail::fail_err!("screen_capture audio skip", ());
+                    Ok::<(), ()>(())
+                };
+                if res().is_err() {
+                    return;
+                }
+
+                let Some(audio_tx) = &self.audio_tx else {
+                    return;
+                };
+
+                let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
+                let slice = buf_list.block().as_slice().unwrap();
+
+                let mut frame = ffmpeg::frame::Audio::new(
+                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
+                    sample_buffer.num_samples() as usize,
+                    ChannelLayout::STEREO,
+                );
+                frame.set_rate(48_000);
+                let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
+                for i in 0..frame.planes() {
+                    use cap_media_info::PlanarData;
+
+                    frame.plane_data_mut(i).copy_from_slice(
+                        &slice[i * data_bytes_size as usize..(i + 1) * data_bytes_size as usize],
+                    );
+                }
+
+                frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
+
+                let _ = audio_tx.send((frame, relative_time));
+            }
+            _ => {}
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SourceError {
+    #[error("NoDisplay: Id '{0}'")]
+    NoDisplay(DisplayId),
+    #[error("AsContentFilter")]
+    AsContentFilter,
+    #[error("DidStopWithError: {0}")]
+    DidStopWithError(arc::R<ns::Error>),
+}
+
 impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        use cidre::{arc, cg, cm, cv};
-        use kameo::prelude::*;
-
-        #[derive(Actor)]
-        struct FrameHandler {
-            start_time_unix: f64,
-            start_cmtime: f64,
-            start_time_f64: f64,
-            video_tx: Sender<(arc::R<cm::SampleBuf>, f64)>,
-            audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
-        }
-
-        impl Message<NewFrame> for FrameHandler {
-            type Reply = ();
-
-            async fn handle(
-                &mut self,
-                msg: NewFrame,
-                _: &mut kameo::prelude::Context<Self, Self::Reply>,
-            ) -> Self::Reply {
-                let frame = msg.0;
-                let sample_buffer = frame.sample_buf();
-
-                let frame_time =
-                    sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
-                let unix_timestamp = self.start_time_unix + frame_time - self.start_cmtime;
-                let relative_time = unix_timestamp - self.start_time_f64;
-
-                match &frame {
-                    scap_screencapturekit::Frame::Screen(frame) => {
-                        if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
-                            return;
-                        }
-
-                        let check_skip_send = || {
-                            cap_fail::fail_err!("media::sources::screen_capture::skip_send", ());
-
-                            Ok::<(), ()>(())
-                        };
-
-                        if check_skip_send().is_ok()
-                            && self
-                                .video_tx
-                                .send((sample_buffer.retained(), relative_time))
-                                .is_err()
-                        {
-                            warn!("Pipeline is unreachable");
-                        }
-                    }
-                    scap_screencapturekit::Frame::Audio(_) => {
-                        use ffmpeg::ChannelLayout;
-
-                        let res = || {
-                            cap_fail::fail_err!("screen_capture audio skip", ());
-                            Ok::<(), ()>(())
-                        };
-                        if res().is_err() {
-                            return;
-                        }
-
-                        let Some(audio_tx) = &self.audio_tx else {
-                            return;
-                        };
-
-                        let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                        let slice = buf_list.block().as_slice().unwrap();
-
-                        let mut frame = ffmpeg::frame::Audio::new(
-                            ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-                            sample_buffer.num_samples() as usize,
-                            ChannelLayout::STEREO,
-                        );
-                        frame.set_rate(48_000);
-                        let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
-                        for i in 0..frame.planes() {
-                            use cap_media_info::PlanarData;
-
-                            frame.plane_data_mut(i).copy_from_slice(
-                                &slice[i * data_bytes_size as usize
-                                    ..(i + 1) * data_bytes_size as usize],
-                            );
-                        }
-
-                        frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
-
-                        let _ = audio_tx.send((frame, relative_time));
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         let start = std::time::SystemTime::now();
         let start_time_unix = start
             .duration_since(std::time::UNIX_EPOCH)
@@ -138,119 +143,122 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         let audio_tx = self.audio_tx.clone();
         let config = self.config.clone();
 
-        self.tokio_handle.block_on(async move {
-            let captures_audio = audio_tx.is_some();
-            let frame_handler = FrameHandler::spawn(FrameHandler {
-                video_tx,
-                audio_tx,
-                start_time_unix,
-                start_cmtime,
-                start_time_f64,
-            });
+        self.tokio_handle
+            .block_on(async move {
+                let captures_audio = audio_tx.is_some();
+                let frame_handler = FrameHandler::spawn(FrameHandler {
+                    video_tx,
+                    audio_tx,
+                    start_time_unix,
+                    start_cmtime,
+                    start_time_f64,
+                });
 
-            let display = Display::from_id(&config.display).unwrap();
+                let display = Display::from_id(&config.display)
+                    .ok_or_else(|| SourceError::NoDisplay(config.display))?;
 
-            let content_filter = display
-                .raw_handle()
-                .as_content_filter()
-                .await
-                .ok_or_else(|| "Failed to get content filter".to_string())?;
+                let content_filter = display
+                    .raw_handle()
+                    .as_content_filter()
+                    .await
+                    .ok_or_else(|| SourceError::AsContentFilter)?;
 
-            let size = {
-                let logical_size = config
-                    .crop_bounds
-                    .map(|bounds| bounds.size())
-                    .or_else(|| display.logical_size())
-                    .unwrap();
+                let size = {
+                    let logical_size = config
+                        .crop_bounds
+                        .map(|bounds| bounds.size())
+                        .or_else(|| display.logical_size())
+                        .unwrap();
 
-                let scale = display.physical_size().unwrap().width()
-                    / display.logical_size().unwrap().width();
+                    let scale = display.physical_size().unwrap().width()
+                        / display.logical_size().unwrap().width();
 
-                PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
-            };
-
-            tracing::info!("size: {:?}", size);
-
-            let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
-                .with_width(size.width() as usize)
-                .with_height(size.height() as usize)
-                .with_fps(config.fps as f32)
-                .with_shows_cursor(config.show_cursor)
-                .with_captures_audio(captures_audio)
-                .build();
-
-            settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
-
-            if let Some(crop_bounds) = config.crop_bounds {
-                tracing::info!("crop bounds: {:?}", crop_bounds);
-                settings.set_src_rect(cg::Rect::new(
-                    crop_bounds.position().x(),
-                    crop_bounds.position().y(),
-                    crop_bounds.size().width(),
-                    crop_bounds.size().height(),
-                ));
-            }
-
-            let (error_tx, error_rx) = flume::bounded(1);
-
-            let capturer = ScreenCaptureActor::spawn(
-                ScreenCaptureActor::new(
-                    content_filter,
-                    settings,
-                    frame_handler.recipient(),
-                    error_tx.clone(),
-                )
-                .unwrap(),
-            );
-
-            let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
-
-            let _ = capturer.ask(StartCapturing).send().await.unwrap();
-
-            let _ = ready_signal.send(Ok(()));
-
-            loop {
-                use futures::future::Either;
-
-                let check_err = || {
-                    use cidre::ns;
-
-                    Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
-                        "macos screen capture startup error",
-                        ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
-                    ))
+                    PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
                 };
-                if let Err(e) = check_err() {
-                    let _ = error_tx.send(e);
+
+                tracing::info!("size: {:?}", size);
+
+                let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
+                    .with_width(size.width() as usize)
+                    .with_height(size.height() as usize)
+                    .with_fps(config.fps as f32)
+                    .with_shows_cursor(config.show_cursor)
+                    .with_captures_audio(captures_audio)
+                    .build();
+
+                settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+
+                if let Some(crop_bounds) = config.crop_bounds {
+                    tracing::info!("crop bounds: {:?}", crop_bounds);
+                    settings.set_src_rect(cg::Rect::new(
+                        crop_bounds.position().x(),
+                        crop_bounds.position().y(),
+                        crop_bounds.size().width(),
+                        crop_bounds.size().height(),
+                    ));
                 }
 
-                match futures::future::select(
-                    error_rx.recv_async(),
-                    control_signal.receiver.recv_async(),
-                )
-                .await
-                {
-                    Either::Left((Ok(error), _)) => {
-                        error!("Error capturing screen: {}", error);
-                        let _ = stop_recipient.ask(StopCapturing).await;
-                        return Err(error.to_string());
+                let (error_tx, error_rx) = flume::bounded(1);
+
+                let capturer = ScreenCaptureActor::spawn(
+                    ScreenCaptureActor::new(
+                        content_filter,
+                        settings,
+                        frame_handler.recipient(),
+                        error_tx.clone(),
+                    )
+                    .unwrap(),
+                );
+
+                let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
+
+                let _ = capturer.ask(StartCapturing).send().await.unwrap();
+
+                let _ = ready_signal.send(Ok(()));
+
+                loop {
+                    use futures::future::Either;
+
+                    let check_err = || {
+                        use cidre::ns;
+
+                        Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
+                            "macos screen capture startup error",
+                            ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
+                        ))
+                    };
+                    if let Err(e) = check_err() {
+                        let _ = error_tx.send(e);
                     }
-                    Either::Right((Ok(ctrl), _)) => {
-                        if let Control::Shutdown = ctrl {
+
+                    match futures::future::select(
+                        error_rx.recv_async(),
+                        control_signal.receiver.recv_async(),
+                    )
+                    .await
+                    {
+                        Either::Left((Ok(error), _)) => {
+                            error!("Error capturing screen: {}", error);
                             let _ = stop_recipient.ask(StopCapturing).await;
+                            return Err(SourceError::DidStopWithError(error));
+                        }
+                        Either::Right((Ok(ctrl), _)) => {
+                            if let Control::Shutdown = ctrl {
+                                let _ = stop_recipient.ask(StopCapturing).await;
+                                return Ok(());
+                            }
+                        }
+                        _ => {
+                            warn!("Screen capture recv channels shutdown, exiting.");
+
+                            let _ = stop_recipient.ask(StopCapturing).await;
+
                             return Ok(());
                         }
                     }
-                    _ => {
-                        warn!("Screen capture recv channels shutdown, exiting.");
-
-                        let _ = stop_recipient.ask(StopCapturing).await;
-
-                        return Ok(());
-                    }
                 }
-            }
-        })
+            })
+            .map_err(|e: SourceError| e.to_string())
     }
 }
 

@@ -14,9 +14,7 @@ use core_graphics::{
     },
 };
 
-use crate::bounds::{
-    LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize,
-};
+use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -123,7 +121,6 @@ impl DisplayImpl {
     }
 
     pub fn name(&self) -> Option<String> {
-        
         use cocoa::base::id;
         use cocoa::foundation::NSString;
         use objc::{msg_send, *};

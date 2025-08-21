@@ -64,7 +64,7 @@ pub enum ScreenCaptureTarget {
     Window {
         id: WindowId,
     },
-    Screen {
+    Display {
         id: DisplayId,
     },
     Area {
@@ -76,26 +76,15 @@ pub enum ScreenCaptureTarget {
 impl ScreenCaptureTarget {
     pub fn display(&self) -> Option<Display> {
         match self {
-            Self::Screen { id } => Display::from_id(id),
+            Self::Display { id } => Display::from_id(id),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.display()),
             Self::Area { screen, .. } => Display::from_id(screen),
         }
     }
 
-    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
-        match self {
-            Self::Screen { id } => todo!(), //  Display::from_id(id).map(|d| d.logical_bounds()),
-            Self::Window { id } => Some(LogicalBounds::new(
-                LogicalPosition::new(0.0, 0.0),
-                Window::from_id(id)?.raw_handle().logical_size()?,
-            )),
-            Self::Area { bounds, .. } => Some(*bounds),
-        }
-    }
-
     pub fn cursor_crop(&self) -> Option<CursorCropBounds> {
         match self {
-            Self::Screen { .. } => {
+            Self::Display { .. } => {
                 #[cfg(target_os = "macos")]
                 {
                     let display = self.display()?;
@@ -180,7 +169,7 @@ impl ScreenCaptureTarget {
 
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         match self {
-            Self::Screen { id } => Display::from_id(id).and_then(|d| d.physical_size()),
+            Self::Display { id } => Display::from_id(id).and_then(|d| d.physical_size()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.physical_size()),
             Self::Area { bounds, .. } => {
                 let display = self.display()?;
@@ -197,7 +186,7 @@ impl ScreenCaptureTarget {
 
     pub fn title(&self) -> Option<String> {
         match self {
-            Self::Screen { id } => Display::from_id(id).and_then(|d| d.name()),
+            Self::Display { id } => Display::from_id(id).and_then(|d| d.name()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.name()),
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
         }
@@ -291,7 +280,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         let fps = max_fps.min(display.refresh_rate() as u32);
 
         let crop_bounds = match target {
-            ScreenCaptureTarget::Screen { .. } => None,
+            ScreenCaptureTarget::Display { .. } => None,
             ScreenCaptureTarget::Window { id } => {
                 let window = Window::from_id(&id).unwrap();
 

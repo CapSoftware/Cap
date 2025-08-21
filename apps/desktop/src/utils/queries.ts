@@ -91,12 +91,12 @@ export function createOptionsQuery() {
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "screen" | "window" | "area" | null;
+		targetMode?: "display" | "window" | "area" | null;
 		cameraID?: DeviceOrModelID | null;
 		/** @deprecated */
 		cameraLabel: string | null;
 	}>({
-		captureTarget: { variant: "screen", id: "0" },
+		captureTarget: { variant: "display", id: "0" },
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",

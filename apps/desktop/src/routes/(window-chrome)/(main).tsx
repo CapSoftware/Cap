@@ -145,7 +145,7 @@ function Page() {
 		screen: () => {
 			let screen: CaptureDisplay | undefined;
 
-			if (rawOptions.captureTarget.variant === "screen") {
+			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
 				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
@@ -191,7 +191,7 @@ function Page() {
 		) {
 			setOptions(
 				"captureTarget",
-				reconcile({ variant: "screen", id: screen.id }),
+				reconcile({ variant: "display", id: screen.id }),
 			);
 		}
 	});
@@ -201,7 +201,7 @@ function Page() {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
-						case "screen": {
+						case "display": {
 							const screen = options.screen();
 							if (!screen)
 								throw new Error(
@@ -209,7 +209,7 @@ function Page() {
 										_screens()?.length
 									}`,
 								);
-							return { variant: "screen", id: screen.id };
+							return { variant: "display", id: screen.id };
 						}
 						case "window": {
 							const win = options.window();
@@ -378,7 +378,7 @@ function Page() {
 							setOptions(
 								"captureTarget",
 								reconcile({
-									variant: "screen",
+									variant: "display",
 									id: screen.id,
 								}),
 							);
@@ -387,7 +387,7 @@ function Page() {
 				<div
 					class={cx(
 						"flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
-						(rawOptions.captureTarget.variant === "screen" ||
+						(rawOptions.captureTarget.variant === "display" ||
 							rawOptions.captureTarget.variant === "area") &&
 							"ml-[2.4rem]",
 					)}
@@ -420,14 +420,14 @@ function Page() {
 
 							setOptions(
 								"captureTarget",
-								reconcile({ variant: "screen", id: value.id }),
+								reconcile({ variant: "display", id: value.id }),
 							);
 						}}
 						value={options.screen() ?? null}
-						placeholder="Screen"
+						placeholder="display"
 						optionsEmptyText="No screens found"
 						selected={
-							rawOptions.captureTarget.variant === "screen" ||
+							rawOptions.captureTarget.variant === "display" ||
 							rawOptions.captureTarget.variant === "area"
 						}
 					/>
@@ -593,7 +593,7 @@ function createUpdateCheck() {
 }
 
 function AreaSelectButton(props: {
-	targetVariant: "screen" | "area" | "other";
+	targetVariant: "display" | "area" | "other";
 	screen: CaptureDisplay | undefined;
 	onChange(area?: number): void;
 }) {

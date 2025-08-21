@@ -56,7 +56,7 @@ export default function CaptureArea() {
 
 	async function handleConfirm() {
 		const target = rawOptions.captureTarget;
-		if (target.variant !== "screen") return;
+		if (target.variant !== "display") return;
 		setPendingState(false);
 
 		setOptions(

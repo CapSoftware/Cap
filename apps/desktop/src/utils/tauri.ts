@@ -682,7 +682,7 @@ export type RequestStartRecording = null;
 export type S3UploadMeta = { id: string };
 export type ScreenCaptureTarget =
 	| { variant: "window"; id: WindowId }
-	| { variant: "screen"; id: DisplayId }
+	| { variant: "display"; id: DisplayId }
 	| { variant: "area"; screen: DisplayId; bounds: LogicalBounds };
 export type ScreenUnderCursor = {
 	name: string;
