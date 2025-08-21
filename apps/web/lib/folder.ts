@@ -12,6 +12,7 @@ import {
 	users,
 	videos,
 } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { Folder } from "@cap/web-domain";
 import { and, desc, eq } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
@@ -112,7 +113,10 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add space-level sharing
 	spaceSharing.forEach((space) => {
-		(sharedSpacesMap[space.videoId] ??= []).push({
+		if (!sharedSpacesMap[space.videoId]) {
+			sharedSpacesMap[space.videoId] = [];
+		}
+		sharedSpacesMap[space.videoId].push({
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
@@ -123,7 +127,10 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add organization-level sharing
 	orgSharing.forEach((org) => {
-		(sharedSpacesMap[org.videoId] ??= []).push({
+		if (!sharedSpacesMap[org.videoId]) {
+			sharedSpacesMap[org.videoId] = [];
+		}
+		sharedSpacesMap[org.videoId].push({
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
@@ -144,6 +151,7 @@ export async function getVideosByFolderId(folderId: string) {
 			ownerId: videos.ownerId,
 			name: videos.name,
 			createdAt: videos.createdAt,
+			public: videos.public,
 			metadata: videos.metadata,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
@@ -180,6 +188,7 @@ export async function getVideosByFolderId(folderId: string) {
 			videos.ownerId,
 			videos.name,
 			videos.createdAt,
+			videos.public,
 			videos.metadata,
 			users.name,
 		)
@@ -196,10 +205,14 @@ export async function getVideosByFolderId(folderId: string) {
 
 	// Process the video data to match the expected format
 	const processedVideoData = videoData.map((video) => {
-		const { effectiveDate, ...videoWithoutEffectiveDate } = video;
-
 		return {
-			...videoWithoutEffectiveDate,
+			id: video.id as Video.VideoId, // Cast to Video.VideoId branded type
+			ownerId: video.ownerId,
+			name: video.name,
+			createdAt: video.createdAt,
+			public: video.public,
+			totalComments: video.totalComments,
+			totalReactions: video.totalReactions,
 			sharedOrganizations: Array.isArray(video.sharedOrganizations)
 				? video.sharedOrganizations.filter(
 						(organization) => organization.id !== null,
@@ -212,10 +225,11 @@ export async function getVideosByFolderId(folderId: string) {
 			metadata: video.metadata as
 				| {
 						customCreatedAt?: string;
-						[key: string]: any;
+						[key: string]: unknown;
 				  }
 				| undefined,
 			hasPassword: video.hasPassword === 1,
+			foldersData: [], // Empty array since videos in a folder don't need folder data
 		};
 	});
 

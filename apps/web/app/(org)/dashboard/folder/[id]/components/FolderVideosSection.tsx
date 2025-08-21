@@ -17,13 +17,7 @@ import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCar
 import { ClientCapCard } from "./index";
 
 interface FolderVideosSectionProps {
-	initialVideos: VideoData & {
-		sharedOrganizations: {
-			id: string;
-			name: string;
-			iconUrl: string;
-		}[];
-	};
+	initialVideos: VideoData;
 	dubApiKeyEnabled: boolean;
 	cardType?: "shared" | "default";
 	userId?: string;
