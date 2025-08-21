@@ -10,9 +10,7 @@ use base64::prelude::*;
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
     DisplayId, WindowId,
-    bounds::{
-        LogicalBounds, PhysicalSize,
-    },
+    bounds::{LogicalBounds, PhysicalSize},
 };
 use serde::Serialize;
 use specta::Type;
