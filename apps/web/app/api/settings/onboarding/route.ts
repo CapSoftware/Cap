@@ -92,7 +92,6 @@ export async function POST(request: NextRequest) {
 	}
 
 	revalidatePath("/onboarding");
-	revalidatePath("/dashboard");
 
 	return Response.json(
 		{

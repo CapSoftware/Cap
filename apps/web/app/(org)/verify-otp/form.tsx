@@ -87,6 +87,7 @@ export function VerifyOTPForm({
 			}
 		},
 		onSuccess: () => {
+			router.refresh();
 			router.replace(next || "/dashboard");
 		},
 		onError: (e) => {
