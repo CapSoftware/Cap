@@ -17,10 +17,10 @@ use crate::{
     windows::{CapWindowId, ShowCapWindow},
 };
 use cap_fail::fail;
-use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
-    platform::Bounds,
-    sources::{CaptureScreen, CaptureWindow},
+    feeds::CameraFeed,
+    platform::{Bounds, display_for_window},
+    sources::{CaptureScreen, CaptureWindow, ScreenCaptureTarge},
 };
 use cap_project::{
     CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,

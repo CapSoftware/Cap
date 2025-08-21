@@ -1,17 +1,16 @@
-use std::time::SystemTime;
-
 use cap_fail::fail;
 use cap_media_info::AudioInfo;
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
+use std::time::SystemTime;
 use tracing::{error, info};
 
-use crate::feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples};
 use crate::{
     MediaError,
     data::FFAudio,
+    feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples},
     pipeline::{
         clock::{LocalTimestamp, RealTimeClock},
         control::Control,

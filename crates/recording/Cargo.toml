@@ -37,6 +37,7 @@ futures = { workspace = true }
 tokio-util = "0.7.15"
 sha2 = "0.10.9"
 hex = "0.4.3"
+kameo = "0.17.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "0.3.5"

@@ -856,6 +856,7 @@ function MicrophoneSelect(props: {
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
+				type="button"
 				disabled={!!currentRecording.data || props.disabled}
 				class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 				onClick={() => {

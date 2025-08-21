@@ -17,6 +17,7 @@ cap-flags = { path = "../flags" }
 cap-audio = { path = "../audio" }
 cap-camera = { path = "../camera", features = ["specta", "serde"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+cap-cpal-ffmpeg = { path = "../cpal-ffmpeg" }
 cap-fail = { path = "../fail" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }

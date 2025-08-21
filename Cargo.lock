@@ -948,6 +948,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cpal-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "cap-cursor-capture"
 version = "0.1.0"
 dependencies = [
@@ -1006,6 +1014,7 @@ dependencies = [
  "futures-intrusive",
  "global-hotkey",
  "image 0.25.6",
+ "kameo",
  "keyed_priority_queue",
  "lazy_static",
  "log",
@@ -1156,6 +1165,7 @@ dependencies = [
  "cap-camera",
  "cap-camera-ffmpeg",
  "cap-camera-windows",
+ "cap-cpal-ffmpeg",
  "cap-fail",
  "cap-flags",
  "cap-media-encoders",
@@ -1258,6 +1268,7 @@ dependencies = [
  "futures",
  "hex",
  "image 0.25.6",
+ "kameo",
  "objc",
  "objc2-app-kit",
  "relative-path",

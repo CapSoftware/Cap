@@ -25,50 +25,49 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
-use cap_editor::EditorInstance;
-use cap_editor::EditorState;
-use cap_media::feeds::RawCameraFrame;
-use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::platform::Bounds;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
-use cap_project::RecordingMetaInner;
-use cap_project::XY;
+use cap_editor::{EditorInstance, EditorState};
+use cap_media::{
+    feeds::{
+        self, AudioInputFeed, AudioInputSamplesSender, CameraFeed, RawCameraFrame,
+        microphone::MicrophoneFeed,
+    },
+    platform::Bounds,
+    sources::ScreenCaptureTarget,
+};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, XY,
+    ZoomSegment,
 };
 use cap_rendering::ProjectRecordingsMeta;
-use clipboard_rs::common::RustImage;
-use clipboard_rs::{Clipboard, ClipboardContext};
-use editor_window::EditorInstances;
-use editor_window::WindowEditorInstance;
+use clipboard_rs::{Clipboard, ClipboardContext, common::RustImage};
+use editor_window::{EditorInstances, WindowEditorInstance};
 use general_settings::GeneralSettingsStore;
+use kameo::{Actor, actor::ActorRef};
 use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
 use relative_path::RelativePathBuf;
-
-use scap::capturer::Capturer;
-use scap::frame::Frame;
-use scap::frame::VideoFrame;
+use scap::{
+    capturer::Capturer,
+    frame::{Frame, VideoFrame},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::Duration;
 use std::{
+    collections::BTreeMap,
     fs::File,
     future::Future,
     io::{BufReader, BufWriter},
     marker::PhantomData,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
-use tauri::Window;
-use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::{AppHandle, Manager, State, Window, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -76,17 +75,14 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::mpsc;
-use tokio::sync::{Mutex, RwLock};
-use tokio::time::timeout;
-use tracing::debug;
-use tracing::error;
-use tracing::trace;
+use tokio::{
+    sync::{Mutex, RwLock, mpsc},
+    time::timeout,
+};
+use tracing::{debug, error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
-use windows::EditorWindowIds;
-use windows::set_window_transparent;
-use windows::{CapWindowId, ShowCapWindow};
+use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -107,8 +103,8 @@ pub struct App {
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
     camera_feed_initialization: Option<mpsc::Sender<()>>,
-    #[serde(skip)]
-    mic_feed: Option<AudioInputFeed>,
+    // #[serde(skip)]
+    // mic_feed: Option<AudioInputFeed>,
     #[serde(skip)]
     mic_samples_tx: AudioInputSamplesSender,
     #[serde(skip)]
@@ -117,6 +113,8 @@ pub struct App {
     recording_state: RecordingState,
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
+    #[serde(skip)]
+    mic_feed_actor: Option<ActorRef<feeds::microphone::MicrophoneFeed>>,
     server_url: String,
 }
 
@@ -221,25 +219,58 @@ impl App {
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
     let mut app = state.write().await;
 
-    match (label, &mut app.mic_feed) {
-        (Some(label), None) => {
-            AudioInputFeed::init(&label)
-                .await
-                .map_err(|e| e.to_string())
-                .map(async |feed| {
-                    feed.add_sender(app.mic_samples_tx.clone()).await.unwrap();
-                    app.mic_feed = Some(feed);
-                })
-                .transpose_async()
-                .await
+    match label {
+        None => {
+            app.mic_feed_actor.take();
         }
-        (Some(label), Some(feed)) => feed.switch_input(&label).await.map_err(|e| e.to_string()),
-        (None, _) => {
-            debug!("removing mic in set_start_recording_options");
-            app.mic_feed.take();
-            Ok(())
+        Some(label) => {
+            let mic_feed_actor = app.mic_feed_actor.get_or_insert_with(|| {
+                let (error_tx, error_rx) = flume::bounded(1);
+
+                // TODO: make this part of a global actor one day
+                tokio::spawn(async move {
+                    let Ok(err) = error_rx.recv_async().await else {
+                        return;
+                    };
+
+                    error!("Mic feed actor error: {err}");
+                });
+
+                MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx))
+            });
+
+            let _ = mic_feed_actor
+                .ask(feeds::microphone::AddSender(app.mic_samples_tx.clone()))
+                .await;
+
+            drop(app);
+
+            let _config = mic_feed_actor
+                .ask(feeds::microphone::SetInput { label })
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
+
+    // match (label, &mut app.mic_feed) {
+    //     (Some(label), None) => {
+    //         AudioInputFeed::init(&label)
+    //             .await
+    //             .map_err(|e| e.to_string())
+    //             .map(async |feed| {
+    //                 feed.add_sender(app.mic_samples_tx.clone()).await.unwrap();
+    //                 app.mic_feed = Some(feed);
+    //             })
+    //             .transpose_async()
+    //             .await
+    //     }
+    //     (Some(label), Some(feed)) => feed.switch_input(&label).await.map_err(|e| e.to_string()),
+    //     (None, _) => {
+    //         debug!("removing mic in set_start_recording_options");
+    //         app.mic_feed.take();
+    //         Ok(())
+    //     }
+    // }
 }
 
 #[tauri::command]
@@ -2116,6 +2147,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     mic_feed: None,
                     recording_state: RecordingState::None,
                     recording_logging_handle,
+                    mic_feed_actor: None,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
                         .flatten()

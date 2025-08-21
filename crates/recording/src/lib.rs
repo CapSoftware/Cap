@@ -7,7 +7,13 @@ pub use studio_recording::{
     CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_media::{MediaError, feeds::AudioInputFeed, platform::Bounds, sources::*};
+use cap_media::{
+    MediaError,
+    feeds::{AudioInputFeed, microphone::MicrophoneFeed},
+    platform::Bounds,
+    sources::*,
+};
+use kameo::actor::ActorRef;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -34,7 +40,7 @@ pub struct RecordingOptions {
 pub struct RecordingBaseInputs<'a> {
     pub capture_target: ScreenCaptureTarget,
     pub capture_system_audio: bool,
-    pub mic_feed: &'a Option<AudioInputFeed>,
+    pub mic_feed: &'a Option<ActorRef<MicrophoneFeed>>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
