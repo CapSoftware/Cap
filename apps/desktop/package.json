@@ -49,7 +49,7 @@
 		"@tauri-apps/plugin-os": "^2.3.0",
 		"@tauri-apps/plugin-process": "2.3.0",
 		"@tauri-apps/plugin-shell": "^2.3.0",
-		"@tauri-apps/plugin-store": "^2.3.0",
+		"@tauri-apps/plugin-store": "^2.4.0",
 		"@tauri-apps/plugin-updater": "^2.9.0",
 		"@ts-rest/core": "^3.52.1",
 		"@types/react-tooltip": "^4.2.4",
