@@ -12,6 +12,7 @@ export const Onboarding = () => {
 	const [lastName, setLastName] = useState("");
 	const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 	const router = useRouter();
+	const [isRedirecting, setIsRedirecting] = useState(false);
 
 	const onboardingRequest = async () => {
 		const response = await fetch("/api/settings/onboarding", {
@@ -39,6 +40,7 @@ export const Onboarding = () => {
 				setShowUpgradeModal(true);
 			} else {
 				router.refresh();
+				setIsRedirecting(true);
 			}
 		} catch {
 			toast.error("Failed to complete onboarding");
@@ -62,6 +64,7 @@ export const Onboarding = () => {
 							name="firstName"
 							required
 							value={firstName}
+							disabled={loading || isRedirecting}
 							onChange={(e) => setFirstName(e.target.value)}
 						/>
 					</div>
@@ -73,6 +76,7 @@ export const Onboarding = () => {
 							placeholder="Last name"
 							required
 							value={lastName}
+							disabled={loading || isRedirecting}
 							onChange={(e) => setLastName(e.target.value)}
 						/>
 					</div>
@@ -83,7 +87,11 @@ export const Onboarding = () => {
 					type="submit"
 					spinner={loading}
 				>
-					{loading ? "Submitting..." : "Submit"}
+					{isRedirecting
+						? "Redirecting..."
+						: loading
+							? "Submitting..."
+							: "Submit"}
 				</Button>
 			</form>
 
@@ -93,6 +101,7 @@ export const Onboarding = () => {
 					setShowUpgradeModal(open);
 					if (!open) {
 						router.refresh();
+						setIsRedirecting(true);
 					}
 				}}
 			/>
