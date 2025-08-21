@@ -30,12 +30,6 @@ pub enum StopCapturingError {
     NotCapturing,
 }
 
-static EXCLUDED_WINDOWS: &[&str] = &[
-    "Cap Camera",
-    "Cap Recordings Overlay",
-    "Cap In Progress Recording",
-];
-
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct CaptureWindow {
     pub id: WindowId,
