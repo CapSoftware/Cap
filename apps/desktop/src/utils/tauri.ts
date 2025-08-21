@@ -45,6 +45,12 @@ export const commands = {
 	async closeRecordingsOverlayWindow(): Promise<void> {
 		await TAURI_INVOKE("close_recordings_overlay_window");
 	},
+	async openDrawingOverlay(): Promise<null> {
+		return await TAURI_INVOKE("open_drawing_overlay");
+	},
+	async closeDrawingOverlay(): Promise<void> {
+		await TAURI_INVOKE("close_drawing_overlay");
+	},
 	async setFakeWindowBounds(name: string, bounds: Bounds): Promise<null> {
 		return await TAURI_INVOKE("set_fake_window_bounds", { name, bounds });
 	},

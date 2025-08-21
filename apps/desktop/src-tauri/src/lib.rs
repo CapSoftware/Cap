@@ -1025,6 +1025,28 @@ fn close_recordings_overlay_window(app: AppHandle) {
     }
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn open_drawing_overlay(app: AppHandle) -> Result<(), String> {
+    use crate::windows::ShowCapWindow;
+    
+    ShowCapWindow::DrawingOverlay
+        .show(&app)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+fn close_drawing_overlay(app: AppHandle) {
+    use crate::windows::CapWindowId;
+    
+    if let Some(window) = CapWindowId::DrawingOverlay.get(&app) {
+        let _ = window.close();
+    }
+}
+
 #[tauri::command(async)]
 #[specta::specta]
 fn focus_captures_panel(_app: AppHandle) {
@@ -1913,6 +1935,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
+            open_drawing_overlay,
+            close_drawing_overlay,
             fake_window::set_fake_window_bounds,
             fake_window::remove_fake_window,
             focus_captures_panel,

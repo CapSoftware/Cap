@@ -50,6 +50,15 @@ export default function () {
 
 	const audioLevel = createAudioInputLevel();
 
+	// Debug logging
+	createEffect(() => {
+		console.log("Recording type:", currentRecording.data?.type);
+		console.log("Full recording data:", currentRecording.data);
+		console.log("Is instant mode?", currentRecording.data?.type === "instant");
+		console.log("Recording is pending?", currentRecording.isPending);
+		console.log("Recording error?", currentRecording.error);
+	});
+
 	const [pauseResumes, setPauseResumes] = createStore<
 		| []
 		| [
@@ -174,19 +183,19 @@ export default function () {
 
 	return (
 		<div class="flex flex-row items-stretch w-full h-full bg-gray-1 animate-in fade-in">
-			<Show when={countdownState()}>
-				{(state) => (
-					<div
-						ref={setCountdownRef}
-						class={cx(
-							"transition-opacity",
-							showCountdown() ? "opacity-100" : "opacity-0",
-						)}
-					>
-						<Countdown from={state().from} current={state().current} />
-					</div>
-				)}
-			</Show>
+				<Show when={countdownState()}>
+					{(state) => (
+						<div
+							ref={setCountdownRef}
+							class={cx(
+								"transition-opacity",
+								showCountdown() ? "opacity-100" : "opacity-0",
+							)}
+						>
+							<Countdown from={state().from} current={state().current} />
+						</div>
+					)}
+				</Show>
 			<div class="flex flex-row justify-between p-[0.25rem] flex-1">
 				<button
 					disabled={stopRecording.isPending}
@@ -236,6 +245,22 @@ export default function () {
 						</ActionButton>
 					)}
 
+					{/* Temporary: Always show draw button for debugging */}
+					<ActionButton
+						onClick={async () => {
+							console.log("Draw button clicked");
+							console.log("Current recording type:", currentRecording.data?.type);
+							try {
+								await commands.openDrawingOverlay();
+							} catch (error) {
+								console.error("Failed to open drawing overlay:", error);
+							}
+						}}
+						title={`Draw on screen (Mode: ${currentRecording.data?.type || 'loading'})`}
+					>
+						<IconLucideEdit />
+					</ActionButton>
+
 					<ActionButton
 						disabled={restartRecording.isPending}
 						onClick={() => restartRecording.mutate()}
@@ -250,13 +275,13 @@ export default function () {
 					</ActionButton>
 				</div>
 			</div>
-			<div
-				class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
-				data-tauri-drag-region
-			>
-				<IconCapMoreVertical class="pointer-events-none text-gray-10" />
+				<div
+					class="non-styled-move cursor-move flex items-center justify-center p-[0.25rem] border-l border-gray-5 hover:cursor-move"
+					data-tauri-drag-region
+				>
+					<IconCapMoreVertical class="pointer-events-none text-gray-10" />
+				</div>
 			</div>
-		</div>
 	);
 }
 

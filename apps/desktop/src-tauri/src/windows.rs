@@ -44,6 +44,7 @@ pub enum CapWindowId {
     Upgrade,
     ModeSelect,
     Debug,
+    DrawingOverlay,
 }
 
 impl FromStr for CapWindowId {
@@ -61,6 +62,7 @@ impl FromStr for CapWindowId {
             "upgrade" => Self::Upgrade,
             "mode-select" => Self::ModeSelect,
             "debug" => Self::Debug,
+            "drawing-overlay" => Self::DrawingOverlay,
             s if s.starts_with("editor-") => Self::Editor {
                 id: s
                     .replace("editor-", "")
@@ -104,6 +106,7 @@ impl std::fmt::Display for CapWindowId {
             Self::ModeSelect => write!(f, "mode-select"),
             Self::Editor { id } => write!(f, "editor-{id}"),
             Self::Debug => write!(f, "debug"),
+            Self::DrawingOverlay => write!(f, "drawing-overlay"),
         }
     }
 }
@@ -154,7 +157,8 @@ impl CapWindowId {
             | Self::WindowCaptureOccluder { .. }
             | Self::CaptureArea
             | Self::RecordingsOverlay
-            | Self::TargetSelectOverlay { .. } => None,
+            | Self::TargetSelectOverlay { .. }
+            | Self::DrawingOverlay => None,
             _ => Some(None),
         }
     }
@@ -187,6 +191,7 @@ pub enum ShowCapWindow {
     InProgressRecording { countdown: Option<u32> },
     Upgrade,
     ModeSelect,
+    DrawingOverlay,
 }
 
 impl ShowCapWindow {
@@ -473,7 +478,7 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let mut width = 180.0 + 32.0;
+                let mut width = 300.0;
 
                 let height = 40.0;
 
@@ -558,6 +563,34 @@ impl ShowCapWindow {
 
                 window
             }
+            Self::DrawingOverlay => {
+                let monitor = app.primary_monitor()?.unwrap();
+                let window = self
+                    .window_builder(app, "/drawing-overlay")
+                    .maximized(false)
+                    .resizable(false)
+                    .fullscreen(false)
+                    .shadow(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .transparent(true)
+                    .skip_taskbar(true)
+                    .decorations(false)
+                    .accept_first_mouse(true)
+                    .inner_size(
+                        (monitor.size().width as f64) / monitor.scale_factor(),
+                        (monitor.size().height as f64) / monitor.scale_factor(),
+                    )
+                    .position(0.0, 0.0)
+                    .build()?;
+
+                #[cfg(target_os = "macos")]
+                {
+                    crate::platform::set_window_level(window.as_ref().window(), 1100);
+                }
+
+                window
+            }
         };
 
         // removing this for now as it causes windows to just stay hidden sometimes -_-
@@ -634,6 +667,7 @@ impl ShowCapWindow {
             ShowCapWindow::InProgressRecording { .. } => CapWindowId::InProgressRecording,
             ShowCapWindow::Upgrade => CapWindowId::Upgrade,
             ShowCapWindow::ModeSelect => CapWindowId::ModeSelect,
+            ShowCapWindow::DrawingOverlay => CapWindowId::DrawingOverlay,
         }
     }
 }
