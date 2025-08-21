@@ -453,6 +453,7 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
+                #[cfg(target_os = "macos")]
                 if let Some(bounds) = display.raw_handle().logical_bounds() {
                     window_builder = window_builder
                         .inner_size(bounds.size().width(), bounds.size().height())

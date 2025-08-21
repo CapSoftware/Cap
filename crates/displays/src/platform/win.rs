@@ -1,4 +1,4 @@
-use std::{mem, str::FromStr};
+use std::{ffi::OsString, mem, os::windows::ffi::OsStringExt, path::PathBuf, str::FromStr};
 use tracing::error;
 use windows::{
     Graphics::Capture::GraphicsCaptureItem,
@@ -13,7 +13,7 @@ use windows::{
         },
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
         Graphics::{
-            Dwm::{DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
+            Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
             Gdi::{
                 BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
                 CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS,
@@ -690,6 +690,10 @@ impl WindowImpl {
         context.list
     }
 
+    pub fn inner(&self) -> HWND {
+        self.0
+    }
+
     pub fn get_topmost_at_cursor() -> Option<Self> {
         let cursor = get_cursor_position()?;
         let point = POINT {
@@ -1319,6 +1323,42 @@ impl WindowImpl {
         )
         .ok()
     }
+
+    pub fn is_on_screen(&self) -> bool {
+        use ::windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+        if !unsafe { IsWindowVisible(self.0) }.as_bool() {
+            return false;
+        }
+
+        let mut pvattribute_cloaked = 0u32;
+        unsafe {
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_CLOAKED,
+                &mut pvattribute_cloaked as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        }
+        .ok();
+
+        if pvattribute_cloaked != 0 {
+            return false;
+        }
+
+        let mut process_id = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut process_id)) };
+
+        let owner_process_path = match unsafe { pid_to_exe_path(process_id) } {
+            Ok(path) => path,
+            Err(_) => return false,
+        };
+
+        if owner_process_path.starts_with("C:\\Windows\\SystemApps") {
+            return false;
+        }
+
+        true
+    }
 }
 
 fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool {
@@ -1449,4 +1489,27 @@ impl FromStr for WindowIdImpl {
             .map(Self)
             .map_err(|_| "Invalid window ID".to_string())
     }
+}
+
+unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
+    if handle.is_invalid() {
+        tracing::error!("Invalid PID {}", pid);
+    }
+    let mut lpexename = [0u16; 1024];
+    let mut lpdwsize = lpexename.len() as u32;
+
+    let query = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT::default(),
+            windows::core::PWSTR(lpexename.as_mut_ptr()),
+            &mut lpdwsize,
+        )
+    };
+    unsafe { CloseHandle(handle) }.ok();
+    query?;
+
+    let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
+    Ok(PathBuf::from(os_str))
 }

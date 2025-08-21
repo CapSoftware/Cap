@@ -92,18 +92,19 @@ impl ScreenCaptureTarget {
 
                 #[cfg(windows)]
                 {
-                    return Some(PhysicalBounds::new(
+                    let display = self.display()?;
+                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
                         PhysicalPosition::new(0.0, 0.0),
-                        self.physical_size()?,
-                    ));
+                        display.raw_handle().physical_size()?,
+                    )));
                 }
             }
             Self::Window { id } => {
                 let window = Window::from_id(id)?;
-                let display = self.display()?;
 
                 #[cfg(target_os = "macos")]
                 {
+                    let display = self.display()?;
                     let display_position = display.raw_handle().logical_position();
                     let window_bounds = window.raw_handle().logical_bounds()?;
 
@@ -118,10 +119,10 @@ impl ScreenCaptureTarget {
 
                 #[cfg(windows)]
                 {
-                    let display_bounds = self.display()?.physical_bounds()?;
-                    let window_bounds = window.physical_bounds()?;
+                    let display_bounds = self.display()?.raw_handle().physical_bounds()?;
+                    let window_bounds = window.raw_handle().physical_bounds()?;
 
-                    return Some(PhysicalBounds::new(
+                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
                         PhysicalPosition::new(
                             window_bounds.position().x() - display_bounds.position().x(),
                             window_bounds.position().y() - display_bounds.position().y(),
@@ -130,7 +131,7 @@ impl ScreenCaptureTarget {
                             window_bounds.size().width(),
                             window_bounds.size().height(),
                         ),
-                    ));
+                    )));
                 }
             }
             Self::Area { bounds, .. } => {
@@ -142,12 +143,12 @@ impl ScreenCaptureTarget {
                 #[cfg(windows)]
                 {
                     let display = self.display()?;
-                    let display_bounds = display.physical_bounds()?;
+                    let display_bounds = display.raw_handle().physical_bounds()?;
                     let display_logical_size = display.logical_size()?;
 
                     let scale = display_bounds.size().width() / display_logical_size.width();
 
-                    return Some(PhysicalBounds::new(
+                    return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
                         PhysicalPosition::new(
                             bounds.position().x() * scale,
                             bounds.position().y() * scale,
@@ -156,7 +157,7 @@ impl ScreenCaptureTarget {
                             bounds.size().width() * scale,
                             bounds.size().height() * scale,
                         ),
-                    ));
+                    )));
                 }
             }
         }
@@ -296,7 +297,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 #[cfg(windows)]
                 {
                     let raw_display_position = display.raw_handle().physical_position().unwrap();
-                    let raw_window_bounds = window.physical_bounds().unwrap();
+                    let raw_window_bounds = window.raw_handle().physical_bounds().unwrap();
 
                     Some(PhysicalBounds::new(
                         PhysicalPosition::new(
@@ -418,6 +419,13 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
                 if v.raw_handle().level() != Some(0)
                     || v.owner_name().filter(|v| v == "Window Server").is_some()
                 {
+                    return None;
+                }
+            }
+
+            #[cfg(windows)]
+            {
+                if !v.raw_handle().is_on_screen() {
                     return None;
                 }
             }

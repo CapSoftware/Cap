@@ -171,7 +171,8 @@ impl Window {
         #[cfg(windows)]
         {
             let display_physical_bounds = display.raw_handle().physical_bounds()?;
-            let window_physical_bounds: PhysicalBounds = self.physical_bounds().raw_handle()?;
+            let display_logical_size = display.logical_size()?;
+            let window_physical_bounds: PhysicalBounds = self.raw_handle().physical_bounds()?;
 
             let scale = display_logical_size.width() / display_physical_bounds.size().width;
 
