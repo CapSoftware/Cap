@@ -1,10 +1,17 @@
 use std::time::Duration;
 
-use cap_displays::{Display, bounds::{LogicalBounds, LogicalSize, LogicalPosition}};
+use cap_displays::Window;
 use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
 
 #[tokio::main]
 pub async fn main() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+    }
+
     tracing_subscriber::fmt::init();
 
     let _ = std::fs::remove_dir_all("/tmp/bruh");
@@ -18,18 +25,18 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Area {
-                screen: Display::primary().id(),
-                bounds: LogicalBounds::new(
-                    LogicalPosition::new(0.0, 0.0),
-                    LogicalSize::new(450.0, 400.0)
-                )
+            capture_target: ScreenCaptureTarget::Window {
+                id: Window::list()
+                    .into_iter()
+                    .find(|w| w.name().unwrap_or_default().contains("Firefox"))
+                    .unwrap()
+                    .id(),
             },
             capture_system_audio: true,
             mic_feed: &None,
         },
         None,
-        false,
+        true,
     )
     .await
     .unwrap();

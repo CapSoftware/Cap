@@ -235,6 +235,8 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
+        use cap_media_encoders::{MP4File, H264Encoder};
+
         let screen_config = source.0.info();
         let mut screen_encoder = MP4File::init(
             "screen",
@@ -280,6 +282,8 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
+        use cap_media_encoders::{MP4File, H264Encoder, AACEncoder, AudioEncoder};
+
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
 

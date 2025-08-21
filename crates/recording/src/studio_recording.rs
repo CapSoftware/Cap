@@ -409,8 +409,6 @@ async fn run_actor_iteration(
                     )
                     .await;
 
-                    println!("Bruh");
-
                     match shutdown(pipeline, &mut actor, segment_start_time).await {
                         Ok((cursors, _)) => stop_recording(actor, cursors).await,
                         Err(e) => Err(e),
@@ -688,7 +686,7 @@ async fn create_segment_pipeline(
         .display()
         .ok_or(CreateSegmentPipelineError::NoDisplay)?;
     let crop_bounds = capture_target
-        .logical_bounds()
+        .display_relative_physical_bounds()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
     let (screen_source, screen_rx) = create_screen_capture(

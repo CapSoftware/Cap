@@ -475,7 +475,7 @@ async fn get_current_recording(
                         id: id.clone(),
                         bounds: cap_displays::Window::from_id(id)
                             .ok_or(())?
-                            .logical_bounds()
+                            .display_relative_logical_bounds()
                             .ok_or(())?,
                     },
                     ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {

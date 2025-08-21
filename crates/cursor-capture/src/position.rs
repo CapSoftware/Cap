@@ -1,11 +1,12 @@
 use cap_displays::{
     Display,
-    bounds::{LogicalPosition, LogicalSize},
+    bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize},
 };
 use device_query::{DeviceQuery, DeviceState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RawCursorPosition {
+    // inner: PhysicalPosition,
     pub x: i32,
     pub y: i32,
 }
@@ -21,7 +22,7 @@ impl RawCursorPosition {
         }
     }
 
-    pub fn relative_to_display(&self, display: Display) -> RelativeCursorPosition {
+    pub fn relative_to_display(&self, display: Display) -> Option<RelativeCursorPosition> {
         RelativeCursorPosition::from_raw(*self, display)
     }
 }
@@ -35,14 +36,14 @@ pub struct RelativeCursorPosition {
 }
 
 impl RelativeCursorPosition {
-    pub fn from_raw(raw: RawCursorPosition, display: Display) -> Self {
-        let logical_bounds = display.logical_bounds();
+    pub fn from_raw(raw: RawCursorPosition, display: Display) -> Option<Self> {
+        let physical_bounds = display.physical_bounds()?;
 
-        Self {
-            x: raw.x - logical_bounds.position().x() as i32,
-            y: raw.y - logical_bounds.position().y() as i32,
+        Some(Self {
+            x: raw.x - physical_bounds.position().x() as i32,
+            y: raw.y - physical_bounds.position().y() as i32,
             display,
-        }
+        })
     }
 
     pub fn x(&self) -> i32 {
@@ -57,18 +58,17 @@ impl RelativeCursorPosition {
         &self.display
     }
 
-    pub fn normalize(&self) -> NormalizedCursorPosition {
-        let bounds = self.display().logical_bounds();
+    pub fn normalize(&self) -> Option<NormalizedCursorPosition> {
+        let bounds = self.display().physical_bounds()?;
         let size = bounds.size();
-        let position = bounds.position();
 
-        NormalizedCursorPosition {
+        Some(NormalizedCursorPosition {
             x: self.x as f64 / size.width(),
             y: self.y as f64 / size.height(),
-            crop_position: LogicalPosition::new(position.x(), position.y()),
-            crop_size: LogicalSize::new(size.width(), size.height()),
+            crop_position: bounds.position(),
+            crop_size: size,
             display: self.display,
-        }
+        })
     }
 }
 
@@ -84,8 +84,8 @@ impl std::fmt::Debug for RelativeCursorPosition {
 pub struct NormalizedCursorPosition {
     pub(crate) x: f64,
     pub(crate) y: f64,
-    pub(crate) crop_position: LogicalPosition,
-    pub(crate) crop_size: LogicalSize,
+    pub(crate) crop_position: PhysicalPosition,
+    pub(crate) crop_size: PhysicalSize,
     pub(crate) display: Display,
 }
 
@@ -102,15 +102,15 @@ impl NormalizedCursorPosition {
         &self.display
     }
 
-    pub fn crop_position(&self) -> LogicalPosition {
+    pub fn crop_position(&self) -> PhysicalPosition {
         self.crop_position
     }
 
-    pub fn crop_size(&self) -> LogicalSize {
+    pub fn crop_size(&self) -> PhysicalSize {
         self.crop_size
     }
 
-    pub fn with_crop(&self, position: LogicalPosition, size: LogicalSize) -> Self {
+    pub fn with_crop(&self, position: PhysicalPosition, size: PhysicalSize) -> Self {
         let raw_px = (
             self.x * self.crop_size.width() + self.crop_position.x(),
             self.y * self.crop_size.height() + self.crop_position.y(),

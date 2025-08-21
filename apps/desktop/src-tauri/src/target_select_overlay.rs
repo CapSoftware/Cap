@@ -10,7 +10,9 @@ use base64::prelude::*;
 use crate::windows::{CapWindowId, ShowCapWindow};
 use cap_displays::{
     DisplayId, WindowId,
-    bounds::{LogicalBounds, PhysicalSize},
+    bounds::{
+        LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+    },
 };
 use serde::Serialize;
 use specta::Type;
@@ -70,17 +72,19 @@ pub async fn open_target_select_overlays(
                     window: window.and_then(|w| {
                         Some(WindowUnderCursor {
                             id: w.id(),
-                            bounds: w.logical_bounds()?,
+                            bounds: w.display_relative_logical_bounds()?,
                             app_name: w.owner_name()?,
                             icon: w.app_icon().map(|bytes| {
                                 format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))
                             }),
                         })
                     }),
-                    screen: display.map(|d| ScreenUnderCursor {
-                        name: d.name().unwrap_or_default(),
-                        physical_size: d.physical_size(),
-                        refresh_rate: d.refresh_rate().to_string(),
+                    screen: display.and_then(|d| {
+                        Some(ScreenUnderCursor {
+                            name: d.name().unwrap_or_default(),
+                            physical_size: d.physical_size()?,
+                            refresh_rate: d.refresh_rate().to_string(),
+                        })
                     }),
                 }
                 .emit(&app);

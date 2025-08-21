@@ -19,15 +19,17 @@ pub async fn main() {
             },
         );
 
-        let capture_handle = capturer.start(|frame| {
-            use scap_ffmpeg::AsFFmpeg;
+        let capture_handle = capturer
+            .start(|frame| {
+                use scap_ffmpeg::AsFFmpeg;
 
-            let ff_frame = frame.as_ffmpeg()?;
+                let ff_frame = frame.as_ffmpeg()?;
 
-            dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
+                dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
 
-            Ok(())
-        });
+                Ok(())
+            })
+            .unwrap();
 
         std::thread::sleep(Duration::from_secs(3));
 

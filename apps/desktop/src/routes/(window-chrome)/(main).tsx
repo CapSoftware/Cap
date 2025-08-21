@@ -36,7 +36,7 @@ import {
 } from "~/utils/queries";
 import {
 	type CameraInfo,
-	CaptureDisplay,
+	type CaptureDisplay,
 	type CaptureWindow,
 	commands,
 	events,

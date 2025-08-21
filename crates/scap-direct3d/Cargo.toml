@@ -26,3 +26,6 @@ scap-ffmpeg = { path = "../scap-ffmpeg" }
 
 [lints]
 workspace = true
+
+[dependencies]
+thiserror.workspace = true

@@ -1,5 +1,5 @@
 use cap_cursor_info::CursorShape;
-use cap_displays::bounds::LogicalBounds;
+use cap_displays::bounds::{LogicalBounds, PhysicalBounds};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
@@ -36,7 +36,7 @@ impl CursorActor {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    crop_bounds: LogicalBounds,
+    crop_bounds: PhysicalBounds,
     display: cap_displays::Display,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
@@ -131,24 +131,18 @@ pub fn spawn_cursor_recorder(
 
             let position = cap_cursor_capture::RawCursorPosition::get();
 
-            dbg!(&position);
-
             let position = (position != last_position).then(|| {
                 last_position = position;
 
-                dbg!(&crop_bounds);
-
                 let cropped_norm_pos = position
-                    .relative_to_display(display)
-                    .normalize()
+                    .relative_to_display(display)?
+                    .normalize()?
                     .with_crop(crop_bounds.position(), crop_bounds.size());
 
-                dbg!(&cropped_norm_pos);
-
-                (cropped_norm_pos.x(), cropped_norm_pos.y())
+                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
             });
 
-            if let Some((x, y)) = position {
+            if let Some((x, y)) = position.flatten() {
                 let mouse_event = CursorMoveEvent {
                     active_modifiers: vec![],
                     cursor_id: cursor_id.clone(),

@@ -255,8 +255,8 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let size = display.raw_handle().logical_size();
-                let position = display.raw_handle().logical_position();
+                let size = display.physical_size().unwrap();
+                let position = display.physical_position().unwrap();
 
                 let mut window_builder = self
                     .window_builder(
@@ -398,7 +398,8 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let bounds = display.logical_bounds();
+                let pos = display.physical_position().unwrap();
+                let bounds = display.physical_size().unwrap();
 
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
@@ -410,8 +411,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(bounds.size().width(), bounds.size().height())
-                    .position(bounds.position().x(), bounds.position().y())
+                    .inner_size(bounds.width(), bounds.height())
+                    .position(pos.x(), pos.y())
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -442,11 +443,11 @@ impl ShowCapWindow {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let bounds = display.logical_bounds();
-
-                window_builder = window_builder
-                    .inner_size(bounds.size().width(), bounds.size().height())
-                    .position(bounds.position().x(), bounds.position().y());
+                if let Some(bounds) = display.physical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
 
                 let window = window_builder.build()?;
 
@@ -715,7 +716,9 @@ trait MonitorExt {
 
 impl MonitorExt for Display {
     fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
-        let bounds = self.logical_bounds();
+        let Some(bounds) = self.physical_bounds() else {
+            return false;
+        };
 
         let left = bounds.position().x() as i32;
         let right = left + bounds.size().width() as i32;

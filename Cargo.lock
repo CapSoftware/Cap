@@ -1073,6 +1073,7 @@ dependencies = [
  "objc",
  "serde",
  "specta",
+ "tracing",
  "windows 0.60.0",
  "windows-sys 0.59.0",
 ]
@@ -7003,6 +7004,7 @@ version = "0.1.0"
 dependencies = [
  "cap-displays",
  "scap-ffmpeg",
+ "thiserror 1.0.69",
  "windows 0.60.0",
 ]
 

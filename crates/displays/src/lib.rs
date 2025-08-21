@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::str::FromStr;
 
+use crate::bounds::{LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition};
+
 #[derive(Clone, Copy)]
 pub struct Display(DisplayImpl);
 
@@ -39,21 +41,25 @@ impl Display {
         self.0.name()
     }
 
-    pub fn physical_size(&self) -> PhysicalSize {
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
         self.0.physical_size()
+    }
+
+    pub fn physical_position(&self) -> Option<PhysicalPosition> {
+        self.0.physical_position()
+    }
+
+    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
+        self.0.physical_bounds()
+    }
+
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        self.0.logical_size()
     }
 
     pub fn refresh_rate(&self) -> f64 {
         self.0.refresh_rate()
     }
-
-    pub fn logical_bounds(&self) -> LogicalBounds {
-        self.0.logical_bounds()
-    }
-
-    // pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
-    //     self.0.physical_bounds()
-    // }
 }
 
 #[derive(Serialize, Deserialize, Type, Clone, PartialEq, Debug)]
@@ -125,17 +131,21 @@ impl Window {
         Self::list().into_iter().find(|d| &d.id() == id)
     }
 
-    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
-        self.0.logical_bounds()
-    }
-
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         self.0.physical_size()
     }
 
-    // pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
-    //     self.0.physical_bounds()
-    // }
+    pub fn physical_position(&self) -> Option<PhysicalSize> {
+        self.0.physical_size()
+    }
+
+    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
+        self.0.physical_bounds()
+    }
+
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        self.0.logical_size()
+    }
 
     pub fn owner_name(&self) -> Option<String> {
         self.0.owner_name()
@@ -155,6 +165,34 @@ impl Window {
 
     pub fn name(&self) -> Option<String> {
         self.0.name()
+    }
+
+    pub fn display_relative_logical_bounds(&self) -> Option<LogicalBounds> {
+        let display = self.display()?;
+        let display_physical_bounds = display.physical_bounds()?;
+        let display_logical_size = display.logical_size()?;
+        let window_physical_bounds = self.physical_bounds()?;
+
+        let scale = display_logical_size.width() / display_physical_bounds.size().width;
+
+        let display_relative_physical_bounds = PhysicalBounds::new(
+            PhysicalPosition::new(
+                window_physical_bounds.position().x - display_physical_bounds.position().x,
+                window_physical_bounds.position().y - display_physical_bounds.position().y,
+            ),
+            window_physical_bounds.size(),
+        );
+
+        Some(LogicalBounds::new(
+            LogicalPosition::new(
+                display_relative_physical_bounds.position().x() * scale,
+                display_relative_physical_bounds.position().y() * scale,
+            ),
+            LogicalSize::new(
+                display_relative_physical_bounds.size().width() * scale,
+                display_relative_physical_bounds.size().height() * scale,
+            ),
+        ))
     }
 }
 

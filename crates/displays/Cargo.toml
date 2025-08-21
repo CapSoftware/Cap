@@ -10,6 +10,7 @@ workspace = true
 serde = { version = "1.0.219", features = ["derive"] }
 specta.workspace = true
 image = "0.24"
+tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = ["sc"] }
@@ -29,6 +30,7 @@ windows = { workspace = true, features = [
 	"Win32_UI_WindowsAndMessaging",
 	"Win32_UI_Shell",
 	"Win32_UI_HiDpi",
+	"Win32_Graphics_Dwm",
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 	"Win32_Devices_Display",

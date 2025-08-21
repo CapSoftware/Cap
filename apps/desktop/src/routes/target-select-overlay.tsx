@@ -21,9 +21,9 @@ import { createStore, reconcile } from "solid-js/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
-	DisplayId,
+	type DisplayId,
 	events,
-	LogicalBounds,
+	type LogicalBounds,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";

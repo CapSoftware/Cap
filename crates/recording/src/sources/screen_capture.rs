@@ -1,6 +1,8 @@
 use cap_displays::{
     Display, DisplayId, Window, WindowId,
-    bounds::{LogicalBounds, PhysicalSize},
+    bounds::{
+        LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+    },
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
@@ -8,7 +10,7 @@ use flume::Sender;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::pipeline::{control::Control, task::PipelineSourceTask};
 
@@ -66,20 +68,62 @@ impl ScreenCaptureTarget {
 
     pub fn logical_bounds(&self) -> Option<LogicalBounds> {
         match self {
-            Self::Screen { id } => Display::from_id(id).map(|d| d.logical_bounds()),
-            Self::Window { id } => Window::from_id(id).and_then(|w| w.logical_bounds()),
+            Self::Screen { id } => todo!(), //  Display::from_id(id).map(|d| d.logical_bounds()),
+            Self::Window { id } => Some(LogicalBounds::new(
+                LogicalPosition::new(0.0, 0.0),
+                Window::from_id(id)?.raw_handle().logical_size()?,
+            )),
             Self::Area { bounds, .. } => Some(*bounds),
+        }
+    }
+
+    pub fn display_relative_physical_bounds(&self) -> Option<PhysicalBounds> {
+        match self {
+            Self::Screen { .. } => Some(PhysicalBounds::new(
+                PhysicalPosition::new(0.0, 0.0),
+                self.physical_size()?,
+            )),
+            Self::Window { id } => {
+                let window = Window::from_id(id)?;
+                let display_bounds = self.display()?.physical_bounds()?;
+                let window_bounds = window.physical_bounds()?;
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        window_bounds.position().x() - display_bounds.position().x(),
+                        window_bounds.position().y() - display_bounds.position().y(),
+                    ),
+                    PhysicalSize::new(window_bounds.size().width(), window_bounds.size().height()),
+                ))
+            }
+            Self::Area { bounds, .. } => {
+                let display = self.display()?;
+                let display_bounds = display.physical_bounds()?;
+                let display_logical_size = display.logical_size()?;
+
+                let scale = display_bounds.size().width() / display_logical_size.width();
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        bounds.position().x() * scale,
+                        bounds.position().y() * scale,
+                    ),
+                    PhysicalSize::new(
+                        bounds.size().width() * scale,
+                        bounds.size().height() * scale,
+                    ),
+                ))
+            }
         }
     }
 
     pub fn physical_size(&self) -> Option<PhysicalSize> {
         match self {
-            Self::Screen { id } => Display::from_id(id).map(|d| d.physical_size()),
+            Self::Screen { id } => Display::from_id(id).and_then(|d| d.physical_size()),
             Self::Window { id } => Window::from_id(id).and_then(|w| w.physical_size()),
             Self::Area { bounds, .. } => {
                 let display = self.display()?;
-                let scale =
-                    display.physical_size().width() / display.logical_bounds().size().width();
+                let scale = display.physical_size()?.width() / display.logical_size()?.width();
                 let size = bounds.size();
 
                 Some(PhysicalSize::new(
@@ -97,30 +141,10 @@ impl ScreenCaptureTarget {
             Self::Area { screen, .. } => Display::from_id(screen).and_then(|d| d.name()),
         }
     }
-
-    // pub fn get_title(&self) -> Option<String> {
-    //     let target = self.get_target();
-
-    //     match target {
-    //         None => None,
-    //         Some(scap::Target::Window(window)) => Some(window.title.clone()),
-    //         Some(scap::Target::Display(screen)) => {
-    //             let names = crate::platform::display_names();
-
-    //             Some(
-    //                 names
-    //                     .get(&screen.id)
-    //                     .cloned()
-    //                     .unwrap_or_else(|| screen.title.clone()),
-    //             )
-    //         }
-    //     }
-    // }
 }
 
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
-    display: Display,
     video_info: VideoInfo,
     tokio_handle: tokio::runtime::Handle,
     video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
@@ -132,7 +156,6 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenCaptureSource")
-            .field("target", &self.config.target)
             // .field("bounds", &self.bounds)
             // .field("output_resolution", &self.output_resolution)
             .field("fps", &self.config.fps)
@@ -160,7 +183,6 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            display: self.display.clone(),
             video_info: self.video_info,
             video_tx: self.video_tx.clone(),
             audio_tx: self.audio_tx.clone(),
@@ -173,7 +195,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
 
 #[derive(Clone)]
 struct Config {
-    target: ScreenCaptureTarget,
+    display: DisplayId,
+    crop_bounds: Option<PhysicalBounds>,
     fps: u32,
     show_cursor: bool,
 }
@@ -203,17 +226,58 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
         let fps = max_fps.min(display.refresh_rate() as u32);
 
-        let output_size = target
-            .physical_size()
-            .ok_or(ScreenCaptureInitError::PhysicalSize)?;
+        let crop_bounds = match target {
+            ScreenCaptureTarget::Screen { .. } => None,
+            ScreenCaptureTarget::Window { id } => {
+                let window = Window::from_id(&id).unwrap();
+
+                let raw_display_position = display.physical_position().unwrap();
+                let raw_window_bounds = window.physical_bounds().unwrap();
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        raw_window_bounds.position().x() - raw_display_position.x(),
+                        raw_window_bounds.position().y() - raw_display_position.y(),
+                    ),
+                    raw_window_bounds.size(),
+                ))
+            }
+            ScreenCaptureTarget::Area {
+                bounds: relative_bounds,
+                ..
+            } => {
+                let raw_display_size = display.physical_size().unwrap();
+                let logical_display_size = display.logical_size().unwrap();
+
+                Some(PhysicalBounds::new(
+                    PhysicalPosition::new(
+                        (relative_bounds.position().x() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.position().y() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                    PhysicalSize::new(
+                        (relative_bounds.size().width() / logical_display_size.width())
+                            * raw_display_size.width(),
+                        (relative_bounds.size().height() / logical_display_size.height())
+                            * raw_display_size.height(),
+                    ),
+                ))
+            }
+        };
+
+        let output_size = crop_bounds
+            .map(|b| b.size())
+            .or_else(|| display.physical_size())
+            .unwrap();
 
         Ok(Self {
             config: Config {
-                target: target.clone(),
+                display: display.id(),
+                crop_bounds,
                 fps,
                 show_cursor,
             },
-            display,
             video_info: VideoInfo::from_raw_ffmpeg(
                 TCaptureFormat::pixel_format(),
                 output_size.width() as u32,
@@ -240,15 +304,15 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
     cap_displays::Display::list()
         .into_iter()
-        .map(|display| {
-            (
+        .filter_map(|display| {
+            Some((
                 CaptureDisplay {
                     id: display.id(),
-                    name: display.name().unwrap(),
+                    name: display.name()?,
                     refresh_rate: display.raw_handle().refresh_rate() as u32,
                 },
                 display,
-            )
+            ))
         })
         .collect()
 }
@@ -257,6 +321,12 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
     cap_displays::Window::list()
         .into_iter()
         .flat_map(|v| {
+            let name = v.name()?;
+
+            if name.is_empty() {
+                return None;
+            }
+
             #[cfg(target_os = "macos")]
             {
                 if v.raw_handle().level() != Some(0)
@@ -269,9 +339,9 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
             Some((
                 CaptureWindow {
                     id: v.id(),
+                    name,
                     owner_name: v.owner_name()?,
-                    bounds: v.logical_bounds()?,
-                    name: v.raw_handle().name()?,
+                    bounds: v.display_relative_logical_bounds()?,
                     refresh_rate: v.display()?.raw_handle().refresh_rate() as u32,
                 },
                 v,
@@ -295,7 +365,7 @@ mod windows {
     use ::windows::{
         Graphics::Capture::GraphicsCaptureItem, Win32::Graphics::Direct3D11::D3D11_BOX,
     };
-    use cap_displays::bounds::{PhysicalBounds, PhysicalPosition};
+    use cpal::traits::{DeviceTrait, HostTrait};
     use scap_ffmpeg::*;
 
     #[derive(Debug)]
@@ -319,7 +389,7 @@ mod windows {
 
             let mut info = AudioInfo::from_stream_config(&supported_config);
 
-            info.sample_format = Sample::F32(ffmpeg::format::sample::Type::Packed);
+            info.sample_format = ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Packed);
 
             info
         }
@@ -520,53 +590,25 @@ mod windows {
                 let mut settings = scap_direct3d::Settings {
                     is_border_required: Some(false),
                     pixel_format: AVFrameCapture::PIXEL_FORMAT,
-                    ..Default::default()
-                };
+                    crop: config.crop_bounds.map(|b| {
+                        let position = b.position();
+                        let size = b.size();
 
-                let capture_item = match &config.target {
-                    ScreenCaptureTarget::Screen { id } => {
-                        let display = Display::from_id(&id).unwrap();
-                        let display = display.raw_handle();
-
-                        display.try_as_capture_item().unwrap()
-                    }
-                    ScreenCaptureTarget::Window { id } => {
-                        let window = Window::from_id(&id).unwrap();
-                        let display = window.display().unwrap();
-                        let display = display.raw_handle();
-
-                        display.try_as_capture_item().unwrap()
-                    }
-                    ScreenCaptureTarget::Area { screen, bounds } => {
-                        let display = Display::from_id(&screen).unwrap();
-                        let display = display.raw_handle();
-
-                        // this will always be >= 1
-                        let scale =
-                            display.physical_size().width() / display.logical_size().width();
-
-                        let size = PhysicalSize::new(
-                            ((bounds.size().width() * scale) / 2.0).round() * 2.0,
-                            ((bounds.size().height() * scale) / 2.0).round() * 2.0,
-                        );
-
-                        let position = PhysicalPosition::new(
-                            bounds.position().x() * scale,
-                            bounds.position().y() * scale,
-                        );
-
-                        settings.crop = Some(D3D11_BOX {
+                        D3D11_BOX {
                             left: position.x() as u32,
                             top: position.y() as u32,
                             right: (position.x() + size.width()) as u32,
                             bottom: (position.y() + size.height()) as u32,
                             front: 0,
                             back: 1,
-                        });
-
-                        display.try_as_capture_item().unwrap()
-                    }
+                        }
+                    }),
+                    ..Default::default()
                 };
+
+                let display = Display::from_id(&config.display).unwrap();
+
+                let capture_item = display.raw_handle().try_as_capture_item().unwrap();
 
                 settings.is_cursor_capture_enabled = Some(config.show_cursor);
 
@@ -624,6 +666,7 @@ mod windows {
     #[derive(Debug)]
     pub enum StartCapturingError {
         AlreadyCapturing,
+        Inner(scap_direct3d::StartCapturerError),
     }
 
     pub struct NewFrame {
@@ -637,33 +680,35 @@ mod windows {
         async fn handle(
             &mut self,
             msg: StartCapturing,
-            ctx: &mut Context<Self, Self::Reply>,
+            _: &mut Context<Self, Self::Reply>,
         ) -> Self::Reply {
-            println!("bruh");
-
             if self.capture_handle.is_some() {
                 return Err(StartCapturingError::AlreadyCapturing);
             }
 
             let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
 
-            let capture_handle = capturer.start(
-                move |frame| {
-                    let display_time = SystemTime::now();
-                    let ff_frame = frame.as_ffmpeg().unwrap();
+            let capture_handle = capturer
+                .start(
+                    move |frame| {
+                        let display_time = SystemTime::now();
+                        let ff_frame = frame.as_ffmpeg().unwrap();
 
-                    let _ = msg
-                        .frame_handler
-                        .tell(NewFrame {
-                            ff_frame,
-                            display_time,
-                        })
-                        .try_send();
+                        // dbg!(ff_frame.width(), ff_frame.height());
 
-                    Ok(())
-                },
-                || Ok(()),
-            );
+                        let _ = msg
+                            .frame_handler
+                            .tell(NewFrame {
+                                ff_frame,
+                                display_time,
+                            })
+                            .try_send();
+
+                        Ok(())
+                    },
+                    || Ok(()),
+                )
+                .map_err(StartCapturingError::Inner)?;
 
             self.capture_handle = Some(capture_handle);
 
@@ -709,7 +754,7 @@ mod windows {
             pub fn new(
                 audio_tx: Sender<(ffmpeg::frame::Audio, f64)>,
                 start_time: SystemTime,
-            ) -> Result<Self, &'static str> {
+            ) -> Result<Self, scap_cpal::CapturerError> {
                 let mut i = 0;
                 let capturer = scap_cpal::create_capturer(
                     move |data, _: &cpal::InputCallbackInfo, config| {
