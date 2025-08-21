@@ -61,6 +61,7 @@ export interface CapCardProps extends PropsWithChildren {
 		hasPassword?: boolean;
 	};
 	analytics: number;
+	isLoadingAnalytics?: boolean;
 	onDelete?: () => Promise<any>;
 	userId?: string;
 	sharedCapCard?: boolean;
@@ -81,6 +82,7 @@ export const CapCard = ({
 	children,
 	onDelete,
 	userId,
+	isLoadingAnalytics,
 	sharedCapCard = false,
 	hideSharedStatus = false,
 	customDomain,
@@ -461,6 +463,7 @@ export const CapCard = ({
 					<CapCardAnalytics
 						capId={cap.id}
 						displayCount={analytics}
+						isLoadingAnalytics={isLoadingAnalytics}
 						totalComments={cap.totalComments}
 						totalReactions={cap.totalReactions}
 					/>

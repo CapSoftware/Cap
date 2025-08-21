@@ -13,7 +13,7 @@ interface VideoThumbnailProps {
 	imageClass?: string;
 	objectFit?: string;
 	containerClass?: string;
-	videoDuration?: string;
+	videoDuration?: string | number;
 }
 
 const formatDuration = (duration: string) => {
