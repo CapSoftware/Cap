@@ -61,7 +61,7 @@ export interface CapCardProps extends PropsWithChildren {
 		hasPassword?: boolean;
 	};
 	analytics: number;
-	isLoadingAnalytics?: boolean;
+	isLoadingAnalytics: boolean;
 	onDelete?: () => Promise<any>;
 	userId?: string;
 	sharedCapCard?: boolean;
