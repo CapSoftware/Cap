@@ -17,7 +17,13 @@ import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCar
 import { ClientCapCard } from "./index";
 
 interface FolderVideosSectionProps {
-	initialVideos: VideoData;
+	initialVideos: VideoData & {
+		sharedOrganizations: {
+			id: string;
+			name: string;
+			iconUrl: string;
+		}[];
+	};
 	dubApiKeyEnabled: boolean;
 	cardType?: "shared" | "default";
 	userId?: string;
@@ -145,8 +151,8 @@ export default function FolderVideosSection({
 			});
 			return analyticsData;
 		},
-		staleTime: 30000, // 30 seconds
 		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 	});
 
 	const analytics = analyticsData || {};

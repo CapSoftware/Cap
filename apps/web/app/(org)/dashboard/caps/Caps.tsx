@@ -81,8 +81,10 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
+	const videoIds = data.map((video) => video.id).sort();
+
 	const { data: analyticsData } = useQuery({
-		queryKey: ["analytics", data.map((video) => video.id)],
+		queryKey: ["analytics", videoIds],
 		queryFn: async () => {
 			if (!dubApiKeyEnabled || data.length === 0) {
 				return {};
@@ -122,6 +124,8 @@ export const Caps = ({
 
 			return analyticsData;
 		},
+		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 	});
 
 	const analytics = analyticsData || {};
