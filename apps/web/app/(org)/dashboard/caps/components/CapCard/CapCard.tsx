@@ -59,6 +59,7 @@ export interface CapCardProps extends PropsWithChildren {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
+		duration?: number;
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -431,7 +432,7 @@ export const CapCard = ({
 					href={`/s/${cap.id}`}
 				>
 					<VideoThumbnail
-						videoDuration={cap.metadata?.duration}
+						videoDuration={cap.duration}
 						imageClass={clsx(
 							anyCapSelected
 								? "opacity-50"

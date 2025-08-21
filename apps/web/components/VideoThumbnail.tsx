@@ -13,12 +13,11 @@ interface VideoThumbnailProps {
 	imageClass?: string;
 	objectFit?: string;
 	containerClass?: string;
-	videoDuration?: string | number;
+	videoDuration?: number;
 }
 
-const formatDuration = (duration: string) => {
-	const durationMs = parseFloat(duration);
-	const momentDuration = moment.duration(durationMs, "milliseconds");
+const formatDuration = (durationSecs: number) => {
+	const momentDuration = moment.duration(durationSecs, "seconds");
 
 	const totalHours = Math.floor(momentDuration.asHours());
 	const totalMinutes = Math.floor(momentDuration.asMinutes());
@@ -108,7 +107,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						)
 					)}
 				</div>
-				{videoDuration && Number(videoDuration) > 0 && (
+				{videoDuration && (
 					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
 						{formatDuration(videoDuration.toString())}
 					</p>
