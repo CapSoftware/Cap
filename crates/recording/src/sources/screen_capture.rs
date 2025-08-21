@@ -1046,6 +1046,7 @@ mod macos {
             let config = self.config.clone();
 
             self.tokio_handle.block_on(async move {
+                let captures_audio = audio_tx.is_some();
                 let frame_handler = FrameHandler::spawn(FrameHandler {
                     video_tx,
                     audio_tx,
@@ -1082,6 +1083,7 @@ mod macos {
                     .with_height(size.height() as usize)
                     .with_fps(config.fps as f32)
                     .with_shows_cursor(config.show_cursor)
+                    .with_captures_audio(captures_audio)
                     .build();
 
                 settings.set_pixel_format(cv::PixelFormat::_32_BGRA);

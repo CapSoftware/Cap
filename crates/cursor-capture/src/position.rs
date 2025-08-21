@@ -187,8 +187,6 @@ impl NormalizedCursorPosition {
     }
 
     pub fn with_crop(&self, crop: CursorCropBounds) -> Self {
-        dbg!(self.x, self.y, self.crop, crop);
-
         let raw_px = (
             self.x * self.crop.width + self.crop.x,
             self.y * self.crop.height + self.crop.y,

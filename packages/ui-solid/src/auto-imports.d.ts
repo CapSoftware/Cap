@@ -57,15 +57,19 @@ declare global {
 	const IconLucideBug: typeof import("~icons/lucide/bug.jsx")["default"];
 	const IconLucideCheck: typeof import("~icons/lucide/check.jsx")["default"];
 	const IconLucideClock: typeof import("~icons/lucide/clock.jsx")["default"];
+	const IconLucideDatabase: typeof import("~icons/lucide/database.jsx")["default"];
+	const IconLucideEdit: typeof import("~icons/lucide/edit.jsx")["default"];
 	const IconLucideFolder: typeof import("~icons/lucide/folder.jsx")["default"];
 	const IconLucideGift: typeof import("~icons/lucide/gift.jsx")["default"];
 	const IconLucideHardDrive: typeof import("~icons/lucide/hard-drive.jsx")["default"];
 	const IconLucideLoaderCircle: typeof import("~icons/lucide/loader-circle.jsx")["default"];
+	const IconLucideMessageSquarePlus: typeof import("~icons/lucide/message-square-plus.jsx")["default"];
 	const IconLucideMicOff: typeof import("~icons/lucide/mic-off.jsx")["default"];
 	const IconLucideMonitor: typeof import("~icons/lucide/monitor.jsx")["default"];
 	const IconLucideRotateCcw: typeof import("~icons/lucide/rotate-ccw.jsx")["default"];
 	const IconLucideSearch: typeof import("~icons/lucide/search.jsx")["default"];
 	const IconLucideSquarePlay: typeof import("~icons/lucide/square-play.jsx")["default"];
+	const IconLucideUnplug: typeof import("~icons/lucide/unplug.jsx")["default"];
 	const IconLucideVolume2: typeof import("~icons/lucide/volume2.jsx")["default"];
 	const IconPhMonitorBold: typeof import("~icons/ph/monitor-bold.jsx")["default"];
 }

@@ -2,7 +2,6 @@ use cidre::{
     arc, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
-use tracing::warn;
 
 define_obj_type!(
     pub CapturerCallbacks + StreamOutputImpl + StreamDelegateImpl, CapturerCallbacksInner, CAPTURER
