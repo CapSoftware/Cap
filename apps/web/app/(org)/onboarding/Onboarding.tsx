@@ -82,10 +82,10 @@ export const Onboarding = () => {
 					</div>
 				</div>
 				<Button
-					disabled={!firstName || !lastName || loading}
+					disabled={!firstName || !lastName || loading || isRedirecting}
 					className="mx-auto mt-6 w-full"
 					type="submit"
-					spinner={loading}
+					spinner={loading || isRedirecting}
 				>
 					{isRedirecting
 						? "Redirecting..."
