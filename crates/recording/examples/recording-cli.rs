@@ -38,13 +38,16 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Window {
-                id: Window::list()
-                    .into_iter()
-                    .find(|w| w.owner_name().unwrap_or_default().contains("Brave"))
-                    .unwrap()
-                    .id(),
+            capture_target: ScreenCaptureTarget::Screen {
+                id: Display::list()[1].id(),
             },
+            // ScreenCaptureTarget::Window {
+            //     id: Window::list()
+            //         .into_iter()
+            //         .find(|w| w.owner_name().unwrap_or_default().contains("Brave"))
+            //         .unwrap()
+            //         .id(),
+            // },
             capture_system_audio: true,
             mic_feed: &None,
         },

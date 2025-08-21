@@ -715,19 +715,28 @@ mod windows {
                     .send()
                     .await;
 
-                if let Some(audio_tx) = audio_tx {
+                let audio_capture = if let Some(audio_tx) = audio_tx {
                     let audio_capture = WindowsAudioCapture::spawn(
                         WindowsAudioCapture::new(audio_tx, start_time).unwrap(),
                     );
 
-                    let _ = audio_capture.ask(audio::StartCapturing).send().await;
-                }
+                    let _ = dbg!(audio_capture.ask(audio::StartCapturing).send().await);
+
+                    Some(audio_capture)
+                } else {
+                    None
+                };
 
                 let _ = ready_signal.send(Ok(()));
 
                 while let Ok(msg) = control_signal.receiver.recv_async().await {
                     if let Control::Shutdown = msg {
                         let _ = stop_recipient.ask(StopCapturing).await;
+
+                        if let Some(audio_capture) = audio_capture {
+                            let _ = audio_capture.ask(StopCapturing).await;
+                        }
+
                         break;
                     }
                 }
@@ -889,6 +898,20 @@ mod windows {
                 ctx: &mut Context<Self, Self::Reply>,
             ) -> Self::Reply {
                 self.capturer.play().map_err(|_| "failed to start stream")?;
+
+                Ok(())
+            }
+        }
+
+        impl Message<StopCapturing> for WindowsAudioCapture {
+            type Reply = Result<(), &'static str>;
+
+            async fn handle(
+                &mut self,
+                msg: StopCapturing,
+                ctx: &mut Context<Self, Self::Reply>,
+            ) -> Self::Reply {
+                self.capturer.pause().map_err(|_| "failed to stop stream")?;
 
                 Ok(())
             }

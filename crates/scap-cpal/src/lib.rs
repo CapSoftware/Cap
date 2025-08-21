@@ -1,6 +1,6 @@
 use cpal::{
-    BuildStreamError, DefaultStreamConfigError, InputCallbackInfo, PlayStreamError, Stream,
-    StreamConfig, StreamError, traits::StreamTrait,
+    BuildStreamError, DefaultStreamConfigError, InputCallbackInfo, PauseStreamError,
+    PlayStreamError, Stream, StreamConfig, StreamError, traits::StreamTrait,
 };
 use thiserror::Error;
 
@@ -38,17 +38,30 @@ pub fn create_capturer(
         None,
     )?;
 
-    Ok(Capturer { stream, config })
+    Ok(Capturer {
+        stream,
+        config,
+        _output_device: output_device,
+        _host: host,
+        _supported_config: supported_config,
+    })
 }
 
 pub struct Capturer {
     stream: Stream,
     config: StreamConfig,
+    _output_device: cpal::Device,
+    _host: cpal::Host,
+    _supported_config: cpal::SupportedStreamConfig,
 }
 
 impl Capturer {
     pub fn play(&self) -> Result<(), PlayStreamError> {
         self.stream.play()
+    }
+
+    pub fn pause(&self) -> Result<(), PauseStreamError> {
+        self.stream.pause()
     }
 
     pub fn config(&self) -> &StreamConfig {
