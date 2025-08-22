@@ -20,25 +20,33 @@ interface CapCardAnalyticsProps {
 }
 
 export const CapCardAnalytics = Object.assign(
-	({ displayCount, totalComments, totalReactions }: CapCardAnalyticsProps) => (
-		<Shell>
-			<Tooltip content={`${displayCount} unique views`}>
-				<IconItem icon={faEye}>
-					<span className="text-sm text-gray-12">{displayCount}</span>
-				</IconItem>
-			</Tooltip>
-			<Tooltip content={`${totalComments} comments`}>
-				<IconItem icon={faComment}>
-					<span className="text-sm text-gray-12">{totalComments}</span>
-				</IconItem>
-			</Tooltip>
-			<Tooltip content={`${totalReactions} reactions`}>
-				<IconItem icon={faSmile}>
-					<span className="text-sm text-gray-12">{totalReactions}</span>
-				</IconItem>
-			</Tooltip>
-		</Shell>
-	),
+	({
+		displayCount,
+		totalComments,
+		totalReactions,
+		isLoadingAnalytics,
+	}: CapCardAnalyticsProps) =>
+		isLoadingAnalytics ? (
+			<CapCardAnalytics.Skeleton />
+		) : (
+			<Shell>
+				<Tooltip content={`${displayCount} unique views`}>
+					<IconItem icon={faEye}>
+						<span className="text-sm text-gray-12">{displayCount}</span>
+					</IconItem>
+				</Tooltip>
+				<Tooltip content={`${totalComments} comments`}>
+					<IconItem icon={faComment}>
+						<span className="text-sm text-gray-12">{totalComments}</span>
+					</IconItem>
+				</Tooltip>
+				<Tooltip content={`${totalReactions} reactions`}>
+					<IconItem icon={faSmile}>
+						<span className="text-sm text-gray-12">{totalReactions}</span>
+					</IconItem>
+				</Tooltip>
+			</Shell>
+		),
 	{
 		Skeleton: () => (
 			<Shell>
