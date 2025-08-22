@@ -8,6 +8,7 @@ pub enum Control {
     Shutdown,
 }
 
+#[derive(Clone)]
 pub struct PipelineControlSignal {
     last_value: Option<Control>,
     receiver: Receiver<Control>,

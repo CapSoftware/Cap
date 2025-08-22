@@ -40,8 +40,16 @@ impl PipelineBuilder {
         let name = name.into();
         let control_signal = self.control.add_listener(name.clone());
 
-        self.spawn_task(name, move |ready_signal| {
-            task.run(ready_signal, control_signal)
+        self.spawn_task(name.clone(), move |ready_signal| {
+            let res = task.run(ready_signal.clone(), control_signal);
+
+            if let Err(e) = &res
+                && !ready_signal.is_disconnected()
+            {
+                let _ = ready_signal.send(Err(MediaError::Any(format!("Task/{name}/{e}").into())));
+            }
+
+            res
         });
     }
 
@@ -123,7 +131,7 @@ impl PipelineBuilder {
             tokio::time::timeout(Duration::from_secs(5), task.ready_signal.recv_async())
                 .await
                 .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
-                .map_err(|e| MediaError::TaskLaunch(format!("{name} build / {e}")))??;
+                .map_err(|e| MediaError::TaskLaunch(format!("'{name}' build / {e}")))??;
 
             task_handles.insert(name.clone(), task.join_handle);
             stop_rx.push(task.done_rx);
@@ -139,8 +147,8 @@ impl PipelineBuilder {
             let task_name = &task_names[index];
 
             let result = match result {
-                Ok(Err(error)) => Err(format!("Task '{task_name}' failed: {error}")),
-                Err(_) => Err(format!("Task '{task_name}' failed for unknown reason")),
+                Ok(Err(error)) => Err(format!("Task/{task_name}/{error}")),
+                Err(_) => Err(format!("Task/{task_name}/Unknown")),
                 _ => Ok(()),
             };
 

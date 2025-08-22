@@ -645,6 +645,10 @@ pub enum CreateSegmentPipelineError {
     NoDisplay,
     #[error("NoBounds")]
     NoBounds,
+    #[error("PipelineBuild/{0}")]
+    PipelineBuild(MediaError),
+    #[error("PipelinePlay/{0}")]
+    PipelinePlay(MediaError),
     #[error("Actor/{0}")]
     Actor(#[from] ActorError),
     #[error("{0}")]
@@ -884,6 +888,16 @@ async fn create_segment_pipeline(
         None
     };
 
+    let (mut pipeline, pipeline_done_rx) = pipeline_builder
+        .build()
+        .await
+        .map_err(CreateSegmentPipelineError::PipelineBuild)?;
+
+    pipeline
+        .play()
+        .await
+        .map_err(CreateSegmentPipelineError::PipelinePlay)?;
+
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(
             crop_bounds,
@@ -899,13 +913,6 @@ async fn create_segment_pipeline(
             actor: Some(cursor),
         }
     });
-
-    let (mut pipeline, pipeline_done_rx) = pipeline_builder
-        .build()
-        .await
-        .map_err(RecordingError::from)?;
-
-    pipeline.play().await.map_err(RecordingError::from)?;
 
     info!("pipeline playing");
 

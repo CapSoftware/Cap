@@ -305,13 +305,6 @@ pub async fn start_recording(
         state.set_pending_recording();
     }
 
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        let _ = general_settings
-            .map(|v| v.main_window_recording_start_behaviour)
-            .unwrap_or_default()
-            .perform(&window);
-    }
-
     let countdown = general_settings.and_then(|v| v.recording_countdown);
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
@@ -343,58 +336,39 @@ pub async fn start_recording(
 
     println!("spawning actor");
 
+    if let Some(window) = CapWindowId::Main.get(&app) {
+        let _ = general_settings
+            .map(|v| v.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+            .perform(&window);
+    }
+
     // done in spawn to catch panics just in case
-    let actor_done_rx = spawn_actor({
-        let state_mtx = Arc::clone(&state_mtx);
-        let general_settings = general_settings.cloned();
-        let capture_target = inputs.capture_target.clone();
-        async move {
-            fail!("recording::spawn_actor");
-            let mut state = state_mtx.write().await;
+    let spawn_actor_res = async {
+        spawn_actor({
+            let state_mtx = Arc::clone(&state_mtx);
+            let general_settings = general_settings.cloned();
+            let capture_target = inputs.capture_target.clone();
+            async move {
+                fail!("recording::spawn_actor");
+                let mut state = state_mtx.write().await;
 
-            let base_inputs = cap_recording::RecordingBaseInputs {
-                capture_target,
-                capture_system_audio: inputs.capture_system_audio,
-                mic_feed: &state.mic_feed,
-            };
+                let base_inputs = cap_recording::RecordingBaseInputs {
+                    capture_target,
+                    capture_system_audio: inputs.capture_system_audio,
+                    mic_feed: &state.mic_feed,
+                };
 
-            let (actor, actor_done_rx) = match inputs.mode {
-                RecordingMode::Studio => {
-                    let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
-                        id.clone(),
-                        recording_dir.clone(),
-                        base_inputs,
-                        state.camera_feed.clone(),
-                        general_settings
-                            .map(|s| s.custom_cursor_capture)
-                            .unwrap_or_default(),
-                    )
-                    .await
-                    .map_err(|e| {
-                        error!("Failed to spawn studio recording actor: {e}");
-                        e.to_string()
-                    })?;
-
-                    (
-                        InProgressRecording::Studio {
-                            handle,
-                            target_name,
-                            inputs,
-                            recording_dir: recording_dir.clone(),
-                        },
-                        actor_done_rx,
-                    )
-                }
-                RecordingMode::Instant => {
-                    let Some(video_upload_info) = video_upload_info.clone() else {
-                        return Err("Video upload info not found".to_string());
-                    };
-
-                    let (handle, actor_done_rx) =
-                        cap_recording::instant_recording::spawn_instant_recording_actor(
+                let (actor, actor_done_rx) = match inputs.mode {
+                    RecordingMode::Studio => {
+                        let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
                             id.clone(),
                             recording_dir.clone(),
                             base_inputs,
+                            state.camera_feed.clone(),
+                            general_settings
+                                .map(|s| s.custom_cursor_capture)
+                                .unwrap_or_default(),
                         )
                         .await
                         .map_err(|e| {
@@ -402,27 +376,81 @@ pub async fn start_recording(
                             e.to_string()
                         })?;
 
-                    (
-                        InProgressRecording::Instant {
-                            handle,
-                            progressive_upload,
-                            video_upload_info,
-                            target_name,
-                            inputs,
-                            recording_dir: recording_dir.clone(),
-                        },
-                        actor_done_rx,
-                    )
-                }
-            };
+                        (
+                            InProgressRecording::Studio {
+                                handle,
+                                target_name,
+                                inputs,
+                                recording_dir: recording_dir.clone(),
+                            },
+                            actor_done_rx,
+                        )
+                    }
+                    RecordingMode::Instant => {
+                        let Some(video_upload_info) = video_upload_info.clone() else {
+                            return Err("Video upload info not found".to_string());
+                        };
 
-            state.set_current_recording(actor);
+                        let (handle, actor_done_rx) =
+                            cap_recording::instant_recording::spawn_instant_recording_actor(
+                                id.clone(),
+                                recording_dir.clone(),
+                                base_inputs,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to spawn studio recording actor: {e}");
+                                e.to_string()
+                            })?;
 
-            Ok::<_, String>(actor_done_rx)
+                        (
+                            InProgressRecording::Instant {
+                                handle,
+                                progressive_upload,
+                                video_upload_info,
+                                target_name,
+                                inputs,
+                                recording_dir: recording_dir.clone(),
+                            },
+                            actor_done_rx,
+                        )
+                    }
+                };
+
+                state.set_current_recording(actor);
+
+                Ok::<_, String>(actor_done_rx)
+            }
+        })
+        .await
+        .map_err(|e| format!("Failed to spawn recording actor: {e}"))?
+    }
+    .await;
+
+    let actor_done_rx = match spawn_actor_res {
+        Ok(rx) => rx,
+        Err(e) => {
+            let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+
+            let mut dialog = MessageDialogBuilder::new(
+                app.dialog().clone(),
+                "An error occurred".to_string(),
+                e.clone(),
+            )
+            .kind(tauri_plugin_dialog::MessageDialogKind::Error);
+
+            if let Some(window) = CapWindowId::InProgressRecording.get(&app) {
+                dialog = dialog.parent(&window);
+            }
+
+            dialog.blocking_show();
+
+            let mut state = state_mtx.write().await;
+            let _ = handle_recording_end(app, None, &mut state).await;
+
+            return Err(e);
         }
-    })
-    .await
-    .map_err(|e| format!("Failed to spawn recording actor: {e}"))??;
+    };
 
     let _ = RecordingEvent::Started.emit(&app);
 

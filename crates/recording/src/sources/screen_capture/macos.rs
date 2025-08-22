@@ -115,6 +115,10 @@ enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsContentFilter")]
     AsContentFilter,
+    #[error("CreateActor: {0}")]
+    CreateActor(arc::R<ns::Error>),
+    #[error("StartCapturing/{0}")]
+    StartCapturing(SendError<StartCapturing, StartCapturingError>),
     #[error("DidStopWithError: {0}")]
     DidStopWithError(arc::R<ns::Error>),
 }
@@ -207,29 +211,21 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                         frame_handler.recipient(),
                         error_tx.clone(),
                     )
-                    .unwrap(),
+                    .map_err(SourceError::CreateActor)?,
                 );
 
                 let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
 
-                let _ = capturer.ask(StartCapturing).send().await.unwrap();
+                let _ = capturer
+                    .ask(StartCapturing)
+                    .send()
+                    .await
+                    .map_err(SourceError::StartCapturing)?;
 
                 let _ = ready_signal.send(Ok(()));
 
                 loop {
                     use futures::future::Either;
-
-                    let check_err = || {
-                        use cidre::ns;
-
-                        Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
-                            "macos screen capture startup error",
-                            ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
-                        ))
-                    };
-                    if let Err(e) = check_err() {
-                        let _ = error_tx.send(e);
-                    }
 
                     match futures::future::select(
                         error_rx.recv_async(),
@@ -275,13 +271,18 @@ impl ScreenCaptureActor {
         frame_handler: Recipient<NewFrame>,
         error_tx: Sender<arc::R<ns::Error>>,
     ) -> Result<Self, arc::R<ns::Error>> {
+        cap_fail::fail_err!(
+            "macos::ScreenCaptureActor::new",
+            ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
+        );
+
         let _error_tx = error_tx.clone();
         let capturer_builder = scap_screencapturekit::Capturer::builder(target, settings)
             .with_output_sample_buf_cb(move |frame| {
                 let check_err = || {
                     Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
-                        "macos screen capture frame error",
-                        ns::Error::with_domain(ns::ErrorDomain::os_status(), 1, None)
+                        "macos::ScreenCaptureActor output_sample_buf",
+                        ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
                     ))
                 };
                 if let Err(e) = check_err() {
@@ -313,9 +314,11 @@ pub struct NewFrame(pub scap_screencapturekit::Frame);
 
 pub struct CaptureError(pub arc::R<ns::Error>);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StartCapturingError {
+    #[error("AlreadyCapturing")]
     AlreadyCapturing,
+    #[error("Start: {0}")]
     Start(arc::R<ns::Error>),
 }
 

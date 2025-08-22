@@ -588,6 +588,8 @@ export type HotkeysConfiguration = { show: boolean };
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } };
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null };
 export type JsonValue<T> = [T];
+export type LayoutMode = "default" | "cameraOnly" | "hideCamera";
+export type LayoutSegment = { start: number; end: number; mode?: LayoutMode };
 export type LogicalBounds = { position: LogicalPosition; size: LogicalSize };
 export type LogicalPosition = { x: number; y: number };
 export type LogicalSize = { width: number; height: number };
@@ -741,12 +743,6 @@ export type TargetUnderCursor = {
 	window: WindowUnderCursor | null;
 	screen: ScreenUnderCursor | null;
 };
-export type LayoutSegment = {
-	start: number;
-	end: number;
-	mode?: "default" | "cameraOnly" | "hideCamera";
-};
-
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];
 	zoomSegments: ZoomSegment[];

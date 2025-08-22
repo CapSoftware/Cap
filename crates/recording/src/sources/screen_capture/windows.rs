@@ -225,7 +225,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 });
 
                 let mut settings = scap_direct3d::Settings {
-                    is_border_required: Some(false),
                     pixel_format: AVFrameCapture::PIXEL_FORMAT,
                     crop: config.crop_bounds.map(|b| {
                         let position = b.position();
@@ -243,6 +242,19 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     ..Default::default()
                 };
 
+                if let Ok(true) = scap_direct3d::Settings::can_is_border_required() {
+                    settings.is_border_required = Some(false);
+                }
+
+                if let Ok(true) = scap_direct3d::Settings::can_is_cursor_capture_enabled() {
+                    settings.is_cursor_capture_enabled = Some(config.show_cursor);
+                }
+
+                if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
+                    settings.min_update_interval =
+                        Some(Duration::from_secs_f64(1.0 / config.fps as f64));
+                }
+
                 let display = Display::from_id(&config.display)
                     .ok_or_else(|| SourceError::NoDisplay(config.display))?;
 
@@ -250,8 +262,6 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     .raw_handle()
                     .try_as_capture_item()
                     .map_err(SourceError::AsCaptureItem)?;
-
-                settings.is_cursor_capture_enabled = Some(config.show_cursor);
 
                 let _ = capturer
                     .ask(StartCapturing {
@@ -339,6 +349,8 @@ impl Message<StartCapturing> for WindowsScreenCapture {
 
         let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
 
+        trace!("Starting capturer with settings: {:?}", &msg.settings);
+
         let capture_handle = capturer
             .start(
                 move |frame| {
@@ -358,6 +370,8 @@ impl Message<StartCapturing> for WindowsScreenCapture {
                 || Ok(()),
             )
             .map_err(StartCapturingError::Inner)?;
+
+        info!("Capturer started");
 
         self.capture_handle = Some(capture_handle);
 

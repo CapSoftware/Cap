@@ -266,7 +266,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         start_time: SystemTime,
         tokio_handle: tokio::runtime::Handle,
     ) -> Result<Self, ScreenCaptureInitError> {
-        cap_fail::fail!("media::screen_capture::init");
+        cap_fail::fail!("ScreenCaptureSource::init");
 
         let display = target.display().ok_or(ScreenCaptureInitError::NoDisplay)?;
 
