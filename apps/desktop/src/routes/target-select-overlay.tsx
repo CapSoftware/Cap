@@ -101,39 +101,35 @@ export default function () {
 	// Eg. on Windows Ctrl+P would open the print dialog without this
 	createEventListener(document, "keydown", (e) => e.preventDefault());
 
-	createEffect(() => console.log(displayInformation.data));
-
 	return (
 		<Switch>
 			<Match when={rawOptions.targetMode === "display"}>
 				{(_) => (
-					<Show
-						when={true}
-						// TODO: || displayInformation.data
-						keyed
+					<div
+						data-over={targetUnderCursor.display_id === params.displayId}
+						class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
 					>
-						{(display) => (
-							<div
-								data-over="true" // TODO: {targetUnderCursor.display_id === params.displayId}
-								class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
-							>
-								{/*<span class="text-3xl font-semibold mb-2">
-									{display.name || "Monitor"}
-								</span>
-								<Show when={display.physical_size}>
-									{(size) => (
-										<span class="text-xs mb-2">
-											{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
-										</span>
-									)}
-								</Show>
+						<Show when={displayInformation.data} keyed>
+							{(display) => (
+								<>
+									<span class="text-3xl font-semibold mb-2">
+										{display.name || "Monitor"}
+									</span>
+									<Show when={display.physical_size}>
+										{(size) => (
+											<span class="text-xs mb-2">
+												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
+											</span>
+										)}
+									</Show>
+								</>
+							)}
+						</Show>
 
-								<RecordingControls
-									target={{ variant: "screen", id: params.displayId! }}
-								/>*/}
-							</div>
-						)}
-					</Show>
+						<RecordingControls
+							target={{ variant: "display", id: params.displayId! }}
+						/>
+					</div>
 				)}
 			</Match>
 			<Match
