@@ -44,12 +44,13 @@ use windows::{
             },
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
-                GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
-                GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
-                GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, HICON, ICONINFO,
-                IsIconic, IsWindowVisible, SendMessageW, WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WindowFromPoint,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumChildWindows, EnumWindows, GCLP_HICON,
+                GW_HWNDNEXT, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
+                GetClientRect, GetCursorPos, GetDesktopWindow, GetIconInfo,
+                GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowLongW,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+                HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW, WM_GETICON, WS_CHILD,
+                WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
     },
@@ -681,7 +682,8 @@ impl WindowImpl {
         };
 
         unsafe {
-            let _ = EnumWindows(
+            let _ = EnumChildWindows(
+                Some(GetDesktopWindow()),
                 Some(enum_windows_proc),
                 LPARAM(std::ptr::addr_of_mut!(context) as isize),
             );
@@ -1325,7 +1327,6 @@ impl WindowImpl {
     }
 
     pub fn is_on_screen(&self) -> bool {
-        use ::windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
         if !unsafe { IsWindowVisible(self.0) }.as_bool() {
             return false;
         }
@@ -1354,6 +1355,36 @@ impl WindowImpl {
         };
 
         if owner_process_path.starts_with("C:\\Windows\\SystemApps") {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn is_valid(&self) -> bool {
+        if !unsafe { IsWindowVisible(self.0).as_bool() } {
+            return false;
+        }
+
+        let mut id = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut id)) };
+        if id == unsafe { GetCurrentProcessId() } {
+            return false;
+        }
+
+        let mut rect = RECT::default();
+        let result = unsafe { GetClientRect(self.0, &mut rect) };
+        if result.is_ok() {
+            let styles = unsafe { GetWindowLongPtrW(self.0, GWL_STYLE) };
+            let ex_styles = unsafe { GetWindowLongPtrW(self.0, GWL_EXSTYLE) };
+
+            if (ex_styles & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap()) != 0 {
+                return false;
+            }
+            if (styles & isize::try_from(WS_CHILD.0).unwrap()) != 0 {
+                return false;
+            }
+        } else {
             return false;
         }
 

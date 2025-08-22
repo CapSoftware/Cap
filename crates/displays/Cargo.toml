@@ -37,4 +37,3 @@ windows = { workspace = true, features = [
 	"Graphics_Capture",
 	"Win32_System_WinRT_Graphics_Capture",
 ] }
-windows-sys = { workspace = true }

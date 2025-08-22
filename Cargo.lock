@@ -1075,7 +1075,6 @@ dependencies = [
  "specta",
  "tracing",
  "windows 0.60.0",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

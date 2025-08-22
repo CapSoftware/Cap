@@ -420,7 +420,7 @@ pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
 
             #[cfg(windows)]
             {
-                if !v.raw_handle().is_on_screen() {
+                if !v.raw_handle().is_valid() || !v.raw_handle().is_on_screen() {
                     return None;
                 }
             }

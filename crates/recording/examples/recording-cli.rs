@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use cap_displays::Display;
-use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
+use cap_recording::{
+    RecordingBaseInputs, screen_capture::ScreenCaptureTarget, sources::list_windows,
+};
 
 #[tokio::main]
 pub async fn main() {
@@ -21,14 +23,14 @@ pub async fn main() {
 
     println!("Recording to directory '{}'", dir.path().display());
 
-    // dbg!(
-    //     list_windows()
-    //         .into_iter()
-    //         .map(|(v, _)| v)
-    //         .collect::<Vec<_>>()
-    // );
+    dbg!(
+        list_windows()
+            .into_iter()
+            .map(|(v, _)| v)
+            .collect::<Vec<_>>()
+    );
 
-    // return;
+    return;
 
     let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
