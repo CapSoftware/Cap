@@ -58,6 +58,8 @@ export default function MicrophoneSelect(props: {
 		if (!props.value || !permissionGranted() || isInitialized()) return;
 
 		setIsInitialized(true);
+		// Ensure the selected microphone is activated so levels flow in
+		void handleMicrophoneChange({ name: props.value });
 	});
 
 	return (
