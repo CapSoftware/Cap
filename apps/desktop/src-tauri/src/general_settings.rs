@@ -149,7 +149,7 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
-            custom_cursor_capture2: false,
+            custom_cursor_capture2: true,
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),
