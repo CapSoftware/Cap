@@ -1,7 +1,6 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorEvents,
-    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    CursorEvents, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
@@ -27,6 +26,7 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod layout;
+mod layout_coordinates;
 mod project_recordings;
 mod spring_mass_damper;
 mod zoom;
@@ -35,6 +35,7 @@ pub use coord::*;
 pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
+pub use layout_coordinates::*;
 
 use layout::*;
 use zoom::*;
@@ -347,6 +348,7 @@ pub struct ProjectUniforms {
     pub zoom: InterpolatedZoom,
     pub layout: InterpolatedLayout,
     pub resolution_base: XY<u32>,
+    pub layout_coordinates: LayoutCoordinates,
 }
 
 #[derive(Debug, Clone)]
@@ -366,152 +368,6 @@ const CAMERA_PADDING: f32 = 50.0;
 const SCREEN_MAX_PADDING: f64 = 0.4;
 
 impl ProjectUniforms {
-    fn get_crop(options: &RenderOptions, project: &ProjectConfiguration) -> Crop {
-        project.background.crop.as_ref().cloned().unwrap_or(Crop {
-            position: XY { x: 0, y: 0 },
-            size: XY {
-                x: options.screen_size.x,
-                y: options.screen_size.y,
-            },
-        })
-    }
-
-    #[allow(unused)]
-    fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
-        let crop = Self::get_crop(options, project);
-
-        let basis = u32::max(crop.size.x, crop.size.y);
-        let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
-
-        basis as f64 * padding_factor
-    }
-
-    pub fn get_output_size(
-        options: &RenderOptions,
-        project: &ProjectConfiguration,
-        resolution_base: XY<u32>,
-    ) -> (u32, u32) {
-        let crop = Self::get_crop(options, project);
-        let crop_aspect = crop.aspect_ratio();
-
-        let (base_width, base_height) = match &project.aspect_ratio {
-            None => {
-                let padding_basis = u32::max(crop.size.x, crop.size.y) as f64;
-                let padding =
-                    padding_basis * project.background.padding / 100.0 * SCREEN_MAX_PADDING * 2.0;
-                let width = ((crop.size.x as f64 + padding) as u32 + 1) & !1;
-                let height = ((crop.size.y as f64 + padding) as u32 + 1) & !1;
-                (width, height)
-            }
-            Some(AspectRatio::Square) => {
-                let size = if crop_aspect > 1.0 {
-                    crop.size.y
-                } else {
-                    crop.size.x
-                };
-                (size, size)
-            }
-            Some(AspectRatio::Wide) => {
-                if crop_aspect > 16.0 / 9.0 {
-                    (((crop.size.y as f32 * 16.0 / 9.0) as u32), crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 9.0 / 16.0) as u32))
-                }
-            }
-            Some(AspectRatio::Vertical) => {
-                if crop_aspect > 9.0 / 16.0 {
-                    ((crop.size.y as f32 * 9.0 / 16.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 16.0 / 9.0) as u32))
-                }
-            }
-            Some(AspectRatio::Classic) => {
-                if crop_aspect > 4.0 / 3.0 {
-                    ((crop.size.y as f32 * 4.0 / 3.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 3.0 / 4.0) as u32))
-                }
-            }
-            Some(AspectRatio::Tall) => {
-                if crop_aspect > 3.0 / 4.0 {
-                    ((crop.size.y as f32 * 3.0 / 4.0) as u32, crop.size.y)
-                } else {
-                    (crop.size.x, ((crop.size.x as f32 * 4.0 / 3.0) as u32))
-                }
-            }
-        };
-
-        let width_scale = resolution_base.x as f32 / base_width as f32;
-        let height_scale = resolution_base.y as f32 / base_height as f32;
-        let scale = width_scale.min(height_scale);
-
-        let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
-        let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        (scaled_width, scaled_height)
-    }
-
-    pub fn display_offset(
-        options: &RenderOptions,
-        project: &ProjectConfiguration,
-        resolution_base: XY<u32>,
-    ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project, resolution_base);
-        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-
-        let output_aspect = output_size.x / output_size.y;
-
-        let crop = Self::get_crop(options, project);
-
-        let crop_start =
-            Coord::<RawDisplaySpace>::new(XY::new(crop.position.x as f64, crop.position.y as f64));
-        let crop_end = Coord::<RawDisplaySpace>::new(XY::new(
-            (crop.position.x + crop.size.x) as f64,
-            (crop.position.y + crop.size.y) as f64,
-        ));
-
-        let cropped_size = crop_end.coord - crop_start.coord;
-
-        let cropped_aspect = cropped_size.x / cropped_size.y;
-
-        let padding = {
-            let padding_factor = project.background.padding / 100.0 * SCREEN_MAX_PADDING;
-
-            f64::max(output_size.x, output_size.y) * padding_factor
-        };
-
-        let is_height_constrained = cropped_aspect <= output_aspect;
-
-        let available_size = output_size - 2.0 * padding;
-
-        let target_size = if is_height_constrained {
-            XY::new(available_size.y * cropped_aspect, available_size.y)
-        } else {
-            XY::new(available_size.x, available_size.x / cropped_aspect)
-        };
-
-        let target_offset = (output_size - target_size) / 2.0;
-
-        Coord::new(if is_height_constrained {
-            XY::new(target_offset.x, padding)
-        } else {
-            XY::new(padding, target_offset.y)
-        })
-    }
-
-    pub fn display_size(
-        options: &RenderOptions,
-        project: &ProjectConfiguration,
-        resolution_base: XY<u32>,
-    ) -> Coord<FrameSpace> {
-        let output_size = Self::get_output_size(options, project, resolution_base);
-        let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-
-        let display_offset = Self::display_offset(options, project, resolution_base);
-
-        let end = Coord::new(output_size) - display_offset;
-
-        end - display_offset
-    }
 
     pub fn new(
         constants: &RenderVideoConstants,
@@ -523,14 +379,11 @@ impl ProjectUniforms {
         segment_frames: &DecodedSegmentFrames,
     ) -> Self {
         let options = &constants.options;
-        let output_size = Self::get_output_size(options, project, resolution_base);
+        let output_size = get_output_size(options, project, resolution_base);
         let frame_time = frame_number as f32 / fps as f32;
 
         let velocity = [0.0, 0.0];
-
         let motion_blur_amount = 0.0;
-
-        let crop = Self::get_crop(options, project);
 
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
@@ -574,243 +427,45 @@ impl ProjectUniforms {
                 .unwrap_or(&[]),
         ));
 
-        let display = {
-            let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
-            let size = [options.screen_size.x as f32, options.screen_size.y as f32];
+        // Calculate all layout coordinates first
+        let layout_coordinates = LayoutCoordinates::calculate(
+            options,
+            project,
+            resolution_base,
+            &zoom,
+            &layout,
+            interpolated_cursor.as_ref(),
+            project.cursor.size as f32,
+        );
 
-            let crop_start = Coord::<RawDisplaySpace>::new(XY::new(
-                crop.position.x as f64,
-                crop.position.y as f64,
-            ));
-            let crop_end = Coord::<RawDisplaySpace>::new(XY::new(
-                (crop.position.x + crop.size.x) as f64,
-                (crop.position.y + crop.size.y) as f64,
-            ));
+        // Generate shader uniforms from coordinates
+        let display = Self::create_display_uniforms(
+            options,
+            project,
+            &layout_coordinates.display,
+            &layout,
+            motion_blur_amount,
+            velocity,
+        );
 
-            let display_offset = Self::display_offset(options, project, resolution_base);
-            let display_size = Self::display_size(options, project, resolution_base);
+        let camera = layout_coordinates.camera.as_ref().map(|camera_coords| {
+            Self::create_camera_uniforms(
+                options,
+                project,
+                camera_coords,
+                &layout,
+                motion_blur_amount,
+            )
+        });
 
-            let end = Coord::new(output_size) - display_offset;
-
-            let (zoom_start, zoom_end) = (
-                Coord::new(zoom.bounds.top_left * display_size.coord),
-                Coord::new((zoom.bounds.bottom_right - 1.0) * display_size.coord),
-            );
-
-            let start = display_offset + zoom_start;
-            let end = end + zoom_end;
-
-            let target_size = end - start;
-            let min_target_axis = target_size.x.min(target_size.y);
-
-            CompositeVideoFrameUniforms {
-                output_size: [output_size.x as f32, output_size.y as f32],
-                frame_size: size,
-                crop_bounds: [
-                    crop_start.x as f32,
-                    crop_start.y as f32,
-                    crop_end.x as f32,
-                    crop_end.y as f32,
-                ],
-                target_bounds: [start.x as f32, start.y as f32, end.x as f32, end.y as f32],
-                target_size: [target_size.x as f32, target_size.y as f32],
-                rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
-                mirror_x: 0.0,
-                velocity_uv: velocity,
-                motion_blur_amount: (motion_blur_amount + layout.screen_blur as f32 * 0.8).min(1.0),
-                camera_motion_blur_amount: 0.0,
-                shadow: project.background.shadow,
-                shadow_size: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(50.0, |s| s.size),
-                shadow_opacity: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(18.0, |s| s.opacity),
-                shadow_blur: project
-                    .background
-                    .advanced_shadow
-                    .as_ref()
-                    .map_or(50.0, |s| s.blur),
-                opacity: layout.screen_opacity as f32,
-                _padding: [0.0; 3],
-            }
-        };
-
-        let camera = options
-            .camera_size
-            .filter(|_| !project.camera.hide && layout.should_render_camera())
-            .map(|camera_size| {
-                let output_size = [output_size.0 as f32, output_size.1 as f32];
-                let frame_size = [camera_size.x as f32, camera_size.y as f32];
-                let min_axis = output_size[0].min(output_size[1]);
-
-                let base_size = project.camera.size / 100.0;
-                let zoom_size = project
-                    .camera
-                    .zoom_size
-                    .unwrap_or(cap_project::Camera::default_zoom_size())
-                    / 100.0;
-
-                let zoomed_size =
-                    (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
-
-                let zoomed_size = zoomed_size * layout.camera_scale as f32;
-
-                let aspect = frame_size[0] / frame_size[1];
-                let size = match project.camera.shape {
-                    CameraShape::Source => {
-                        if aspect >= 1.0 {
-                            [
-                                (min_axis * zoomed_size + CAMERA_PADDING) * aspect,
-                                min_axis * zoomed_size + CAMERA_PADDING,
-                            ]
-                        } else {
-                            [
-                                min_axis * zoomed_size + CAMERA_PADDING,
-                                (min_axis * zoomed_size + CAMERA_PADDING) / aspect,
-                            ]
-                        }
-                    }
-                    CameraShape::Square => [
-                        min_axis * zoomed_size + CAMERA_PADDING,
-                        min_axis * zoomed_size + CAMERA_PADDING,
-                    ],
-                };
-
-                let position = {
-                    let x = match &project.camera.position.x {
-                        CameraXPosition::Left => CAMERA_PADDING,
-                        CameraXPosition::Center => output_size[0] / 2.0 - (size[0]) / 2.0,
-                        CameraXPosition::Right => output_size[0] - CAMERA_PADDING - size[0],
-                    };
-                    let y = match &project.camera.position.y {
-                        CameraYPosition::Top => CAMERA_PADDING,
-                        CameraYPosition::Bottom => output_size[1] - size[1] - CAMERA_PADDING,
-                    };
-
-                    [x, y]
-                };
-
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
-
-                let camera_motion_blur = 0.0;
-
-                let crop_bounds = match project.camera.shape {
-                    CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
-                    CameraShape::Square => [
-                        (frame_size[0] - frame_size[1]) / 2.0,
-                        0.0,
-                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
-                        frame_size[1],
-                    ],
-                };
-
-                CompositeVideoFrameUniforms {
-                    output_size,
-                    frame_size,
-                    crop_bounds,
-                    target_bounds,
-                    target_size: [
-                        target_bounds[2] - target_bounds[0],
-                        target_bounds[3] - target_bounds[1],
-                    ],
-                    rounding_px: project.camera.rounding / 100.0 * 0.5 * size[0].min(size[1]),
-                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
-                    velocity_uv: [0.0, 0.0],
-                    motion_blur_amount,
-                    camera_motion_blur_amount: camera_motion_blur,
-                    shadow: project.camera.shadow,
-                    shadow_size: project
-                        .camera
-                        .advanced_shadow
-                        .as_ref()
-                        .map_or(50.0, |s| s.size),
-                    shadow_opacity: project
-                        .camera
-                        .advanced_shadow
-                        .as_ref()
-                        .map_or(18.0, |s| s.opacity),
-                    shadow_blur: project
-                        .camera
-                        .advanced_shadow
-                        .as_ref()
-                        .map_or(50.0, |s| s.blur),
-                    opacity: layout.regular_camera_transition_opacity() as f32,
-                    _padding: [0.0; 3],
-                }
-            });
-
-        let camera_only = options
-            .camera_size
-            .filter(|_| !project.camera.hide && layout.is_transitioning_camera_only())
-            .map(|camera_size| {
-                let output_size = [output_size.0 as f32, output_size.1 as f32];
-                let frame_size = [camera_size.x as f32, camera_size.y as f32];
-
-                let aspect = frame_size[0] / frame_size[1];
-                let output_aspect = output_size[0] / output_size[1];
-
-                let zoom_factor = layout.camera_only_zoom as f32;
-                let size = [output_size[0] * zoom_factor, output_size[1] * zoom_factor];
-
-                let position = [
-                    (output_size[0] - size[0]) / 2.0,
-                    (output_size[1] - size[1]) / 2.0,
-                ];
-
-                let target_bounds = [
-                    position[0],
-                    position[1],
-                    position[0] + size[0],
-                    position[1] + size[1],
-                ];
-
-                // In camera-only mode, we ignore the camera shape setting (Square/Source)
-                // and just apply the minimum crop needed to fill the output aspect ratio.
-                // This prevents excessive zooming when shape is set to Square.
-                let crop_bounds = if aspect > output_aspect {
-                    // Camera is wider than output - crop left and right
-                    let visible_width = frame_size[1] * output_aspect;
-                    let crop_x = (frame_size[0] - visible_width) / 2.0;
-                    [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
-                } else {
-                    // Camera is taller than output - crop top and bottom
-                    let visible_height = frame_size[0] / output_aspect;
-                    let crop_y = (frame_size[1] - visible_height) / 2.0;
-                    [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
-                };
-
-                CompositeVideoFrameUniforms {
-                    output_size,
-                    frame_size,
-                    crop_bounds,
-                    target_bounds,
-                    target_size: [
-                        target_bounds[2] - target_bounds[0],
-                        target_bounds[3] - target_bounds[1],
-                    ],
-                    rounding_px: 0.0,
-                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
-                    velocity_uv: [0.0, 0.0],
-                    motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: layout.camera_only_blur as f32 * 0.5,
-                    shadow: 0.0,
-                    shadow_size: 0.0,
-                    shadow_opacity: 0.0,
-                    shadow_blur: 0.0,
-                    opacity: layout.camera_only_transition_opacity() as f32,
-                    _padding: [0.0; 3],
-                }
-            });
+        let camera_only = layout_coordinates.camera_only.as_ref().map(|camera_only_coords| {
+            Self::create_camera_only_uniforms(
+                options,
+                project,
+                camera_only_coords,
+                &layout,
+            )
+        });
 
         Self {
             output_size,
@@ -823,6 +478,157 @@ impl ProjectUniforms {
             zoom,
             layout,
             interpolated_cursor,
+            layout_coordinates,
+        }
+    }
+
+    fn create_display_uniforms(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        display_coords: &DisplayCoordinates,
+        layout: &InterpolatedLayout,
+        motion_blur_amount: f32,
+        velocity: [f32; 2],
+    ) -> CompositeVideoFrameUniforms {
+        let size = [options.screen_size.x as f32, options.screen_size.y as f32];
+        let min_target_axis = display_coords.target_size.x.min(display_coords.target_size.y);
+        let output_size = [display_coords.target_end.x as f32, display_coords.target_end.y as f32];
+
+        CompositeVideoFrameUniforms {
+            output_size,
+            frame_size: size,
+            crop_bounds: [
+                display_coords.crop_start.x as f32,
+                display_coords.crop_start.y as f32,
+                display_coords.crop_end.x as f32,
+                display_coords.crop_end.y as f32,
+            ],
+            target_bounds: [
+                display_coords.target_start.x as f32,
+                display_coords.target_start.y as f32,
+                display_coords.target_end.x as f32,
+                display_coords.target_end.y as f32,
+            ],
+            target_size: [
+                display_coords.target_size.x as f32,
+                display_coords.target_size.y as f32,
+            ],
+            rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
+            mirror_x: 0.0,
+            velocity_uv: velocity,
+            motion_blur_amount: (motion_blur_amount + layout.screen_blur as f32 * 0.8).min(1.0),
+            camera_motion_blur_amount: 0.0,
+            shadow: project.background.shadow,
+            shadow_size: project
+                .background
+                .advanced_shadow
+                .as_ref()
+                .map_or(50.0, |s| s.size),
+            shadow_opacity: project
+                .background
+                .advanced_shadow
+                .as_ref()
+                .map_or(18.0, |s| s.opacity),
+            shadow_blur: project
+                .background
+                .advanced_shadow
+                .as_ref()
+                .map_or(50.0, |s| s.blur),
+            opacity: layout.screen_opacity as f32,
+            _padding: [0.0; 3],
+        }
+    }
+
+    fn create_camera_uniforms(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        camera_coords: &CameraCoordinates,
+        layout: &InterpolatedLayout,
+        motion_blur_amount: f32,
+    ) -> CompositeVideoFrameUniforms {
+        let camera_size = options.camera_size.unwrap();
+        let frame_size = [camera_size.x as f32, camera_size.y as f32];
+        let output_size = [camera_coords.target_end.x as f32, camera_coords.target_end.y as f32];
+
+        CompositeVideoFrameUniforms {
+            output_size,
+            frame_size,
+            crop_bounds: [
+                camera_coords.crop_start.x as f32,
+                camera_coords.crop_start.y as f32,
+                camera_coords.crop_end.x as f32,
+                camera_coords.crop_end.y as f32,
+            ],
+            target_bounds: [
+                camera_coords.target_start.x as f32,
+                camera_coords.target_start.y as f32,
+                camera_coords.target_end.x as f32,
+                camera_coords.target_end.y as f32,
+            ],
+            target_size: [camera_coords.size.x as f32, camera_coords.size.y as f32],
+            rounding_px: project.camera.rounding / 100.0 * 0.5 * camera_coords.size.x.min(camera_coords.size.y) as f32,
+            mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+            velocity_uv: [0.0, 0.0],
+            motion_blur_amount,
+            camera_motion_blur_amount: 0.0,
+            shadow: project.camera.shadow,
+            shadow_size: project
+                .camera
+                .advanced_shadow
+                .as_ref()
+                .map_or(50.0, |s| s.size),
+            shadow_opacity: project
+                .camera
+                .advanced_shadow
+                .as_ref()
+                .map_or(18.0, |s| s.opacity),
+            shadow_blur: project
+                .camera
+                .advanced_shadow
+                .as_ref()
+                .map_or(50.0, |s| s.blur),
+            opacity: layout.regular_camera_transition_opacity() as f32,
+            _padding: [0.0; 3],
+        }
+    }
+
+    fn create_camera_only_uniforms(
+        options: &RenderOptions,
+        project: &ProjectConfiguration,
+        camera_only_coords: &CameraOnlyCoordinates,
+        layout: &InterpolatedLayout,
+    ) -> CompositeVideoFrameUniforms {
+        let camera_size = options.camera_size.unwrap();
+        let frame_size = [camera_size.x as f32, camera_size.y as f32];
+        let output_size = [camera_only_coords.target_end.x as f32, camera_only_coords.target_end.y as f32];
+
+        CompositeVideoFrameUniforms {
+            output_size,
+            frame_size,
+            crop_bounds: [
+                camera_only_coords.crop_start.x as f32,
+                camera_only_coords.crop_start.y as f32,
+                camera_only_coords.crop_end.x as f32,
+                camera_only_coords.crop_end.y as f32,
+            ],
+            target_bounds: [
+                camera_only_coords.target_start.x as f32,
+                camera_only_coords.target_start.y as f32,
+                camera_only_coords.target_end.x as f32,
+                camera_only_coords.target_end.y as f32,
+            ],
+            target_size: [camera_only_coords.size.x as f32, camera_only_coords.size.y as f32],
+            rounding_px: 0.0,
+            mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+            velocity_uv: [0.0, 0.0],
+            motion_blur_amount: 0.0,
+            camera_motion_blur_amount: layout.camera_only_blur as f32 * 0.5,
+            shadow: 0.0,
+            shadow_size: 0.0,
+            shadow_opacity: 0.0,
+            shadow_blur: 0.0,
+            opacity: layout.camera_only_transition_opacity() as f32,
+            _padding: [0.0; 3],
         }
     }
 }

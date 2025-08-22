@@ -2,7 +2,10 @@ use std::ops::{Add, Deref, Mul, Sub, SubAssign};
 
 use cap_project::{ProjectConfiguration, XY};
 
-use crate::{ProjectUniforms, RenderOptions, zoom::InterpolatedZoom};
+use crate::{
+    layout_coordinates::{get_crop, get_output_size, display_offset, display_size},
+    zoom::InterpolatedZoom, RenderOptions,
+};
 
 /// Coordinate system for display frames
 /// `(0, 0)` is the top left of the frame,
@@ -95,7 +98,7 @@ impl Coord<RawDisplaySpace> {
         options: &RenderOptions,
         project: &ProjectConfiguration,
     ) -> Coord<CroppedDisplaySpace> {
-        let crop = ProjectUniforms::get_crop(options, project);
+        let crop = get_crop(options, project);
         Coord::new(self.coord - crop.position.map(|v| v as f64))
     }
 }
@@ -107,9 +110,9 @@ impl Coord<CroppedDisplaySpace> {
         project: &ProjectConfiguration,
         resolution_base: XY<u32>,
     ) -> Coord<FrameSpace> {
-        let crop = ProjectUniforms::get_crop(options, project);
-        let output_size = ProjectUniforms::get_output_size(options, project, resolution_base);
-        let padding_offset = ProjectUniforms::display_offset(options, project, resolution_base);
+        let crop = get_crop(options, project);
+        let output_size = get_output_size(options, project, resolution_base);
+        let padding_offset = display_offset(options, project, resolution_base);
 
         let output_size = XY::new(output_size.0, output_size.1).map(|v| v as f64);
 
@@ -129,8 +132,8 @@ impl Coord<FrameSpace> {
         resolution_base: XY<u32>,
         zoom: &InterpolatedZoom,
     ) -> Coord<ZoomedFrameSpace> {
-        let padding_offset = ProjectUniforms::display_offset(options, project, resolution_base);
-        let display_size = ProjectUniforms::display_size(options, project, resolution_base);
+        let padding_offset = display_offset(options, project, resolution_base);
+        let display_size = display_size(options, project, resolution_base);
 
         let size_ratio = zoom.bounds.bottom_right - zoom.bounds.top_left;
 

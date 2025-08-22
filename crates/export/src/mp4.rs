@@ -56,7 +56,7 @@ impl Mp4ExportSettings {
 
         let fps = self.fps;
 
-        let output_size = ProjectUniforms::get_output_size(
+        let output_size = cap_rendering::get_output_size(
             &base.render_constants.options,
             &base.project_config,
             self.resolution_base,

@@ -7,8 +7,8 @@ use tracing::error;
 use wgpu::{BindGroup, FilterMode, include_wgsl, util::DeviceExt};
 
 use crate::{
-    Coord, DecodedSegmentFrames, FrameSpace, ProjectUniforms, RenderVideoConstants,
-    STANDARD_CURSOR_HEIGHT, zoom::InterpolatedZoom,
+    DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants,
+    zoom::InterpolatedZoom,
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
@@ -203,19 +203,16 @@ impl CursorLayer {
             return;
         };
 
-        let velocity: [f32; 2] = [0.0, 0.0];
-        // let velocity: [f32; 2] = [
-        //     interpolated_cursor.velocity.x * 75.0,
-        //     interpolated_cursor.velocity.y * 75.0,
-        // ];
+        // Check if we have calculated cursor coordinates from the layout
+        let Some(cursor_coords) = &uniforms.layout_coordinates.cursor else {
+            self.bind_group = None;
+            return;
+        };
 
-        let speed = (velocity[0] * velocity[0] + velocity[1] * velocity[1]).sqrt();
-        let motion_blur_amount = (speed * 0.3).min(1.0) * 0.0; // uniforms.project.cursor.motion_blur;
+        let velocity: [f32; 2] = [0.0, 0.0];
+        let motion_blur_amount = 0.0;
 
         // Remove all cursor assets if the svg configuration changes.
-        // it might change the texture.
-        //
-        // This would be better if it only invalidated the required assets but that would be more complicated.
         if self.prev_is_svg_assets_enabled != Some(uniforms.project.cursor.use_svg) {
             self.prev_is_svg_assets_enabled = Some(uniforms.project.cursor.use_svg);
             self.cursors.drain();
@@ -238,7 +235,6 @@ impl CursorLayer {
             };
 
             // Attempt to find and load a higher-quality SVG cursor included in Cap.
-            // These are used instead of the OS provided cursor images when possible as the quality is better.
             if let Some(cursor_shape) = cursor_shape
                 && uniforms.project.cursor.use_svg
                 && let Some(info) = cursor_shape.resolve()
@@ -279,66 +275,15 @@ impl CursorLayer {
             return;
         };
 
-        let size = {
-            let base_size_px = STANDARD_CURSOR_HEIGHT / constants.options.screen_size.y as f32
-                * uniforms.output_size.1 as f32;
+        // Apply click animation to the calculated size
+        let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
+        let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
+        
+        let final_size = cursor_coords.size * click_scale_factor as f64;
 
-            let cursor_size_factor = if uniforms.cursor_size <= 0.0 {
-                100.0
-            } else {
-                uniforms.cursor_size / 100.0
-            };
-
-            // 0 -> 1 indicating how much to shrink from click
-            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
-            // lerp shrink size
-            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
-
-            let size = base_size_px * cursor_size_factor * click_scale_factor;
-
-            let texture_size_aspect = {
-                let texture_size = cursor_texture.texture.size();
-                texture_size.width as f32 / texture_size.height as f32
-            };
-
-            Coord::<FrameSpace>::new(if texture_size_aspect > 1.0 {
-                // Wide cursor: base sizing on width to prevent excessive width
-                let width = size;
-                let height = size / texture_size_aspect;
-                XY::new(width, height).into()
-            } else {
-                // Tall or square cursor: base sizing on height (current behavior)
-                XY::new(size * texture_size_aspect, size).into()
-            })
-        };
-
-        let hotspot = Coord::<FrameSpace>::new(size.coord * cursor_texture.hotspot);
-
-        // Calculate position without hotspot first
-        let position = interpolated_cursor.position.to_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-        ) - hotspot;
-
-        // Transform to zoomed space
-        let zoomed_position = position.to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
-        );
-
-        let zoomed_size = (position + size).to_zoomed_frame_space(
-            &constants.options,
-            &uniforms.project,
-            resolution_base,
-            zoom,
-        ) - zoomed_position;
-
-        let uniforms = CursorUniforms {
-            position: [zoomed_position.x as f32, zoomed_position.y as f32],
-            size: [zoomed_size.x as f32, zoomed_size.y as f32],
+        let cursor_uniforms = CursorUniforms {
+            position: [cursor_coords.position.x as f32, cursor_coords.position.y as f32],
+            size: [final_size.x as f32, final_size.y as f32],
             output_size: [uniforms.output_size.0 as f32, uniforms.output_size.1 as f32],
             screen_bounds: uniforms.display.target_bounds,
             velocity,
@@ -349,7 +294,7 @@ impl CursorLayer {
         constants.queue.write_buffer(
             &self.statics.uniform_buffer,
             0,
-            bytemuck::cast_slice(&[uniforms]),
+            bytemuck::cast_slice(&[cursor_uniforms]),
         );
 
         self.bind_group = Some(
