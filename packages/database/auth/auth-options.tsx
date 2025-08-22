@@ -1,4 +1,5 @@
 import { serverEnv } from "@cap/env";
+import crypto from "crypto";
 import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import type { NextAuthOptions } from "next-auth";
@@ -11,10 +12,8 @@ import WorkOSProvider from "next-auth/providers/workos";
 import { db } from "../";
 import { dub } from "../dub";
 import { sendEmail } from "../emails/config";
-import { LoginLink } from "../emails/login-link";
 import { nanoId } from "../helpers";
 import { organizationMembers, organizations, users } from "../schema";
-import { isEmailAllowedForSignup } from "./domain-utils";
 import { DrizzleAdapter } from "./drizzle-adapter";
 
 export const config = {
@@ -72,17 +71,36 @@ export const authOptions = (): NextAuthOptions => {
 					},
 				}),
 				EmailProvider({
-					async sendVerificationRequest({ identifier, url }) {
+					async generateVerificationToken() {
+						return crypto.randomInt(100000, 1000000).toString();
+					},
+					async sendVerificationRequest({ identifier, token }) {
 						console.log("sendVerificationRequest");
+
 						if (!serverEnv().RESEND_API_KEY) {
-							console.log(`Login link: ${url}`);
+							console.log("\n");
+							console.log(
+								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+							);
+							console.log("🔐 VERIFICATION CODE (Development Mode)");
+							console.log(
+								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+							);
+							console.log(`📧 Email: ${identifier}`);
+							console.log(`🔢 Code: ${token}`);
+							console.log(`⏱️  Expires in: 10 minutes`);
+							console.log(
+								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+							);
+							console.log("\n");
 						} else {
-							console.log({ identifier, url });
-							const email = LoginLink({ url, email: identifier });
+							console.log({ identifier, token });
+							const { OTPEmail } = await import("../emails/otp-email");
+							const email = OTPEmail({ code: token, email: identifier });
 							console.log({ email });
 							await sendEmail({
 								email: identifier,
-								subject: `Your Cap Login Link`,
+								subject: `Your Cap Verification Code`,
 								react: email,
 							});
 						}
@@ -99,13 +117,12 @@ export const authOptions = (): NextAuthOptions => {
 					httpOnly: true,
 					sameSite: "none",
 					path: "/",
-					secure: true,
+					secure: process.env.NODE_ENV === "production",
 				},
 			},
 		},
 		events: {
 			async signIn({ user, account, isNewUser }) {
-				// Check if user needs organization setup (new user or guest checkout user)
 				const [dbUser] = await db()
 					.select()
 					.from(users)
@@ -135,10 +152,7 @@ export const authOptions = (): NextAuthOptions => {
 
 							console.log("Dub tracking successful:", trackResult);
 
-							// Properly delete the dub_id cookie
 							cookies().delete("dub_id");
-
-							// Also delete dub_partner_data if it exists
 							if (dubPartnerData) {
 								cookies().delete("dub_partner_data");
 							}
@@ -175,29 +189,6 @@ export const authOptions = (): NextAuthOptions => {
 			},
 		},
 		callbacks: {
-			async signIn({ user }) {
-				const allowedDomains = serverEnv().CAP_ALLOWED_SIGNUP_DOMAINS;
-				if (!allowedDomains) return true;
-
-				if (user.email) {
-					const [existingUser] = await db()
-						.select()
-						.from(users)
-						.where(eq(users.email, user.email))
-						.limit(1);
-
-					// Only apply domain restrictions for new users, existing ones can always sign in
-					if (
-						!existingUser &&
-						!isEmailAllowedForSignup(user.email, allowedDomains)
-					) {
-						console.warn(`Signup blocked for email domain: ${user.email}`);
-						return false;
-					}
-				}
-
-				return true;
-			},
 			async session({ token, session }) {
 				if (!session.user) return session;
 

@@ -1,7 +1,6 @@
-use std::path::{Path, PathBuf};
-
-use cap_recording::RecordingMode;
+use cap_recording::{RecordingMode, feeds::DeviceOrModelID, sources::ScreenCaptureTarget};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
@@ -21,7 +20,7 @@ pub enum CaptureMode {
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
-        camera: Option<cap_media::feeds::DeviceOrModelID>,
+        camera: Option<DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,
@@ -121,14 +120,13 @@ impl DeepLinkAction {
                 crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                use cap_media::sources::ScreenCaptureTarget;
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_media::sources::list_screens()
+                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
                         .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Screen { id: s.id })
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                         .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_media::sources::list_windows()
+                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })

@@ -106,10 +106,6 @@ export default async function CapsPage({
 		redirect("/login");
 	}
 
-	if (!user.name || user.name.length <= 1) {
-		redirect("/onboarding");
-	}
-
 	const userId = user.id;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
@@ -153,6 +149,7 @@ export default async function CapsPage({
 			name: videos.name,
 			createdAt: videos.createdAt,
 			metadata: videos.metadata,
+			duration: videos.duration,
 			public: videos.public,
 			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
 			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,

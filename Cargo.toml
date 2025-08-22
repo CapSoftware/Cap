@@ -6,9 +6,9 @@ members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
+# cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
+cpal = "0.16"
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
-ffmpeg-sys-next = "7.1.0"
 tokio = { version = "1.39.3", features = [
 	"macros",
 	"process",
@@ -43,7 +43,7 @@ sentry = { version = "0.34.0", features = [
 tracing = "0.1.41"
 futures = "0.3.31"
 
-cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438", features = [
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
 	"macos_13_0",
 	"cv",
 	"cf",
@@ -79,6 +79,6 @@ debug = true
 
 [patch.crates-io]
 screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
-cidre = { git = "https://github.com/CapSoftware/cidre", rev = "517d097ae438" }
+cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

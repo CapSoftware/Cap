@@ -1,12 +1,17 @@
 use std::{ffi::c_void, str::FromStr};
 
-use core_foundation::{base::FromVoid, number::CFNumber, string::CFString};
+use cidre::{arc, ns, sc};
+use cocoa::appkit::NSScreen;
+use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::CFString};
 use core_graphics::{
     display::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
         CGRect, kCGWindowListOptionIncludingWindow,
     },
-    window::{CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerName},
+    window::{
+        CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
+        kCGWindowOwnerName,
+    },
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
@@ -40,13 +45,13 @@ impl DisplayImpl {
         Self::list().into_iter().find(|d| d.0.id == parsed_id)
     }
 
-    pub fn logical_size(&self) -> LogicalSize {
+    pub fn logical_size(&self) -> Option<LogicalSize> {
         let rect = unsafe { CGDisplayBounds(self.0.id) };
 
-        LogicalSize {
+        Some(LogicalSize {
             width: rect.size.width,
             height: rect.size.height,
-        }
+        })
     }
 
     pub fn logical_position(&self) -> LogicalPosition {
@@ -58,36 +63,48 @@ impl DisplayImpl {
         }
     }
 
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
+        Some(LogicalBounds {
+            position: self.logical_position(),
+            size: self.logical_size()?,
+        })
+    }
+
     pub fn get_containing_cursor() -> Option<Self> {
         let cursor = get_cursor_position()?;
 
         Self::list().into_iter().find(|display| {
+            let Some(logical_size) = display.logical_size() else {
+                return false;
+            };
+
             let bounds = LogicalBounds {
                 position: display.logical_position(),
-                size: display.logical_size(),
+                size: logical_size,
             };
             bounds.contains_point(cursor)
         })
     }
 
-    pub fn physical_size(&self) -> PhysicalSize {
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
         let mode = unsafe { CGDisplayCopyDisplayMode(self.0.id) };
         if mode.is_null() {
-            return PhysicalSize {
-                width: 0.0,
-                height: 0.0,
-            };
+            return None;
         }
 
-        let width = unsafe { core_graphics::display::CGDisplayModeGetWidth(mode) };
-        let height = unsafe { core_graphics::display::CGDisplayModeGetHeight(mode) };
+        let width = unsafe { core_graphics::display::CGDisplayModeGetPixelWidth(mode) };
+        let height = unsafe { core_graphics::display::CGDisplayModeGetPixelHeight(mode) };
 
         unsafe { core_graphics::display::CGDisplayModeRelease(mode) };
 
-        PhysicalSize {
+        Some(PhysicalSize {
             width: width as f64,
             height: height as f64,
-        }
+        })
+    }
+
+    pub fn scale(&self) -> Option<f64> {
+        Some(unsafe { NSScreen::backingScaleFactor(self.as_ns_screen()?) })
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -103,12 +120,32 @@ impl DisplayImpl {
         refresh_rate
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> Option<String> {
+        use cocoa::base::id;
+        use cocoa::foundation::NSString;
+        use objc::{msg_send, *};
+        use std::ffi::CStr;
+
+        unsafe {
+            if let Some(ns_screen) = self.as_ns_screen() {
+                let name: id = msg_send![ns_screen, localizedName];
+                if !name.is_null() {
+                    let name = CStr::from_ptr(NSString::UTF8String(name))
+                        .to_string_lossy()
+                        .to_string();
+                    return Some(name);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn as_ns_screen(&self) -> Option<*mut objc::runtime::Object> {
         use cocoa::appkit::NSScreen;
         use cocoa::base::{id, nil};
         use cocoa::foundation::{NSArray, NSDictionary, NSString};
         use objc::{msg_send, *};
-        use std::ffi::CStr;
 
         unsafe {
             let screens = NSScreen::screens(nil);
@@ -126,19 +163,41 @@ impl DisplayImpl {
                 let num_value: u32 = msg_send![num, unsignedIntValue];
 
                 if num_value == self.0.id {
-                    let name: id = msg_send![screen, localizedName];
-                    if !name.is_null() {
-                        let name = CStr::from_ptr(NSString::UTF8String(name))
-                            .to_string_lossy()
-                            .to_string();
-                        return name;
-                    }
+                    return Some(screen);
                 }
             }
-
-            // Fallback to generic name with display ID
-            format!("Display {}", self.0.id)
         }
+
+        None
+    }
+}
+
+impl DisplayImpl {
+    pub async fn as_sc(&self) -> Option<arc::R<sc::Display>> {
+        sc::ShareableContent::current()
+            .await
+            .ok()?
+            .displays()
+            .iter()
+            .find(|d| d.display_id().0 == self.0.id)
+            .map(|v| v.retained())
+    }
+
+    pub async fn as_content_filter(&self) -> Option<arc::R<sc::ContentFilter>> {
+        self.as_content_filter_excluding_windows(vec![]).await
+    }
+
+    pub async fn as_content_filter_excluding_windows(
+        &self,
+        windows: Vec<arc::R<sc::Window>>,
+    ) -> Option<arc::R<sc::ContentFilter>> {
+        let excluded_windows =
+            ns::Array::from_slice_retained(windows.into_iter().collect::<Vec<_>>().as_slice());
+
+        Some(sc::ContentFilter::with_display_excluding_windows(
+            self.as_sc().await?.as_ref(),
+            &excluded_windows,
+        ))
     }
 }
 
@@ -203,7 +262,7 @@ impl WindowImpl {
         Self::list()
             .into_iter()
             .filter_map(|window| {
-                let bounds = window.bounds()?;
+                let bounds = window.logical_bounds()?;
                 bounds.contains_point(cursor).then_some(window)
             })
             .collect()
@@ -258,7 +317,21 @@ impl WindowImpl {
         }
     }
 
-    pub fn bounds(&self) -> Option<LogicalBounds> {
+    pub fn name(&self) -> Option<String> {
+        let windows =
+            core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
+
+        let window_dict =
+            unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
+
+        unsafe {
+            window_dict
+                .find(kCGWindowName)
+                .map(|v| CFString::from_void(*v).to_string())
+        }
+    }
+
+    pub fn logical_bounds(&self) -> Option<LogicalBounds> {
         let windows =
             core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
 
@@ -279,6 +352,22 @@ impl WindowImpl {
                 width: rect.size.width,
                 height: rect.size.height,
             },
+        })
+    }
+
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        Some(self.logical_bounds()?.size())
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        let logical_bounds = self.logical_bounds()?;
+        let display = self.display()?;
+
+        let scale = display.physical_size()?.width() / display.logical_size()?.width();
+
+        Some(PhysicalSize {
+            width: logical_bounds.size().width() * scale,
+            height: logical_bounds.size().height() * scale,
         })
     }
 
@@ -357,6 +446,38 @@ impl WindowImpl {
             pool.drain();
             result
         }
+    }
+
+    pub async fn as_sc(&self) -> Option<arc::R<sc::Window>> {
+        sc::ShareableContent::current()
+            .await
+            .ok()?
+            .windows()
+            .iter()
+            .find(|w| w.id() == self.0)
+            .map(|v| v.retained())
+    }
+
+    pub fn display(&self) -> Option<DisplayImpl> {
+        let descriptions = core_graphics::window::create_description_from_array(
+            CFArray::from_copyable(&[self.0]),
+        )?;
+
+        let window_bounds = CGRect::from_dict_representation(
+            &descriptions
+                .get(0)?
+                .get(unsafe { kCGWindowBounds })
+                .downcast::<CFDictionary>()?,
+        )?;
+
+        for id in CGDisplay::active_displays().ok()? {
+            let display = CGDisplay::new(id);
+            if window_bounds.is_intersects(&display.bounds()) {
+                return Some(DisplayImpl(display));
+            }
+        }
+
+        None
     }
 }
 

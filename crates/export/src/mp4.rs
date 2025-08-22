@@ -1,8 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use crate::ExporterBase;
-use cap_editor::get_audio_segments;
-use cap_media::feeds::AudioRenderer;
+use cap_editor::{AudioRenderer, get_audio_segments};
 use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;

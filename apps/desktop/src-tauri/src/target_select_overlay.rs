@@ -36,8 +36,8 @@ pub struct WindowUnderCursor {
 
 #[derive(Serialize, Type, Clone)]
 pub struct DisplayInformation {
-    name: String,
-    physical_size: PhysicalSize,
+    name: Option<String>,
+    physical_size: Option<PhysicalSize>,
     refresh_rate: String,
 }
 
@@ -64,23 +64,12 @@ pub async fn open_target_select_overlays(
                 {
                     let display = cap_displays::Display::get_containing_cursor();
                     let window = cap_displays::Window::get_topmost_at_cursor();
-
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
                         window: window.and_then(|w| {
-                            let bounds = w.bounds()?;
-
-                            // Convert global window bounds to display-relative coordinates
-                            let bounds = if let Some(current_display) = &display {
-                                let display_pos = current_display.raw_handle().logical_position();
-                                LogicalBounds::new(bounds.position() - display_pos, bounds.size())
-                            } else {
-                                bounds
-                            };
-
                             Some(WindowUnderCursor {
                                 id: w.id(),
-                                bounds,
+                                bounds: w.display_relative_logical_bounds()?,
                                 app_name: w.owner_name()?,
                                 icon: w.app_icon().map(|bytes| {
                                     format!(
@@ -134,10 +123,10 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
     let display_id = display_id
         .parse::<DisplayId>()
         .map_err(|err| format!("Invalid display ID: {}", err))?;
-    let display = Display::from_id(display_id).ok_or("Display not found")?;
+    let display = Display::from_id(&display_id).ok_or("Display not found")?;
 
     Ok(DisplayInformation {
-        name: display.name().to_string(),
+        name: display.name(),
         physical_size: display.physical_size(),
         refresh_rate: display.refresh_rate().to_string(),
     })

@@ -5,7 +5,6 @@ import {
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
-import { Menu, Submenu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
@@ -23,20 +22,22 @@ import { createStore, reconcile } from "solid-js/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
+	type DisplayId,
 	events,
+	type LogicalBounds,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
-import DisplayArt from "../assets/illustrations/display.png";
 
 export default function () {
-	const [params] = useSearchParams<{ displayId: string }>();
+	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
 			display_id: null,
 			window: null,
+			screen: null,
 		});
 
 	const unsubTargetUnderCursor = events.targetUnderCursor.listen((event) => {
@@ -57,10 +58,10 @@ export default function () {
 			}
 		},
 		enabled:
-			params.displayId !== undefined && rawOptions.targetMode === "screen",
+			params.displayId !== undefined && rawOptions.targetMode === "display",
 	}));
 
-	const [bounds, _setBounds] = createStore({
+	const [bounds, _setBounds] = createStore<LogicalBounds>({
 		position: { x: 0, y: 0 },
 		size: { width: 400, height: 300 },
 	});
@@ -72,19 +73,13 @@ export default function () {
 				y: Math.max(0, newBounds.position.y),
 			},
 			size: {
-				width: Math.max(
-					150,
-					Math.min(
-						window.innerWidth - Math.max(0, newBounds.position.x),
-						newBounds.size.width,
-					),
+				width: Math.min(
+					window.innerWidth - newBounds.position.x,
+					newBounds.size.width,
 				),
-				height: Math.max(
-					150,
-					Math.min(
-						window.innerHeight - Math.max(0, newBounds.position.y),
-						newBounds.size.height,
-					),
+				height: Math.min(
+					window.innerHeight - newBounds.position.y,
+					newBounds.size.height,
 				),
 			},
 		};
@@ -106,28 +101,36 @@ export default function () {
 	// Eg. on Windows Ctrl+P would open the print dialog without this
 	createEventListener(document, "keydown", (e) => e.preventDefault());
 
+	createEffect(() => console.log(displayInformation.data));
+
 	return (
 		<Switch>
-			<Match when={rawOptions.targetMode === "screen"}>
+			<Match when={rawOptions.targetMode === "display"}>
 				{(_) => (
-					<Show when={displayInformation.data} keyed>
+					<Show
+						when={true}
+						// TODO: || displayInformation.data
+						keyed
+					>
 						{(display) => (
 							<div
-								data-over="true"
-								class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/30 transition-colors"
+								data-over="true" // TODO: {targetUnderCursor.display_id === params.displayId}
+								class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
 							>
-								<img src={DisplayArt} class="w-full max-w-[160px] mb-5" />
-								<p class="mb-2 text-3xl font-semibold">{display.name}</p>
-								<p class="mb-2 text-base">
-									{`${display.physical_size.width}x${display.physical_size.height} · ${display.refresh_rate}FPS`}
-								</p>
+								{/*<span class="text-3xl font-semibold mb-2">
+									{display.name || "Monitor"}
+								</span>
+								<Show when={display.physical_size}>
+									{(size) => (
+										<span class="text-xs mb-2">
+											{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
+										</span>
+									)}
+								</Show>
 
 								<RecordingControls
-									target={{
-										variant: "screen",
-										id: getDisplayId(params.displayId),
-									}}
-								/>
+									target={{ variant: "screen", id: params.displayId! }}
+								/>*/}
 							</div>
 						)}
 					</Show>
@@ -143,10 +146,10 @@ export default function () {
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
-							class="relative w-screen h-screen bg-black/50"
+							class="w-screen h-screen bg-black/50 relative"
 						>
 							<div
-								class="flex absolute flex-col justify-center items-center bg-blue-600/40"
+								class="bg-blue-600/40 absolute flex flex-col items-center justify-center"
 								style={{
 									width: `${windowUnderCursor.bounds.size.width}px`,
 									height: `${windowUnderCursor.bounds.size.height}px`,
@@ -154,27 +157,27 @@ export default function () {
 									top: `${windowUnderCursor.bounds.position.y}px`,
 								}}
 							>
-								<div class="flex flex-col justify-center items-center">
+								<div class="flex flex-col items-center justify-center">
 									<Show when={windowUnderCursor.icon}>
 										{(icon) => (
 											<img
 												src={icon()}
 												alt={`${windowUnderCursor.app_name} icon`}
-												class="mb-3 w-32 h-32 rounded-lg"
+												class="w-32 h-32 mb-3 rounded-lg"
 											/>
 										)}
 									</Show>
-									<span class="mb-2 text-3xl font-semibold">
+									<span class="text-3xl font-semibold mb-2">
 										{windowUnderCursor.app_name}
 									</span>
-									<span class="mb-2 text-xs">
+									<span class="text-xs mb-2">
 										{`${windowUnderCursor.bounds.size.width}x${windowUnderCursor.bounds.size.height}`}
 									</span>
 								</div>
 								<RecordingControls
 									target={{
 										variant: "window",
-										id: Number(windowUnderCursor.id),
+										id: windowUnderCursor.id,
 									}}
 								/>
 
@@ -206,41 +209,6 @@ export default function () {
 					>
 						{(_) => {
 							const [dragging, setDragging] = createSignal(false);
-							// Track whether the controls should be placed above the selection to avoid window bottom overflow
-							const [placeControlsAbove, setPlaceControlsAbove] =
-								createSignal(false);
-							let controlsEl: HTMLDivElement | undefined;
-
-							// Recompute placement when bounds change or window resizes
-							createEffect(() => {
-								// Read reactive dependencies
-								const top = bounds.position.y;
-								const height = bounds.size.height;
-								// Measure controls height (fallback to 64px if not yet mounted)
-								const ctrlH = controlsEl?.offsetHeight ?? 64;
-								const margin = 16;
-
-								const wouldOverflow =
-									top + height + margin + ctrlH > window.innerHeight;
-								setPlaceControlsAbove(wouldOverflow);
-							});
-
-							// Handle window resize to keep placement responsive
-							createRoot((dispose) => {
-								const onResize = () => {
-									const ctrlH = controlsEl?.offsetHeight ?? 64;
-									const margin = 16;
-									const wouldOverflow =
-										bounds.position.y + bounds.size.height + margin + ctrlH >
-										window.innerHeight;
-									setPlaceControlsAbove(wouldOverflow);
-								};
-								window.addEventListener("resize", onResize);
-								onCleanup(() => {
-									window.removeEventListener("resize", onResize);
-									dispose();
-								});
-							});
 
 							function createOnMouseDown(
 								onDrag: (
@@ -254,24 +222,19 @@ export default function () {
 										size: { ...bounds.size },
 									};
 
-									let animationFrame: number | null = null;
-
 									createRoot((dispose) => {
 										createEventListenerMap(window, {
-											mouseup: () => {
-												if (animationFrame)
-													cancelAnimationFrame(animationFrame);
-												dispose();
-											},
+											mouseup: () => dispose(),
 											mousemove: (moveEvent) => {
-												if (animationFrame)
-													cancelAnimationFrame(animationFrame);
-
-												animationFrame = requestAnimationFrame(() => {
-													onDrag(startBounds, {
-														x: moveEvent.clientX - downEvent.clientX, // Remove Math.max constraint
-														y: moveEvent.clientY - downEvent.clientY, // Remove Math.max constraint
-													});
+												onDrag(startBounds, {
+													x: Math.max(
+														-startBounds.position.x,
+														moveEvent.clientX - downEvent.clientX,
+													),
+													y: Math.max(
+														-startBounds.position.y,
+														moveEvent.clientY - downEvent.clientY,
+													),
 												});
 											},
 										});
@@ -512,12 +475,12 @@ export default function () {
 									<>
 										{/* Left */}
 										<div
-											class="absolute top-0 bottom-0 left-0 bg-black/50"
+											class="bg-black/50 absolute top-0 left-0 bottom-0"
 											style={{ width: `${bounds.position.x}px` }}
 										/>
 										{/* Right */}
 										<div
-											class="absolute top-0 right-0 bottom-0 bg-black/50"
+											class="bg-black/50 absolute top-0 right-0 bottom-0"
 											style={{
 												width: `${
 													window.innerWidth -
@@ -527,7 +490,7 @@ export default function () {
 										/>
 										{/* Top center */}
 										<div
-											class="absolute top-0 bg-black/50"
+											class="bg-black/50 absolute top-0"
 											style={{
 												left: `${bounds.position.x}px`,
 												width: `${bounds.size.width}px`,
@@ -536,7 +499,7 @@ export default function () {
 										/>
 										{/* Bottom center */}
 										<div
-											class="absolute bottom-0 bg-black/50"
+											class="bg-black/50 absolute bottom-0"
 											style={{
 												left: `${bounds.position.x}px`,
 												width: `${bounds.size.width}px`,
@@ -556,7 +519,7 @@ export default function () {
 
 									<div
 										class={cx(
-											"flex absolute flex-col items-center",
+											"absolute flex flex-col items-center",
 											dragging() ? "cursor-grabbing" : "cursor-grab",
 										)}
 										style={{
@@ -609,23 +572,14 @@ export default function () {
 										}}
 									>
 										<div
-											ref={controlsEl}
-											class={cx(
-												"flex absolute flex-col items-center m-2",
-												placeControlsAbove() ? "bottom-full" : "top-full",
-											)}
+											class="absolute top-full flex flex-col items-center m-2"
 											style={{ width: `${bounds.size.width}px` }}
 										>
 											<RecordingControls
 												target={{
 													variant: "area",
-													screen: Number(params.displayId),
-													bounds: {
-														x: bounds.position.x,
-														y: bounds.position.y,
-														width: bounds.size.width,
-														height: bounds.size.height,
-													},
+													screen: params.displayId!,
+													bounds,
 												}}
 											/>
 										</div>
@@ -633,7 +587,9 @@ export default function () {
 
 									<ResizeHandles />
 
-									<p class="z-10 text-xl">Click and drag area to record</p>
+									<span class="text-xl z-10">
+										Click and drag area to record
+									</span>
 								</div>
 							);
 						}}
@@ -645,115 +601,21 @@ export default function () {
 }
 
 function RecordingControls(props: { target: ScreenCaptureTarget }) {
-	const { rawOptions, setOptions } = createOptionsQuery();
-
-	const capitalize = (str: string) => {
-		return str.charAt(0).toUpperCase() + str.slice(1);
-	};
-
-	const menuModes = async () => {
-		return await Menu.new({
-			items: [
-				{
-					id: "studio",
-					text: "Studio Mode",
-					action: () => {
-						setOptions("mode", "studio");
-					},
-				},
-				{
-					id: "instant",
-					text: "Instant Mode",
-					action: () => {
-						setOptions("mode", "instant");
-					},
-				},
-			],
-		});
-	};
-
-	const countdownMenu = async () =>
-		await Submenu.new({
-			text: "Recording Countdown",
-			items: [
-				{
-					id: "countdown-three",
-					text: "3 seconds",
-					action: () => {
-						console.log("Countdown 3 clicked");
-					},
-				},
-				{
-					id: "countdown-five",
-					text: "5 seconds",
-					action: () => {
-						console.log("Countdown 5 clicked");
-					},
-				},
-				{
-					id: "countdown-ten",
-					text: "10 seconds",
-					action: () => {
-						console.log("Countdown 10 clicked");
-					},
-				},
-			],
-		});
-	const preRecordingMenu = async () => {
-		return await Menu.new({
-			items: [await countdownMenu()],
-		});
-	};
+	const { rawOptions } = createOptionsQuery();
 
 	return (
-		<div class="flex gap-2.5 items-center p-3 my-4 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
-			<div
-				onClick={() => setOptions("targetMode", null)}
-				class="flex justify-center items-center bg-white rounded-full transition-opacity cursor-pointer size-9 hover:opacity-80"
-			>
-				<IconCapX class="will-change-transform size-3" />
-			</div>
-			<div
-				class="flex items-center px-4 py-2 rounded-full transition-colors cursor-pointer bg-blue-9 hover:bg-blue-10"
-				onClick={() => {
-					commands.startRecording({
-						capture_target: props.target,
-						mode: rawOptions.mode,
-						capture_system_audio: rawOptions.captureSystemAudio,
-					});
-				}}
-			>
-				{rawOptions.mode === "studio" ? (
-					<IconCapFilmCut class="mr-2 size-4" />
-				) : (
-					<IconCapInstant class="mr-2 size-4" />
-				)}
-				<p class="text-sm text-white text-nowrap">
-					<span class="font-medium">Start Recording</span>:
-				</p>
-				<div
-					onClick={(e) => {
-						e.stopPropagation();
-						menuModes().then((menu) => menu.popup());
-					}}
-					class="flex gap-1.5 items-center"
-				>
-					<p class="pl-0.5 text-sm text-nowrap text-white">
-						{capitalize(rawOptions.mode) + " Mode"}
-					</p>
-					<IconCapCaretDown class="focus:rotate-90" />
-				</div>
-			</div>
-			<div
-				onClick={(e) => {
-					e.stopPropagation();
-					preRecordingMenu().then((menu) => menu.popup());
-				}}
-				class="flex justify-center items-center rounded-full border transition-opacity cursor-pointer bg-gray-6 border-gray-7 size-9 hover:opacity-80"
-			>
-				<IconCapGear class="will-change-transform size-5" />
-			</div>
-		</div>
+		<Button
+			size="lg"
+			onClick={() => {
+				commands.startRecording({
+					capture_target: props.target,
+					mode: rawOptions.mode,
+					capture_system_audio: rawOptions.captureSystemAudio,
+				});
+			}}
+		>
+			Start Recording
+		</Button>
 	);
 }
 

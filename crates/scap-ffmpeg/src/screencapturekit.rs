@@ -9,7 +9,7 @@ pub enum AsFFmpegError {
     BaseAddrLock(os::Error),
 }
 
-impl<'a> super::AsFFmpeg for scap_screencapturekit::VideoFrame<'a> {
+impl super::AsFFmpeg for scap_screencapturekit::VideoFrame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let mut image_buf = self.image_buf().retained();
 

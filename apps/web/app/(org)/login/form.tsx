@@ -1,6 +1,5 @@
 "use client";
 
-import { NODE_ENV } from "@cap/env";
 import { Button, Input, LogoBadge } from "@cap/ui";
 import {
 	faArrowLeft,
@@ -8,13 +7,12 @@ import {
 	faExclamationCircle,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import Cookies from "js-cookie";
 import { LucideArrowUpRight } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { Suspense, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -28,45 +26,19 @@ const MotionButton = motion(Button);
 
 export function LoginForm() {
 	const searchParams = useSearchParams();
+	const router = useRouter();
 	const next = searchParams?.get("next");
 	const [email, setEmail] = useState("");
+	const [loading, setLoading] = useState(false);
+	const [emailSent, setEmailSent] = useState(false);
 	const [oauthError, setOauthError] = useState(false);
 	const [showOrgInput, setShowOrgInput] = useState(false);
 	const [organizationId, setOrganizationId] = useState("");
 	const [organizationName, setOrganizationName] = useState<string | null>(null);
+	const [lastEmailSentTime, setLastEmailSentTime] = useState<number | null>(
+		null,
+	);
 	const theme = Cookies.get("theme") || "light";
-
-	const emailSignInMutation = useMutation({
-		mutationFn: async (email: string) => {
-			trackEvent("auth_started", {
-				method: "email",
-				is_signup: !oauthError,
-			});
-
-			const result = await signIn("email", {
-				email,
-				redirect: false,
-				...(next && next.length > 0 ? { callbackUrl: next } : {}),
-			});
-
-			if (!result?.ok || result?.error) {
-				throw new Error("Failed to send email");
-			}
-
-			return result;
-		},
-		onSuccess: () => {
-			trackEvent("auth_email_sent", {
-				email_domain: email.split("@")[1],
-			});
-			toast.success("Email sent - check your inbox!");
-		},
-		onError: () => {
-			toast.error("Error sending email - try again?");
-		},
-	});
-
-	const emailSent = emailSignInMutation.isSuccess;
 
 	useEffect(() => {
 		theme === "dark"
@@ -122,8 +94,6 @@ export function LoginForm() {
 					}),
 				});
 				const data = await response.json();
-
-				console.log(data);
 
 				if (data.url) {
 					window.location.href = data.url;
@@ -274,7 +244,64 @@ export function LoginForm() {
 											e.preventDefault();
 											if (!email) return;
 
-											emailSignInMutation.mutate(email);
+											// Check if we're rate limited on the client side
+											if (lastEmailSentTime) {
+												const timeSinceLastRequest =
+													Date.now() - lastEmailSentTime;
+												const waitTime = 30000; // 30 seconds
+												if (timeSinceLastRequest < waitTime) {
+													const remainingSeconds = Math.ceil(
+														(waitTime - timeSinceLastRequest) / 1000,
+													);
+													toast.error(
+														`Please wait ${remainingSeconds} seconds before requesting a new code`,
+													);
+													return;
+												}
+											}
+
+											setLoading(true);
+											trackEvent("auth_started", {
+												method: "email",
+												is_signup: !oauthError,
+											});
+											signIn("email", {
+												email,
+												redirect: false,
+												...(next && next.length > 0
+													? { callbackUrl: next }
+													: {}),
+											})
+												.then((res) => {
+													setLoading(false);
+
+													if (res?.ok && !res?.error) {
+														setEmailSent(true);
+														setLastEmailSentTime(Date.now());
+														trackEvent("auth_email_sent", {
+															email_domain: email.split("@")[1],
+														});
+														const params = new URLSearchParams({
+															email,
+															...(next && { next }),
+															lastSent: Date.now().toString(),
+														});
+														router.push(`/verify-otp?${params.toString()}`);
+													} else {
+														// NextAuth always returns "EmailSignin" for all email provider errors
+														// Since we already check rate limiting on the client side before sending,
+														// if we get an error here, it's likely rate limiting from the server
+														toast.error(
+															"Please wait 30 seconds before requesting a new code",
+														);
+													}
+												})
+												.catch((error) => {
+													setEmailSent(false);
+													setLoading(false);
+													// Catch block is rarely triggered with NextAuth
+													toast.error("Error sending email - try again?");
+												});
 										}}
 										className="flex flex-col space-y-3"
 									>
@@ -283,7 +310,7 @@ export function LoginForm() {
 											email={email}
 											emailSent={emailSent}
 											setEmail={setEmail}
-											loading={emailSignInMutation.isPending}
+											loading={loading}
 											oauthError={oauthError}
 											handleGoogleSignIn={handleGoogleSignIn}
 										/>
@@ -315,18 +342,6 @@ export function LoginForm() {
 							.
 						</motion.p>
 					</motion.div>
-					{emailSent && (
-						<motion.button
-							layout
-							className="pt-3 mx-auto text-sm underline text-gray-10 hover:text-gray-8"
-							onClick={() => {
-								setEmail("");
-								emailSignInMutation.reset();
-							}}
-						>
-							Click to restart sign in process
-						</motion.button>
-					)}
 				</Suspense>
 			</motion.div>
 		</motion.div>
@@ -409,11 +424,7 @@ const NormalLogin = ({
 					disabled={loading || emailSent}
 					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
 				>
-					{emailSent
-						? NODE_ENV === "development"
-							? "Email sent to your terminal"
-							: "Email sent to your inbox"
-						: "Login with email"}
+					Login with email
 				</MotionButton>
 				{/* {NODE_ENV === "development" && (
                   <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
