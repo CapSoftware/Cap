@@ -166,6 +166,7 @@ impl Message<NewFrame> for FrameHandler {
                 total_count,
                 WINDOW_DURATION.as_secs()
             );
+            let _ = ctx.actor_ref().stop_gracefully().await;
             return;
             // return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
         }

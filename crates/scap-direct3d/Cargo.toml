@@ -2,6 +2,7 @@
 name = "scap-direct3d"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

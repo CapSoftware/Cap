@@ -2,6 +2,7 @@
 name = "cap-camera-avfoundation"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

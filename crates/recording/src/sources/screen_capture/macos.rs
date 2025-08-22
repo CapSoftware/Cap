@@ -233,7 +233,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                     match futures::future::select(
                         error_rx.recv_async(),
-                        control_signal.receiver.recv_async(),
+                        control_signal.receiver().recv_async(),
                     )
                     .await
                     {

@@ -96,14 +96,14 @@ impl Settings {
     pub fn can_is_border_required() -> windows::core::Result<bool> {
         ApiInformation::IsPropertyPresent(
             &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
-            &HSTRING::from("IsCursorCaptureEnabled"),
+            &HSTRING::from("IsBorderRequired"),
         )
     }
 
     pub fn can_is_cursor_capture_enabled() -> windows::core::Result<bool> {
         ApiInformation::IsPropertyPresent(
             &HSTRING::from("Windows.Graphics.Capture.GraphicsCaptureSession"),
-            &HSTRING::from("IsBorderRequired"),
+            &HSTRING::from("IsCursorCaptureEnabled"),
         )
     }
 

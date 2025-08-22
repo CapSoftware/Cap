@@ -23,21 +23,12 @@ pub async fn main() {
 
     println!("Recording to directory '{}'", dir.path().display());
 
-    dbg!(
-        list_windows()
-            .into_iter()
-            .map(|(v, _)| v)
-            .collect::<Vec<_>>()
-    );
-
-    return;
-
     let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
             capture_target: ScreenCaptureTarget::Display {
-                id: Display::list()[1].id(),
+                id: Display::primary().id(),
             },
             // ScreenCaptureTarget::Window {
             //     id: Window::list()

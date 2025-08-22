@@ -249,8 +249,10 @@ struct Config {
 pub enum ScreenCaptureInitError {
     #[error("NoDisplay")]
     NoDisplay,
-    #[error("PhysicalSize")]
-    PhysicalSize,
+    #[error("NoWindow")]
+    NoWindow,
+    #[error("Bounds")]
+    NoBounds,
 }
 
 impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
@@ -273,12 +275,18 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         let crop_bounds = match target {
             ScreenCaptureTarget::Display { .. } => None,
             ScreenCaptureTarget::Window { id } => {
-                let window = Window::from_id(&id).unwrap();
+                let window = Window::from_id(&id).ok_or(ScreenCaptureInitError::NoWindow)?;
 
                 #[cfg(target_os = "macos")]
                 {
-                    let raw_display_bounds = display.raw_handle().logical_bounds().unwrap();
-                    let raw_window_bounds = window.raw_handle().logical_bounds().unwrap();
+                    let raw_display_bounds = display
+                        .raw_handle()
+                        .logical_bounds()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
+                    let raw_window_bounds = window
+                        .raw_handle()
+                        .logical_bounds()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
 
                     Some(LogicalBounds::new(
                         LogicalPosition::new(
@@ -291,8 +299,14 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
                 #[cfg(windows)]
                 {
-                    let raw_display_position = display.raw_handle().physical_position().unwrap();
-                    let raw_window_bounds = window.raw_handle().physical_bounds().unwrap();
+                    let raw_display_position = display
+                        .raw_handle()
+                        .physical_position()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
+                    let raw_window_bounds = window
+                        .raw_handle()
+                        .physical_bounds()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
 
                     Some(PhysicalBounds::new(
                         PhysicalPosition::new(
@@ -314,8 +328,12 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 
                 #[cfg(windows)]
                 {
-                    let raw_display_size = display.physical_size().unwrap();
-                    let logical_display_size = display.logical_size().unwrap();
+                    let raw_display_size = display
+                        .physical_size()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
+                    let logical_display_size = display
+                        .logical_size()
+                        .ok_or(ScreenCaptureInitError::NoBounds)?;
 
                     Some(PhysicalBounds::new(
                         PhysicalPosition::new(
@@ -351,7 +369,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 Some(b.size().map(|v| (v / 2.0).floor() * 2.0))
             })
             .or_else(|| display.physical_size())
-            .unwrap();
+            .ok_or(ScreenCaptureInitError::NoBounds)?;
 
         Ok(Self {
             config: Config {

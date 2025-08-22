@@ -14,11 +14,11 @@ impl DataExt for ::cpal::Data {
 
         let mut ffmpeg_frame = ffmpeg::frame::Audio::new(
             match self.sample_format() {
-                SampleFormat::F32 => Sample::F32(format_typ),
-                SampleFormat::F64 => Sample::F64(format_typ),
+                SampleFormat::U8 => Sample::U8(format_typ),
                 SampleFormat::I16 => Sample::I16(format_typ),
                 SampleFormat::I32 => Sample::I32(format_typ),
-                SampleFormat::U8 => Sample::U8(format_typ),
+                SampleFormat::F32 => Sample::F32(format_typ),
+                SampleFormat::F64 => Sample::F64(format_typ),
                 _ => panic!("Unsupported sample format"),
             },
             sample_count,

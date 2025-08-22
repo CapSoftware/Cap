@@ -19,7 +19,7 @@ mod windows {
         core::Interface,
     };
 
-    fn main() {
+    pub fn main() {
         tracing_subscriber::fmt::init();
 
         unsafe {
