@@ -9,6 +9,7 @@ mod editor_window;
 mod export;
 mod fake_window;
 mod flags;
+mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod notifications;
@@ -25,18 +26,23 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
+use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
-use cap_media::feeds::RawCameraFrame;
-use cap_media::feeds::{AudioInputFeed, AudioInputSamplesSender};
-use cap_media::platform::Bounds;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
 use cap_project::RecordingMetaInner;
 use cap_project::XY;
 use cap_project::{
     ProjectConfiguration, RecordingMeta, SharingMeta, StudioRecordingMeta, ZoomSegment,
 };
+use cap_recording::feeds::DeviceOrModelID;
+use cap_recording::{
+    feeds::CameraFeed,
+    feeds::RawCameraFrame,
+    feeds::{AudioInputFeed, AudioInputSamplesSender},
+    sources::ScreenCaptureTarget,
+};
 use cap_rendering::ProjectRecordingsMeta;
+use cap_rendering::RenderedFrame;
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::EditorInstances;
@@ -250,7 +256,7 @@ async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     camera_preview: State<'_, CameraPreview>,
-    id: Option<cap_media::feeds::DeviceOrModelID>,
+    id: Option<DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
 
@@ -433,9 +439,17 @@ pub struct RecordingInfo {
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 enum CurrentRecordingTarget {
-    Window { id: u32, bounds: Bounds },
-    Screen { id: u32 },
-    Area { screen: u32, bounds: Bounds },
+    Window {
+        id: WindowId,
+        bounds: LogicalBounds,
+    },
+    Screen {
+        id: DisplayId,
+    },
+    Area {
+        screen: DisplayId,
+        bounds: LogicalBounds,
+    },
 }
 
 #[derive(Serialize, Type)]
@@ -451,29 +465,37 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording().map(|r| {
-        let bounds = r.bounds();
+    Ok(JsonValue::new(
+        &state
+            .current_recording()
+            .map(|r| {
+                let target = match r.capture_target() {
+                    ScreenCaptureTarget::Display { id } => {
+                        CurrentRecordingTarget::Screen { id: id.clone() }
+                    }
+                    ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                        id: id.clone(),
+                        bounds: cap_displays::Window::from_id(id)
+                            .ok_or(())?
+                            .display_relative_logical_bounds()
+                            .ok_or(())?,
+                    },
+                    ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                        screen: screen.clone(),
+                        bounds: bounds.clone(),
+                    },
+                };
 
-        let target = match r.capture_target() {
-            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
-            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                id: *id,
-                bounds: *bounds,
-            },
-            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-                screen: *screen,
-                bounds: *bounds,
-            },
-        };
-
-        CurrentRecording {
-            target,
-            r#type: match r {
-                InProgressRecording::Instant { .. } => RecordingType::Instant,
-                InProgressRecording::Studio { .. } => RecordingType::Studio,
-            },
-        }
-    })))
+                Ok(CurrentRecording {
+                    target,
+                    r#type: match r {
+                        InProgressRecording::Instant { .. } => RecordingType::Instant,
+                        InProgressRecording::Studio { .. } => RecordingType::Studio,
+                    },
+                })
+            })
+            .transpose()?,
+    ))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -1896,7 +1918,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::delete_recording,
             recording::list_cameras,
             recording::list_capture_windows,
-            recording::list_capture_screens,
+            recording::list_capture_displays,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -1992,13 +2014,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    // #[cfg(debug_assertions)]
-    // specta_builder
-    //     .export(
-    //         specta_typescript::Typescript::default(),
-    //         "../src/utils/tauri.ts",
-    //     )
-    //     .expect("Failed to export typescript bindings");
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/utils/tauri.ts",
+        )
+        .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
@@ -2306,16 +2328,21 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
+    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
-    let instance = EditorInstance::new(path, {
+    let instance = {
         let app = app.clone();
-        move |state| {
-            EditorStateChanged::new(state).emit(&app).ok();
-        }
-    })
-    .await?;
+        EditorInstance::new(
+            path,
+            move |state| {
+                let _ = EditorStateChanged::new(state).emit(&app);
+            },
+            frame_cb,
+        )
+        .await?
+    };
 
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();

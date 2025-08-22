@@ -53,8 +53,8 @@ pub fn main() {
         for fr_range in fr_ranges.iter() {
             _formats.push(Format {
                 index: i,
-                width: desc.dimensions().width,
-                height: desc.dimensions().height,
+                width: desc.dims().width,
+                height: desc.dims().height,
                 fourcc: desc.media_sub_type(),
                 color_space,
                 max_frame_rate: (

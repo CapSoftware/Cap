@@ -1,11 +1,10 @@
-use std::time::Duration;
-
 use cap_media_info::AudioInfo;
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
+use std::time::Duration;
 use tracing::{debug, warn};
 
-use crate::pipeline::{RawNanoseconds, RealTimeClock, task::PipelineSourceTask};
+use crate::pipeline::task::PipelineSourceTask;
 
 pub struct AudioMixer {
     sources: Vec<AudioMixerSource>,
@@ -162,11 +161,8 @@ pub struct AudioMixerSource {
 }
 
 impl PipelineSourceTask for AudioMixer {
-    type Clock = RealTimeClock<RawNanoseconds>;
-
     fn run(
         &mut self,
-        _clock: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

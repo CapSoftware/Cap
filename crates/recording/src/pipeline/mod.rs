@@ -4,26 +4,23 @@ use tracing::{info, trace};
 
 pub mod audio_buffer;
 pub mod builder;
-pub mod clock;
 pub mod control;
 pub mod task;
 
 use crate::MediaError;
 
 use builder::PipelineBuilder;
-pub use clock::*;
 use control::{Control, ControlBroadcast, PipelineControlSignal};
 
-pub struct Pipeline<T: PipelineClock> {
-    clock: T,
+pub struct Pipeline {
     control: ControlBroadcast,
     task_handles: IndexMap<String, JoinHandle<()>>,
     is_shutdown: bool,
 }
 
-impl<T: PipelineClock> Pipeline<T> {
-    pub fn builder(clock: T) -> PipelineBuilder<T> {
-        PipelineBuilder::new(clock)
+impl Pipeline {
+    pub fn builder() -> PipelineBuilder {
+        PipelineBuilder::new()
     }
 
     pub async fn play(&mut self) -> Result<(), MediaError> {
@@ -31,7 +28,6 @@ impl<T: PipelineClock> Pipeline<T> {
             return Err(MediaError::ShutdownPipeline);
         };
 
-        self.clock.start();
         self.control.broadcast(Control::Play).await;
 
         Ok(())

@@ -56,10 +56,7 @@ declare global {
 	const IconCapUpload: typeof import("~icons/cap/upload.jsx")["default"];
 	const IconCapZoomIn: typeof import("~icons/cap/zoom-in.jsx")["default"];
 	const IconCapZoomOut: typeof import("~icons/cap/zoom-out.jsx")["default"];
-	const IconFa6SolidDisplay: typeof import("~icons/fa6-solid/display.jsx")["default"];
 	const IconHugeiconsEaseCurveControlPoints: typeof import("~icons/hugeicons/ease-curve-control-points.jsx")["default"];
-	const IconIcBaselineMonitor: typeof import("~icons/ic/baseline-monitor.jsx")["default"];
-	const IconIcRoundSearch: typeof import("~icons/ic/round-search.jsx")["default"];
 	const IconLucideAppWindowMac: typeof import("~icons/lucide/app-window-mac.jsx")["default"];
 	const IconLucideBell: typeof import("~icons/lucide/bell.jsx")["default"];
 	const IconLucideBug: typeof import("~icons/lucide/bug.jsx")["default"];
@@ -84,9 +81,6 @@ declare global {
 	const IconLucideUnplug: typeof import("~icons/lucide/unplug.jsx")["default"];
 	const IconLucideVolume2: typeof import("~icons/lucide/volume2.jsx")["default"];
 	const IconLucideVolumeX: typeof import("~icons/lucide/volume-x.jsx")["default"];
-	const IconLucideX: typeof import("~icons/lucide/x.jsx")["default"];
-	const IconMaterialSymbolsLightScreenshotFrame2: typeof import("~icons/material-symbols-light/screenshot-frame2.jsx")["default"];
-	const IconMaterialSymbolsLightScreenshotFrame2MaterialSymbolsScreenshotFrame2Rounded: typeof import("~icons/material-symbols-light/screenshot-frame2-material-symbols-screenshot-frame2-rounded.jsx")["default"];
 	const IconMaterialSymbolsScreenshotFrame2Rounded: typeof import("~icons/material-symbols/screenshot-frame2-rounded.jsx")["default"];
 	const IconMdiMonitor: typeof import("~icons/mdi/monitor.jsx")["default"];
 	const IconPhMonitorBold: typeof import("~icons/ph/monitor-bold.jsx")["default"];

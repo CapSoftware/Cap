@@ -1,14 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{
-    App, ArcLock, fake_window,
-    general_settings::{AppTheme, GeneralSettingsStore},
-    permissions,
-    target_select_overlay::WindowFocusManager,
-};
-use cap_displays::DisplayId;
-use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
+use cap_displays::{Display, DisplayId};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -25,6 +18,13 @@ use tauri::{
 use tokio::sync::RwLock;
 use tracing::debug;
 
+use crate::{
+    App, ArcLock, fake_window,
+    general_settings::{AppTheme, GeneralSettingsStore},
+    permissions,
+    target_select_overlay::WindowFocusManager,
+};
+
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
@@ -36,7 +36,7 @@ pub enum CapWindowId {
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
     Camera,
@@ -70,7 +70,7 @@ impl FromStr for CapWindowId {
             s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
                 screen_id: s
                     .replace("window-capture-occluder-", "")
-                    .parse::<u32>()
+                    .parse::<DisplayId>()
                     .map_err(|e| e.to_string())?,
             },
             s if s.starts_with("target-select-overlay-") => Self::TargetSelectOverlay {
@@ -180,9 +180,9 @@ pub enum ShowCapWindow {
     Settings { page: Option<String> },
     Editor { project_path: PathBuf },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
-    CaptureArea { screen_id: u32 },
+    CaptureArea { screen_id: DisplayId },
     Camera,
     InProgressRecording { countdown: Option<u32> },
     Upgrade,
@@ -237,6 +237,7 @@ impl ShowCapWindow {
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
+                        .content_protected(true)
                         .center()
                         .build()?;
 
@@ -251,12 +252,19 @@ impl ShowCapWindow {
                 }
             }
             Self::TargetSelectOverlay { display_id } => {
-                let Some(display) = cap_displays::Display::from_id(display_id.clone()) else {
+                let Some(display) = cap_displays::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
 
-                let size = display.raw_handle().logical_size();
+                #[cfg(target_os = "macos")]
                 let position = display.raw_handle().logical_position();
+                #[cfg(target_os = "macos")]
+                let size = display.logical_size().unwrap();
+
+                #[cfg(windows)]
+                let position = display.raw_handle().physical_position().unwrap();
+                #[cfg(windows)]
+                let size = display.physical_size().unwrap();
 
                 let mut window_builder = self
                     .window_builder(
@@ -394,9 +402,17 @@ impl ShowCapWindow {
                 window
             }
             Self::WindowCaptureOccluder { screen_id } => {
-                let Some(bounds) = logical_monitor_bounds(*screen_id) else {
+                let Some(display) = Display::from_id(screen_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
+
+                #[cfg(target_os = "macos")]
+                let position = display.raw_handle().logical_position();
+
+                #[cfg(windows)]
+                let position = display.raw_handle().physical_position().unwrap();
+
+                let bounds = display.physical_size().unwrap();
 
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
@@ -408,8 +424,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(bounds.size.width, bounds.size.height)
-                    .position(bounds.position.x, bounds.position.y)
+                    .inner_size(bounds.width(), bounds.height())
+                    .position(position.x(), position.y())
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -436,22 +452,23 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
-                let target_monitor = app
-                    .monitor_from_point(screen_bounds.x, screen_bounds.y)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(monitor);
+                let Some(display) = Display::from_id(screen_id) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
 
-                let size = target_monitor.size();
-                let scale_factor = target_monitor.scale_factor();
-                let pos = target_monitor.position();
-                window_builder = window_builder
-                    .inner_size(
-                        (size.width as f64) / scale_factor,
-                        (size.height as f64) / scale_factor,
-                    )
-                    .position(pos.x as f64, pos.y as f64);
+                #[cfg(target_os = "macos")]
+                if let Some(bounds) = display.raw_handle().logical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
+
+                #[cfg(windows)]
+                if let Some(bounds) = display.raw_handle().physical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
 
                 let window = window_builder.build()?;
 
@@ -465,7 +482,8 @@ impl ShowCapWindow {
                 if let Some(main_window) = CapWindowId::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                    && target_monitor.intersects(outer_pos, outer_size)
+                    && let Ok(scale_factor) = main_window.scale_factor()
+                    && display.intersects(outer_pos, outer_size, scale_factor)
                 {
                     let _ = main_window.minimize();
                 };
@@ -473,8 +491,7 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let mut width = 180.0 + 32.0;
-
+                let width = 250.0;
                 let height = 40.0;
 
                 let window = self
@@ -626,7 +643,7 @@ impl ShowCapWindow {
             },
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
-                    screen_id: *screen_id,
+                    screen_id: screen_id.clone(),
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
@@ -715,30 +732,68 @@ fn position_traffic_lights_impl(
 
 // Credits: tauri-plugin-window-state
 trait MonitorExt {
-    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool;
+    fn intersects(
+        &self,
+        position: PhysicalPosition<i32>,
+        size: PhysicalSize<u32>,
+        scale: f64,
+    ) -> bool;
 }
 
-impl MonitorExt for Monitor {
-    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
-        let PhysicalPosition { x, y } = *self.position();
-        let PhysicalSize { width, height } = *self.size();
+impl MonitorExt for Display {
+    fn intersects(
+        &self,
+        position: PhysicalPosition<i32>,
+        size: PhysicalSize<u32>,
+        _scale: f64,
+    ) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bounds) = self.raw_handle().logical_bounds() else {
+                return false;
+            };
 
-        let left = x;
-        let right = x + width as i32;
-        let top = y;
-        let bottom = y + height as i32;
+            let left = (bounds.position().x() * _scale) as i32;
+            let right = left + (bounds.size().width() * _scale) as i32;
+            let top = (bounds.position().y() * _scale) as i32;
+            let bottom = top + (bounds.size().height() * _scale) as i32;
 
-        [
-            (position.x, position.y),
-            (position.x + size.width as i32, position.y),
-            (position.x, position.y + size.height as i32),
-            (
-                position.x + size.width as i32,
-                position.y + size.height as i32,
-            ),
-        ]
-        .into_iter()
-        .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
+
+        #[cfg(windows)]
+        {
+            let Some(bounds) = self.raw_handle().physical_bounds() else {
+                return false;
+            };
+
+            let left = bounds.position().x() as i32;
+            let right = left + bounds.size().width() as i32;
+            let top = bounds.position().y() as i32;
+            let bottom = top + bounds.size().height() as i32;
+
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
     }
 }
 

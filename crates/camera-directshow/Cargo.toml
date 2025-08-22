@@ -2,6 +2,7 @@
 name = "cap-camera-directshow"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 tracing.workspace = true
@@ -26,15 +27,3 @@ workspace = true
 inquire = "0.7.5"
 tracing.workspace = true
 tracing-subscriber = "0.3.19"
-
-[target.'cfg(windows)'.dev-dependencies]
-windows-core = { workspace = true }
-windows = { workspace = true, features = [
-	"Win32_System_Com",
-	"Win32_Media_MediaFoundation",
-	"Win32_Media_DirectShow",
-	"Win32_System_Com_StructuredStorage",
-	"Win32_System_Ole",
-	"Win32_System_Variant",
-	"Win32_Media_KernelStreaming",
-] }

@@ -1,8 +1,7 @@
-mod audio_input;
-mod audio_mixer;
-mod camera;
-mod screen_capture;
-// pub mod system_audio;
+pub mod audio_input;
+pub mod audio_mixer;
+pub mod camera;
+pub mod screen_capture;
 
 pub use audio_input::*;
 pub use audio_mixer::*;
