@@ -1,6 +1,7 @@
 use cap_project::{LayoutMode, LayoutSegment};
 
 pub const LAYOUT_TRANSITION_DURATION: f64 = 0.3;
+pub const MIN_GAP_FOR_TRANSITION: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LayoutSegmentsCursor<'a> {
@@ -63,6 +64,23 @@ pub struct InterpolatedLayout {
 }
 
 impl InterpolatedLayout {
+    fn from_single_mode(mode: LayoutMode) -> Self {
+        let (camera_opacity, screen_opacity, camera_scale) = Self::get_layout_values(&mode);
+        
+        InterpolatedLayout {
+            camera_opacity,
+            screen_opacity,
+            camera_scale,
+            layout_mode: mode.clone(),
+            transition_progress: 1.0,
+            from_mode: mode.clone(),
+            to_mode: mode,
+            screen_blur: 0.0,
+            camera_only_zoom: 1.0,
+            camera_only_blur: 0.0,
+        }
+    }
+    
     pub fn new(cursor: LayoutSegmentsCursor) -> Self {
         let ease_in_out = bezier_easing::bezier_easing(0.42, 0.0, 0.58, 1.0).unwrap();
 
@@ -71,10 +89,26 @@ impl InterpolatedLayout {
             let transition_end = segment.end - LAYOUT_TRANSITION_DURATION;
 
             if cursor.time < segment.start && cursor.time >= transition_start {
-                let prev_mode = cursor
-                    .prev_segment
-                    .map(|s| s.mode.clone())
-                    .unwrap_or(LayoutMode::Default);
+                // Check if we should skip transition for small gaps
+                let prev_mode = if let Some(prev_seg) = cursor.prev_segment {
+                    let gap = segment.start - prev_seg.end;
+                    let same_mode = matches!(
+                        (&prev_seg.mode, &segment.mode),
+                        (LayoutMode::CameraOnly, LayoutMode::CameraOnly) |
+                        (LayoutMode::Default, LayoutMode::Default) |
+                        (LayoutMode::HideCamera, LayoutMode::HideCamera)
+                    );
+                    if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                        // Small gap between same modes, no transition needed
+                        return InterpolatedLayout::from_single_mode(segment.mode.clone());
+                    } else if gap > 0.01 {
+                        LayoutMode::Default
+                    } else {
+                        prev_seg.mode.clone()
+                    }
+                } else {
+                    LayoutMode::Default
+                };
                 let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
                 (
                     prev_mode,
@@ -83,14 +117,38 @@ impl InterpolatedLayout {
                 )
             } else if cursor.time >= transition_end && cursor.time < segment.end {
                 if let Some(next_seg) = cursor.next_segment() {
-                    let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
-                    (
-                        segment.mode.clone(),
-                        next_seg.mode.clone(),
-                        ease_in_out(progress as f32) as f64,
-                    )
+                    let gap = next_seg.start - segment.end;
+                    
+                    // For small gaps between same-mode segments, don't transition
+                    let same_mode = matches!(
+                        (&segment.mode, &next_seg.mode),
+                        (LayoutMode::CameraOnly, LayoutMode::CameraOnly) |
+                        (LayoutMode::Default, LayoutMode::Default) |
+                        (LayoutMode::HideCamera, LayoutMode::HideCamera)
+                    );
+                    if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                        // Keep the current mode without transitioning
+                        (segment.mode.clone(), segment.mode.clone(), 1.0)
+                    } else if gap > 0.01 {
+                        // There's a significant gap, so transition to default layout
+                        let progress = ((cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION).min(1.0);
+                        (
+                            segment.mode.clone(),
+                            LayoutMode::Default,
+                            ease_in_out(progress as f32) as f64,
+                        )
+                    } else {
+                        // No gap, segments are back-to-back, transition directly if modes differ
+                        let progress = ((cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION).min(1.0);
+                        (
+                            segment.mode.clone(),
+                            next_seg.mode.clone(),
+                            ease_in_out(progress as f32) as f64,
+                        )
+                    }
                 } else {
-                    let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
+                    // No next segment, transition to default
+                    let progress = ((cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION).min(1.0);
                     (
                         segment.mode.clone(),
                         LayoutMode::Default,
@@ -102,36 +160,51 @@ impl InterpolatedLayout {
             }
         } else if let Some(next_segment) = cursor.next_segment() {
             let transition_start = next_segment.start - LAYOUT_TRANSITION_DURATION;
-            if cursor.time >= transition_start {
-                let prev_mode = cursor
-                    .prev_segment
-                    .map(|s| s.mode.clone())
-                    .unwrap_or(LayoutMode::Default);
+            
+            if let Some(prev_seg) = cursor.prev_segment {
+                let gap = next_segment.start - prev_seg.end;
+                
+                // For small gaps between same-mode segments, stay in that mode
+                let same_mode = matches!(
+                    (&prev_seg.mode, &next_segment.mode),
+                    (LayoutMode::CameraOnly, LayoutMode::CameraOnly) |
+                    (LayoutMode::Default, LayoutMode::Default) |
+                    (LayoutMode::HideCamera, LayoutMode::HideCamera)
+                );
+                if gap < MIN_GAP_FOR_TRANSITION && same_mode {
+                    (prev_seg.mode.clone(), prev_seg.mode.clone(), 1.0)
+                } else if cursor.time >= transition_start {
+                    // Start transitioning into the next segment
+                    let prev_mode = if gap > 0.01 {
+                        LayoutMode::Default
+                    } else {
+                        prev_seg.mode.clone()
+                    };
+                    let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
+                    (
+                        prev_mode,
+                        next_segment.mode.clone(),
+                        ease_in_out(progress as f32) as f64,
+                    )
+                } else {
+                    // We're in a gap that requires transition - should be at default
+                    (LayoutMode::Default, LayoutMode::Default, 1.0)
+                }
+            } else if cursor.time >= transition_start {
+                // No previous segment, transitioning into the first segment
                 let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
                 (
-                    prev_mode,
+                    LayoutMode::Default,
                     next_segment.mode.clone(),
                     ease_in_out(progress as f32) as f64,
                 )
-            } else if let Some(prev_segment) = cursor.prev_segment {
-                if cursor.time < prev_segment.end + 0.05 {
-                    (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
-                } else {
-                    (LayoutMode::Default, LayoutMode::Default, 1.0)
-                }
             } else {
                 (LayoutMode::Default, LayoutMode::Default, 1.0)
             }
         } else {
-            if let Some(prev_segment) = cursor.prev_segment {
-                if cursor.time < prev_segment.end + 0.05 {
-                    (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
-                } else {
-                    (LayoutMode::Default, LayoutMode::Default, 1.0)
-                }
-            } else {
-                (LayoutMode::Default, LayoutMode::Default, 1.0)
-            }
+            // No next segment (at the end of timeline)
+            // The transition should have already completed inside the last segment
+            (LayoutMode::Default, LayoutMode::Default, 1.0)
         };
 
         let (start_camera_opacity, start_screen_opacity, start_camera_scale) =
