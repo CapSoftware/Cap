@@ -29,6 +29,7 @@ import {
 	type TargetUnderCursor,
 } from "~/utils/tauri";
 import DisplayArt from "../assets/illustrations/display.png";
+import { generalSettingsStore } from "~/store";
 
 export default function () {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
@@ -679,23 +680,17 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 				{
 					id: "countdown-three",
 					text: "3 seconds",
-					action: () => {
-						console.log("Countdown 3 clicked");
-					},
+					action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
 				},
 				{
 					id: "countdown-five",
 					text: "5 seconds",
-					action: () => {
-						console.log("Countdown 5 clicked");
-					},
+					action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
 				},
 				{
 					id: "countdown-ten",
 					text: "10 seconds",
-					action: () => {
-						console.log("Countdown 10 clicked");
-					},
+					action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
 				},
 			],
 		});
