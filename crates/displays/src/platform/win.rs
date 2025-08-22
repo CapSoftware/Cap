@@ -3,15 +3,7 @@ use tracing::error;
 use windows::{
     Graphics::Capture::GraphicsCaptureItem,
     Win32::{
-        Devices::Display::{
-            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-            DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
-            DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
-            QueryDisplayConfig,
-        },
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::{
             Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
             Gdi::{
@@ -26,10 +18,6 @@ use windows::{
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
-            Registry::{
-                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ, RegCloseKey, RegEnumKeyExW,
-                RegOpenKeyExW, RegQueryValueExW,
-            },
             Threading::{
                 GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
                 PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
