@@ -12,7 +12,7 @@ function TargetTypeButton(
 		<div
 			{...props}
 			class={cx(
-				"flex-1 text-center hover:bg-gray-3 bg-gray-2 flex flex-col ring-offset-gray-1 ring-offset-2 items-center justify-end gap-2 py-2.5 rounded-lg transition-all",
+				"flex-1 text-center hover:bg-gray-4 bg-gray-3 flex flex-col ring-offset-gray-1 ring-offset-2 items-center justify-end gap-2 py-1.5 rounded-lg transition-all",
 				props.selected
 					? "bg-gray-3 text-white ring-blue-9 ring-1"
 					: "ring-transparent ring-0",
@@ -20,7 +20,7 @@ function TargetTypeButton(
 		>
 			<props.Component
 				class={cx(
-					"size-5 transition-colors",
+					"size-6 transition-colors",
 					props.selected ? "text-gray-12" : "text-gray-9",
 				)}
 			/>

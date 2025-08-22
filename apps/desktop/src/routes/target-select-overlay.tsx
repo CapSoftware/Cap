@@ -29,7 +29,6 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
-import DisplayArt from "../assets/illustrations/display.png";
 
 export default function () {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
@@ -114,17 +113,18 @@ export default function () {
 				{(_) => (
 					<div
 						data-over={targetUnderCursor.display_id === params.displayId}
-						class="w-screen h-screen flex flex-col items-center justify-center bg-black/50 data-[over='true']:bg-blue-600/40 transition-colors"
+						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
+						<div class="absolute inset-0 bg-black/50 -z-10" />
 						<Show when={displayInformation.data} keyed>
 							{(display) => (
 								<>
-									<span class="text-3xl font-semibold mb-2">
+									<span class="text-3xl font-semibold mb-2 text-white">
 										{display.name || "Monitor"}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
-											<span class="text-xs mb-2">
+											<span class="text-xs mb-2 text-white">
 												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
 											</span>
 										)}
@@ -160,7 +160,7 @@ export default function () {
 									top: `${windowUnderCursor.bounds.position.y}px`,
 								}}
 							>
-								<div class="flex flex-col justify-center items-center">
+								<div class="flex flex-col justify-center items-center text-white">
 									<Show when={windowUnderCursor.icon}>
 										{(icon) => (
 											<img
@@ -187,7 +187,6 @@ export default function () {
 								<Button
 									variant="primary"
 									size="sm"
-									class="mt-4"
 									onClick={() => {
 										setBounds(windowUnderCursor.bounds);
 										setOptions({
@@ -701,15 +700,15 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 	};
 
 	return (
-		<div class="flex gap-2.5 items-center p-3 my-4 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+		<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
 			<div
 				onClick={() => setOptions("targetMode", null)}
-				class="flex justify-center items-center bg-white rounded-full transition-opacity cursor-pointer size-9 hover:opacity-80"
+				class="flex justify-center items-center bg-white rounded-full transition-opacity size-9 hover:opacity-80"
 			>
 				<IconCapX class="will-change-transform size-3" />
 			</div>
 			<div
-				class="flex items-center px-4 py-2 rounded-full transition-colors cursor-pointer bg-blue-9 hover:bg-blue-10"
+				class="flex flex-row rounded-full bg-blue-9 overflow-hidden group h-11"
 				onClick={() => {
 					commands.startRecording({
 						capture_target: props.target,
@@ -718,24 +717,28 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 					});
 				}}
 			>
-				{rawOptions.mode === "studio" ? (
-					<IconCapFilmCut class="mr-2 size-4" />
-				) : (
-					<IconCapInstant class="mr-2 size-4" />
-				)}
-				<p class="text-sm text-white text-nowrap">
-					<span class="font-medium">Start Recording</span>:
-				</p>
+				<div class="flex items-center pl-4 py-1 hover:bg-blue-10 transition-colors">
+					{rawOptions.mode === "studio" ? (
+						<IconCapFilmCut class="size-4" />
+					) : (
+						<IconCapInstant class="size-4" />
+					)}
+					<div class="flex flex-col ml-3 mr-2">
+						<span class="text-sm text-white font-medium text-nowrap">
+							Start Recording
+						</span>
+						<span class="text-xs text-nowrap text-white font-light -mt-0.5">
+							{`${capitalize(rawOptions.mode)} Mode`}
+						</span>
+					</div>
+				</div>
 				<div
+					class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
 					onClick={(e) => {
 						e.stopPropagation();
 						menuModes().then((menu) => menu.popup());
 					}}
-					class="flex gap-1.5 items-center"
 				>
-					<p class="pl-0.5 text-sm text-nowrap text-white">
-						{capitalize(rawOptions.mode) + " Mode"}
-					</p>
 					<IconCapCaretDown class="focus:rotate-90" />
 				</div>
 			</div>
@@ -744,7 +747,7 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 					e.stopPropagation();
 					preRecordingMenu().then((menu) => menu.popup());
 				}}
-				class="flex justify-center items-center rounded-full border transition-opacity cursor-pointer bg-gray-6 border-gray-7 size-9 hover:opacity-80"
+				class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
 			>
 				<IconCapGear class="will-change-transform size-5" />
 			</div>

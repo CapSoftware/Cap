@@ -10,12 +10,20 @@ import {
 import * as dialog from "@tauri-apps/plugin-dialog";
 import { type as ostype } from "@tauri-apps/plugin-os";
 import * as updater from "@tauri-apps/plugin-updater";
-import { createEffect, onCleanup, onMount } from "solid-js";
+import { cx } from "cva";
+import {
+	createEffect,
+	ErrorBoundary,
+	onCleanup,
+	onMount,
+	Suspense,
+} from "solid-js";
 import { reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import {
 	createCameraMutation,
+	createLicenseQuery,
 	listAudioDevices,
 	listScreens,
 	listVideoDevices,
@@ -27,14 +35,14 @@ import {
 	type DeviceOrModelID,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
-import CameraSelect from "./CameraSelect";
-import ChangelogButton from "./ChangeLogButton";
-import { WindowChromeHeader } from "./Context";
-import MicrophoneSelect from "./MicrophoneSelect";
+import { WindowChromeHeader } from "../Context";
 import {
 	RecordingOptionsProvider,
 	useRecordingOptions,
-} from "./OptionsContext";
+} from "../OptionsContext";
+import CameraSelect from "./CameraSelect";
+import ChangelogButton from "./ChangeLogButton";
+import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
 import TargetTypeButton from "./TargetTypeButton";
 
@@ -251,14 +259,17 @@ function Page() {
 		else setCamera.mutate(null);
 	});
 
+	const license = createLicenseQuery();
+
 	return (
 		<div class="flex justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
 				<div
 					dir={ostype() === "windows" ? "rtl" : "rtl"}
-					class="flex gap-1 items-center mx-2"
+					class="flex gap-1 items-center mx-2 w-full"
+					data-tauri-drag-region
 				>
-					<div class="flex gap-1 items-center">
+					<div class="flex gap-1 items-center" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
 							<button
 								type="button"
@@ -266,9 +277,9 @@ function Page() {
 									await commands.showWindow({ Settings: { page: "general" } });
 									getCurrentWindow().hide();
 								}}
-								class="flex items-center justify-center w-5 h-5 -ml-[1.5px]"
+								class="flex items-center justify-center size-5 -ml-[1.5px]"
 							>
-								<IconCapSettings class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+								<IconCapSettings class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
 						<Tooltip content={<span>Previous Recordings</span>}>
@@ -280,9 +291,9 @@ function Page() {
 									});
 									getCurrentWindow().hide();
 								}}
-								class="flex justify-center items-center w-5 h-5"
+								class="flex justify-center items-center size-5"
 							>
-								<IconLucideSquarePlay class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+								<IconLucideSquarePlay class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						</Tooltip>
 						<ChangelogButton />
@@ -294,10 +305,34 @@ function Page() {
 								}}
 								class="flex justify-center items-center"
 							>
-								<IconLucideBug class="transition-colors text-gray-11 size-3.5 hover:text-gray-12" />
+								<IconLucideBug class="transition-colors text-gray-11 size-4 hover:text-gray-12" />
 							</button>
 						)}
 					</div>
+					<div class="flex-1" data-tauri-drag-region />
+					<ErrorBoundary fallback={<></>}>
+						<Suspense>
+							<span
+								onClick={async () => {
+									if (license.data?.type !== "pro") {
+										await commands.showWindow("Upgrade");
+									}
+								}}
+								class={cx(
+									"text-[0.6rem] rounded-full px-1.5 py-0.5",
+									license.data?.type === "pro"
+										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
+										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
+								)}
+							>
+								{license.data?.type === "commercial"
+									? "Commercial"
+									: license.data?.type === "pro"
+										? "Pro"
+										: "Personal"}
+							</span>
+						</Suspense>
+					</ErrorBoundary>
 				</div>
 			</WindowChromeHeader>
 			<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">

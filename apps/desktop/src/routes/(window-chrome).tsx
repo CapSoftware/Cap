@@ -81,7 +81,7 @@ function Header() {
 		<header
 			class={cx(
 				"flex items-center space-x-1 h-9 select-none shrink-0 bg-gray-2",
-				isWindows ? "flex-row" : "flex-row-reverse pl-[5rem]",
+				isWindows ? "flex-row" : "flex-row-reverse pl-[4.2rem]",
 			)}
 			data-tauri-drag-region
 		>
