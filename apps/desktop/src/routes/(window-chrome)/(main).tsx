@@ -337,8 +337,6 @@ function Page() {
 					</a>
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
-							{/** biome-ignore lint/a11y/useKeyWithClickEvents: <explanation> */}
-							{/** biome-ignore lint/a11y/noStaticElementInteractions: <explanation> */}
 							<span
 								onClick={async () => {
 									if (license.data?.type !== "pro") {
