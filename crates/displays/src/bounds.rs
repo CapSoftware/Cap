@@ -93,6 +93,13 @@ impl PhysicalSize {
     pub fn height(&self) -> f64 {
         self.height
     }
+
+    pub fn map(&self, f: impl Fn(f64) -> f64) -> Self {
+        Self {
+            width: f(self.width),
+            height: f(self.height),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Type, Serialize, Deserialize, PartialEq)]

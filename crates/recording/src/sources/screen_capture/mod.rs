@@ -351,7 +351,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 }
 
                 #[cfg(windows)]
-                Some(b.size())
+                Some(b.size().map(|v| (v / 2.0).floor() * 2.0))
             })
             .or_else(|| display.physical_size())
             .unwrap();

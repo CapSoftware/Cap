@@ -234,7 +234,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     pixel_format: AVFrameCapture::PIXEL_FORMAT,
                     crop: config.crop_bounds.map(|b| {
                         let position = b.position();
-                        let size = b.size();
+                        let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
 
                         D3D11_BOX {
                             left: position.x() as u32,
