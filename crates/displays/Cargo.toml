@@ -19,9 +19,8 @@ core-foundation = "0.10.0"
 cocoa = "0.26.0"
 objc = "0.2.7"
 
-[target.'cfg(target_os= "windows")'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
-# <<<<<<< HEAD
     "Win32_Foundation",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
@@ -29,21 +28,4 @@ windows = { workspace = true, features = [
     "Win32_UI_HiDpi",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
-# =======
-# 	"Win32_Foundation",
-# 	"Win32_System",
-# 	"Win32_System_Threading",
-# 	"Win32_System_Registry",
-# 	"Win32_System_Com",
-# 	"Win32_System_Wmi",
-# 	"Win32_UI_WindowsAndMessaging",
-# 	"Win32_UI_Shell",
-# 	"Win32_UI_HiDpi",
-# 	"Win32_Graphics_Dwm",
-# 	"Win32_Graphics_Gdi",
-# 	"Win32_Storage_FileSystem",
-# 	"Win32_Devices_Display",
-# 	"Graphics_Capture",
-# 	"Win32_System_WinRT_Graphics_Capture",
-# >>>>>>> main
 ] }
