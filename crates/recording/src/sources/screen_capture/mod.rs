@@ -1,8 +1,5 @@
 use cap_cursor_capture::CursorCropBounds;
-use cap_displays::{
-    Display, DisplayId, Window, WindowId,
-    bounds::{LogicalBounds, LogicalPosition, PhysicalSize},
-};
+use cap_displays::{Display, DisplayId, Window, WindowId, bounds::*};
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;

@@ -9,6 +9,10 @@ use std::{
 };
 use tracing::info;
 
+const WINDOW_DURATION: Duration = Duration::from_secs(3);
+const LOG_INTERVAL: Duration = Duration::from_secs(5);
+const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
+
 #[derive(Debug)]
 pub struct AVFrameCapture;
 
@@ -185,7 +189,7 @@ enum SourceError {
     #[error("NoDisplay: Id '{0}'")]
     NoDisplay(DisplayId),
     #[error("AsCaptureItem: {0}")]
-    AsCaptureItem(windows::core::Error),
+    AsCaptureItem(::windows::core::Error),
 }
 
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
@@ -195,20 +199,10 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        const WINDOW_DURATION: Duration = Duration::from_secs(3);
-        const LOG_INTERVAL: Duration = Duration::from_secs(5);
-        const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
-
-        let video_info = self.video_info;
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
 
         let start_time = self.start_time;
-
-        let mut video_i = 0;
-        let mut audio_i = 0;
-
-        let mut frames_dropped = 0;
 
         // Frame drop rate tracking state
         let config = self.config.clone();
@@ -254,7 +248,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 let capture_item = display
                     .raw_handle()
                     .try_as_capture_item()
-                    .map_err(SourceError::AsCaptureItem);
+                    .map_err(SourceError::AsCaptureItem)?;
 
                 settings.is_cursor_capture_enabled = Some(config.show_cursor);
 
@@ -375,8 +369,8 @@ impl Message<StopCapturing> for WindowsScreenCapture {
 
     async fn handle(
         &mut self,
-        msg: StopCapturing,
-        ctx: &mut Context<Self, Self::Reply>,
+        _: StopCapturing,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let Some(capturer) = self.capture_handle.take() else {
             return Err(StopCapturingError::NotCapturing);
@@ -395,9 +389,7 @@ impl Message<StopCapturing> for WindowsScreenCapture {
 use audio::WindowsAudioCapture;
 pub mod audio {
     use super::*;
-    use cpal::traits::StreamTrait;
-    use scap_cpal::*;
-    use scap_ffmpeg::*;
+    use cpal::{PauseStreamError, PlayStreamError};
 
     #[derive(Actor)]
     pub struct WindowsAudioCapture {
@@ -445,8 +437,8 @@ pub mod audio {
 
         async fn handle(
             &mut self,
-            msg: StartCapturing,
-            ctx: &mut Context<Self, Self::Reply>,
+            _: StartCapturing,
+            _: &mut Context<Self, Self::Reply>,
         ) -> Self::Reply {
             self.capturer.play()?;
 
@@ -459,8 +451,8 @@ pub mod audio {
 
         async fn handle(
             &mut self,
-            msg: StopCapturing,
-            ctx: &mut Context<Self, Self::Reply>,
+            _: StopCapturing,
+            _: &mut Context<Self, Self::Reply>,
         ) -> Self::Reply {
             self.capturer.pause()?;
 

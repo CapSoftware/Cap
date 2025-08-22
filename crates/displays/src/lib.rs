@@ -1,7 +1,7 @@
 pub mod bounds;
 pub mod platform;
 
-use bounds::{LogicalBounds, PhysicalSize};
+use bounds::*;
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
