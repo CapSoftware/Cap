@@ -20,6 +20,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import { generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
@@ -29,7 +30,6 @@ import {
 	type TargetUnderCursor,
 } from "~/utils/tauri";
 import DisplayArt from "../assets/illustrations/display.png";
-import { generalSettingsStore } from "~/store";
 
 export default function () {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
