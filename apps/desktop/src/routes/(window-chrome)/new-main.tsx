@@ -300,7 +300,7 @@ function Page() {
 							v === "display" ? null : "display",
 						)
 					}
-					name="display"
+					name="Display"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "window"}

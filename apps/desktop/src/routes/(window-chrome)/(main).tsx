@@ -424,7 +424,7 @@ function Page() {
 							);
 						}}
 						value={options.screen() ?? null}
-						placeholder="display"
+						placeholder="Display"
 						optionsEmptyText="No screens found"
 						selected={
 							rawOptions.captureTarget.variant === "display" ||
