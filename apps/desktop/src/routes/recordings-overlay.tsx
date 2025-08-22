@@ -533,10 +533,14 @@ function createFakeWindowBounds(
 
 	createEffect(() => {
 		commands.setFakeWindowBounds(key(), {
-			x: bounds.left ?? 0,
-			y: bounds.top ?? 0,
-			width: bounds.width ?? 0,
-			height: bounds.height ?? 0,
+			position: {
+				x: bounds.left ?? 0,
+				y: bounds.top ?? 0,
+			},
+			size: {
+				width: bounds.width ?? 0,
+				height: bounds.height ?? 0,
+			},
 		});
 	});
 

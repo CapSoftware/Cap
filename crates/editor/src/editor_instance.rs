@@ -1,23 +1,20 @@
 use crate::editor;
 use crate::playback::{self, PlaybackHandle};
 use cap_audio::AudioData;
-// use cap_media::feeds::AudioData;
-use cap_media::frame_ws::create_frame_ws;
 use cap_project::StudioRecordingMeta;
 use cap_project::{CursorEvents, ProjectConfiguration, RecordingMeta, RecordingMetaInner, XY};
 use cap_rendering::{
     ProjectRecordingsMeta, ProjectUniforms, RecordingSegmentDecoders, RenderVideoConstants,
-    SegmentVideoPaths, get_duration,
+    RenderedFrame, SegmentVideoPaths, get_duration,
 };
 use std::ops::Deref;
 use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, watch};
-use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 pub struct EditorInstance {
     pub project_path: PathBuf,
-    pub ws_port: u16,
+    // pub ws_port: u16,
     pub recordings: Arc<ProjectRecordingsMeta>,
     pub renderer: Arc<editor::RendererHandle>,
     pub render_constants: Arc<RenderVideoConstants>,
@@ -28,7 +25,7 @@ pub struct EditorInstance {
         watch::Sender<ProjectConfiguration>,
         watch::Receiver<ProjectConfiguration>,
     ),
-    ws_shutdown_token: CancellationToken,
+    // ws_shutdown_token: CancellationToken,
     pub segments: Arc<Vec<Segment>>,
     meta: RecordingMeta,
 }
@@ -37,6 +34,7 @@ impl EditorInstance {
     pub async fn new(
         project_path: PathBuf,
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
+        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
         sentry::configure_scope(|scope| {
             scope.set_tag("crate", "editor");
@@ -59,10 +57,6 @@ impl EditorInstance {
 
         let segments = create_segments(&recording_meta, meta).await?;
 
-        let (frame_tx, frame_rx) = flume::bounded(4);
-
-        let (ws_port, ws_shutdown_token) = create_frame_ws(frame_rx).await;
-
         let render_constants = Arc::new(
             RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
@@ -71,7 +65,7 @@ impl EditorInstance {
 
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
-            frame_tx,
+            frame_cb,
             &recording_meta,
             meta,
         )?);
@@ -81,7 +75,6 @@ impl EditorInstance {
         let this = Arc::new(Self {
             project_path,
             recordings,
-            ws_port,
             renderer,
             render_constants,
             state: Arc::new(Mutex::new(EditorState {
@@ -92,7 +85,6 @@ impl EditorInstance {
             on_state_change: Box::new(on_state_change),
             preview_tx,
             project_config: watch::channel(project),
-            ws_shutdown_token,
             segments: Arc::new(segments),
             meta: recording_meta,
         });
@@ -124,10 +116,6 @@ impl EditorInstance {
             task.abort();
             task.await.ok(); // Await the task to ensure it's fully stopped
         }
-
-        // Stop WebSocket server
-        trace!("Shutting down WebSocket server");
-        self.ws_shutdown_token.cancel();
 
         // Stop renderer
         trace!("Stopping renderer");

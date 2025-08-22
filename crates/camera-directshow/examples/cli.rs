@@ -1,6 +1,6 @@
 fn main() {
     #[cfg(windows)]
-    windows::run();
+    windows::main();
     #[cfg(not(windows))]
     panic!("This example is only available on Windows");
 }
@@ -19,7 +19,7 @@ mod windows {
         core::Interface,
     };
 
-    fn main() {
+    pub fn main() {
         tracing_subscriber::fmt::init();
 
         unsafe {

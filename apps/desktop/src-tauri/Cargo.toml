@@ -45,13 +45,13 @@ tauri-plugin-deep-link = "2.2.0"
 tauri-plugin-clipboard-manager = "2.2.1"
 tauri-plugin-opener = "2.2.6"
 
+scap = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.111"
 specta.workspace = true
 specta-typescript = "0.0.7"
 tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
-scap.workspace = true
 image = "0.25.2"
 mp4 = "0.14.0"
 futures-intrusive = "0.5.0"

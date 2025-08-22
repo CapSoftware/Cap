@@ -96,7 +96,8 @@ export default function Cropper(
 		showGuideLines?: boolean;
 	}>,
 ) {
-	const crop = props.value;
+	const position = () => props.value.position;
+	const size = () => props.value.size;
 
 	const [containerSize, setContainerSize] = createSignal({ x: 0, y: 0 });
 	const mappedSize = createMemo(() => props.mappedSize || containerSize());
@@ -121,10 +122,10 @@ export default function Cropper(
 		const mapped = mappedSize();
 		const container = containerSize();
 		return {
-			x: (crop.position.x / mapped.x) * container.x,
-			y: (crop.position.y / mapped.y) * container.y,
-			width: (crop.size.x / mapped.x) * container.x,
-			height: (crop.size.y / mapped.y) * container.y,
+			x: (position().x / mapped.x) * container.x,
+			y: (position().y / mapped.y) * container.y,
+			width: (size().x / mapped.x) * container.x,
+			height: (size().y / mapped.y) * container.y,
 		};
 	});
 
@@ -173,7 +174,7 @@ export default function Cropper(
 			() => props.aspectRatio,
 			() => {
 				if (!props.aspectRatio) return;
-				const box = Box.from(crop.position, crop.size);
+				const box = Box.from(position(), size());
 				box.constrainToRatio(props.aspectRatio, ORIGIN_CENTER);
 				box.constrainToBoundary(mappedSize().x, mappedSize().y, ORIGIN_CENTER);
 				setCrop(box.toBounds());
@@ -204,7 +205,7 @@ export default function Cropper(
 		event.stopPropagation();
 		setDragging(true);
 		let lastValidPos = { x: event.clientX, y: event.clientY };
-		const box = Box.from(crop.position, crop.size);
+		const box = Box.from(position(), size());
 		const scaleFactors = containerToMappedSizeScale();
 
 		createRoot((dispose) => {
@@ -225,7 +226,7 @@ export default function Cropper(
 						);
 
 						const newBox = box;
-						if (newBox.x !== crop.position.x || newBox.y !== crop.position.y) {
+						if (newBox.x !== position().x || newBox.y !== position().y) {
 							lastValidPos = { x: e.clientX, y: e.clientY };
 							setCrop(newBox.toBounds());
 						}
@@ -237,7 +238,7 @@ export default function Cropper(
 
 	function handleWheel(event: WheelEvent) {
 		event.preventDefault();
-		const box = Box.from(crop.position, crop.size);
+		const box = Box.from(position(), size());
 		const mapped = mappedSize();
 
 		if (event.ctrlKey) {
@@ -281,8 +282,8 @@ export default function Cropper(
 			batch(() => {
 				setGestureState("initialPinchDistance", distance);
 				setGestureState("initialSize", {
-					width: crop.size.x,
-					height: crop.size.y,
+					width: size().x,
+					height: size().y,
 				});
 				setGestureState("lastTouchCenter", { x: centerX, y: centerY });
 			});
@@ -304,11 +305,11 @@ export default function Cropper(
 			const currentDistance = distanceOf(event.touches[0], event.touches[1]);
 			const scale = currentDistance / gestureState.initialPinchDistance;
 
-			const box = Box.from(crop.position, crop.size);
+			const box = Box.from(position(), size());
 			const mapped = mappedSize();
 
 			// Calculate new dimensions while maintaining aspect ratio
-			const currentRatio = crop.size.x / crop.size.y;
+			const currentRatio = size().x / size().y;
 			let newWidth = clamp(
 				gestureState.initialSize.width * scale,
 				minSize().x,
@@ -344,7 +345,7 @@ export default function Cropper(
 			setCrop(box.toBounds());
 		} else if (event.touches.length === 1 && dragging()) {
 			// Handle single touch drag
-			const box = Box.from(crop.position, crop.size);
+			const box = Box.from(position(), size());
 			const scaleFactors = containerToMappedSizeScale();
 			const mapped = mappedSize();
 
@@ -414,7 +415,7 @@ export default function Cropper(
 		};
 
 		let lastValidPos = { x: clientX, y: clientY };
-		const box = Box.from(crop.position, crop.size);
+		const box = Box.from(position(), size());
 		const scaleFactors = containerToMappedSizeScale();
 		const mapped = mappedSize();
 
@@ -504,10 +505,10 @@ export default function Cropper(
 
 			const newBox = box.toBounds();
 			if (
-				newBox.size.x !== crop.size.x ||
-				newBox.size.y !== crop.size.y ||
-				newBox.position.x !== crop.position.x ||
-				newBox.position.y !== crop.position.y
+				newBox.size.x !== size().x ||
+				newBox.size.y !== size().y ||
+				newBox.position.x !== position().x ||
+				newBox.position.y !== position().y
 			) {
 				lastValidPos = { x: moveX, y: moveY };
 				props.onCropChange(newBox);
@@ -530,7 +531,7 @@ export default function Cropper(
 
 		if (lastKeyHandleFrame) return;
 		lastKeyHandleFrame = requestAnimationFrame(() => {
-			const box = Box.from(crop.position, crop.size);
+			const box = Box.from(position(), size());
 			const mapped = mappedSize();
 			const scaleFactors = containerToMappedSizeScale();
 
@@ -599,7 +600,6 @@ export default function Cropper(
 
 	return (
 		<div
-			aria-label="Crop area"
 			ref={containerRef}
 			class={`relative h-full w-full overflow-hidden overscroll-contain *:overscroll-none ${props.class}`}
 			onWheel={handleWheel}
@@ -608,30 +608,34 @@ export default function Cropper(
 			onTouchEnd={handleTouchEnd}
 			onKeyDown={handleKeyDown}
 			tabIndex={0}
-			onContextMenu={async (e) => {
-				e.preventDefault();
-				const menu = await Menu.new({
-					id: "crop-options",
-					items: [
-						{
-							id: "enableRatioSnap",
-							text: "Snap to aspect ratios",
-							checked: snapToRatioEnabled(),
-							action: () => {
-								setSnapToRatioEnabled((v) => !v);
-							},
-						} satisfies CheckMenuItemOptions,
-					],
-				});
-				menu.popup();
-			}}
+			// onContextMenu={async (e) => {
+			// 	e.preventDefault();
+			// 	const menu = await Menu.new({
+			// 		id: "crop-options",
+			// 		items: [
+			// 			{
+			// 				id: "enableRatioSnap",
+			// 				text: "Snap to aspect ratios",
+			// 				checked: snapToRatioEnabled(),
+			// 				action: () => {
+			// 					setSnapToRatioEnabled((v) => !v);
+			// 				},
+			// 			} satisfies CheckMenuItemOptions,
+			// 		],
+			// 	});
+			// 	menu.popup();
+			// }}
 		>
 			<CropAreaRenderer
 				bounds={{
-					x: displayScaledCrop().x,
-					y: displayScaledCrop().y,
-					width: displayScaledCrop().width,
-					height: displayScaledCrop().height,
+					position: {
+						x: displayScaledCrop().x,
+						y: displayScaledCrop().y,
+					},
+					size: {
+						width: displayScaledCrop().width,
+						height: displayScaledCrop().height,
+					},
 				}}
 				borderRadius={9}
 				guideLines={props.showGuideLines}

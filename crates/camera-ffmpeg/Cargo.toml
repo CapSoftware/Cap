@@ -2,6 +2,7 @@
 name = "cap-camera-ffmpeg"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ffmpeg = { workspace = true }

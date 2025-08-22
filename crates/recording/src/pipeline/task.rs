@@ -7,11 +7,8 @@ const DEFAULT_QUEUE_SIZE: usize = 2048;
 pub type PipelineReadySignal = Sender<Result<(), MediaError>>;
 
 pub trait PipelineSourceTask: Send {
-    type Clock;
-
     fn run(
         &mut self,
-        clock: Self::Clock,
         ready_signal: PipelineReadySignal,
         control_signal: PipelineControlSignal,
     ) -> Result<(), String>;

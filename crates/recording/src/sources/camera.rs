@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::{
     MediaError,
     feeds::{CameraConnection, CameraFeed, RawCameraFrame},
-    pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
+    pipeline::{control::Control, task::PipelineSourceTask},
 };
 
 pub struct CameraSource {
@@ -92,12 +92,9 @@ impl CameraSource {
 }
 
 impl PipelineSourceTask for CameraSource {
-    type Clock = RealTimeClock<Instant>;
-
     // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
-        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

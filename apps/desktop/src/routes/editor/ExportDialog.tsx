@@ -33,6 +33,8 @@ import {
 	type ExportSettings,
 	events,
 	type FramesRendered,
+	type GifExportSettings,
+	type Mp4ExportSettings,
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";

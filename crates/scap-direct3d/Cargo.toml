@@ -2,12 +2,14 @@
 name = "scap-direct3d"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
 	"System",
 	"Graphics_Capture",
 	"Graphics_DirectX_Direct3D11",
+	"Foundation_Metadata",
 	"Win32_Graphics_Gdi",
 	"Win32_Graphics_Direct3D",
 	"Win32_Graphics_Direct3D11",
@@ -19,5 +21,12 @@ windows = { workspace = true, features = [
 	"Win32_UI_WindowsAndMessaging",
 ] }
 
+[dev-dependencies]
+cap-displays = { path = "../displays" }
+scap-ffmpeg = { path = "../scap-ffmpeg" }
+
 [lints]
 workspace = true
+
+[dependencies]
+thiserror.workspace = true
