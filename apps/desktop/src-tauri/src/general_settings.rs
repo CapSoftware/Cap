@@ -74,8 +74,9 @@ pub struct GeneralSettingsStore {
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
-    #[serde(default)]
-    pub custom_cursor_capture: bool,
+    // Renamed from `custom_cursor_capture` to `custom_cursor_capture2` so we can change the default.
+    #[serde(default = "default_true")]
+    pub custom_cursor_capture2: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
     #[serde(default)]
@@ -112,6 +113,14 @@ fn no(_: &bool) -> bool {
     false
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn yes(_: &bool) -> bool {
+    true
+}
+
 fn default_server_url() -> String {
     std::option_env!("VITE_SERVER_URL")
         .unwrap_or("https://cap.so")
@@ -144,7 +153,7 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
-            custom_cursor_capture: false,
+            custom_cursor_capture2: false,
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),

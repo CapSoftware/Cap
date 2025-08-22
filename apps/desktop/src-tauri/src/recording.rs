@@ -394,7 +394,7 @@ pub async fn start_recording(
                         base_inputs,
                         state.camera_feed.clone(),
                         general_settings
-                            .map(|s| s.custom_cursor_capture)
+                            .map(|s| s.custom_cursor_capture2)
                             .unwrap_or_default(),
                     )
                     .await

@@ -132,15 +132,25 @@ export function ExportDialog() {
 	const exportWithSettings = (onProgress: (progress: FramesRendered) => void) =>
 		exportVideo(
 			projectPath,
-			{
-				format: settings.format,
-				fps: settings.fps,
-				resolution_base: {
-					x: settings.resolution.width,
-					y: settings.resolution.height,
-				},
-				compression: settings.compression,
-			},
+			settings.format === "Mp4"
+				? {
+						format: "Mp4",
+						fps: settings.fps,
+						resolution_base: {
+							x: settings.resolution.width,
+							y: settings.resolution.height,
+						},
+						compression: settings.compression,
+					}
+				: {
+						format: "Gif",
+						fps: settings.fps,
+						resolution_base: {
+							x: settings.resolution.width,
+							y: settings.resolution.height,
+						},
+						quality: null,
+					},
 			onProgress,
 		);
 

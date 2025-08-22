@@ -1992,13 +1992,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    // #[cfg(debug_assertions)]
-    // specta_builder
-    //     .export(
-    //         specta_typescript::Typescript::default(),
-    //         "../src/utils/tauri.ts",
-    //     )
-    //     .expect("Failed to export typescript bindings");
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/utils/tauri.ts",
+        )
+        .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 

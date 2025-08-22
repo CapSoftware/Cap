@@ -542,7 +542,7 @@ export type GeneralSettingsStore = {
 	windowTransparency?: boolean;
 	postStudioRecordingBehaviour?: PostStudioRecordingBehaviour;
 	mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour;
-	customCursorCapture?: boolean;
+	customCursorCapture2?: boolean;
 	serverUrl?: string;
 	recordingCountdown?: number | null;
 	enableNativeCameraPreview: boolean;
@@ -550,7 +550,21 @@ export type GeneralSettingsStore = {
 	enableNewRecordingFlow: boolean;
 	postDeletionBehaviour?: PostDeletionBehaviour;
 };
-export type GifExportSettings = { fps: number; resolution_base: XY<number> };
+export type GifExportSettings = {
+	fps: number;
+	resolution_base: XY<number>;
+	quality: GifQuality | null;
+};
+export type GifQuality = {
+	/**
+	 * Encoding quality from 1-100 (default: 90)
+	 */
+	quality: number | null;
+	/**
+	 * Whether to prioritize speed over quality (default: false)
+	 */
+	fast: boolean | null;
+};
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic";
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted";
 export type Hotkey = {
@@ -568,6 +582,8 @@ export type HotkeysConfiguration = { show: boolean };
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } };
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null };
 export type JsonValue<T> = [T];
+export type LayoutMode = "default" | "cameraOnly" | "hideCamera";
+export type LayoutSegment = { start: number; end: number; mode?: LayoutMode };
 export type LogicalBounds = { position: LogicalPosition; size: LogicalSize };
 export type LogicalPosition = { x: number; y: number };
 export type LogicalSize = { width: number; height: number };
@@ -721,12 +737,6 @@ export type TargetUnderCursor = {
 	window: WindowUnderCursor | null;
 	screen: ScreenUnderCursor | null;
 };
-export type LayoutSegment = {
-	start: number;
-	end: number;
-	mode?: "default" | "cameraOnly" | "hideCamera";
-};
-
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];
 	zoomSegments: ZoomSegment[];
