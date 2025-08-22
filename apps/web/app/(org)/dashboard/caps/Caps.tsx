@@ -101,7 +101,7 @@ export const Caps = ({
 
 					if (response.ok) {
 						const responseData = await response.json();
-						return { videoId: video.id, count: responseData.count || 0 };
+						return { videoId: video.id, count: responseData.count };
 					}
 					return { videoId: video.id, count: 0 };
 				} catch (error) {

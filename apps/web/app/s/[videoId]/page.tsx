@@ -624,7 +624,7 @@ async function AuthorizedContent({
 		return allComments;
 	})();
 
-	const viewsPromise = getVideoAnalytics(videoId).then((v) => v.count);
+	const viewsPromise = await getVideoAnalytics(videoId).then((v) => v.count);
 
 	const [
 		membersList,
