@@ -23,7 +23,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
-	DisplayId,
+	type DisplayId,
 	events,
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
