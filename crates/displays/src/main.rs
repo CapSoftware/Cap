@@ -4,7 +4,7 @@ fn main() {
     #[cfg(windows)]
     {
         use windows::Win32::UI::HiDpi::{
-            PROCESS_DPI_UNAWARE, PROCESS_PER_MONITOR_DPI_AWARE, PROCESS_SYSTEM_DPI_AWARE,
+            PROCESS_PER_MONITOR_DPI_AWARE,
             SetProcessDpiAwareness,
         };
 

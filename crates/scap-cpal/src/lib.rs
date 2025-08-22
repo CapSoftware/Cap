@@ -4,7 +4,7 @@ use cpal::{
 };
 use thiserror::Error;
 
-#[derive(Error, Debug)]
+#[derive(Clone, Error, Debug)]
 pub enum CapturerError {
     #[error("NoDevice")]
     NoDevice,

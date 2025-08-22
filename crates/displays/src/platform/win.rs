@@ -38,8 +38,7 @@ use windows::{
         },
         UI::{
             HiDpi::{
-                DPI_AWARENESS_UNAWARE, GetDpiForMonitor, GetDpiForWindow, GetProcessDpiAwareness,
-                MDT_DEFAULT, MDT_EFFECTIVE_DPI, MDT_RAW_DPI, PROCESS_DPI_UNAWARE,
+                GetDpiForMonitor, GetDpiForWindow, GetProcessDpiAwareness, MDT_EFFECTIVE_DPI,
                 PROCESS_PER_MONITOR_DPI_AWARE,
             },
             Shell::ExtractIconExW,
@@ -58,7 +57,7 @@ use windows::{
 };
 
 use crate::bounds::{
-    LogicalBounds, LogicalPosition, LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
+    LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
 };
 
 // All of this assumes PROCESS_PER_MONITOR_DPI_AWARE

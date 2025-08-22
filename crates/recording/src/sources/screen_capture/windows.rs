@@ -1,5 +1,6 @@
 use super::*;
 use ::windows::{Graphics::Capture::GraphicsCaptureItem, Win32::Graphics::Direct3D11::D3D11_BOX};
+use cap_fail::fail_err;
 use cpal::traits::{DeviceTrait, HostTrait};
 use kameo::prelude::*;
 use scap_ffmpeg::*;
@@ -7,7 +8,7 @@ use std::{
     collections::VecDeque,
     time::{Duration, Instant},
 };
-use tracing::info;
+use tracing::{info, trace};
 
 const WINDOW_DURATION: Duration = Duration::from_secs(3);
 const LOG_INTERVAL: Duration = Duration::from_secs(5);
@@ -41,7 +42,7 @@ impl ScreenCaptureFormat for AVFrameCapture {
 }
 
 struct FrameHandler {
-    capturer: WeakActorRef<WindowsScreenCapture>,
+    capturer: WeakActorRef<ScreenCaptureActor>,
     start_time: SystemTime,
     frames_dropped: u32,
     last_cleanup: Instant,
@@ -191,6 +192,14 @@ enum SourceError {
     NoDisplay(DisplayId),
     #[error("AsCaptureItem: {0}")]
     AsCaptureItem(::windows::core::Error),
+    #[error("StartCapturingVideo/{0}")]
+    StartCapturingVideo(SendError<StartCapturing, StartCapturingError>),
+    #[error("CreateAudioCapture/{0}")]
+    CreateAudioCapture(scap_cpal::CapturerError),
+    #[error("StartCapturingAudio/{0}")]
+    StartCapturingAudio(SendError<audio::StartCapturing, cpal::PlayStreamError>),
+    #[error("Closed")]
+    Closed,
 }
 
 impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
@@ -210,9 +219,8 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
         self.tokio_handle
             .block_on(async move {
-                let capturer = WindowsScreenCapture::spawn(WindowsScreenCapture::new());
-
-                let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
+                let (error_tx, error_rx) = flume::bounded(1);
+                let capturer = ScreenCaptureActor::spawn(ScreenCaptureActor::new(error_tx));
 
                 let frame_handler = FrameHandler::spawn(FrameHandler {
                     capturer: capturer.downgrade(),
@@ -263,21 +271,25 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     .try_as_capture_item()
                     .map_err(SourceError::AsCaptureItem)?;
 
-                let _ = capturer
+                capturer
                     .ask(StartCapturing {
                         target: capture_item,
                         settings,
                         frame_handler: frame_handler.clone().recipient(),
                     })
-                    .send()
-                    .await;
+                    .await
+                    .map_err(SourceError::StartCapturingVideo)?;
 
                 let audio_capture = if let Some(audio_tx) = audio_tx {
                     let audio_capture = WindowsAudioCapture::spawn(
-                        WindowsAudioCapture::new(audio_tx, start_time).unwrap(),
+                        WindowsAudioCapture::new(audio_tx, start_time)
+                            .map_err(SourceError::CreateAudioCapture)?,
                     );
 
-                    let _ = audio_capture.ask(audio::StartCapturing).send().await;
+                    audio_capture
+                        .ask(audio::StartCapturing)
+                        .await
+                        .map_err(SourceError::StartCapturingAudio)?;
 
                     Some(audio_capture)
                 } else {
@@ -286,37 +298,66 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 
                 let _ = ready_signal.send(Ok(()));
 
-                while let Ok(msg) = control_signal.receiver.recv_async().await {
-                    if let Control::Shutdown = msg {
-                        let _ = stop_recipient.ask(StopCapturing).await;
+                let stop = async move {
+                    let _ = capturer.ask(StopCapturing).await;
+                    let _ = capturer.stop_gracefully().await;
 
-                        if let Some(audio_capture) = audio_capture {
-                            let _ = audio_capture.ask(StopCapturing).await;
+                    if let Some(audio_capture) = audio_capture {
+                        let _ = audio_capture.ask(StopCapturing).await;
+                        let _ = audio_capture.stop_gracefully().await;
+                    }
+                };
+
+                loop {
+                    use futures::future::Either;
+
+                    match futures::future::select(
+                        error_rx.recv_async(),
+                        control_signal.receiver().recv_async(),
+                    )
+                    .await
+                    {
+                        Either::Left((Ok(_), _)) => {
+                            error!("Screen capture closed");
+                            stop.await;
+                            return Err(SourceError::Closed);
                         }
+                        Either::Right((Ok(ctrl), _)) => {
+                            if let Control::Shutdown = ctrl {
+                                stop.await;
+                                return Ok(());
+                            }
+                        }
+                        _ => {
+                            warn!("Screen capture recv channels shutdown, exiting.");
 
-                        break;
+                            stop.await;
+
+                            return Ok(());
+                        }
                     }
                 }
-
-                Ok::<_, SourceError>(())
             })
             .map_err(|e| e.to_string())
     }
 }
 
 #[derive(Actor)]
-pub struct WindowsScreenCapture {
-    capture_handle: Option<scap_direct3d::CaptureHandle>,
+struct ScreenCaptureActor {
+    capture_handle: Option<scap_direct3d::Capturer>,
+    error_tx: Sender<()>,
 }
 
-impl WindowsScreenCapture {
-    pub fn new() -> Self {
+impl ScreenCaptureActor {
+    pub fn new(error_tx: Sender<()>) -> Self {
         Self {
             capture_handle: None,
+            error_tx,
         }
     }
 }
 
+#[derive(Clone)]
 pub struct StartCapturing {
     pub target: GraphicsCaptureItem,
     pub settings: scap_direct3d::Settings,
@@ -324,10 +365,14 @@ pub struct StartCapturing {
     // error_handler: Option<Recipient<CaptureError>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StartCapturingError {
+    #[error("AlreadyCapturing")]
     AlreadyCapturing,
-    Inner(scap_direct3d::StartCapturerError),
+    #[error("CreateCapturer/{0}")]
+    CreateCapturer(scap_direct3d::NewCapturerError),
+    #[error("StartCapturer/{0}")]
+    StartCapturer(scap_direct3d::StartCapturerError),
 }
 
 pub struct NewFrame {
@@ -335,7 +380,7 @@ pub struct NewFrame {
     pub display_time: SystemTime,
 }
 
-impl Message<StartCapturing> for WindowsScreenCapture {
+impl Message<StartCapturing> for ScreenCaptureActor {
     type Reply = Result<(), StartCapturingError>;
 
     async fn handle(
@@ -347,11 +392,18 @@ impl Message<StartCapturing> for WindowsScreenCapture {
             return Err(StartCapturingError::AlreadyCapturing);
         }
 
-        let capturer = scap_direct3d::Capturer::new(msg.target, msg.settings);
+        fail_err!(
+            "WindowsScreenCapture.StartCapturing",
+            StartCapturingError::CreateCapturer(scap_direct3d::NewCapturerError::NotSupported)
+        );
 
         trace!("Starting capturer with settings: {:?}", &msg.settings);
 
-        let capture_handle = capturer
+        let mut capture_handle = scap_direct3d::Capturer::new(msg.target, msg.settings)
+            .map_err(StartCapturingError::CreateCapturer)?;
+
+        let error_tx = self.error_tx.clone();
+        capture_handle
             .start(
                 move |frame| {
                     let display_time = SystemTime::now();
@@ -367,9 +419,13 @@ impl Message<StartCapturing> for WindowsScreenCapture {
 
                     Ok(())
                 },
-                || Ok(()),
+                move || {
+                    let _ = error_tx.send(());
+
+                    Ok(())
+                },
             )
-            .map_err(StartCapturingError::Inner)?;
+            .map_err(StartCapturingError::StartCapturer)?;
 
         info!("Capturer started");
 
@@ -379,7 +435,7 @@ impl Message<StartCapturing> for WindowsScreenCapture {
     }
 }
 
-impl Message<StopCapturing> for WindowsScreenCapture {
+impl Message<StopCapturing> for ScreenCaptureActor {
     type Reply = Result<(), StopCapturingError>;
 
     async fn handle(
@@ -387,7 +443,7 @@ impl Message<StopCapturing> for WindowsScreenCapture {
         _: StopCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Some(capturer) = self.capture_handle.take() else {
+        let Some(mut capturer) = self.capture_handle.take() else {
             return Err(StopCapturingError::NotCapturing);
         };
 
@@ -445,6 +501,7 @@ pub mod audio {
         }
     }
 
+    #[derive(Clone)]
     pub struct StartCapturing;
 
     impl Message<StartCapturing> for WindowsAudioCapture {

@@ -237,6 +237,7 @@ impl ShowCapWindow {
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
+                        .content_protected(true)
                         .center()
                         .build()?;
 
@@ -490,8 +491,7 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let mut width = 180.0 + 32.0;
-
+                let width = 250.0;
                 let height = 40.0;
 
                 let window = self

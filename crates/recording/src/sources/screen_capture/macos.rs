@@ -218,11 +218,15 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                 let _ = capturer
                     .ask(StartCapturing)
-                    .send()
                     .await
                     .map_err(SourceError::StartCapturing)?;
 
                 let _ = ready_signal.send(Ok(()));
+
+                let stop = async move {
+                    let _ = capturer.ask(StopCapturing).await;
+                    let _ = capturer.stop_gracefully().await;
+                };
 
                 loop {
                     use futures::future::Either;
@@ -235,19 +239,19 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     {
                         Either::Left((Ok(error), _)) => {
                             error!("Error capturing screen: {}", error);
-                            let _ = stop_recipient.ask(StopCapturing).await;
+                            stop.await;
                             return Err(SourceError::DidStopWithError(error));
                         }
                         Either::Right((Ok(ctrl), _)) => {
                             if let Control::Shutdown = ctrl {
-                                let _ = stop_recipient.ask(StopCapturing).await;
+                                stop.await;
                                 return Ok(());
                             }
                         }
                         _ => {
                             warn!("Screen capture recv channels shutdown, exiting.");
 
-                            let _ = stop_recipient.ask(StopCapturing).await;
+                            stop.await;
 
                             return Ok(());
                         }
