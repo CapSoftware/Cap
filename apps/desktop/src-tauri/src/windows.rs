@@ -266,47 +266,38 @@ impl ShowCapWindow {
                 #[cfg(windows)]
                 let size = display.physical_size().unwrap();
 
-                println!(
-                    "\t TSO: {:?} LogicalSize {{ width: {}, height: {} }} LogicalPosition {{ x: {}, y: {} }}",
-                    display_id.to_string(),
-                    size.width(),
-                    size.height(),
-                    position.x(),
-                    position.y()
-                );
+                // // Get the target monitor for proper scale factor handling
+                // let target_monitor = app
+                //     .monitor_from_point(position.x(), position.y())
+                //     .ok()
+                //     .flatten()
+                //     .unwrap_or(monitor);
 
-                // Get the target monitor for proper scale factor handling
-                let target_monitor = app
-                    .monitor_from_point(position.x(), position.y())
-                    .ok()
-                    .flatten()
-                    .unwrap_or(monitor);
+                // let scale_factor = target_monitor.scale_factor();
+                // let monitor_size = target_monitor.size();
+                // let monitor_pos = target_monitor.position();
 
-                let scale_factor = target_monitor.scale_factor();
-                let monitor_size = target_monitor.size();
-                let monitor_pos = target_monitor.position();
+                // // For scale factor 1 monitors, use the monitor's actual size to avoid Tauri scaling issues
+                // let scaled_size = if scale_factor == 1.0 {
+                //     (monitor_size.width as f64, monitor_size.height as f64)
+                // } else {
+                //     // Use properly scaled dimensions like CaptureArea does for high-DPI monitors
+                //     (size.width() / scale_factor, size.height() / scale_factor)
+                // };
+                // let position_tuple = (position.x(), position.y());
 
-                // For scale factor 1 monitors, use the monitor's actual size to avoid Tauri scaling issues
-                let scaled_size = if scale_factor == 1.0 {
-                    (monitor_size.width as f64, monitor_size.height as f64)
-                } else {
-                    // Use properly scaled dimensions like CaptureArea does for high-DPI monitors
-                    (size.width() / scale_factor, size.height() / scale_factor)
-                };
-                let position_tuple = (position.x(), position.y());
-
-                println!(
-                    "\t TSO Scale Factor: {} -> Scaled Size: {}x{}",
-                    scale_factor, scaled_size.0, scaled_size.1
-                );
-                println!(
-                    "\t TSO Monitor: {}x{} at ({}, {}) - Scale: {}",
-                    monitor_size.width,
-                    monitor_size.height,
-                    monitor_pos.x,
-                    monitor_pos.y,
-                    scale_factor
-                );
+                // println!(
+                //     "\t TSO Scale Factor: {} -> Scaled Size: {}x{}",
+                //     scale_factor, scaled_size.0, scaled_size.1
+                // );
+                // println!(
+                //     "\t TSO Monitor: {}x{} at ({}, {}) - Scale: {}",
+                //     monitor_size.width,
+                //     monitor_size.height,
+                //     monitor_pos.x,
+                //     monitor_pos.y,
+                //     scale_factor
+                // );
 
                 let mut window_builder = self
                     .window_builder(
@@ -321,34 +312,11 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
+                    .inner_size(size.width(), size.height())
+                    .position(position.x(), position.y())
                     .transparent(true);
 
-                // On Windows, set minimal size during creation, then resize after
-                #[cfg(target_os = "windows")]
-                {
-                    window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
-                }
-
-                // On other platforms, set size and position during creation as before
-                #[cfg(not(target_os = "windows"))]
-                {
-                    window_builder = window_builder
-                        .inner_size(scaled_size.0, scaled_size.1)
-                        .position(position_tuple.0, position_tuple.1);
-                }
-
                 let window = window_builder.build()?;
-
-                // On Windows, manually set size and position after window creation
-                #[cfg(target_os = "windows")]
-                {
-                    use tauri::{LogicalPosition, LogicalSize};
-                    // Small delay to ensure window is fully initialized
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    let _ = window.set_size(LogicalSize::new(scaled_size.0, scaled_size.1));
-                    let _ = window
-                        .set_position(LogicalPosition::new(position_tuple.0, position_tuple.1));
-                }
 
                 if let (Ok(final_pos), Ok(final_size)) =
                     (window.inner_position(), window.inner_size())
