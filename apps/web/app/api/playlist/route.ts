@@ -198,13 +198,9 @@ const getPlaylistResponse = (
 				const generatedPlaylist = generateMasterPlaylist(
 					videoMetadata?.Metadata?.resolution ?? "",
 					videoMetadata?.Metadata?.bandwidth ?? "",
-					`${serverEnv().WEB_URL}/api/playlist?userId=${
-						video.ownerId
-					}&videoId=${video.id}&videoType=video`,
+					`${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=video`,
 					audioMetadata
-						? `${serverEnv().WEB_URL}/api/playlist?userId=${
-								video.ownerId
-							}&videoId=${video.id}&videoType=audio`
+						? `${serverEnv().WEB_URL}/api/playlist?videoId=${video.id}&videoType=audio`
 						: null,
 				);
 

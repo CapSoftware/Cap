@@ -741,9 +741,16 @@ export type TargetUnderCursor = {
 	window: WindowUnderCursor | null;
 	screen: ScreenUnderCursor | null;
 };
+export type LayoutSegment = {
+	start: number;
+	end: number;
+	mode?: "default" | "cameraOnly" | "hideCamera";
+};
+
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];
 	zoomSegments: ZoomSegment[];
+	layoutSegments?: LayoutSegment[];
 };
 export type TimelineSegment = {
 	recordingSegment?: number;

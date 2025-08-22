@@ -94,6 +94,8 @@ use windows::EditorWindowIds;
 use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
+use crate::upload::build_video_meta;
+
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
     None,
@@ -1145,34 +1147,19 @@ async fn upload_exported_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    let screen_metadata = get_video_metadata(path.clone()).await.map_err(|e| {
-        sentry::capture_message(
-            &format!("Failed to get video metadata: {e}"),
-            sentry::Level::Error,
-        );
-
-        "Failed to read video metadata. The recording may be from an incompatible version."
-            .to_string()
-    })?;
-
-    let camera_metadata = get_video_metadata(path.clone()).await.ok();
-
-    let duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    if !auth.is_upgraded() && duration > 300.0 {
-        return Ok(UploadResult::UpgradeRequired);
-    }
-
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
+    }
+
+    let metadata = build_video_meta(&output_path)
+        .map_err(|err| format!("Error getting output video meta: {}", err.to_string()))?;
+
+    if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
+        return Ok(UploadResult::UpgradeRequired);
     }
 
     UploadProgress { progress: 0.0 }.emit(&app).ok();
@@ -1199,7 +1186,7 @@ async fn upload_exported_video(
             false,
             video_id,
             Some(meta.pretty_name.clone()),
-            Some(duration.to_string()),
+            Some(metadata.clone()),
         )
         .await
     }
@@ -1213,7 +1200,7 @@ async fn upload_exported_video(
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
-        Some(duration.to_string()),
+        Some(metadata),
     )
     .await
     {

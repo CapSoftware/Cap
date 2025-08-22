@@ -746,7 +746,7 @@ async fn handle_recording_finish(
                                 output_path,
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
-                                meta.map(|v| v.duration),
+                                meta,
                             )
                             .await
                             {
@@ -961,6 +961,7 @@ fn project_config_from_recording(
             } else {
                 Vec::new()
             },
+            layout_segments: Vec::new(),
         }),
         ..default_config.unwrap_or_default()
     }

@@ -1,8 +1,8 @@
+import { nanoId } from "@cap/database/helpers";
 import * as Db from "@cap/database/schema";
-import { Folder, Policy } from "@cap/web-domain";
+import { CurrentUser, Folder, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Effect } from "effect";
-
+import { Effect, Option } from "effect";
 import { Database, type DatabaseError } from "../Database";
 import { FoldersPolicy } from "./FoldersPolicy";
 
@@ -61,6 +61,51 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			});
 
 		return {
+			create: Effect.fn("Folders.create")(function* (data: {
+				name: string;
+				color: Folder.FolderColor;
+				spaceId: Option.Option<string>;
+				parentId: Option.Option<Folder.FolderId>;
+			}) {
+				const user = yield* CurrentUser;
+
+				if (Option.isSome(data.parentId)) {
+					const parentId = data.parentId.value;
+					const [parentFolder] = yield* db.execute((db) =>
+						db
+							.select()
+							.from(Db.folders)
+							.where(
+								Dz.and(
+									Dz.eq(Db.folders.id, parentId),
+									Dz.eq(Db.folders.organizationId, user.activeOrgId),
+								),
+							),
+					);
+
+					if (!parentFolder) return yield* new Folder.NotFoundError();
+				}
+
+				const folder = {
+					id: Folder.FolderId.make(nanoId()),
+					name: data.name,
+					color: data.color,
+					organizationId: user.activeOrgId,
+					createdById: user.id,
+					spaceId: data.spaceId,
+					parentId: data.parentId,
+				};
+
+				yield* db.execute((db) =>
+					db.insert(Db.folders).values({
+						...folder,
+						spaceId: Option.getOrNull(folder.spaceId),
+						parentId: Option.getOrNull(folder.parentId),
+					}),
+				);
+
+				return new Folder.Folder(folder);
+			}),
 			/**
 			 * Deletes a folder and all its subfolders. Videos inside the folders will be
 			 * relocated to the root of the collection (space or My Caps) they're in
