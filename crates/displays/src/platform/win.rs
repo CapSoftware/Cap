@@ -56,9 +56,7 @@ use windows::{
     core::{BOOL, PCWSTR, PWSTR},
 };
 
-use crate::bounds::{
-    LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize,
-};
+use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize};
 
 // All of this assumes PROCESS_PER_MONITOR_DPI_AWARE
 //
