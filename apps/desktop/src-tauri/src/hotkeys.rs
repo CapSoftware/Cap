@@ -47,6 +47,7 @@ pub enum HotkeyAction {
     StartRecording,
     StopRecording,
     RestartRecording,
+    OpenSettings,
     // TakeScreenshot,
 }
 
@@ -94,7 +95,25 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
+    let mut store = HotkeysStore::get(app).unwrap().unwrap_or_default();
+    
+    // Set default hotkey for openSettings if none exists (Command + Comma on macOS)
+    if !store.hotkeys.contains_key(&HotkeyAction::OpenSettings) {
+        let default_open_settings_hotkey = Hotkey {
+            code: Code::Comma,
+            meta: true,  // Command key on macOS
+            ctrl: false,
+            alt: false,
+            shift: false,
+        };
+        store.hotkeys.insert(HotkeyAction::OpenSettings, default_open_settings_hotkey);
+        
+        // Save the updated store
+        if let Ok(store_ref) = app.store("store") {
+            let _ = store_ref.set("hotkeys", serde_json::to_value(&store).unwrap_or_default());
+            let _ = store_ref.save();
+        }
+    }
 
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {
@@ -113,6 +132,11 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
         HotkeyAction::RestartRecording => {
             recording::restart_recording(app.clone(), app.state()).await
+        }
+        HotkeyAction::OpenSettings => {
+            use crate::windows::ShowCapWindow;
+            let _ = ShowCapWindow::Settings { page: Some("general".to_string()) }.show(&app).await;
+            Ok(())
         }
     }
 }
