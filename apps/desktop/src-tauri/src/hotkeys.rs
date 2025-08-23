@@ -96,22 +96,29 @@ pub fn init(app: &AppHandle) {
     .unwrap();
 
     let mut store = HotkeysStore::get(app).unwrap().unwrap_or_default();
-    
-    // Set default hotkey for openSettings if none exists (Command + Comma on macOS)
-    if !store.hotkeys.contains_key(&HotkeyAction::OpenSettings) {
+
+    // Set default only on macOS to avoid conflicts on other platforms
+    if cfg!(target_os = "macos") && !store.hotkeys.contains_key(&HotkeyAction::OpenSettings) {
         let default_open_settings_hotkey = Hotkey {
             code: Code::Comma,
-            meta: true,  // Command key on macOS
+            meta: true, // Command key on macOS
             ctrl: false,
             alt: false,
             shift: false,
         };
         store.hotkeys.insert(HotkeyAction::OpenSettings, default_open_settings_hotkey);
-        
+
         // Save the updated store
         if let Ok(store_ref) = app.store("store") {
-            let _ = store_ref.set("hotkeys", serde_json::to_value(&store).unwrap_or_default());
-            let _ = store_ref.save();
+            match serde_json::to_value(&store) {
+                Ok(value) => {
+                    let _ = store_ref.set("hotkeys", value);
+                    let _ = store_ref.save();
+                }
+                Err(e) => {
+                    eprintln!("Failed to serialize hotkeys store: {e}");
+                }
+            }
         }
     }
 
