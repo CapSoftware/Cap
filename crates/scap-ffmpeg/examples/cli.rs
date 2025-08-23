@@ -1,4 +1,4 @@
-use cap_displays::*;
+use scap_targets::*;
 use scap_ffmpeg::*;
 use std::time::Duration;
 

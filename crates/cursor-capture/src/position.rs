@@ -1,5 +1,5 @@
-use cap_displays::{Display, bounds::*};
 use device_query::{DeviceQuery, DeviceState};
+use scap_targets::{bounds::*, Display};
 
 // Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,7 +208,7 @@ impl std::fmt::Debug for NormalizedCursorPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_displays::Display;
+    use scap_targets::Display;
 
     // Helper function to create a mock Display for testing
     fn mock_display() -> Display {

@@ -8,14 +8,14 @@ pub mod studio_recording;
 
 pub use sources::{camera, screen_capture};
 pub use studio_recording::{
-    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
+    spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
 };
 
 use feeds::AudioInputFeed;
 use sources::*;
 
-use cap_displays::bounds::LogicalBounds;
 use cap_media::MediaError;
+use scap_targets::bounds::LogicalBounds;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

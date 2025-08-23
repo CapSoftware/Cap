@@ -1,5 +1,5 @@
 use cap_camera::ModelID;
-use cap_displays::{DisplayId, WindowId};
+use scap_targets::{DisplayId, WindowId};
 use cap_recording::screen_capture::ScreenCaptureTarget;
 use clap::Args;
 use std::{env::current_dir, path::PathBuf, sync::Arc};

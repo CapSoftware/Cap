@@ -5,9 +5,9 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use cap_displays::*;
     use scap_direct3d::{Capturer, PixelFormat, Settings};
     use scap_ffmpeg::*;
+    use scap_targets::*;
     use std::time::Duration;
     use windows::Win32::Graphics::Direct3D11::D3D11_BOX;
 

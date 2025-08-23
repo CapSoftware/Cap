@@ -26,7 +26,7 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
-use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
+use scap_targets::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
 use cap_project::RecordingMetaInner;
@@ -475,7 +475,7 @@ async fn get_current_recording(
                     }
                     ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
                         id: id.clone(),
-                        bounds: cap_displays::Window::from_id(id)
+                        bounds: scap_targets::Window::from_id(id)
                             .ok_or(())?
                             .display_relative_logical_bounds()
                             .ok_or(())?,

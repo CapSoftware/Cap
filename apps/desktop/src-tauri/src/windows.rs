@@ -1,7 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use cap_displays::{Display, DisplayId};
+use scap_targets::{Display, DisplayId};
 use futures::pin_mut;
 use serde::Deserialize;
 use specta::Type;
@@ -252,7 +252,7 @@ impl ShowCapWindow {
                 }
             }
             Self::TargetSelectOverlay { display_id } => {
-                let Some(display) = cap_displays::Display::from_id(display_id) else {
+                let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
 

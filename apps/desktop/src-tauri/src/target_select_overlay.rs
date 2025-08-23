@@ -8,7 +8,7 @@ use std::{
 use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
-use cap_displays::{
+use scap_targets::{
     Display, DisplayId, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
 };
@@ -47,7 +47,7 @@ pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
-    let displays = cap_displays::Display::list()
+    let displays = scap_targets::Display::list()
         .into_iter()
         .map(|d| d.id())
         .collect::<Vec<_>>();
@@ -61,8 +61,8 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
         async move {
             loop {
-                let display = cap_displays::Display::get_containing_cursor();
-                let window = cap_displays::Window::get_topmost_at_cursor();
+                let display = scap_targets::Display::get_containing_cursor();
+                let window = scap_targets::Window::get_topmost_at_cursor();
 
                 let _ = TargetUnderCursor {
                     display_id: display.map(|d| d.id()),

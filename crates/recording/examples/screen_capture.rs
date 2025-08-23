@@ -1,4 +1,4 @@
-use cap_displays::Window;
+use scap_targets::Window;
 use cap_recording::{
     pipeline::{control::PipelineControlSignal, task::PipelineSourceTask},
     sources::{CMSampleBufferCapture, ScreenCaptureSource, ScreenCaptureTarget},
