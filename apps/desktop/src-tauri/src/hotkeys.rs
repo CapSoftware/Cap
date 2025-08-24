@@ -95,7 +95,14 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let mut store = HotkeysStore::get(app).unwrap().unwrap_or_default();
+    let mut store = match HotkeysStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => HotkeysStore::default(),
+        Err(e) => {
+            eprintln!("Failed to load hotkeys store: {e}");
+            HotkeysStore::default()
+        }
+    };
 
     // Set default only on macOS to avoid conflicts on other platforms
     if cfg!(target_os = "macos") && !store.hotkeys.contains_key(&HotkeyAction::OpenSettings) {
