@@ -170,17 +170,19 @@ export default function () {
 								}}
 							>
 								<div class="flex flex-col justify-center items-center text-white">
-									<Suspense>
-										<Show when={windowIcon.data}>
-											{(icon) => (
-												<img
-													src={icon()}
-													alt={`${windowUnderCursor.app_name} icon`}
-													class="mb-3 w-32 h-32 rounded-lg"
-												/>
-											)}
-										</Show>
-									</Suspense>
+									<div class="w-32 h-32">
+										<Suspense>
+											<Show when={windowIcon.data}>
+												{(icon) => (
+													<img
+														src={icon()}
+														alt={`${windowUnderCursor.app_name} icon`}
+														class="mb-3 w-full h-full rounded-lg animate-in fade-in"
+													/>
+												)}
+											</Show>
+										</Suspense>
+									</div>
 									<span class="mb-2 text-3xl font-semibold">
 										{windowUnderCursor.app_name}
 									</span>
