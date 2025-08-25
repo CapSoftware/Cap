@@ -11,6 +11,7 @@ declare global {
 	const IconCapBgBlur: typeof import("~icons/cap/bg-blur.jsx")["default"];
 	const IconCapCamera: typeof import("~icons/cap/camera.jsx")["default"];
 	const IconCapCaptions: typeof import("~icons/cap/captions.jsx")["default"];
+	const IconCapCaretDown: typeof import("~icons/cap/caret-down.jsx")["default"];
 	const IconCapChevronDown: typeof import("~icons/cap/chevron-down.jsx")["default"];
 	const IconCapCircle: typeof import("~icons/cap/circle.jsx")["default"];
 	const IconCapCircleCheck: typeof import("~icons/cap/circle-check.jsx")["default"];
@@ -25,6 +26,7 @@ declare global {
 	const IconCapFile: typeof import("~icons/cap/file.jsx")["default"];
 	const IconCapFilmCut: typeof import("~icons/cap/film-cut.jsx")["default"];
 	const IconCapGauge: typeof import("~icons/cap/gauge.jsx")["default"];
+	const IconCapGear: typeof import("~icons/cap/gear.jsx")["default"];
 	const IconCapHotkeys: typeof import("~icons/cap/hotkeys.jsx")["default"];
 	const IconCapImage: typeof import("~icons/cap/image.jsx")["default"];
 	const IconCapInfo: typeof import("~icons/cap/info.jsx")["default"];
@@ -55,6 +57,7 @@ declare global {
 	const IconCapTrash: typeof import("~icons/cap/trash.jsx")["default"];
 	const IconCapUndo: typeof import("~icons/cap/undo.jsx")["default"];
 	const IconCapUpload: typeof import("~icons/cap/upload.jsx")["default"];
+	const IconCapX: typeof import("~icons/cap/x.jsx")["default"];
 	const IconCapZoomIn: typeof import("~icons/cap/zoom-in.jsx")["default"];
 	const IconCapZoomOut: typeof import("~icons/cap/zoom-out.jsx")["default"];
 	const IconHugeiconsEaseCurveControlPoints: typeof import("~icons/hugeicons/ease-curve-control-points.jsx")["default"];
@@ -83,6 +86,7 @@ declare global {
 	const IconLucideVolume2: typeof import("~icons/lucide/volume2.jsx")["default"];
 	const IconLucideVolumeX: typeof import("~icons/lucide/volume-x.jsx")["default"];
 	const IconMaterialSymbolsScreenshotFrame2Rounded: typeof import("~icons/material-symbols/screenshot-frame2-rounded.jsx")["default"];
+	const IconMdiLoading: typeof import("~icons/mdi/loading.jsx")["default"];
 	const IconMdiMonitor: typeof import("~icons/mdi/monitor.jsx")["default"];
 	const IconPhMonitorBold: typeof import("~icons/ph/monitor-bold.jsx")["default"];
 }

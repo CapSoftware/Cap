@@ -1,8 +1,8 @@
 use cap_cursor_capture::CursorCropBounds;
-use cap_displays::{Display, DisplayId, Window, WindowId, bounds::*};
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;
+use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
@@ -402,7 +402,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 }
 
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
-    cap_displays::Display::list()
+    scap_targets::Display::list()
         .into_iter()
         .filter_map(|display| {
             Some((
@@ -418,7 +418,7 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
-    cap_displays::Window::list()
+    scap_targets::Window::list()
         .into_iter()
         .flat_map(|v| {
             let name = v.name()?;
