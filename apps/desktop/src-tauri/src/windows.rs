@@ -237,7 +237,7 @@ impl ShowCapWindow {
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
-                        .content_protected(false)
+                        .content_protected(true)
                         .center()
                         .build()?;
 
@@ -265,7 +265,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .content_protected(false)
+                    .content_protected(true)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
