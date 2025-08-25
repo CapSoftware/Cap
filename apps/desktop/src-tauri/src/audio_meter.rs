@@ -1,4 +1,4 @@
-use cap_media::feeds::{AudioInputSamples, AudioInputSamplesReceiver};
+use cap_recording::feeds::{AudioInputSamples, AudioInputSamplesReceiver};
 use cpal::{SampleFormat, StreamInstant};
 use keyed_priority_queue::KeyedPriorityQueue;
 use serde::{Deserialize, Serialize};

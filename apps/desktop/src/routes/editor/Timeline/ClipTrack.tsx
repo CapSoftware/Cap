@@ -58,7 +58,10 @@ function WaveformCanvas(props: {
 
 		ctx.moveTo(0, h);
 
-		const norm = (w: number) => 1.0 - Math.max(w + gain, -60) / -60;
+		const norm = (w: number) => {
+			const ww = Number.isFinite(w) ? w : -60;
+			return 1.0 - Math.max(ww + gain, -60) / -60;
+		};
 
 		for (
 			let segmentTime = props.segment.start;
@@ -68,13 +71,17 @@ function WaveformCanvas(props: {
 			const index = Math.floor(segmentTime * 10);
 			const xTime = index / 10;
 
-			const amplitude = norm(waveform[index]) * maxAmplitude;
+			const currentDb =
+				typeof waveform[index] === "number" ? waveform[index] : -60;
+			const amplitude = norm(currentDb) * maxAmplitude;
 
 			const x = (xTime - props.segment.start) / secsPerPixel();
 			const y = h - amplitude;
 
 			const prevX = (xTime - 0.1 - props.segment.start) / secsPerPixel();
-			const prevAmplitude = norm(waveform[index - 1]) * maxAmplitude;
+			const prevDb =
+				typeof waveform[index - 1] === "number" ? waveform[index - 1] : -60;
+			const prevAmplitude = norm(prevDb) * maxAmplitude;
 			const prevY = h - prevAmplitude;
 
 			const cpX1 = prevX + step / 2;
@@ -259,7 +266,7 @@ export function ClipTrack(
 												})()}
 											>
 												{(marker) => (
-													<div class="h-7 -top-8 overflow-hidden rounded-full -translate-x-1/2 z-10">
+													<div class="overflow-hidden -top-8 z-10 h-7 rounded-full -translate-x-1/2">
 														<CutOffsetButton
 															value={(() => {
 																const m = marker();
@@ -297,7 +304,7 @@ export function ClipTrack(
 												{(marker) => {
 													const markerValue = marker();
 													return (
-														<div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
+														<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 															<CutOffsetButton
 																value={
 																	markerValue.type === "time"
@@ -348,10 +355,21 @@ export function ClipTrack(
 											createEventListener(e.currentTarget, "mouseup", (e) => {
 												dispose();
 
-												setEditorState("timeline", "selection", {
-													type: "clip",
-													index: i(),
-												});
+												// If there's only one segment, don't open the clip config panel
+												// since there's nothing to configure - just let the normal click behavior happen
+												const hasOnlyOneSegment = segments().length === 1;
+
+												if (hasOnlyOneSegment) {
+													// Clear any existing selection (zoom, layout, etc.) when clicking on a clip
+													// This ensures the sidebar updates properly
+													setEditorState("timeline", "selection", null);
+												} else {
+													// When there are multiple segments, show the clip configuration
+													setEditorState("timeline", "selection", {
+														type: "clip",
+														index: i(),
+													});
+												}
 												props.handleUpdatePlayhead(e);
 											});
 										});
@@ -539,7 +557,7 @@ export function ClipTrack(
 										}}
 									>
 										<div class="w-[2px] bottom-0 -top-2 rounded-full from-red-300 to-transparent bg-gradient-to-b -translate-x-1/2" />
-										<div class="h-7 w-0 absolute -top-8 flex flex-row rounded-full">
+										<div class="flex absolute -top-8 flex-row w-0 h-7 rounded-full">
 											<CutOffsetButton
 												value={(() => {
 													const m = marker();

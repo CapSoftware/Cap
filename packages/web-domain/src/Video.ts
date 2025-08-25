@@ -41,7 +41,7 @@ export class Video extends Schema.Class<Video>("Video")({
  */
 export class VideoPasswordAttachment extends Context.Tag(
 	"VideoPasswordAttachment",
-)<VideoPasswordAttachment, { password: string }>() {}
+)<VideoPasswordAttachment, { password: Option.Option<string> }>() {}
 
 export class VerifyVideoPasswordError extends Schema.TaggedError<VerifyVideoPasswordError>()(
 	"VerifyVideoPasswordError",
@@ -59,13 +59,16 @@ export const verifyPassword = (video: Video, password: Option.Option<string>) =>
 
 		if (Option.isNone(password)) return;
 
-		if (Option.isNone(passwordAttachment))
+		if (
+			Option.isNone(passwordAttachment) ||
+			Option.isNone(passwordAttachment.value.password)
+		)
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "not-provided",
 			});
 
-		if (passwordAttachment.value.password !== password.value)
+		if (passwordAttachment.value.password.value !== password.value)
 			return yield* new VerifyVideoPasswordError({
 				id: video.id,
 				cause: "wrong-password",

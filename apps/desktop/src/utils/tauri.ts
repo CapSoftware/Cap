@@ -33,8 +33,8 @@ export const commands = {
 	async listCaptureWindows(): Promise<CaptureWindow[]> {
 		return await TAURI_INVOKE("list_capture_windows");
 	},
-	async listCaptureScreens(): Promise<CaptureScreen[]> {
-		return await TAURI_INVOKE("list_capture_screens");
+	async listCaptureDisplays(): Promise<CaptureDisplay[]> {
+		return await TAURI_INVOKE("list_capture_displays");
 	},
 	async takeScreenshot(): Promise<null> {
 		return await TAURI_INVOKE("take_screenshot");
@@ -45,7 +45,10 @@ export const commands = {
 	async closeRecordingsOverlayWindow(): Promise<void> {
 		await TAURI_INVOKE("close_recordings_overlay_window");
 	},
-	async setFakeWindowBounds(name: string, bounds: Bounds): Promise<null> {
+	async setFakeWindowBounds(
+		name: string,
+		bounds: LogicalBounds,
+	): Promise<null> {
 		return await TAURI_INVOKE("set_fake_window_bounds", { name, bounds });
 	},
 	async removeFakeWindow(name: string): Promise<null> {
@@ -404,7 +407,6 @@ export type BackgroundSource =
 			to: [number, number, number];
 			angle?: number;
 	  };
-export type Bounds = { x: number; y: number; width: number; height: number };
 export type Camera = {
 	hide: boolean;
 	mirror: boolean;
@@ -460,12 +462,16 @@ export type CaptionsData = {
 	segments: CaptionSegment[];
 	settings: CaptionSettings;
 };
-export type CaptureScreen = { id: number; name: string; refresh_rate: number };
+export type CaptureDisplay = {
+	id: DisplayId;
+	name: string;
+	refresh_rate: number;
+};
 export type CaptureWindow = {
-	id: number;
+	id: WindowId;
 	owner_name: string;
 	name: string;
-	bounds: Bounds;
+	bounds: LogicalBounds;
 	refresh_rate: number;
 };
 export type CommercialLicense = {
@@ -481,9 +487,9 @@ export type CurrentRecording = {
 };
 export type CurrentRecordingChanged = null;
 export type CurrentRecordingTarget =
-	| { window: { id: number; bounds: Bounds } }
-	| { screen: { id: number } }
-	| { area: { screen: number; bounds: Bounds } };
+	| { window: { id: WindowId; bounds: LogicalBounds } }
+	| { screen: { id: DisplayId } }
+	| { area: { screen: DisplayId; bounds: LogicalBounds } };
 export type CursorAnimationStyle = "regular" | "slow" | "fast";
 export type CursorConfiguration = {
 	hide?: boolean;
@@ -550,7 +556,21 @@ export type GeneralSettingsStore = {
 	enableNewRecordingFlow: boolean;
 	postDeletionBehaviour?: PostDeletionBehaviour;
 };
-export type GifExportSettings = { fps: number; resolution_base: XY<number> };
+export type GifExportSettings = {
+	fps: number;
+	resolution_base: XY<number>;
+	quality: GifQuality | null;
+};
+export type GifQuality = {
+	/**
+	 * Encoding quality from 1-100 (default: 90)
+	 */
+	quality: number | null;
+	/**
+	 * Whether to prioritize speed over quality (default: false)
+	 */
+	fast: boolean | null;
+};
 export type HapticPattern = "Alignment" | "LevelChange" | "Generic";
 export type HapticPerformanceTime = "Default" | "Now" | "DrawCompleted";
 export type Hotkey = {
@@ -568,6 +588,8 @@ export type HotkeysConfiguration = { show: boolean };
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } };
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null };
 export type JsonValue<T> = [T];
+export type LayoutMode = "default" | "cameraOnly" | "hideCamera";
+export type LayoutSegment = { start: number; end: number; mode?: LayoutMode };
 export type LogicalBounds = { position: LogicalPosition; size: LogicalSize };
 export type LogicalPosition = { x: number; y: number };
 export type LogicalSize = { width: number; height: number };
@@ -661,9 +683,9 @@ export type RequestOpenSettings = { page: string };
 export type RequestStartRecording = null;
 export type S3UploadMeta = { id: string };
 export type ScreenCaptureTarget =
-	| { variant: "window"; id: number }
-	| { variant: "screen"; id: number }
-	| { variant: "area"; screen: number; bounds: Bounds };
+	| { variant: "window"; id: WindowId }
+	| { variant: "display"; id: DisplayId }
+	| { variant: "area"; screen: DisplayId; bounds: LogicalBounds };
 export type ScreenUnderCursor = {
 	name: string;
 	physical_size: PhysicalSize;
@@ -694,9 +716,9 @@ export type ShowCapWindow =
 	| { Settings: { page: string | null } }
 	| { Editor: { project_path: string } }
 	| "RecordingsOverlay"
-	| { WindowCaptureOccluder: { screen_id: number } }
+	| { WindowCaptureOccluder: { screen_id: DisplayId } }
 	| { TargetSelectOverlay: { display_id: DisplayId } }
-	| { CaptureArea: { screen_id: number } }
+	| { CaptureArea: { screen_id: DisplayId } }
 	| "Camera"
 	| { InProgressRecording: { countdown: number | null } }
 	| "Upgrade"
@@ -724,6 +746,7 @@ export type TargetUnderCursor = {
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];
 	zoomSegments: ZoomSegment[];
+	layoutSegments?: LayoutSegment[];
 };
 export type TimelineSegment = {
 	recordingSegment?: number;

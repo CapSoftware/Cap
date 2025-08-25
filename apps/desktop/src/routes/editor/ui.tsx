@@ -344,6 +344,7 @@ type EditorButtonProps<T extends ValidComponent = "button"> =
 		children?: JSX.Element | string;
 		leftIcon?: JSX.Element;
 		rightIcon?: JSX.Element;
+		kbd?: string[];
 		tooltipText?: string;
 		comingSoon?: boolean;
 		rightIconEnd?: boolean;
@@ -359,6 +360,8 @@ export function EditorButton<T extends ValidComponent = "button">(
 			"leftIcon",
 			"rightIcon",
 			"tooltipText",
+			"kbd",
+			"ref",
 			"comingSoon",
 			"rightIconEnd",
 		],
@@ -382,7 +385,10 @@ export function EditorButton<T extends ValidComponent = "button">(
 	return (
 		<>
 			{local.tooltipText || local.comingSoon ? (
-				<Tooltip content={local.comingSoon ? "Coming Soon" : local.tooltipText}>
+				<Tooltip
+					kbd={local.kbd}
+					content={local.comingSoon ? "Coming Soon" : local.tooltipText}
+				>
 					<Polymorphic
 						as="button"
 						{...others}

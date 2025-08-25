@@ -6,8 +6,8 @@ use std::{
 };
 
 use cap_export::ExporterBase;
-use cap_media::{feeds::CameraFeed, sources::get_target_fps};
 use cap_project::XY;
+use cap_recording::feeds::CameraFeed;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
@@ -77,7 +77,7 @@ async fn main() -> Result<(), String> {
         }
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
-                let screens = cap_media::sources::list_screens();
+                let screens = cap_recording::screen_capture::list_displays();
 
                 for (i, (screen, target)) in screens.iter().enumerate() {
                     println!(
@@ -89,12 +89,12 @@ screen {}:
                         i,
                         screen.id,
                         screen.name,
-                        get_target_fps(target).unwrap()
+                        target.refresh_rate()
                     );
                 }
             }
             Some(RecordCommands::Windows) => {
-                let windows = cap_media::sources::list_windows();
+                let windows = cap_recording::screen_capture::list_windows();
 
                 for (i, (window, target)) in windows.iter().enumerate() {
                     println!(
@@ -106,7 +106,7 @@ window {}:
                         i,
                         window.id,
                         window.name,
-                        get_target_fps(target).unwrap()
+                        target.display().unwrap().refresh_rate()
                     );
                 }
             }

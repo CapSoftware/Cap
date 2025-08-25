@@ -1,6 +1,7 @@
-use std::{mem, str::FromStr};
-
+use std::{ffi::OsString, mem, os::windows::ffi::OsStringExt, path::PathBuf, str::FromStr};
+use tracing::error;
 use windows::{
+    Graphics::Capture::GraphicsCaptureItem,
     Win32::{
         Devices::Display::{
             DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
@@ -11,13 +12,17 @@ use windows::{
             QueryDisplayConfig,
         },
         Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
-        Graphics::Gdi::{
-            BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
-            CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS, DeleteDC, DeleteObject,
-            ENUM_CURRENT_SETTINGS, EnumDisplayMonitors, EnumDisplaySettingsW, FillRect, GetDC,
-            GetDIBits, GetMonitorInfoW, GetObjectA, HBRUSH, HDC, HGDIOBJ, HMONITOR,
-            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL, MONITORINFOEXW, MonitorFromPoint,
-            ReleaseDC, SelectObject,
+        Graphics::{
+            Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
+            Gdi::{
+                BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleBitmap,
+                CreateCompatibleDC, CreateSolidBrush, DEVMODEW, DIB_RGB_COLORS,
+                DISPLAY_DEVICE_STATE_FLAGS, DISPLAY_DEVICEW, DeleteDC, DeleteObject,
+                ENUM_CURRENT_SETTINGS, EnumDisplayDevicesW, EnumDisplayMonitors,
+                EnumDisplaySettingsW, FillRect, GetDC, GetDIBits, GetMonitorInfoW, GetObjectA,
+                HBRUSH, HDC, HGDIOBJ, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+                MONITORINFOEXW, MonitorFromPoint, MonitorFromWindow, ReleaseDC, SelectObject,
+            },
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
@@ -29,26 +34,39 @@ use windows::{
                 GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
                 PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
             },
+            WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
         },
         UI::{
-            HiDpi::GetDpiForWindow,
+            HiDpi::{
+                GetDpiForMonitor, GetDpiForWindow, GetProcessDpiAwareness, MDT_EFFECTIVE_DPI,
+                PROCESS_PER_MONITOR_DPI_AWARE,
+            },
             Shell::ExtractIconExW,
             WindowsAndMessaging::{
-                DI_FLAGS, DestroyIcon, DrawIconEx, EnumWindows, GCLP_HICON, GW_HWNDNEXT,
-                GWL_EXSTYLE, GetClassLongPtrW, GetClassNameW, GetCursorPos, GetIconInfo,
-                GetLayeredWindowAttributes, GetWindow, GetWindowLongW, GetWindowRect,
-                GetWindowThreadProcessId, HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW,
-                WM_GETICON, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
+                DI_FLAGS, DestroyIcon, DrawIconEx, EnumChildWindows, EnumWindows, GCLP_HICON,
+                GW_HWNDNEXT, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
+                GetClientRect, GetCursorPos, GetDesktopWindow, GetIconInfo,
+                GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW, GetWindowLongW,
+                GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+                HICON, ICONINFO, IsIconic, IsWindowVisible, SendMessageW, WM_GETICON, WS_CHILD,
+                WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WindowFromPoint,
             },
         },
     },
     core::{BOOL, PCWSTR, PWSTR},
 };
 
-use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize};
+
+// All of this assumes PROCESS_PER_MONITOR_DPI_AWARE
+//
+// On Windows it's nigh impossible to get the logical position of a display
+// or window, since there's no simple API that accounts for each monitor having different DPI.
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
+
+unsafe impl Send for DisplayImpl {}
 
 impl DisplayImpl {
     pub fn primary() -> Self {
@@ -112,41 +130,21 @@ impl DisplayImpl {
         Self::list().into_iter().find(|d| d.raw_id().0 == parsed_id)
     }
 
-    pub fn logical_size(&self) -> LogicalSize {
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        let physical_size = self.physical_size()?;
 
-        unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                let rect = info.monitorInfo.rcMonitor;
-                LogicalSize {
-                    width: (rect.right - rect.left) as f64,
-                    height: (rect.bottom - rect.top) as f64,
-                }
-            } else {
-                LogicalSize {
-                    width: 0.0,
-                    height: 0.0,
-                }
-            }
-        }
-    }
+        let dpi = unsafe {
+            let mut dpi_x = 0;
+            GetDpiForMonitor(self.0, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut 0).ok()?;
+            dpi_x
+        };
 
-    pub fn logical_position(&self) -> LogicalPosition {
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
+        let scale = dpi as f64 / 96.0;
 
-        unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                let rect = info.monitorInfo.rcMonitor;
-                LogicalPosition {
-                    x: rect.left as f64,
-                    y: rect.top as f64,
-                }
-            } else {
-                LogicalPosition { x: 0.0, y: 0.0 }
-            }
-        }
+        Some(LogicalSize::new(
+            physical_size.width() / scale,
+            physical_size.height() / scale,
+        ))
     }
 
     pub fn get_containing_cursor() -> Option<Self> {
@@ -164,40 +162,30 @@ impl DisplayImpl {
         }
     }
 
-    pub fn physical_size(&self) -> PhysicalSize {
+    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
         let mut info = MONITORINFOEXW::default();
         info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
 
-        unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                let device_name = info.szDevice;
-                let mut devmode = DEVMODEW::default();
-                devmode.dmSize = mem::size_of::<DEVMODEW>() as u16;
-
-                if EnumDisplaySettingsW(
-                    PCWSTR(device_name.as_ptr()),
-                    ENUM_CURRENT_SETTINGS,
-                    &mut devmode,
+        unsafe { GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _) }
+            .as_bool()
+            .then(|| {
+                let rect = info.monitorInfo.rcMonitor;
+                PhysicalBounds::new(
+                    PhysicalPosition::new(rect.left as f64, rect.top as f64),
+                    PhysicalSize::new(
+                        rect.right as f64 - rect.left as f64,
+                        rect.bottom as f64 - rect.top as f64,
+                    ),
                 )
-                .as_bool()
-                {
-                    PhysicalSize {
-                        width: devmode.dmPelsWidth as f64,
-                        height: devmode.dmPelsHeight as f64,
-                    }
-                } else {
-                    PhysicalSize {
-                        width: 0.0,
-                        height: 0.0,
-                    }
-                }
-            } else {
-                PhysicalSize {
-                    width: 0.0,
-                    height: 0.0,
-                }
-            }
-        }
+            })
+    }
+
+    pub fn physical_position(&self) -> Option<PhysicalPosition> {
+        Some(self.physical_bounds()?.position())
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        Some(self.physical_bounds()?.size())
     }
 
     pub fn refresh_rate(&self) -> f64 {
@@ -227,48 +215,43 @@ impl DisplayImpl {
         }
     }
 
-    pub fn name(&self) -> String {
-        // First try the modern DisplayConfig API for friendly names
-        if let Some(friendly_name) = self.get_friendly_name_from_displayconfig() {
-            return friendly_name;
-        }
-
-        // Try WMI query for better localized names
-        if let Some(wmi_name) = self.get_friendly_name_from_wmi() {
-            return wmi_name;
-        }
-
-        // Fallback to the existing registry method
-        let mut info = MONITORINFOEXW::default();
-        info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
+    pub fn name(&self) -> Option<String> {
         unsafe {
-            if GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                // Convert the device name from wide string to String
-                let device_name = &info.szDevice;
-                let null_pos = device_name
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(device_name.len());
-                let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
+            let mut monitor_info = MONITORINFOEXW {
+                monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+                    cbSize: mem::size_of::<MONITORINFOEXW>() as u32,
+                    rcMonitor: RECT::default(),
+                    rcWork: RECT::default(),
+                    dwFlags: 0,
+                },
+                szDevice: [0; 32],
+            };
 
-                // Try to get friendly name from registry
-                if let Some(friendly_name) = self.get_friendly_name_from_registry(&device_name_str)
-                {
-                    return friendly_name;
+            if GetMonitorInfoW(self.0, &mut monitor_info as *mut _ as *mut _).as_bool() {
+                let device_name = PCWSTR::from_raw(monitor_info.szDevice.as_ptr());
+
+                let mut display_device = DISPLAY_DEVICEW {
+                    cb: mem::size_of::<DISPLAY_DEVICEW>() as u32,
+                    DeviceName: [0; 32],
+                    DeviceString: [0; 128],
+                    StateFlags: DISPLAY_DEVICE_STATE_FLAGS(0),
+                    DeviceID: [0; 128],
+                    DeviceKey: [0; 128],
+                };
+
+                if EnumDisplayDevicesW(device_name, 0, &mut display_device, 0).as_bool() {
+                    let device_string = display_device.DeviceString;
+                    let len = device_string
+                        .iter()
+                        .position(|&x| x == 0)
+                        .unwrap_or(device_string.len());
+
+                    return Some(String::from_utf16_lossy(&device_string[..len]));
                 }
-
-                // Try EDID-based name lookup as final fallback before device name
-                if let Some(edid_name) = self.get_friendly_name_from_edid(&device_name_str) {
-                    return edid_name;
-                }
-
-                // Final fallback to device name
-                device_name_str
-            } else {
-                format!("Unknown Display")
             }
         }
+
+        None
     }
 
     fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
@@ -649,13 +632,18 @@ impl DisplayImpl {
         }
         None
     }
+
+    pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        unsafe { interop.CreateForMonitor(self.0) }
+    }
 }
 
-fn get_cursor_position() -> Option<LogicalPosition> {
+fn get_cursor_position() -> Option<PhysicalPosition> {
     let mut point = POINT { x: 0, y: 0 };
     unsafe {
         if GetCursorPos(&mut point).is_ok() {
-            Some(LogicalPosition {
+            Some(PhysicalPosition {
                 x: point.x as f64,
                 y: point.y as f64,
             })
@@ -691,13 +679,18 @@ impl WindowImpl {
         };
 
         unsafe {
-            let _ = EnumWindows(
+            let _ = EnumChildWindows(
+                Some(GetDesktopWindow()),
                 Some(enum_windows_proc),
                 LPARAM(std::ptr::addr_of_mut!(context) as isize),
             );
         }
 
         context.list
+    }
+
+    pub fn inner(&self) -> HWND {
+        self.0
     }
 
     pub fn get_topmost_at_cursor() -> Option<Self> {
@@ -799,7 +792,7 @@ impl WindowImpl {
         Self::list()
             .into_iter()
             .filter_map(|window| {
-                let bounds = window.bounds()?;
+                let bounds = window.physical_bounds()?;
                 bounds.contains_point(cursor).then_some(window)
             })
             .collect()
@@ -1217,32 +1210,182 @@ impl WindowImpl {
         }
     }
 
-    pub fn bounds(&self) -> Option<LogicalBounds> {
+    pub fn logical_size(&self) -> Option<LogicalSize> {
+        let mut rect = RECT::default();
+
+        unsafe {
+            match GetProcessDpiAwareness(None) {
+                Ok(PROCESS_PER_MONITOR_DPI_AWARE) => {}
+                Err(e) => {
+                    error!("Failed to get process DPI awareness: {e}");
+                    return None;
+                }
+                Ok(v) => {
+                    error!("Unsupported DPI awareness {v:?}");
+                    return None;
+                }
+            }
+
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                (&raw mut rect).cast(),
+                size_of::<RECT>() as u32,
+            )
+            .ok()?;
+
+            const BASE_DPI: f64 = 96.0;
+            let dpi = match GetDpiForWindow(self.0) {
+                0 => BASE_DPI as u32,
+                dpi => dpi,
+            } as f64;
+            let scale_factor = dpi / BASE_DPI;
+
+            Some(LogicalSize {
+                width: (rect.right - rect.left) as f64 / scale_factor,
+                height: (rect.bottom - rect.top) as f64 / scale_factor,
+            })
+        }
+    }
+
+    pub fn physical_bounds(&self) -> Option<PhysicalBounds> {
         let mut rect = RECT::default();
         unsafe {
-            if GetWindowRect(self.0, &mut rect).is_ok() {
-                // Get DPI scaling factor to convert physical to logical coordinates
-                const BASE_DPI: f64 = 96.0;
-                let dpi = match GetDpiForWindow(self.0) {
-                    0 => BASE_DPI as u32,
-                    dpi => dpi,
-                } as f64;
-                let scale_factor = dpi / BASE_DPI;
+            match GetProcessDpiAwareness(None) {
+                Ok(PROCESS_PER_MONITOR_DPI_AWARE) => {}
+                Err(e) => {
+                    error!("Failed to get process DPI awareness: {e}");
+                    return None;
+                }
+                Ok(v) => {
+                    error!("Unsupported DPI awareness {v:?}");
+                    return None;
+                }
+            }
 
-                Some(LogicalBounds {
-                    position: LogicalPosition {
-                        x: rect.left as f64 / scale_factor,
-                        y: rect.top as f64 / scale_factor,
-                    },
-                    size: LogicalSize {
-                        width: (rect.right - rect.left) as f64 / scale_factor,
-                        height: (rect.bottom - rect.top) as f64 / scale_factor,
-                    },
-                })
-            } else {
-                None
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                (&raw mut rect).cast(),
+                size_of::<RECT>() as u32,
+            )
+            .ok()?;
+
+            Some(PhysicalBounds {
+                position: PhysicalPosition {
+                    x: rect.left as f64,
+                    y: rect.top as f64,
+                },
+                size: PhysicalSize {
+                    width: (rect.right - rect.left) as f64,
+                    height: (rect.bottom - rect.top) as f64,
+                },
+            })
+        }
+    }
+
+    pub fn physical_size(&self) -> Option<PhysicalSize> {
+        Some(self.physical_bounds()?.size())
+    }
+
+    pub fn physical_position(&self) -> Option<PhysicalPosition> {
+        Some(self.physical_bounds()?.position())
+    }
+
+    pub fn display(&self) -> Option<DisplayImpl> {
+        let hwmonitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONULL) };
+        if hwmonitor.is_invalid() {
+            None
+        } else {
+            Some(DisplayImpl(hwmonitor))
+        }
+    }
+
+    pub fn name(&self) -> Option<String> {
+        let len = unsafe { GetWindowTextLengthW(self.0) };
+
+        let mut name = vec![0u16; usize::try_from(len).unwrap() + 1];
+        if len >= 1 {
+            let copied = unsafe { GetWindowTextW(self.0, &mut name) };
+            if copied == 0 {
+                return Some(String::new());
             }
         }
+
+        String::from_utf16(
+            &name
+                .as_slice()
+                .iter()
+                .take_while(|ch| **ch != 0x0000)
+                .copied()
+                .collect::<Vec<u16>>(),
+        )
+        .ok()
+    }
+
+    pub fn is_on_screen(&self) -> bool {
+        if !unsafe { IsWindowVisible(self.0) }.as_bool() {
+            return false;
+        }
+
+        let mut pvattribute_cloaked = 0u32;
+        unsafe {
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_CLOAKED,
+                &mut pvattribute_cloaked as *mut _ as *mut std::ffi::c_void,
+                std::mem::size_of::<u32>() as u32,
+            )
+        }
+        .ok();
+
+        if pvattribute_cloaked != 0 {
+            return false;
+        }
+
+        let mut process_id = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut process_id)) };
+
+        let owner_process_path = match unsafe { pid_to_exe_path(process_id) } {
+            Ok(path) => path,
+            Err(_) => return false,
+        };
+
+        if owner_process_path.starts_with("C:\\Windows\\SystemApps") {
+            return false;
+        }
+
+        true
+    }
+
+    pub fn is_valid(&self) -> bool {
+        if !unsafe { IsWindowVisible(self.0).as_bool() } {
+            return false;
+        }
+
+        let mut id = 0;
+        unsafe { GetWindowThreadProcessId(self.0, Some(&mut id)) };
+        if id == unsafe { GetCurrentProcessId() } {
+            return false;
+        }
+
+        let mut rect = RECT::default();
+        let result = unsafe { GetClientRect(self.0, &mut rect) };
+        if result.is_ok() {
+            let styles = unsafe { GetWindowLongPtrW(self.0, GWL_STYLE) };
+            let ex_styles = unsafe { GetWindowLongPtrW(self.0, GWL_EXSTYLE) };
+
+            if (ex_styles & isize::try_from(WS_EX_TOOLWINDOW.0).unwrap()) != 0 {
+                return false;
+            }
+            if (styles & isize::try_from(WS_CHILD.0).unwrap()) != 0 {
+                return false;
+            }
+        } else {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -1374,4 +1517,27 @@ impl FromStr for WindowIdImpl {
             .map(Self)
             .map_err(|_| "Invalid window ID".to_string())
     }
+}
+
+unsafe fn pid_to_exe_path(pid: u32) -> Result<PathBuf, windows::core::Error> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }?;
+    if handle.is_invalid() {
+        tracing::error!("Invalid PID {}", pid);
+    }
+    let mut lpexename = [0u16; 1024];
+    let mut lpdwsize = lpexename.len() as u32;
+
+    let query = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT::default(),
+            windows::core::PWSTR(lpexename.as_mut_ptr()),
+            &mut lpdwsize,
+        )
+    };
+    unsafe { CloseHandle(handle) }.ok();
+    query?;
+
+    let os_str = &OsString::from_wide(&lpexename[..lpdwsize as usize]);
+    Ok(PathBuf::from(os_str))
 }

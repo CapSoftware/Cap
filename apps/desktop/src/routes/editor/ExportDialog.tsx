@@ -33,6 +33,8 @@ import {
 	type ExportSettings,
 	events,
 	type FramesRendered,
+	type GifExportSettings,
+	type Mp4ExportSettings,
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
@@ -73,17 +75,17 @@ export const EXPORT_TO_OPTIONS = [
 	{
 		label: "File",
 		value: "file",
-		icon: <IconCapFile class="text-gray-12 size-4" />,
+		icon: <IconCapFile class="text-gray-12 size-3.5" />,
 	},
 	{
 		label: "Clipboard",
 		value: "clipboard",
-		icon: <IconCapCopy class="text-gray-12 size-4" />,
+		icon: <IconCapCopy class="text-gray-12 size-3.5" />,
 	},
 	{
 		label: "Shareable link",
 		value: "link",
-		icon: <IconCapLink class="text-gray-12 size-4" />,
+		icon: <IconCapLink class="text-gray-12 size-3.5" />,
 	},
 ] as const;
 
@@ -140,7 +142,7 @@ export function ExportDialog() {
 					y: settings.resolution.height,
 				},
 				compression: settings.compression,
-			},
+			} as (Mp4ExportSettings & GifExportSettings) & { format: "Mp4" | "Gif" },
 			onProgress,
 		);
 
@@ -169,9 +171,9 @@ export function ExportDialog() {
 	}));
 
 	const exportButtonIcon: Record<"file" | "clipboard" | "link", JSX.Element> = {
-		file: <IconCapFile class="text-gray-1 size-4" />,
-		clipboard: <IconCapCopy class="text-gray-1 size-4" />,
-		link: <IconCapLink class="text-gray-1 size-4" />,
+		file: <IconCapFile class="text-gray-1 size-3.5" />,
+		clipboard: <IconCapCopy class="text-gray-1 size-3.5" />,
+		link: <IconCapLink class="text-gray-1 size-3.5" />,
 	};
 
 	const copy = createMutation(() => ({
@@ -360,6 +362,7 @@ export function ExportDialog() {
 			setExportState({ type: "done" });
 		},
 		onError: (error) => {
+			console.error(error);
 			commands.globalMessageDialog(
 				error instanceof Error ? error.message : "Failed to upload recording",
 			);
@@ -372,7 +375,7 @@ export function ExportDialog() {
 		<>
 			<Show when={exportState.type === "idle"}>
 				<DialogContent
-					title="Export"
+					title="Export Cap"
 					confirm={
 						<>
 							{settings.exportTo === "link" && !auth.data ? (
@@ -406,8 +409,8 @@ export function ExportDialog() {
 										)}
 									>
 										<p class="flex gap-4 items-center">
-											<span class="flex items-center text-[--gray-500]">
-												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+											<span class="flex items-center text-gray-12">
+												<IconCapCamera class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().duration_seconds,
@@ -430,16 +433,16 @@ export function ExportDialog() {
 														.padStart(2, "0")}`;
 												})()}
 											</span>
-											<span class="flex items-center text-[--gray-500]">
-												<IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+											<span class="flex items-center text-gray-12">
+												<IconLucideMonitor class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{settings.resolution.width}×{settings.resolution.height}
 											</span>
-											<span class="flex items-center text-[--gray-500]">
-												<IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+											<span class="flex items-center text-gray-12">
+												<IconLucideHardDrive class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{est().estimated_size_mb.toFixed(2)} MB
 											</span>
-											<span class="flex items-center text-[--gray-500]">
-												<IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-[--gray-500]" />
+											<span class="flex items-center text-gray-12">
+												<IconLucideClock class="w-[14px] h-[14px] mr-1.5 text-gray-12" />
 												{(() => {
 													const totalSeconds = Math.round(
 														est().estimated_time_seconds,
@@ -471,7 +474,7 @@ export function ExportDialog() {
 				>
 					<div class="flex flex-wrap gap-3">
 						{/* Export to */}
-						<div class="flex-1 p-4 rounded-xl bg-gray-2">
+						<div class="flex-1 p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Export to</h3>
 								<div class="flex gap-2">
@@ -480,7 +483,7 @@ export function ExportDialog() {
 											<Button
 												onClick={() => setSettings("exportTo", option.value)}
 												class={cx(
-													"flex gap-2 items-center",
+													"flex flex-1 gap-2 items-center text-nowrap",
 													settings.exportTo === option.value && selectedStyle,
 												)}
 												variant="secondary"
@@ -494,7 +497,7 @@ export function ExportDialog() {
 							</div>
 						</div>
 						{/* Format */}
-						<div class="p-4 rounded-xl bg-gray-2">
+						<div class="p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Format</h3>
 								<div class="flex flex-row gap-2">
@@ -549,7 +552,7 @@ export function ExportDialog() {
 							</div>
 						</div>
 						{/* Frame rate */}
-						<div class="overflow-hidden relative p-4 rounded-xl bg-gray-2">
+						<div class="overflow-hidden relative p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Frame rate</h3>
 								<KSelect<{ label: string; value: number }>
@@ -582,7 +585,7 @@ export function ExportDialog() {
 										</MenuItem>
 									)}
 								>
-									<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 rounded-xl transition-colors bg-gray-3 disabled:text-gray-11">
+									<KSelect.Trigger class="flex flex-row gap-2 items-center px-3 w-full h-10 rounded-xl transition-colors dark:bg-gray-3 bg-gray-4 disabled:text-gray-11">
 										<KSelect.Value<
 											(typeof FPS_OPTIONS)[number]
 										> class="flex-1 text-sm text-left truncate tabular-nums text-[--gray-500]">
@@ -603,7 +606,7 @@ export function ExportDialog() {
 											class={cx(topSlideAnimateClasses, "z-50")}
 										>
 											<MenuItemList<typeof KSelect.Listbox>
-												class="overflow-y-auto max-h-32"
+												class="max-h-32 custom-scroll"
 												as={KSelect.Listbox}
 											/>
 										</PopperContent>
@@ -612,7 +615,7 @@ export function ExportDialog() {
 							</div>
 						</div>
 						{/* Compression */}
-						<div class="p-4 rounded-xl bg-gray-2">
+						<div class="p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Compression</h3>
 								<div class="flex gap-2">
@@ -639,7 +642,7 @@ export function ExportDialog() {
 							</div>
 						</div>
 						{/* Resolution */}
-						<div class="flex-1 p-4 rounded-xl bg-gray-2">
+						<div class="flex-1 p-4 rounded-xl dark:bg-gray-2 bg-gray-3">
 							<div class="flex flex-col gap-3">
 								<h3 class="text-gray-12">Resolution</h3>
 								<div class="flex gap-2">
