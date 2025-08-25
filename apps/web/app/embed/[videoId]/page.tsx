@@ -11,7 +11,7 @@ import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
 import { provideOptionalAuth, Videos, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import type { Metadata } from "next";
 import Link from "next/link";
@@ -142,6 +142,11 @@ export default async function EmbedVideoPage(props: Props) {
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
 					folderId: videos.folderId,
+					width: videos.width,
+					height: videos.height,
+					duration: videos.duration,
+					fps: videos.fps,
+					hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
