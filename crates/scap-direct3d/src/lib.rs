@@ -309,6 +309,14 @@ impl<'a> Frame<'a> {
         &self.texture
     }
 
+    pub fn d3d_device(&self) -> &ID3D11Device {
+        self.d3d_device
+    }
+
+    pub fn d3d_context(&self) -> &ID3D11DeviceContext {
+        self.d3d_context
+    }
+
     pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'a>> {
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: self.width,
