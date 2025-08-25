@@ -1884,7 +1884,7 @@ async fn set_camera_preview_state(
 #[tauri::command]
 #[specta::specta]
 async fn await_camera_preview_ready(store: State<'_, CameraPreview>) -> Result<bool, ()> {
-    store.wait_for_camera_to_load().await;
+    // store.wait_for_camera_to_load().await; // TODO: Reimplement this
     Ok(true)
 }
 

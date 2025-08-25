@@ -61,7 +61,6 @@ pub struct CameraPreview {
         broadcast::Sender<Option<(u32, u32)>>,
         broadcast::Receiver<Option<(u32, u32)>>,
     ),
-    loading: Arc<AtomicBool>,
     store: Arc<Store<Wry>>,
 }
 
@@ -69,7 +68,6 @@ impl CameraPreview {
     pub fn init(manager: &impl Manager<Wry>) -> tauri_plugin_store::Result<Self> {
         Ok(Self {
             reconfigure: broadcast::channel(1),
-            loading: Arc::new(AtomicBool::new(false)),
             store: tauri_plugin_store::StoreBuilder::new(manager, "cameraPreview").build()?,
         })
     }
@@ -79,13 +77,10 @@ impl CameraPreview {
         window: WebviewWindow,
         camera_rx: Receiver<RawCameraFrame>,
     ) -> anyhow::Result<()> {
-        self.loading.store(true, Ordering::Relaxed);
-
         let mut renderer = Renderer::init(window.clone()).await?;
 
         let store = self.store.clone();
         let mut reconfigure = self.reconfigure.1.resubscribe();
-        let loading_state = self.loading.clone();
         thread::spawn(move || {
             let mut window_visible = false;
             let mut first = true;
@@ -206,11 +201,6 @@ impl CameraPreview {
                     let output_height = 100; // (1280.0 / camera_aspect_ratio) as u32;
 
                     let new_texture_value = if let Some(frame) = frame {
-                        if loading {
-                            loading_state.store(false, Ordering::Relaxed);
-                            loading = false;
-                        }
-
                         let resampler_frame = resampler_frame
                             .get_or_init((output_width, output_height), frame::Video::empty);
 
@@ -288,14 +278,6 @@ impl CameraPreview {
         self.store.save()?;
         self.reconfigure.0.send(None).ok();
         Ok(())
-    }
-
-    /// Wait for the camera to load.
-    pub async fn wait_for_camera_to_load(&self) {
-        // The webview is generally slow to load so it's rare this will actually loop.
-        while self.loading.load(Ordering::Relaxed) {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     }
 
     /// Update the size of the window.
