@@ -1002,7 +1002,7 @@ impl WindowImpl {
         // Also skip WebView2 and Cap-related processes
         if let Ok(exe_path) = unsafe { pid_to_exe_path(id) } {
             if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                if IGNORED_EXES.contains(&exe_name.to_lowercase()) {
+                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
                     return false;
                 }
             }
@@ -1045,7 +1045,7 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
         // Also skip WebView2 and Cap-related processes
         if let Ok(exe_path) = pid_to_exe_path(process_id) {
             if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                if IGNORED_EXES.contains(&exe_name.to_lowercase()) {
+                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
                     return false;
                 }
             }
