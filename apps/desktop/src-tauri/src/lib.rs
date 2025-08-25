@@ -32,6 +32,7 @@ use cap_project::{
     ZoomSegment,
 };
 use cap_recording::{
+    RecordingMode,
     feeds::{
         self, CameraFeed, DeviceOrModelID, RawCameraFrame,
         microphone::{self, MicrophoneFeed},
@@ -91,7 +92,10 @@ use crate::upload::build_video_meta;
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
     None,
-    Pending,
+    Pending {
+        mode: RecordingMode,
+        target: ScreenCaptureTarget,
+    },
     Active(InProgressRecording),
 }
 
@@ -148,8 +152,8 @@ pub struct VideoUploadInfo {
 }
 
 impl App {
-    pub fn set_pending_recording(&mut self) {
-        self.recording_state = RecordingState::Pending;
+    pub fn set_pending_recording(&mut self, mode: RecordingMode, target: ScreenCaptureTarget) {
+        self.recording_state = RecordingState::Pending { mode, target };
         CurrentRecordingChanged.emit(&self.handle).ok();
     }
 
@@ -445,7 +449,7 @@ enum CurrentRecordingTarget {
 #[serde(rename_all = "camelCase")]
 struct CurrentRecording {
     target: CurrentRecordingTarget,
-    r#type: RecordingType,
+    mode: RecordingMode,
 }
 
 #[tauri::command]
@@ -454,37 +458,29 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(
-        &state
-            .current_recording()
-            .map(|r| {
-                let target = match r.capture_target() {
-                    ScreenCaptureTarget::Display { id } => {
-                        CurrentRecordingTarget::Screen { id: id.clone() }
-                    }
-                    ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                        id: id.clone(),
-                        bounds: scap_targets::Window::from_id(id)
-                            .ok_or(())?
-                            .display_relative_logical_bounds()
-                            .ok_or(())?,
-                    },
-                    ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-                        screen: screen.clone(),
-                        bounds: bounds.clone(),
-                    },
-                };
 
-                Ok(CurrentRecording {
-                    target,
-                    r#type: match r {
-                        InProgressRecording::Instant { .. } => RecordingType::Instant,
-                        InProgressRecording::Studio { .. } => RecordingType::Studio,
-                    },
-                })
-            })
-            .transpose()?,
-    ))
+    let (mode, capture_target) = match &state.recording_state {
+        RecordingState::None => return Ok(JsonValue::new(&None)),
+        RecordingState::Pending { mode, target } => (*mode, target),
+        RecordingState::Active(inner) => (inner.mode(), inner.capture_target()),
+    };
+
+    let target = match capture_target {
+        ScreenCaptureTarget::Display { id } => CurrentRecordingTarget::Screen { id: id.clone() },
+        ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+            id: id.clone(),
+            bounds: scap_targets::Window::from_id(&id)
+                .ok_or(())?
+                .display_relative_logical_bounds()
+                .ok_or(())?,
+        },
+        ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+            screen: screen.clone(),
+            bounds: bounds.clone(),
+        },
+    };
+
+    Ok(JsonValue::new(&Some(CurrentRecording { target, mode })))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -1465,29 +1461,22 @@ async fn save_file_dialog(
 }
 
 #[derive(Serialize, specta::Type)]
-pub struct RecordingMetaWithType {
+pub struct RecordingMetaWithMode {
     #[serde(flatten)]
     pub inner: RecordingMeta,
-    pub r#type: RecordingType,
+    pub mode: RecordingMode,
 }
 
-impl RecordingMetaWithType {
+impl RecordingMetaWithMode {
     fn new(inner: RecordingMeta) -> Self {
         Self {
-            r#type: match &inner.inner {
-                RecordingMetaInner::Studio(_) => RecordingType::Studio,
-                RecordingMetaInner::Instant(_) => RecordingType::Instant,
+            mode: match &inner.inner {
+                RecordingMetaInner::Studio(_) => RecordingMode::Studio,
+                RecordingMetaInner::Instant(_) => RecordingMode::Instant,
             },
             inner,
         }
     }
-}
-
-#[derive(Serialize, specta::Type)]
-#[serde(rename_all = "camelCase")]
-pub enum RecordingType {
-    Studio,
-    Instant,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
@@ -1502,15 +1491,15 @@ pub enum FileType {
 fn get_recording_meta(
     path: PathBuf,
     _file_type: FileType,
-) -> Result<RecordingMetaWithType, String> {
+) -> Result<RecordingMetaWithMode, String> {
     RecordingMeta::load_for_project(&path)
-        .map(RecordingMetaWithType::new)
+        .map(RecordingMetaWithMode::new)
         .map_err(|e| format!("Failed to load recording meta: {e}"))
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithType)>, String> {
+fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMode)>, String> {
     let recordings_dir = recordings_path(&app);
 
     if !recordings_dir.exists() {

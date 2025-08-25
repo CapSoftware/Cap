@@ -1,7 +1,12 @@
+import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen, once } from "@tauri-apps/api/event";
+import {
+	getAllWebviewWindows,
+	WebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import {
 	getCurrentWindow,
 	LogicalSize,
@@ -13,14 +18,18 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
 import {
 	createEffect,
+	createSignal,
 	ErrorBoundary,
 	onCleanup,
 	onMount,
+	Show,
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
+import { createSignInMutation } from "~/utils/auth";
+import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCameraMutation,
 	createLicenseQuery,
@@ -261,8 +270,28 @@ function Page() {
 
 	const license = createLicenseQuery();
 
+	const signIn = createSignInMutation();
+
+	const startSignInCleanup = listen("start-sign-in", async () => {
+		const abort = new AbortController();
+		for (const win of await getAllWebviewWindows()) {
+			if (win.label.startsWith("target-select-overlay")) {
+				await win.hide();
+			}
+		}
+
+		await signIn.mutateAsync(abort).catch(() => {});
+
+		for (const win of await getAllWebviewWindows()) {
+			if (win.label.startsWith("target-select-overlay")) {
+				await win.show();
+			}
+		}
+	});
+	onCleanup(() => startSignInCleanup.then((cb) => cb()));
+
 	return (
-		<div class="flex justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
+		<div class="flex relative justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
 				<div
 					dir={ostype() === "windows" ? "rtl" : "rtl"}
@@ -335,6 +364,24 @@ function Page() {
 					</ErrorBoundary>
 				</div>
 			</WindowChromeHeader>
+			<Show when={signIn.isPending}>
+				<div class="bg-gray-1 absolute inset-0 flex items-center justify-center animate-in fade-in">
+					<div class="flex flex-col items-center justify-center gap-4">
+						<span>Singning In...</span>
+
+						<Button
+							onClick={() => {
+								signIn.variables?.abort();
+								signIn.reset();
+							}}
+							variant="secondary"
+							class="w-full"
+						>
+							Cancel Sign In
+						</Button>
+					</div>
+				</div>
+			</Show>
 			<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "display"}

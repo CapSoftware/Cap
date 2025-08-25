@@ -1,8 +1,8 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use scap_targets::{Display, DisplayId};
 use futures::pin_mut;
+use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
@@ -237,7 +237,7 @@ impl ShowCapWindow {
                         .maximizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
-                        .content_protected(true)
+                        .content_protected(false)
                         .center()
                         .build()?;
 
@@ -265,7 +265,7 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .content_protected(true)
+                    .content_protected(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)

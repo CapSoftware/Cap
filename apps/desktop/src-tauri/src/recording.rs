@@ -14,7 +14,7 @@ use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
@@ -119,6 +119,13 @@ impl InProgressRecording {
         match self {
             Self::Instant { handle, .. } => handle.cancel().await,
             Self::Studio { handle, .. } => handle.cancel().await,
+        }
+    }
+
+    pub fn mode(&self) -> RecordingMode {
+        match self {
+            Self::Instant { .. } => RecordingMode::Instant,
+            Self::Studio { .. } => RecordingMode::Studio,
         }
     }
 }
@@ -300,15 +307,22 @@ pub async fn start_recording(
     }
 
     // Set pending state BEFORE closing main window and starting countdown
-    {
-        let mut state = state_mtx.write().await;
-        state.set_pending_recording();
-    }
+    state_mtx
+        .write()
+        .await
+        .set_pending_recording(inputs.mode, inputs.capture_target.clone());
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;
+
+    if let Some(window) = CapWindowId::Main.get(&app) {
+        let _ = general_settings
+            .map(|v| v.main_window_recording_start_behaviour)
+            .unwrap_or_default()
+            .perform(&window);
+    }
 
     if let Some(countdown) = countdown {
         for t in 0..countdown {
@@ -335,13 +349,6 @@ pub async fn start_recording(
         });
 
     println!("spawning actor");
-
-    if let Some(window) = CapWindowId::Main.get(&app) {
-        let _ = general_settings
-            .map(|v| v.main_window_recording_start_behaviour)
-            .unwrap_or_default()
-            .perform(&window);
-    }
 
     // done in spawn to catch panics just in case
     let spawn_actor_res = async {
@@ -502,8 +509,6 @@ pub async fn start_recording(
     });
 
     AppSounds::StartRecording.play();
-
-    RecordingStarted.emit(&app).ok();
 
     Ok(())
 }

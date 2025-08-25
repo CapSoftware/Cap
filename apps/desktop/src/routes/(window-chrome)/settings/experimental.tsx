@@ -25,7 +25,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNativeCameraPreview: false,
 			enableNewRecordingFlow: false,
 			autoZoomOnClicks: false,
-			customCursorCapture2: true,
+			custom_cursor_capture2: true,
 		},
 	);
 
@@ -58,9 +58,9 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 							<ToggleSetting
 								label="Custom cursor capture in Studio Mode"
 								description="Studio Mode recordings will capture cursor state separately for customisation (size, smoothing) in the editor. Currently experimental as cursor events may not be captured accurately."
-								value={!!settings.customCursorCapture2}
+								value={!!settings.custom_cursor_capture2}
 								onChange={(value) =>
-									handleChange("customCursorCapture2", value)
+									handleChange("custom_cursor_capture2", value)
 								}
 							/>
 							<ToggleSetting

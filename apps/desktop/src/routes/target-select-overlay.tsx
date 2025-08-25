@@ -5,6 +5,7 @@ import {
 } from "@solid-primitives/event-listener";
 import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
+import { emit } from "@tauri-apps/api/event";
 import { Menu, Submenu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
@@ -20,7 +21,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { generalSettingsStore } from "~/store";
+import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
@@ -645,6 +646,7 @@ export default function () {
 }
 
 function RecordingControls(props: { target: ScreenCaptureTarget }) {
+	const auth = authStore.createQuery();
 	const { rawOptions, setOptions } = createOptionsQuery();
 
 	const capitalize = (str: string) => {
@@ -708,8 +710,14 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 				<IconCapX class="will-change-transform size-3" />
 			</div>
 			<div
+				data-inactive={rawOptions.mode === "instant" && !auth.data}
 				class="flex flex-row rounded-full bg-blue-9 overflow-hidden group h-11"
 				onClick={() => {
+					if (rawOptions.mode === "instant" && !auth.data) {
+						emit("start-sign-in");
+						return;
+					}
+
 					commands.startRecording({
 						capture_target: props.target,
 						mode: rawOptions.mode,
@@ -725,9 +733,11 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 					)}
 					<div class="flex flex-col ml-3 mr-2">
 						<span class="text-sm text-white font-medium text-nowrap">
-							Start Recording
+							{rawOptions.mode === "instant" && !auth.data
+								? "Sign In To Use"
+								: "Start Recording"}
 						</span>
-						<span class="text-xs text-nowrap text-white font-light -mt-0.5">
+						<span class="text-xs text-nowrap text-white font-light -mt-0.5 opacity-90">
 							{`${capitalize(rawOptions.mode)} Mode`}
 						</span>
 					</div>
