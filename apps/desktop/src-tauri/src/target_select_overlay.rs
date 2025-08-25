@@ -149,6 +149,7 @@ impl WindowFocusManager {
                     let cap_settings = CapWindowId::Settings.get(app);
 
                     let has_cap_main = cap_main
+                        .as_ref()
                         .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
                         .unwrap_or(true);
                     let has_cap_settings = cap_settings
