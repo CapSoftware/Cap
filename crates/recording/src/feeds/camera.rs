@@ -1,18 +1,23 @@
+use cap_fail::{fail, fail_err};
 use cap_media_info::VideoInfo;
 use ffmpeg::frame;
 use futures::future::BoxFuture;
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
+    cmp::Ordering,
     ops::Deref,
     sync::mpsc::{self, SyncSender},
+    thread,
     time::{Duration, Instant},
 };
-use tracing::{error, trace};
+use tracing::{debug, error, info, trace, warn};
 
-// TODO: Fix these
-type SupportedStreamConfig = ();
-type StreamError = ();
+use cap_camera_ffmpeg::*;
+
+type StreamError = (); // TODO: Fix this
+
+const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
@@ -25,7 +30,7 @@ pub struct RawCameraFrame {
 pub struct CameraFeed {
     state: State,
     senders: Vec<flume::Sender<RawCameraFrame>>,
-    //     error_sender: flume::Sender<StreamError>,
+    input_id_counter: u32,
 }
 
 enum State {
@@ -50,17 +55,17 @@ struct OpenState {
 
 impl OpenState {
     fn handle_input_connected(&mut self, data: InputConnected) {
-        // if let Some(connecting) = &self.connecting
-        //     && data.id == connecting.id
-        // {
-        //     self.attached = Some(AttachedState {
-        //         id: data.id,
-        //         config: data.config.clone(),
-        //         done_tx: data.done_tx,
-        //     });
-        //     self.connecting = None;
-        // }
-        todo!();
+        if let Some(connecting) = &self.connecting
+            && data.id == connecting.id
+        {
+            self.attached = Some(AttachedState {
+                id: data.id,
+                done_tx: data.done_tx,
+                camera_info: data.camera_info,
+                video_info: data.video_info,
+            });
+            self.connecting = None;
+        }
     }
 }
 
@@ -71,8 +76,9 @@ struct ConnectingState {
 
 struct AttachedState {
     id: u32,
-    // config: SupportedStreamConfig,
     done_tx: mpsc::SyncSender<()>,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
 }
 
 impl CameraFeed {
@@ -83,7 +89,7 @@ impl CameraFeed {
                 attached: None,
             }),
             senders: Vec::new(),
-            // error_sender,
+            input_id_counter: 0,
         }
     }
 }
@@ -149,13 +155,18 @@ pub struct Lock;
 // Private Events
 
 struct InputConnected {
-    // id: u32,
-    // config: SupportedStreamConfig,
+    id: u32,
+    video_info: VideoInfo,
     done_tx: SyncSender<()>,
+    camera_info: cap_camera::CameraInfo,
 }
 
 struct InputConnectFailed {
-    // id: u32,
+    id: u32,
+}
+
+struct CameraFrames {
+    frame: RawCameraFrame,
 }
 
 struct Unlock;
@@ -168,143 +179,200 @@ pub struct FeedLockedError;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum SetInputError {
-    // #[error(transparent)]
-    // Locked(#[from] FeedLockedError),
-    // #[error("DeviceNotFound")]
-    // DeviceNotFound,
-    // #[error("BuildStreamCrashed")]
-    // BuildStreamCrashed,
-    // // we use strings for these as the cpal errors aren't Clone
-    // #[error("BuildStream: {0}")]
-    // BuildStream(String),
-    // #[error("PlayStream: {0}")]
-    // PlayStream(String),
+    #[error(transparent)]
+    Locked(#[from] FeedLockedError),
+    #[error("Camera not found")]
+    CameraNotFound,
+    #[error("Invalid format")]
+    InvalidFormat,
+    #[error("Camera timed out")]
+    Timeout(String),
+    #[error("StartCapturing/{0}")]
+    StartCapturing(String),
+    #[error("Failed to initialize camera")]
+    Initialisation,
+}
+
+fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraInfo> {
+    cap_camera::list_cameras().find(|c| match selected_camera {
+        DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
+        DeviceOrModelID::ModelID(model_id) => c.model_id() == Some(model_id),
+    })
+}
+
+struct SetupCameraResult {
+    handle: cap_camera::CaptureHandle,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
+    frame_rx: mpsc::Receiver<RawCameraFrame>,
+}
+
+fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraResult, SetInputError> {
+    let camera = find_camera(&id).ok_or(SetInputError::CameraNotFound)?;
+    let formats = camera.formats().ok_or(SetInputError::InvalidFormat)?;
+    if formats.is_empty() {
+        return Err(SetInputError::InvalidFormat);
+    }
+
+    let mut ideal_formats = formats
+        .clone()
+        .into_iter()
+        .filter(|f| f.frame_rate() >= 30.0 && f.width() < 2000 && f.height() < 2000)
+        .collect::<Vec<_>>();
+
+    if ideal_formats.is_empty() {
+        ideal_formats = formats;
+    };
+
+    ideal_formats.sort_by(|a, b| {
+        let target_aspect_ratio = 16.0 / 9.0;
+
+        let aspect_ratio_a = a.width() as f32 / a.height() as f32;
+        let aspect_ratio_b = b.width() as f32 / b.height() as f32;
+
+        let aspect_cmp_a = (aspect_ratio_a - target_aspect_ratio).abs();
+        let aspect_cmp_b = (aspect_ratio_b - target_aspect_ratio).abs();
+
+        let aspect_cmp = aspect_cmp_a.partial_cmp(&aspect_cmp_b);
+        let resolution_cmp = (a.width() * a.height()).cmp(&(b.width() * b.height()));
+        let fr_cmp = a.frame_rate().partial_cmp(&b.frame_rate());
+
+        aspect_cmp
+            .unwrap_or(Ordering::Equal)
+            .then(resolution_cmp.reverse())
+            .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
+    });
+
+    let format = ideal_formats.swap_remove(0);
+    let frame_rate = format.frame_rate() as u32;
+
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let mut ready_signal = Some(ready_tx);
+
+    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
+
+    let capture_handle = camera
+        .start_capturing(format.clone(), move |frame| {
+            let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+                return;
+            };
+
+            ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+
+            if let Some(signal) = ready_signal.take() {
+                let video_info = VideoInfo::from_raw_ffmpeg(
+                    ff_frame.format(),
+                    ff_frame.width(),
+                    ff_frame.height(),
+                    frame_rate,
+                );
+
+                let _ = signal.send(video_info);
+            }
+
+            let _ = frame_tx.send(RawCameraFrame {
+                frame: ff_frame,
+                timestamp: frame.timestamp,
+                refrence_time: frame.reference_time,
+            });
+        })
+        .map_err(|e| SetInputError::StartCapturing(e.to_string()))?;
+
+    let video_info = ready_rx
+        .recv_timeout(CAMERA_INIT_TIMEOUT)
+        .map_err(|e| SetInputError::Timeout(e.to_string()))?;
+
+    Ok(SetupCameraResult {
+        handle: capture_handle,
+        camera_info: camera,
+        video_info,
+        frame_rx,
+    })
 }
 
 impl Message<SetInput> for CameraFeed {
-    type Reply =
-        Result<BoxFuture<'static, Result<SupportedStreamConfig, SetInputError>>, SetInputError>;
+    type Reply = Result<BoxFuture<'static, Result<VideoInfo, SetInputError>>, SetInputError>;
 
     async fn handle(&mut self, msg: SetInput, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        todo!();
-        //         trace!("CameraFeed.SetInput('{}')", &msg.label);
+        trace!("CameraFeed.SetInput('{:?}')", &msg.id);
 
-        //         let state = self.state.try_as_open()?;
+        fail_err!(
+            "media::feeds::camera::set_input",
+            SetInputError::Initialisation
+        );
 
-        //         let id = self.input_id_counter;
-        //         self.input_id_counter += 1;
+        let state = self.state.try_as_open()?;
 
-        //         let Some((device, config)) = Self::list().swap_remove(&msg.label) else {
-        //             return Err(SetInputError::DeviceNotFound);
-        //         };
+        let id = self.input_id_counter;
+        self.input_id_counter += 1;
 
-        //         let sample_format = config.sample_format();
+        let setup_result = setup_camera(msg.id)?;
+        let camera_info = setup_result.camera_info.clone();
+        let video_info = setup_result.video_info.clone();
 
-        //         let (ready_tx, ready_rx) = oneshot::channel();
-        //         let (done_tx, done_rx) = mpsc::sync_channel(0);
+        let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        //         let actor_ref = ctx.actor_ref();
-        //         let ready = {
-        //             let config = config.clone();
-        //             ready_rx
-        //                 .map(|v| {
-        //                     v.map_err(|_| SetInputError::BuildStreamCrashed)
-        //                         .map(|_| config)
-        //                 })
-        //                 .shared()
-        //         };
-        //         let error_sender = self.error_sender.clone();
+        let actor_ref = ctx.actor_ref();
 
-        //         state.connecting = Some(ConnectingState {
-        //             id,
-        //             ready: {
-        //                 let done_tx = done_tx.clone();
-        //                 ready
-        //                     .clone()
-        //                     .map(move |v| {
-        //                         v.map(|config| InputConnected {
-        //                             id,
-        //                             config,
-        //                             done_tx,
-        //                         })
-        //                     })
-        //                     .boxed()
-        //             },
-        //         });
+        state.connecting = Some(ConnectingState {
+            id,
+            ready: {
+                let camera_info = camera_info.clone();
+                let video_info = video_info.clone();
+                let done_tx = done_tx.clone();
+                Box::pin(async move {
+                    Ok(InputConnected {
+                        id,
+                        done_tx,
+                        camera_info,
+                        video_info,
+                    })
+                })
+            },
+        });
 
-        //         std::thread::spawn({
-        //             let config = config.clone();
-        //             move || {
-        //                 let stream = match device.build_input_stream_raw(
-        //                     &config.into(),
-        //                     sample_format,
-        //                     {
-        //                         let actor_ref = actor_ref.clone();
-        //                         move |data, info| {
-        //                             let _ = actor_ref
-        //                                 .tell(MicrophoneSamples {
-        //                                     data: data.bytes().to_vec(),
-        //                                     format: data.sample_format(),
-        //                                     info: info.clone(),
-        //                                 })
-        //                                 .try_send();
-        //                         }
-        //                     },
-        //                     move |e| {
-        //                         error!("Microphone stream error: {e}");
+        thread::spawn(move || {
+            let frame_rx = setup_result.frame_rx;
 
-        //                         let _ = error_sender.send(e).is_err();
-        //                         actor_ref.kill();
-        //                     },
-        //                     None,
-        //                 ) {
-        //                     Ok(stream) => stream,
-        //                     Err(e) => {
-        //                         let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
-        //                         return;
-        //                     }
-        //                 };
+            loop {
+                match done_rx.try_recv() {
+                    Ok(_) => {
+                        info!("Camera actor shut down, ending stream");
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        info!("Camera actor unreachable, ending stream");
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
 
-        //                 if let Err(e) = stream.play() {
-        //                     let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
-        //                     return;
-        //                 }
+                match frame_rx.recv_timeout(Duration::from_secs(5)) {
+                    Ok(frame) => {
+                        let _ = actor_ref.tell(CameraFrames { frame }).try_send();
+                    }
+                    Err(_) => {
+                        break;
+                    }
+                }
+            }
+        });
 
-        //                 let _ = ready_tx.send(Ok(()));
+        tokio::spawn({
+            let actor = ctx.actor_ref();
+            async move {
+                let _ = actor
+                    .tell(InputConnected {
+                        id,
+                        video_info,
+                        done_tx,
+                        camera_info,
+                    })
+                    .await;
+            }
+        });
 
-        //                 match done_rx.recv() {
-        //                     Ok(_) => {
-        //                         info!("Microphone actor shut down, ending stream");
-        //                     }
-        //                     Err(_) => {
-        //                         info!("Microphone actor unreachable, ending stream");
-        //                     }
-        //                 }
-        //             }
-        //         });
-
-        //         tokio::spawn({
-        //             let ready = ready.clone();
-        //             let actor = ctx.actor_ref();
-        //             async move {
-        //                 match ready.await {
-        //                     Ok(config) => {
-        //                         let _ = actor
-        //                             .tell(InputConnected {
-        //                                 id,
-        //                                 config,
-        //                                 done_tx,
-        //                             })
-        //                             .await;
-        //                     }
-        //                     Err(_) => {
-        //                         let _ = actor.tell(InputConnectFailed { id }).await;
-        //                     }
-        //                 }
-        //             }
-        //         });
-
-        //         Ok(ready.boxed())
+        Ok(Box::pin(async move { Ok(video_info) }))
     }
 }
 
@@ -312,15 +380,15 @@ impl Message<RemoveInput> for CameraFeed {
     type Reply = Result<(), FeedLockedError>;
 
     async fn handle(&mut self, _: RemoveInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        // trace!("CameraFeed.RemoveInput");
+        trace!("CameraFeed.RemoveInput");
 
-        // let state = self.state.try_as_open()?;
+        let state = self.state.try_as_open()?;
 
-        // state.connecting = None;
+        state.connecting = None;
 
-        // if let Some(AttachedState { done_tx, .. }) = state.attached.take() {
-        //     let _ = done_tx.send(());
-        // }
+        if let Some(AttachedState { done_tx, .. }) = state.attached.take() {
+            let _ = done_tx.send(());
+        }
 
         Ok(())
     }
@@ -334,32 +402,31 @@ impl Message<AddSender> for CameraFeed {
     }
 }
 
-// impl Message<MicrophoneSamples> for CameraFeed {
-//     type Reply = ();
+impl Message<CameraFrames> for CameraFeed {
+    type Reply = ();
 
-//     async fn handle(
-//         &mut self,
-//         msg: MicrophoneSamples,
-//         _: &mut Context<Self, Self::Reply>,
-//     ) -> Self::Reply {
-//         todo!();
-//         // let mut to_remove = vec![];
+    async fn handle(
+        &mut self,
+        msg: CameraFrames,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let mut to_remove = vec![];
 
-//         // for (i, sender) in self.senders.iter().enumerate() {
-//         //     if let Err(TrySendError::Disconnected(_)) = sender.try_send(msg.clone()) {
-//         //         warn!("Audio sender {} disconnected, will be removed", i);
-//         //         to_remove.push(i);
-//         //     };
-//         // }
+        for (i, sender) in self.senders.iter().enumerate() {
+            if let Err(flume::TrySendError::Disconnected(_)) = sender.try_send(msg.frame.clone()) {
+                warn!("Camera sender {} disconnected, will be removed", i);
+                to_remove.push(i);
+            };
+        }
 
-//         // if !to_remove.is_empty() {
-//         //     debug!("Removing {} disconnected audio senders", to_remove.len());
-//         //     for i in to_remove.into_iter().rev() {
-//         //         self.senders.swap_remove(i);
-//         //     }
-//         // }
-//     }
-// }
+        if !to_remove.is_empty() {
+            debug!("Removing {} disconnected camera senders", to_remove.len());
+            for i in to_remove.into_iter().rev() {
+                self.senders.swap_remove(i);
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum LockFeedError {
@@ -375,33 +442,32 @@ impl Message<Lock> for CameraFeed {
     type Reply = Result<CameraFeedLock, LockFeedError>;
 
     async fn handle(&mut self, _: Lock, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        todo!();
-        // trace!("CameraFeed.Lock");
+        trace!("CameraFeed.Lock");
 
-        // let state = self.state.try_as_open()?;
+        let state = self.state.try_as_open()?;
 
-        // if let Some(connecting) = &mut state.connecting {
-        //     let ready = &mut connecting.ready;
-        //     let data = ready.await?;
+        if let Some(connecting) = &mut state.connecting {
+            let ready = &mut connecting.ready;
+            let data = ready.await?;
 
-        //     state.handle_input_connected(data);
-        // }
+            state.handle_input_connected(data);
+        }
 
-        // let Some(attached) = state.attached.take() else {
-        //     return Err(LockFeedError::NoInput);
-        // };
+        let Some(attached) = state.attached.take() else {
+            return Err(LockFeedError::NoInput);
+        };
 
-        // let config = attached.config.clone();
+        let camera_info = attached.camera_info.clone();
+        let video_info = attached.video_info.clone();
 
-        // self.state = State::Locked { inner: attached };
+        self.state = State::Locked { inner: attached };
 
-        // Ok(CameraFeedLock {
-        //     video_info: todo!(),
-        //     // audio_info: AudioInfo::from_stream_config(&config),
-        //     actor: ctx.actor_ref(),
-        //     // config,
-        //     lock_tx: ctx.actor_ref().recipient(),
-        // })
+        Ok(CameraFeedLock {
+            camera_info,
+            video_info,
+            actor: ctx.actor_ref(),
+            lock_tx: ctx.actor_ref().recipient(),
+        })
     }
 }
 
@@ -433,13 +499,13 @@ impl Message<InputConnectFailed> for CameraFeed {
     ) -> Self::Reply {
         trace!("CameraFeed.InputConnectFailed");
 
-        // let state = self.state.try_as_open()?;
+        let state = self.state.try_as_open()?;
 
-        // if let Some(connecting) = &state.connecting
-        //     && connecting.id == msg.id
-        // {
-        //     state.connecting = None;
-        // }
+        if let Some(connecting) = &state.connecting
+            && connecting.id == msg.id
+        {
+            state.connecting = None;
+        }
 
         Ok(())
     }
