@@ -64,14 +64,6 @@ pub async fn open_target_select_overlays(
                     let display = scap_targets::Display::get_containing_cursor();
                     let window = scap_targets::Window::get_topmost_at_cursor();
 
-                    println!(
-                        "TUC: {:?}",
-                        window.as_ref().map(|w| (
-                            w.owner_name().unwrap(),
-                            w.display_relative_logical_bounds()
-                        ))
-                    ); // TODO
-
                     let _ = TargetUnderCursor {
                         display_id: display.map(|d| d.id()),
                         window: window.and_then(|w| {
