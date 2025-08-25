@@ -1,7 +1,8 @@
-use cap_fail::{fail, fail_err};
+use cap_camera::CameraInfo;
+use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
 use ffmpeg::frame;
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
@@ -11,6 +12,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, trace, warn};
 
 use cap_camera_ffmpeg::*;
@@ -70,12 +72,12 @@ impl OpenState {
 }
 
 struct ConnectingState {
-    id: u32,
+    id: DeviceOrModelID,
     ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
 }
 
 struct AttachedState {
-    id: u32,
+    id: DeviceOrModelID,
     done_tx: mpsc::SyncSender<()>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
@@ -126,7 +128,7 @@ impl Drop for CameraFeedLock {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Clone, Debug, PartialEq)]
 pub enum DeviceOrModelID {
     DeviceID(String),
     ModelID(cap_camera::ModelID),
@@ -155,14 +157,14 @@ pub struct Lock;
 // Private Events
 
 struct InputConnected {
-    id: u32,
+    id: DeviceOrModelID,
     video_info: VideoInfo,
     done_tx: SyncSender<()>,
     camera_info: cap_camera::CameraInfo,
 }
 
 struct InputConnectFailed {
-    id: u32,
+    id: DeviceOrModelID,
 }
 
 struct CameraFrames {
@@ -181,11 +183,13 @@ pub struct FeedLockedError;
 pub enum SetInputError {
     #[error(transparent)]
     Locked(#[from] FeedLockedError),
-    #[error("Camera not found")]
-    CameraNotFound,
-    #[error("Invalid format")]
+    #[error("DeviceNotFound")]
+    DeviceNotFound,
+    #[error("BuildStreamCrashed")]
+    BuildStreamCrashed, // TODO: Maybe rename this?
+    #[error("InvalidFormat")]
     InvalidFormat,
-    #[error("Camera timed out")]
+    #[error("CameraTimeout")]
     Timeout(String),
     #[error("StartCapturing/{0}")]
     StartCapturing(String),
@@ -208,7 +212,7 @@ struct SetupCameraResult {
 }
 
 fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraResult, SetInputError> {
-    let camera = find_camera(&id).ok_or(SetInputError::CameraNotFound)?;
+    let camera = find_camera(&id).ok_or(SetInputError::DeviceNotFound)?;
     let formats = camera.formats().ok_or(SetInputError::InvalidFormat)?;
     if formats.is_empty() {
         return Err(SetInputError::InvalidFormat);
@@ -291,7 +295,8 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraResult, SetInputError>
 }
 
 impl Message<SetInput> for CameraFeed {
-    type Reply = Result<BoxFuture<'static, Result<VideoInfo, SetInputError>>, SetInputError>;
+    type Reply =
+        Result<BoxFuture<'static, Result<(VideoInfo, CameraInfo), SetInputError>>, SetInputError>;
 
     async fn handle(&mut self, msg: SetInput, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("CameraFeed.SetInput('{:?}')", &msg.id);
@@ -303,76 +308,166 @@ impl Message<SetInput> for CameraFeed {
 
         let state = self.state.try_as_open()?;
 
-        let id = self.input_id_counter;
-        self.input_id_counter += 1;
+        // let id = self.input_id_counter;
+        // self.input_id_counter += 1;
 
         let setup_result = setup_camera(msg.id)?;
         let camera_info = setup_result.camera_info.clone();
         let video_info = setup_result.video_info.clone();
 
+        let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
         let actor_ref = ctx.actor_ref();
+        let ready = {
+            let video_info = video_info.clone();
+            let camera_info = camera_info.clone();
+            ready_rx
+                .map(|v| {
+                    v.map_err(|_| SetInputError::BuildStreamCrashed)
+                        .map(|_| (video_info, camera_info))
+                })
+                .shared()
+        };
+        // let error_sender = self.error_sender.clone();
 
         state.connecting = Some(ConnectingState {
-            id,
+            id: msg.id,
             ready: {
-                let camera_info = camera_info.clone();
-                let video_info = video_info.clone();
                 let done_tx = done_tx.clone();
-                Box::pin(async move {
-                    Ok(InputConnected {
-                        id,
-                        done_tx,
-                        camera_info,
-                        video_info,
+                ready
+                    .clone()
+                    .map(move |v| {
+                        v.map(|config| InputConnected {
+                            id: msg.id,
+                            video_info,
+                            camera_info,
+                            done_tx,
+                        })
                     })
-                })
+                    .boxed()
             },
         });
 
-        thread::spawn(move || {
-            let frame_rx = setup_result.frame_rx;
+        ready_tx.send(()).unwrap(); // TODO
 
-            loop {
-                match done_rx.try_recv() {
-                    Ok(_) => {
-                        info!("Camera actor shut down, ending stream");
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        info!("Camera actor unreachable, ending stream");
-                        break;
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {}
-                }
+        // std::thread::spawn({
+        //     let config = config.clone();
+        //     move || {
+        //         let stream = match device.build_input_stream_raw(
+        //             &config.into(),
+        //             sample_format,
+        //             {
+        //                 let actor_ref = actor_ref.clone();
+        //                 move |data, info| {
+        //                     let _ = actor_ref
+        //                         .tell(MicrophoneSamples {
+        //                             data: data.bytes().to_vec(),
+        //                             format: data.sample_format(),
+        //                             info: info.clone(),
+        //                         })
+        //                         .try_send();
+        //                 }
+        //             },
+        //             move |e| {
+        //                 error!("Microphone stream error: {e}");
 
-                match frame_rx.recv_timeout(Duration::from_secs(5)) {
-                    Ok(frame) => {
-                        let _ = actor_ref.tell(CameraFrames { frame }).try_send();
-                    }
-                    Err(_) => {
-                        break;
-                    }
-                }
-            }
-        });
+        //                 let _ = error_sender.send(e).is_err();
+        //                 actor_ref.kill();
+        //             },
+        //             None,
+        //         ) {
+        //             Ok(stream) => stream,
+        //             Err(e) => {
+        //                 let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
+        //                 return;
+        //             }
+        //         };
+
+        //         if let Err(e) = stream.play() {
+        //             let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
+        //             return;
+        //         }
+
+        //         let _ = ready_tx.send(Ok(()));
+
+        //         match done_rx.recv() {
+        //             Ok(_) => {
+        //                 info!("Microphone actor shut down, ending stream");
+        //             }
+        //             Err(_) => {
+        //                 info!("Microphone actor unreachable, ending stream");
+        //             }
+        //         }
+        //     }
+        // });
 
         tokio::spawn({
+            let ready = ready.clone();
             let actor = ctx.actor_ref();
             async move {
-                let _ = actor
-                    .tell(InputConnected {
-                        id,
-                        video_info,
-                        done_tx,
-                        camera_info,
-                    })
-                    .await;
+                match ready.await {
+                    Ok((video_info, camera_info)) => {
+                        let _ = actor
+                            .tell(InputConnected {
+                                id: msg.id,
+                                video_info,
+                                camera_info,
+                                done_tx,
+                            })
+                            .await;
+                    }
+                    Err(_) => {
+                        let _ = actor.tell(InputConnectFailed { id: msg.id }).await;
+                    }
+                }
             }
         });
 
-        Ok(Box::pin(async move { Ok(video_info) }))
+        todo!();
+
+        // thread::spawn(move || {
+        //     let frame_rx = setup_result.frame_rx;
+
+        //     loop {
+        //         match done_rx.try_recv() {
+        //             Ok(_) => {
+        //                 info!("Camera actor shut down, ending stream");
+        //                 break;
+        //             }
+        //             Err(mpsc::TryRecvError::Disconnected) => {
+        //                 info!("Camera actor unreachable, ending stream");
+        //                 break;
+        //             }
+        //             Err(mpsc::TryRecvError::Empty) => {}
+        //         }
+
+        //         match frame_rx.recv_timeout(Duration::from_secs(5)) {
+        //             Ok(frame) => {
+        //                 let _ = actor_ref.tell(CameraFrames { frame }).try_send();
+        //             }
+        //             Err(_) => {
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // });
+
+        // tokio::spawn({
+        //     let actor = ctx.actor_ref();
+        //     async move {
+        //         let _ = actor
+        //             .tell(InputConnected {
+        //                 id: msg.id,
+        //                 video_info,
+        //                 done_tx,
+        //                 camera_info,
+        //             })
+        //             .await;
+        //     }
+        // });
+
+        Ok(ready.boxed())
     }
 }
 
