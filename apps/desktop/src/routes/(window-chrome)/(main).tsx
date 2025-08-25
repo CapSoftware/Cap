@@ -477,13 +477,11 @@ function Page() {
 			<SystemAudio />
 			<div class="flex items-center space-x-1 w-full">
 				{rawOptions.mode === "instant" && !auth.data ? (
-					<>
-						<SignInButton>
-							Sign In for{" "}
-							<IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
-							Instant Mode
-						</SignInButton>
-					</>
+					<SignInButton>
+						Sign In for{" "}
+						<IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+						Instant Mode
+					</SignInButton>
 				) : (
 					<Button
 						disabled={toggleRecording.isPending}
