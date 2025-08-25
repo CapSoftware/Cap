@@ -1,4 +1,4 @@
-use crate::{RequestStartRecording, recording};
+use crate::{RequestStartRecording, recording, windows::ShowCapWindow};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -47,7 +47,6 @@ pub enum HotkeyAction {
     StartRecording,
     StopRecording,
     RestartRecording,
-    OpenSettings,
     // TakeScreenshot,
 }
 
@@ -82,6 +81,13 @@ pub fn init(app: &AppHandle) {
                     OnEscapePress.emit(app).ok();
                 }
 
+                if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
+                    });
+                }
+
                 let state = app.state::<HotkeysState>();
                 let store = state.lock().unwrap();
 
@@ -104,20 +110,6 @@ pub fn init(app: &AppHandle) {
         }
     };
 
-    // Set default only on macOS to avoid conflicts on other platforms
-    if cfg!(target_os = "macos") {
-        store.hotkeys.insert(
-            HotkeyAction::OpenSettings,
-            Hotkey {
-                code: Code::Comma,
-                meta: true,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-        );
-    }
-
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {
         global_shortcut.register(Shortcut::from(*hotkey)).ok();
@@ -135,15 +127,6 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
         HotkeyAction::RestartRecording => {
             recording::restart_recording(app.clone(), app.state()).await
-        }
-        HotkeyAction::OpenSettings => {
-            use crate::windows::ShowCapWindow;
-            let _ = ShowCapWindow::Settings {
-                page: Some("general".to_string()),
-            }
-            .show(&app)
-            .await;
-            Ok(())
         }
     }
 }
