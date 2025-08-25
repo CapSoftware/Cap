@@ -1,8 +1,3 @@
-use std::{
-    ops::Deref,
-    sync::mpsc::{self, SyncSender},
-};
-
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::{
     Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
@@ -12,6 +7,11 @@ use flume::TrySendError;
 use futures::{FutureExt, channel::oneshot, future::BoxFuture};
 use indexmap::IndexMap;
 use kameo::prelude::*;
+use replace_with::replace_with_or_abort;
+use std::{
+    ops::Deref,
+    sync::mpsc::{self, SyncSender},
+};
 use tracing::{debug, error, info, trace, warn};
 
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
@@ -32,23 +32,59 @@ pub struct MicrophoneFeed {
 }
 
 enum State {
-    Detached,
-    Initializing {
-        id: u32,
-        ready: BoxFuture<'static, Result<SupportedStreamConfig, SetInputError>>,
-    },
-    Attached {
-        id: u32,
-        config: SupportedStreamConfig,
-        done_tx: mpsc::SyncSender<()>,
-    },
+    Open(OpenState),
+    Locked { inner: AttachedState },
+}
+
+impl State {
+    fn try_as_open(&mut self) -> Result<&mut OpenState, FeedLockedError> {
+        if let Self::Open(open_state) = self {
+            Ok(open_state)
+        } else {
+            Err(FeedLockedError)
+        }
+    }
+}
+
+struct OpenState {
+    connecting: Option<ConnectingState>,
+    attached: Option<AttachedState>,
+}
+
+impl OpenState {
+    fn handle_input_connected(&mut self, data: InputConnected) {
+        if let Some(connecting) = &self.connecting
+            && data.id == connecting.id
+        {
+            self.attached = Some(AttachedState {
+                id: data.id,
+                config: data.config.clone(),
+                done_tx: data.done_tx,
+            });
+            self.connecting = None;
+        }
+    }
+}
+
+struct ConnectingState {
+    id: u32,
+    ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
+}
+
+struct AttachedState {
+    id: u32,
+    config: SupportedStreamConfig,
+    done_tx: mpsc::SyncSender<()>,
 }
 
 impl MicrophoneFeed {
     pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
         Self {
             input_id_counter: 0,
-            state: State::Detached,
+            state: State::Open(OpenState {
+                connecting: None,
+                attached: None,
+            }),
             senders: Vec::new(),
             error_sender,
         }
@@ -120,6 +156,7 @@ pub struct MicrophoneFeedLock {
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
+    lock_tx: Recipient<Unlock>,
 }
 
 impl MicrophoneFeedLock {
@@ -137,6 +174,12 @@ impl Deref for MicrophoneFeedLock {
 
     fn deref(&self) -> &Self::Target {
         &self.actor
+    }
+}
+
+impl Drop for MicrophoneFeedLock {
+    fn drop(&mut self) {
+        let _ = self.lock_tx.tell(Unlock).blocking_send();
     }
 }
 
@@ -159,19 +202,28 @@ struct InputConnected {
     config: SupportedStreamConfig,
     done_tx: SyncSender<()>,
 }
+
 struct InputConnectFailed {
     id: u32,
 }
 
+struct Unlock;
+
 // Impls
+
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("FeedLocked")]
+pub struct FeedLockedError;
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum SetInputError {
+    #[error(transparent)]
+    Locked(#[from] FeedLockedError),
     #[error("DeviceNotFound")]
     DeviceNotFound,
     #[error("BuildStreamCrashed")]
     BuildStreamCrashed,
-    // we use stringes for these as the cpal errors aren't Clone
+    // we use strings for these as the cpal errors aren't Clone
     #[error("BuildStream: {0}")]
     BuildStream(String),
     #[error("PlayStream: {0}")]
@@ -185,6 +237,8 @@ impl Message<SetInput> for MicrophoneFeed {
     async fn handle(&mut self, msg: SetInput, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("MicrophoneFeed.SetInput('{}')", &msg.label);
 
+        let state = self.state.try_as_open()?;
+
         let id = self.input_id_counter;
         self.input_id_counter += 1;
 
@@ -197,65 +251,82 @@ impl Message<SetInput> for MicrophoneFeed {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        let _stream_config = config.clone().into();
         let actor_ref = ctx.actor_ref();
-        let ready = ready_rx
-            .map(|v| {
-                v.map_err(|_| SetInputError::BuildStreamCrashed)
-                    .map(|_| config)
-            })
-            .shared();
+        let ready = {
+            let config = config.clone();
+            ready_rx
+                .map(|v| {
+                    v.map_err(|_| SetInputError::BuildStreamCrashed)
+                        .map(|_| config)
+                })
+                .shared()
+        };
         let error_sender = self.error_sender.clone();
 
-        self.state = State::Initializing {
+        state.connecting = Some(ConnectingState {
             id,
-            ready: ready.clone().boxed(),
-        };
+            ready: {
+                let done_tx = done_tx.clone();
+                ready
+                    .clone()
+                    .map(move |v| {
+                        v.map(|config| InputConnected {
+                            id,
+                            config,
+                            done_tx,
+                        })
+                    })
+                    .boxed()
+            },
+        });
 
-        std::thread::spawn(move || {
-            let stream = match device.build_input_stream_raw(
-                &_stream_config,
-                sample_format,
-                {
-                    let actor_ref = actor_ref.clone();
-                    move |data, info| {
-                        let _ = actor_ref
-                            .tell(MicrophoneSamples {
-                                data: data.bytes().to_vec(),
-                                format: data.sample_format(),
-                                info: info.clone(),
-                            })
-                            .try_send();
+        std::thread::spawn({
+            let config = config.clone();
+            move || {
+                let stream = match device.build_input_stream_raw(
+                    &config.into(),
+                    sample_format,
+                    {
+                        let actor_ref = actor_ref.clone();
+                        move |data, info| {
+                            let _ = actor_ref
+                                .tell(MicrophoneSamples {
+                                    data: data.bytes().to_vec(),
+                                    format: data.sample_format(),
+                                    info: info.clone(),
+                                })
+                                .try_send();
+                        }
+                    },
+                    move |e| {
+                        error!("Microphone stream error: {e}");
+
+                        let _ = error_sender.send(e).is_err();
+                        actor_ref.kill();
+                    },
+                    None,
+                ) {
+                    Ok(stream) => stream,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
+                        return;
                     }
-                },
-                move |e| {
-                    error!("Microphone stream error: {e}");
+                };
 
-                    let _ = error_sender.send(e).is_err();
-                    actor_ref.kill();
-                },
-                None,
-            ) {
-                Ok(stream) => stream,
-                Err(e) => {
-                    let _ = ready_tx.send(Err(SetInputError::BuildStream(e.to_string())));
+                if let Err(e) = stream.play() {
+                    let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
                     return;
                 }
-            };
 
-            if let Err(e) = stream.play() {
-                let _ = ready_tx.send(Err(SetInputError::PlayStream(e.to_string())));
-                return;
-            }
+                let _ = ready_tx.send(Ok(()));
 
-            let _ = ready_tx.send(Ok(()));
-
-            match done_rx.recv() {
-                Ok(_) => {
-                    info!("Microphone actor shut down, ending stream");
-                }
-                Err(_) => {
-                    info!("Microphone actor unreachable, ending stream");
+                match done_rx.recv() {
+                    Ok(_) => {
+                        info!("Microphone actor shut down, ending stream");
+                    }
+                    Err(_) => {
+                        info!("Microphone actor unreachable, ending stream");
+                    }
                 }
             }
         });
@@ -286,18 +357,20 @@ impl Message<SetInput> for MicrophoneFeed {
 }
 
 impl Message<RemoveInput> for MicrophoneFeed {
-    type Reply = ();
+    type Reply = Result<(), FeedLockedError>;
 
     async fn handle(&mut self, _: RemoveInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         trace!("MicrophoneFeed.RemoveInput");
 
-        match std::mem::replace(&mut self.state, State::Detached) {
-            State::Detached => {}
-            State::Initializing { .. } => {}
-            State::Attached { done_tx, .. } => {
-                let _ = done_tx.send(());
-            }
+        let state = self.state.try_as_open()?;
+
+        state.connecting = None;
+
+        if let Some(AttachedState { done_tx, .. }) = state.attached.take() {
+            let _ = done_tx.send(());
         }
+
+        Ok(())
     }
 }
 
@@ -337,64 +410,101 @@ impl Message<MicrophoneSamples> for MicrophoneFeed {
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum LockFeedError {
+    #[error(transparent)]
+    Locked(#[from] FeedLockedError),
     #[error("NoInput")]
     NoInput,
-    #[error("InitializeFailed${0}")]
-    InitializeFailed(SetInputError),
+    #[error("InitializeFailed/{0}")]
+    InitializeFailed(#[from] SetInputError),
 }
 
 impl Message<Lock> for MicrophoneFeed {
     type Reply = Result<MicrophoneFeedLock, LockFeedError>;
 
     async fn handle(&mut self, _: Lock, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        let config = match &mut self.state {
-            State::Detached => return Err(LockFeedError::NoInput),
-            State::Initializing { ready, .. } => {
-                ready.await.map_err(LockFeedError::InitializeFailed)?
-            }
-            State::Attached { config, .. } => config.clone(),
+        trace!("MicrophoneFeed.Lock");
+
+        let state = self.state.try_as_open()?;
+
+        if let Some(connecting) = &mut state.connecting {
+            let ready = &mut connecting.ready;
+            let data = ready.await?;
+
+            state.handle_input_connected(data);
+        }
+
+        let Some(attached) = state.attached.take() else {
+            return Err(LockFeedError::NoInput);
         };
+
+        let config = attached.config.clone();
+
+        self.state = State::Locked { inner: attached };
 
         Ok(MicrophoneFeedLock {
             audio_info: AudioInfo::from_stream_config(&config),
             actor: ctx.actor_ref(),
             config,
+            lock_tx: ctx.actor_ref().recipient(),
         })
     }
 }
 
 impl Message<InputConnected> for MicrophoneFeed {
-    type Reply = ();
+    type Reply = Result<(), FeedLockedError>;
 
     async fn handle(
         &mut self,
         msg: InputConnected,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Initializing { id, .. } = self.state
-            && id == msg.id
-        {
-            self.state = State::Attached {
-                id: msg.id,
-                config: msg.config,
-                done_tx: msg.done_tx,
-            };
-        }
+        trace!("MicrophoneFeed.InputConnected");
+
+        let state = self.state.try_as_open()?;
+
+        state.handle_input_connected(msg);
+
+        Ok(())
     }
 }
 
 impl Message<InputConnectFailed> for MicrophoneFeed {
-    type Reply = ();
+    type Reply = Result<(), FeedLockedError>;
 
     async fn handle(
         &mut self,
         msg: InputConnectFailed,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let State::Attached { id, .. } = self.state
-            && id == msg.id
+        trace!("MicrophoneFeed.InputConnectFailed");
+
+        let state = self.state.try_as_open()?;
+
+        if let Some(connecting) = &state.connecting
+            && connecting.id == msg.id
         {
-            self.state = State::Detached;
+            state.connecting = None;
         }
+
+        Ok(())
+    }
+}
+
+impl Message<Unlock> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Unlock, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        trace!("MicrophoneFeed.Unlock");
+
+        replace_with_or_abort(&mut self.state, |state| {
+            if let State::Locked { inner } = state {
+                State::Open(OpenState {
+                    connecting: None,
+                    attached: Some(inner),
+                })
+            } else {
+                state
+            }
+        });
     }
 }
