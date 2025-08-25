@@ -14,7 +14,7 @@ use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
@@ -313,6 +313,15 @@ pub async fn start_recording(
         .set_pending_recording(inputs.mode, inputs.capture_target.clone());
 
     let countdown = general_settings.and_then(|v| v.recording_countdown);
+    for (id, win) in app
+        .webview_windows()
+        .iter()
+        .filter_map(|(label, win)| CapWindowId::from_str(label).ok().map(|id| (id, win)))
+    {
+        if matches!(id, CapWindowId::TargetSelectOverlay { .. }) {
+            win.close().ok();
+        }
+    }
     let _ = ShowCapWindow::InProgressRecording { countdown }
         .show(&app)
         .await;
