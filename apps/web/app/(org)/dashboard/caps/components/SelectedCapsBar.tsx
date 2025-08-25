@@ -25,8 +25,8 @@ export const SelectedCapsBar = ({
 }: SelectedCapsBarProps) => {
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
-	const handleConfirmDelete = async () => {
-		await deleteSelectedCaps();
+	const handleConfirmDelete = () => {
+		deleteSelectedCaps();
 		setConfirmOpen(false);
 	};
 
@@ -70,7 +70,6 @@ export const SelectedCapsBar = ({
 							onClick={() => setConfirmOpen(true)}
 							disabled={isDeleting}
 							className="size-[40px] min-w-[unset] p-0"
-							spinner={isDeleting}
 							size="sm"
 						>
 							<FontAwesomeIcon className="w-3.5 text-white" icon={faTrash} />
