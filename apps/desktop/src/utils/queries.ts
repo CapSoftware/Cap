@@ -173,12 +173,15 @@ export function createCameraMutation() {
 		mutationFn: rawMutate,
 	}));
 
-	return new Proxy(setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate }, {
-		get(target, key) {
-			if (key === 'rawMutate') return rawMutate;
-			return Reflect.get(target, key);
-		}
-	});
+	return new Proxy(
+		setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate },
+		{
+			get(target, key) {
+				if (key === "rawMutate") return rawMutate;
+				return Reflect.get(target, key);
+			},
+		},
+	);
 }
 
 export function createCustomDomainQuery() {
