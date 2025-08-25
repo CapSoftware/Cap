@@ -469,7 +469,7 @@ export function LayoutTrack(props: {
 							end: time() + maxAvailableDuration(),
 						}}
 					>
-						<SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#3B82F6] via-[#60A5FA] to-[#3B82F6] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
+						<SegmentContent class="bg-gradient-to-r hover:border duration-200 hover:border-gray-500 from-[#5C1BC4] via-[#975CFA] to-[#5C1BC4] transition-colors group shadow-[inset_0_8px_12px_3px_rgba(255,255,255,0.2)]">
 							<p class="w-full text-center text-gray-1 dark:text-gray-12 text-md text-primary">
 								+
 							</p>
