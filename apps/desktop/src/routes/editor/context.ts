@@ -146,11 +146,11 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
-			deleteLayoutSegment: (segmentIndex: number) => {
+			deleteSceneSegment: (segmentIndex: number) => {
 				batch(() => {
 					setProject(
 						"timeline",
-						"layoutSegments",
+						"sceneSegments",
 						produce((s) => {
 							if (!s) return;
 							s.splice(segmentIndex, 1);
@@ -257,7 +257,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					| null
 					| { type: "zoom"; indices: number[] }
 					| { type: "clip"; index: number }
-					| { type: "layout"; index: number },
+					| { type: "scene"; index: number },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),

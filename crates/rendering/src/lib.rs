@@ -26,8 +26,8 @@ mod cursor_interpolation;
 pub mod decoder;
 mod frame_pipeline;
 mod layers;
-mod layout;
 mod project_recordings;
+mod scene;
 mod spring_mass_damper;
 mod zoom;
 
@@ -36,7 +36,7 @@ pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
-use layout::*;
+use scene::*;
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
@@ -345,7 +345,7 @@ pub struct ProjectUniforms {
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
-    pub layout: InterpolatedLayout,
+    pub scene: InterpolatedScene,
     pub resolution_base: XY<u32>,
 }
 
@@ -565,12 +565,12 @@ impl ProjectUniforms {
             .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
 
-        let layout = InterpolatedLayout::new(LayoutSegmentsCursor::new(
+        let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
             frame_time as f64,
             project
                 .timeline
                 .as_ref()
-                .map(|t| t.layout_segments.as_slice())
+                .map(|t| t.scene_segments.as_slice())
                 .unwrap_or(&[]),
         ));
 
@@ -617,7 +617,7 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount: (motion_blur_amount + layout.screen_blur as f32 * 0.8).min(1.0),
+                motion_blur_amount: (motion_blur_amount + scene.screen_blur as f32 * 0.8).min(1.0),
                 camera_motion_blur_amount: 0.0,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -635,14 +635,14 @@ impl ProjectUniforms {
                     .advanced_shadow
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
-                opacity: layout.screen_opacity as f32,
+                opacity: scene.screen_opacity as f32,
                 _padding: [0.0; 3],
             }
         };
 
         let camera = options
             .camera_size
-            .filter(|_| !project.camera.hide && layout.should_render_camera())
+            .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
@@ -658,7 +658,7 @@ impl ProjectUniforms {
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
 
-                let zoomed_size = zoomed_size * layout.camera_scale as f32;
+                let zoomed_size = zoomed_size * scene.camera_scale as f32;
 
                 let aspect = frame_size[0] / frame_size[1];
                 let size = match project.camera.shape {
@@ -744,14 +744,14 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    opacity: layout.regular_camera_transition_opacity() as f32,
+                    opacity: scene.regular_camera_transition_opacity() as f32,
                     _padding: [0.0; 3],
                 }
             });
 
         let camera_only = options
             .camera_size
-            .filter(|_| !project.camera.hide && layout.is_transitioning_camera_only())
+            .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
@@ -759,7 +759,7 @@ impl ProjectUniforms {
                 let aspect = frame_size[0] / frame_size[1];
                 let output_aspect = output_size[0] / output_size[1];
 
-                let zoom_factor = layout.camera_only_zoom as f32;
+                let zoom_factor = scene.camera_only_zoom as f32;
                 let size = [output_size[0] * zoom_factor, output_size[1] * zoom_factor];
 
                 let position = [
@@ -802,12 +802,12 @@ impl ProjectUniforms {
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
-                    camera_motion_blur_amount: layout.camera_only_blur as f32 * 0.5,
+                    camera_motion_blur_amount: scene.camera_only_blur as f32 * 0.5,
                     shadow: 0.0,
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
-                    opacity: layout.camera_only_transition_opacity() as f32,
+                    opacity: scene.camera_only_transition_opacity() as f32,
                     _padding: [0.0; 3],
                 }
             });
@@ -821,7 +821,7 @@ impl ProjectUniforms {
             camera_only,
             project: project.clone(),
             zoom,
-            layout,
+            scene,
             interpolated_cursor,
         }
     }
@@ -1009,25 +1009,25 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        if uniforms.layout.should_render_screen() {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        if uniforms.layout.should_render_screen() {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
 
         // Render camera-only layer when transitioning with CameraOnly mode
-        if uniforms.layout.is_transitioning_camera_only() {
+        if uniforms.scene.is_transitioning_camera_only() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
         }
 
         // Also render regular camera overlay during transitions when its opacity > 0
-        if uniforms.layout.should_render_camera()
-            && uniforms.layout.regular_camera_transition_opacity() > 0.01
+        if uniforms.scene.should_render_camera()
+            && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
