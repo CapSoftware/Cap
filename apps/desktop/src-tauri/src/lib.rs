@@ -1929,22 +1929,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
 
-    let camera_feed = {
-        let (error_tx, error_rx) = flume::bounded(1);
-
-        let mic_feed = CameraFeed::spawn(CameraFeed::new(error_tx));
-
-        // TODO: make this part of a global actor one day
-        tokio::spawn(async move {
-            let Ok(err) = error_rx.recv_async().await else {
-                return;
-            };
-
-            error!("Camera feed actor error: {err:?}");
-        });
-
-        mic_feed
-    };
+    let camera_feed = CameraFeed::spawn(CameraFeed::new());
 
     let mic_feed = {
         let (error_tx, error_rx) = flume::bounded(1);

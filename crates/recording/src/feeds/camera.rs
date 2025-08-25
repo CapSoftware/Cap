@@ -15,8 +15,6 @@ use tracing::{debug, error, trace, warn};
 
 use cap_camera_ffmpeg::*;
 
-type StreamError = (); // TODO: Fix this
-
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
@@ -30,7 +28,6 @@ pub struct RawCameraFrame {
 pub struct CameraFeed {
     state: State,
     senders: Vec<flume::Sender<RawCameraFrame>>,
-    input_id_counter: u32,
 }
 
 enum State {
@@ -82,14 +79,13 @@ struct AttachedState {
 }
 
 impl CameraFeed {
-    pub fn new(error_sender: flume::Sender<StreamError>) -> Self {
+    pub fn new() -> Self {
         Self {
             state: State::Open(OpenState {
                 connecting: None,
                 attached: None,
             }),
             senders: Vec::new(),
-            input_id_counter: 0,
         }
     }
 }
@@ -253,7 +249,6 @@ async fn setup_camera(
             let Ok(mut ff_frame) = frame.to_ffmpeg() else {
                 return;
             };
-            dbg!(ff_frame.format());
 
             ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 
@@ -303,9 +298,6 @@ impl Message<SetInput> for CameraFeed {
         );
 
         let state = self.state.try_as_open()?;
-
-        // let id = self.input_id_counter;
-        // self.input_id_counter += 1;
 
         let (internal_ready_tx, internal_ready_rx) =
             oneshot::channel::<Result<SetupCameraResult, SetInputError>>();
