@@ -9,8 +9,8 @@ import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { EditorButton, Slider } from "./ui";
-import { formatTime } from "./utils";
 import { useEditorShortcuts } from "./useEditorShortcuts";
+import { formatTime } from "./utils";
 
 export function Player() {
 	const {
