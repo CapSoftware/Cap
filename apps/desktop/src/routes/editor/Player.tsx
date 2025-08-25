@@ -248,17 +248,19 @@ export function Player() {
 					>
 						<IconCapPrev class="text-gray-12 size-3" />
 					</button>
-					<button
-						type="button"
-						onClick={handlePlayPauseClick}
-						class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
-					>
-						{!editorState.playing || isAtEnd() ? (
-							<IconCapPlay class="text-gray-12 size-3" />
-						) : (
-							<IconCapPause class="text-gray-12 size-3" />
-						)}
-					</button>
+					<Tooltip kbd={["Space"]} content="Play/Pause video">
+						<button
+							type="button"
+							onClick={handlePlayPauseClick}
+							class="flex justify-center items-center rounded-full border border-gray-300 transition-colors bg-gray-3 hover:bg-gray-4 hover:text-black size-9"
+						>
+							{!editorState.playing || isAtEnd() ? (
+								<IconCapPlay class="text-gray-12 size-3" />
+							) : (
+								<IconCapPause class="text-gray-12 size-3" />
+							)}
+						</button>
+					</Tooltip>
 					<button
 						type="button"
 						class="transition-opacity hover:opacity-70 will-change-[opacity]"
