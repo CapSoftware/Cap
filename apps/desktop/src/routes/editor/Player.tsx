@@ -2,25 +2,14 @@ import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { cx } from "cva";
-import {
-	createEffect,
-	createResource,
-	createSignal,
-	For,
-	on,
-	onCleanup,
-	onMount,
-	Show,
-	Suspense,
-} from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import { createEffect, createSignal, onMount, Show } from "solid-js";
 
 import Tooltip from "~/components/Tooltip";
 import { captionsStore } from "~/store/captions";
 import { commands } from "~/utils/tauri";
 import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
-import { ComingSoonTooltip, EditorButton, Slider } from "./ui";
+import { EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
 
 export function Player() {
@@ -108,6 +97,23 @@ export function Player() {
 		return total > 0 && total - editorState.playbackTime <= 0.1;
 	};
 
+	const cropDialogHandler = () => {
+		const display = editorInstance.recordings.segments[0].display;
+		setDialog({
+			open: true,
+			type: "crop",
+			position: {
+				...(project.background.crop?.position ?? { x: 0, y: 0 }),
+			},
+			size: {
+				...(project.background.crop?.size ?? {
+					x: display.width,
+					y: display.height,
+				}),
+			},
+		});
+	};
+
 	createEffect(() => {
 		if (isAtEnd() && editorState.playing) {
 			commands.stopPlayback();
@@ -139,6 +145,56 @@ export function Player() {
 		}
 	};
 
+	//split shortcut
+	createEventListener(document, "keydown", (e: KeyboardEvent) => {
+		if (e.code === "KeyS" && e.target === document.body) {
+			e.preventDefault();
+			setEditorState(
+				"timeline",
+				"interactMode",
+				editorState.timeline.interactMode === "split" ? "seek" : "split",
+			);
+		}
+	});
+
+	//zoom-in shortct
+	createEventListener(document, "keydown", (e: KeyboardEvent) => {
+		if (
+			(e.metaKey || e.ctrlKey) &&
+			e.code === "Equal" &&
+			e.target === document.body
+		) {
+			e.preventDefault();
+			editorState.timeline.transform.updateZoom(
+				editorState.timeline.transform.zoom / 1.1,
+				editorState.playbackTime,
+			);
+		}
+	});
+
+	//zoom-out shortcut
+	createEventListener(document, "keydown", (e: KeyboardEvent) => {
+		if (
+			(e.metaKey || e.ctrlKey) &&
+			e.code === "Minus" &&
+			e.target === document.body
+		) {
+			e.preventDefault();
+			editorState.timeline.transform.updateZoom(
+				editorState.timeline.transform.zoom * 1.1,
+				editorState.playbackTime,
+			);
+		}
+	});
+
+	//crop shortcut
+	createEventListener(document, "keydown", async (e: KeyboardEvent) => {
+		if (e.code === "KeyC" && e.target === document.body) {
+			e.preventDefault();
+			cropDialogHandler();
+		}
+	});
+
 	createEventListener(document, "keydown", async (e: KeyboardEvent) => {
 		if (e.code === "Space" && e.target === document.body) {
 			e.preventDefault();
@@ -155,26 +211,13 @@ export function Player() {
 	});
 
 	return (
-		<div class="flex flex-col flex-1 rounded-xl bg-gray-1 dark:bg-gray-2 border border-gray-3">
+		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">
 			<div class="flex gap-3 justify-center p-3">
 				<AspectRatioSelect />
 				<EditorButton
-					onClick={() => {
-						const display = editorInstance.recordings.segments[0].display;
-						setDialog({
-							open: true,
-							type: "crop",
-							position: {
-								...(project.background.crop?.position ?? { x: 0, y: 0 }),
-							},
-							size: {
-								...(project.background.crop?.size ?? {
-									x: display.width,
-									y: display.height,
-								}),
-							},
-						});
-					}}
+					tooltipText="Crop Video"
+					kbd={["C"]}
+					onClick={() => cropDialogHandler()}
 					leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 				>
 					Crop
@@ -231,6 +274,8 @@ export function Player() {
 				<div class="flex flex-row flex-1 gap-4 justify-end items-center">
 					<div class="flex-1" />
 					<EditorButton<typeof KToggleButton>
+						tooltipText="Split"
+						kbd={["S"]}
 						pressed={editorState.timeline.interactMode === "split"}
 						onChange={(v: boolean) =>
 							setEditorState("timeline", "interactMode", v ? "split" : "seek")
@@ -248,7 +293,7 @@ export function Player() {
 						}
 					/>
 					<div class="w-px h-8 rounded-full bg-gray-4" />
-					<Tooltip content="Zoom out">
+					<Tooltip kbd={["meta", "-"]} content="Zoom out">
 						<IconCapZoomOut
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
@@ -259,7 +304,7 @@ export function Player() {
 							class="text-gray-12 size-5 will-change-[opacity] transition-opacity hover:opacity-70"
 						/>
 					</Tooltip>
-					<Tooltip content="Zoom in">
+					<Tooltip kbd={["meta", "+"]} content="Zoom in">
 						<IconCapZoomIn
 							onClick={() => {
 								editorState.timeline.transform.updateZoom(
