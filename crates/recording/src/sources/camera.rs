@@ -1,17 +1,20 @@
 use cap_media_info::VideoInfo;
 use ffmpeg::frame;
 use flume::{Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tracing::{error, info};
 
 use crate::{
     MediaError,
-    feeds::{CameraConnection, CameraFeed, RawCameraFrame},
+    feeds::camera::{self, CameraFeedLock, RawCameraFrame},
     pipeline::{control::Control, task::PipelineSourceTask},
 };
 
 pub struct CameraSource {
-    feed_connection: CameraConnection,
+    feed: Arc<CameraFeedLock>,
     video_info: VideoInfo,
     output: Sender<(frame::Video, f64)>,
     first_frame_instant: Option<Instant>,
@@ -21,13 +24,13 @@ pub struct CameraSource {
 
 impl CameraSource {
     pub fn init(
-        feed: &CameraFeed,
+        feed: Arc<CameraFeedLock>,
         output: Sender<(frame::Video, f64)>,
         start_instant: Instant,
     ) -> Self {
         Self {
-            feed_connection: feed.create_connection(),
-            video_info: feed.video_info(),
+            video_info: feed.video_info().clone(),
+            feed,
             output,
             first_frame_instant: None,
             first_frame_timestamp: None,
@@ -92,7 +95,6 @@ impl CameraSource {
 }
 
 impl PipelineSourceTask for CameraSource {
-    // #[tracing::instrument(skip_all)]
     fn run(
         &mut self,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
@@ -102,7 +104,11 @@ impl PipelineSourceTask for CameraSource {
 
         info!("Camera source ready");
 
-        let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
+        let frames = frames_rx.get_or_insert_with(|| {
+            let (tx, rx) = flume::bounded(5);
+            let _ = self.feed.ask(camera::AddSender(tx)).blocking_send();
+            rx
+        });
 
         ready_signal.send(Ok(())).unwrap();
 

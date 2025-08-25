@@ -19,6 +19,8 @@ use sources::*;
 use std::sync::Arc;
 use thiserror::Error;
 
+use crate::feeds::camera::CameraFeedLock;
+
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
@@ -43,6 +45,7 @@ pub struct RecordingBaseInputs {
     pub capture_target: ScreenCaptureTarget,
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    pub camera_feed: Option<Arc<CameraFeedLock>>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

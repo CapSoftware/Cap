@@ -1,4 +1,4 @@
-use cap_recording::feeds::RawCameraFrame;
+use cap_recording::feeds::camera::RawCameraFrame;
 use flume::Sender;
 use tokio_util::sync::CancellationToken;
 
