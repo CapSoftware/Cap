@@ -9,7 +9,7 @@ use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
 use scap_targets::{
-    Display, DisplayId, WindowId,
+    Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
 };
 use serde::Serialize;
@@ -31,7 +31,6 @@ pub struct WindowUnderCursor {
     id: WindowId,
     app_name: String,
     bounds: LogicalBounds,
-    icon: Option<String>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -80,13 +79,6 @@ pub async fn open_target_select_overlays(
                                 id: w.id(),
                                 bounds: w.display_relative_logical_bounds()?,
                                 app_name: w.owner_name()?,
-                                icon: None,
-                                // w.app_icon().map(|bytes| {
-                                //     format!(
-                                //         "data:image/png;base64,{}",
-                                //         BASE64_STANDARD.encode(&bytes)
-                                //     )
-                                // }),
                             })
                         }),
                     }
@@ -126,6 +118,19 @@ pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> 
     }
 
     Ok(())
+}
+
+#[specta::specta]
+#[tauri::command]
+pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> {
+    let window_id = window_id
+        .parse::<WindowId>()
+        .map_err(|err| format!("Invalid window ID: {}", err))?;
+
+    Ok(Window::from_id(&window_id)
+        .ok_or("Window not found")?
+        .app_icon()
+        .map(|bytes| format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))))
 }
 
 #[specta::specta]

@@ -305,6 +305,9 @@ export const commands = {
 	async displayInformation(displayId: string): Promise<DisplayInformation> {
 		return await TAURI_INVOKE("display_information", { displayId });
 	},
+	async getWindowIcon(windowId: string): Promise<string | null> {
+		return await TAURI_INVOKE("get_window_icon", { windowId });
+	},
 };
 
 /** user-defined events **/
@@ -790,7 +793,6 @@ export type WindowUnderCursor = {
 	id: WindowId;
 	app_name: string;
 	bounds: LogicalBounds;
-	icon: string | null;
 };
 export type XY<T> = { x: T; y: T };
 export type ZoomMode = "auto" | { manual: { x: number; y: number } };

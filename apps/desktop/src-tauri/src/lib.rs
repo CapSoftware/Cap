@@ -1962,6 +1962,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::open_target_select_overlays,
             target_select_overlay::close_target_select_overlays,
             target_select_overlay::display_information,
+            target_select_overlay::get_window_icon,
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
