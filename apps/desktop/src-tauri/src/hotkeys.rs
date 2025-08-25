@@ -105,28 +105,17 @@ pub fn init(app: &AppHandle) {
     };
 
     // Set default only on macOS to avoid conflicts on other platforms
-    if cfg!(target_os = "macos") && !store.hotkeys.contains_key(&HotkeyAction::OpenSettings) {
-        let default_open_settings_hotkey = Hotkey {
-            code: Code::Comma,
-            meta: true, // Command key on macOS
-            ctrl: false,
-            alt: false,
-            shift: false,
-        };
-        store.hotkeys.insert(HotkeyAction::OpenSettings, default_open_settings_hotkey);
-
-        // Save the updated store
-        if let Ok(store_ref) = app.store("store") {
-            match serde_json::to_value(&store) {
-                Ok(value) => {
-                    let _ = store_ref.set("hotkeys", value);
-                    let _ = store_ref.save();
-                }
-                Err(e) => {
-                    eprintln!("Failed to serialize hotkeys store: {e}");
-                }
-            }
-        }
+    if cfg!(target_os = "macos") {
+        store.hotkeys.insert(
+            HotkeyAction::OpenSettings,
+            Hotkey {
+                code: Code::Comma,
+                meta: true,
+                ctrl: false,
+                alt: false,
+                shift: false,
+            },
+        );
     }
 
     let global_shortcut = app.global_shortcut();
@@ -149,7 +138,11 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         }
         HotkeyAction::OpenSettings => {
             use crate::windows::ShowCapWindow;
-            let _ = ShowCapWindow::Settings { page: Some("general".to_string()) }.show(&app).await;
+            let _ = ShowCapWindow::Settings {
+                page: Some("general".to_string()),
+            }
+            .show(&app)
+            .await;
             Ok(())
         }
     }

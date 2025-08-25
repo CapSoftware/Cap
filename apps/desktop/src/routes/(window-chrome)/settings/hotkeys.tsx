@@ -24,7 +24,6 @@ const ACTION_TEXT: Record<HotkeyAction, string> = {
 	startRecording: "Start Recording",
 	stopRecording: "Stop Recording",
 	restartRecording: "Restart Recording",
-	openSettings: "Open Settings",
 	// takeScreenshot: "Take Screenshot",
 };
 
@@ -76,7 +75,6 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		"startRecording",
 		"stopRecording",
 		"restartRecording",
-		"openSettings",
 		// "takeScreenshot",
 	] as Array<HotkeyAction>;
 
@@ -171,7 +169,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 													when={hotkeys[item()]}
 													fallback={
 														<p
-															class="flex items-center text-[11px] uppercase transition-colors hover:bg-gray-6 hover:border-gray-7 
+															class="flex items-center text-[11px] uppercase transition-colors hover:bg-gray-6 hover:border-gray-7
                         cursor-pointer py-3 px-2.5 h-5 bg-gray-4 border border-gray-5 rounded-lg text-gray-11 hover:text-gray-12"
 														>
 															None
