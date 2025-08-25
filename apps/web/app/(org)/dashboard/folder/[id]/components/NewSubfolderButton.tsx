@@ -4,10 +4,11 @@ import { Button } from "@cap/ui";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useState } from "react";
+import { Folder } from "@cap/web-domain";
 import { SubfolderDialog } from "./SubfolderDialog";
 
 interface NewSubfolderButtonProps {
-	parentFolderId: string;
+	parentFolderId: Folder.FolderId;
 }
 
 export const NewSubfolderButton = ({

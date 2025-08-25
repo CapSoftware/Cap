@@ -20,7 +20,7 @@ export interface VideoStatusResult {
 	aiTitle: string | null;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
-	generationError: string | null;
+	// generationError: string | null;
 	error?: string;
 }
 
@@ -62,7 +62,7 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
-				generationError: metadata.generationError || null,
+				// generationError: metadata.generationError || null,
 			};
 		} catch (error) {
 			console.error(
@@ -75,7 +75,7 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
-				generationError: metadata.generationError || null,
+				// generationError: metadata.generationError || null,
 				error: "Failed to start transcription",
 			};
 		}
@@ -88,7 +88,7 @@ export async function getVideoStatus(
 			aiTitle: metadata.aiTitle || null,
 			summary: metadata.summary || null,
 			chapters: metadata.chapters || null,
-			generationError: metadata.generationError || null,
+			// generationError: metadata.generationError || null,
 			error: "Transcription failed",
 		};
 	}
@@ -110,7 +110,7 @@ export async function getVideoStatus(
 					metadata: {
 						...metadata,
 						aiProcessing: false,
-						generationError: "AI processing timed out and was reset",
+						// generationError: "AI processing timed out and was reset",
 					},
 				})
 				.where(eq(videos.id, videoId));
@@ -133,7 +133,7 @@ export async function getVideoStatus(
 					aiTitle: updatedMetadata.aiTitle || null,
 					summary: updatedMetadata.summary || null,
 					chapters: updatedMetadata.chapters || null,
-					generationError: updatedMetadata.generationError || null,
+					// generationError: updatedMetadata.generationError || null,
 					error: "AI processing timed out and was reset",
 				};
 			}
@@ -144,8 +144,8 @@ export async function getVideoStatus(
 		video.transcriptionStatus === "COMPLETE" &&
 		!metadata.aiProcessing &&
 		!metadata.summary &&
-		!metadata.chapters &&
-		!metadata.generationError
+		!metadata.chapters
+		// !metadata.generationError
 	) {
 		console.log(
 			`[Get Status] Transcription complete but no AI data, checking feature flag for video owner ${video.ownerId}`,
@@ -198,8 +198,8 @@ export async function getVideoStatus(
 									metadata: {
 										...currentMetadata,
 										aiProcessing: false,
-										generationError:
-											error instanceof Error ? error.message : String(error),
+										// generationError:
+										// 	error instanceof Error ? error.message : String(error),
 									},
 								})
 								.where(eq(videos.id, videoId));
@@ -221,7 +221,7 @@ export async function getVideoStatus(
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
-				generationError: metadata.generationError || null,
+				// generationError: metadata.generationError || null,
 			};
 		} else {
 			const videoOwner = videoOwnerQuery[0];
@@ -239,6 +239,6 @@ export async function getVideoStatus(
 		aiTitle: metadata.aiTitle || null,
 		summary: metadata.summary || null,
 		chapters: metadata.chapters || null,
-		generationError: metadata.generationError || null,
+		// generationError: metadata.generationError || null,
 	};
 }

@@ -113,10 +113,9 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add space-level sharing
 	spaceSharing.forEach((space) => {
-		if (!sharedSpacesMap[space.videoId]) {
-			sharedSpacesMap[space.videoId] = [];
-		}
-		sharedSpacesMap[space.videoId].push({
+		const spaces = sharedSpacesMap[space.videoId] ?? []
+		sharedSpacesMap[space.videoId] = spaces;
+		spaces.push({
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
@@ -127,10 +126,10 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add organization-level sharing
 	orgSharing.forEach((org) => {
-		if (!sharedSpacesMap[org.videoId]) {
-			sharedSpacesMap[org.videoId] = [];
-		}
-		sharedSpacesMap[org.videoId].push({
+		const spaces = sharedSpacesMap[org.videoId] ?? [];
+		sharedSpacesMap[org.videoId] = spaces;
+
+		spaces.push({
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,
@@ -216,8 +215,8 @@ export async function getVideosByFolderId(folderId: string) {
 			totalReactions: video.totalReactions,
 			sharedOrganizations: Array.isArray(video.sharedOrganizations)
 				? video.sharedOrganizations.filter(
-						(organization) => organization.id !== null,
-					)
+					(organization) => organization.id !== null,
+				)
 				: [],
 			sharedSpaces: Array.isArray(sharedSpacesMap[video.id])
 				? sharedSpacesMap[video.id]
@@ -225,9 +224,9 @@ export async function getVideosByFolderId(folderId: string) {
 			ownerName: video.ownerName ?? "",
 			metadata: video.metadata as
 				| {
-						customCreatedAt?: string;
-						[key: string]: unknown;
-				  }
+					customCreatedAt?: string;
+					[key: string]: unknown;
+				}
 				| undefined,
 			hasPassword: video.hasPassword === 1,
 			foldersData: [], // Empty array since videos in a folder don't need folder data

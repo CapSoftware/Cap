@@ -1,9 +1,8 @@
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";

@@ -19,6 +19,7 @@ import {
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
+import { Video } from "@cap/web-domain";
 
 const formatTime = (time: number) => {
 	const minutes = Math.floor(time / 60);
@@ -62,7 +63,7 @@ interface ShareProps {
 }
 
 const useVideoStatus = (
-	videoId: string,
+	videoId: Video.VideoId,
 	aiGenerationEnabled: boolean,
 	initialData?: {
 		transcriptionStatus?: string | null;
@@ -93,7 +94,6 @@ const useVideoStatus = (
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
-					generationError: null,
 				}
 			: undefined,
 		refetchInterval: (query) => {
@@ -177,7 +177,7 @@ export const Share = ({
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
 			processing: videoStatus?.aiProcessing || false,
-			generationError: videoStatus?.generationError || null,
+			// generationError: videoStatus?.generationError || null,
 		}),
 		[videoStatus],
 	);
@@ -196,9 +196,9 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiData.generationError) {
-				return false;
-			}
+			// if (aiData.generationError) {
+			// 	return false;
+			// }
 			if (aiData.processing === true) {
 				return true;
 			}
