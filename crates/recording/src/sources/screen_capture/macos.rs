@@ -214,7 +214,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .map_err(SourceError::CreateActor)?,
                 );
 
-                let _ = capturer
+                capturer
                     .ask(StartCapturing)
                     .await
                     .map_err(SourceError::StartCapturing)?;
@@ -282,10 +282,11 @@ impl ScreenCaptureActor {
         let capturer_builder = scap_screencapturekit::Capturer::builder(target, settings)
             .with_output_sample_buf_cb(move |frame| {
                 let check_err = || {
-                    Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
+                    cap_fail::fail_err!(
                         "macos::ScreenCaptureActor output_sample_buf",
                         ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
-                    ))
+                    );
+                    Result::<_, arc::R<ns::Error>>::Ok(())
                 };
                 if let Err(e) = check_err() {
                     let _ = _error_tx.send(e);

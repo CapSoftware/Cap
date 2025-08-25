@@ -1,9 +1,8 @@
-use cap_camera::ModelID;
 use cap_recording::screen_capture::ScreenCaptureTarget;
 use clap::Args;
 use scap_targets::{DisplayId, WindowId};
-use std::{env::current_dir, path::PathBuf, sync::Arc};
-use tokio::{io::AsyncBufReadExt, sync::Mutex};
+use std::{env::current_dir, path::PathBuf};
+use tokio::io::AsyncBufReadExt;
 use uuid::Uuid;
 
 #[derive(Args)]
@@ -43,16 +42,16 @@ impl RecordStart {
             _ => Err("No target specified".to_string()),
         }?;
 
-        let camera = if let Some(model_id) = self.camera {
-            let _model_id: ModelID = model_id
-                .try_into()
-                .map_err(|_| "Invalid model ID".to_string())?;
+        // let camera = if let Some(model_id) = self.camera {
+        //     let _model_id: ModelID = model_id
+        //         .try_into()
+        //         .map_err(|_| "Invalid model ID".to_string())?;
 
-            todo!()
-            // Some(CameraFeed::init(model_id).await.unwrap())
-        } else {
-            None
-        };
+        //     todo!()
+        //     // Some(CameraFeed::init(model_id).await.unwrap())
+        // } else {
+        //     None
+        // };
 
         let id = Uuid::new_v4().to_string();
         let path = self
@@ -66,8 +65,8 @@ impl RecordStart {
                 capture_target: target_info,
                 capture_system_audio: self.system_audio,
                 mic_feed: None,
+                camera_feed: None, // camera.map(|c| Arc::new(Mutex::new(c))),
             },
-            camera.map(|c| Arc::new(Mutex::new(c))),
             false,
         )
         .await

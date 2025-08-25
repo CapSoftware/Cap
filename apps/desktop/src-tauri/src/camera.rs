@@ -170,8 +170,8 @@ impl InitializedCameraPreview {
             1.0
         };
 
-        let size = resize_window(&window, &default_state, aspect)
-            .context("Error resizing Tauri window")?;
+        let size =
+            resize_window(&window, default_state, aspect).context("Error resizing Tauri window")?;
 
         let (tx, rx) = oneshot::channel();
         window
@@ -404,8 +404,8 @@ impl InitializedCameraPreview {
             aspect_ratio: Cached::default(),
         };
 
-        renderer.update_state_uniforms(&default_state);
-        renderer.sync_ratio_uniform_and_resize_window_to_it(&window, &default_state, aspect);
+        renderer.update_state_uniforms(default_state);
+        renderer.sync_ratio_uniform_and_resize_window_to_it(&window, default_state, aspect);
         renderer.reconfigure_gpu_surface(size.0, size.1);
 
         // We initialize and render a blank color fallback.
@@ -645,7 +645,7 @@ impl Renderer {
                 bytemuck::cast_slice(&[camera_uniforms]),
             );
 
-            if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio)
+            if let Ok((width, height)) = resize_window(window, state, aspect_ratio)
                 .map_err(|err| error!("Error resizing camera preview window: {err}"))
             {
                 self.reconfigure_gpu_surface(width, height);
@@ -726,6 +726,7 @@ pub struct PreparedTexture {
 }
 
 impl PreparedTexture {
+    #[allow(clippy::too_many_arguments)]
     pub fn init(
         device: wgpu::Device,
         queue: wgpu::Queue,

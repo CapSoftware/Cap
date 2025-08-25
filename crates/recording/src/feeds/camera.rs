@@ -74,14 +74,15 @@ struct ConnectingState {
 }
 
 struct AttachedState {
+    #[allow(dead_code)]
     id: DeviceOrModelID,
     handle: cap_camera::CaptureHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
 }
 
-impl CameraFeed {
-    pub fn new() -> Self {
+impl Default for CameraFeed {
+    fn default() -> Self {
         Self {
             state: State::Open(OpenState {
                 connecting: None,
@@ -337,7 +338,7 @@ impl Message<SetInput> for CameraFeed {
         tokio::spawn(async move {
             match setup_camera(&id, new_frame_recipient).await {
                 Ok(r) => {
-                    let _ = ready_tx.send(Ok((r.camera_info.clone(), r.video_info.clone())));
+                    let _ = ready_tx.send(Ok((r.camera_info.clone(), r.video_info)));
                     let _ = internal_ready_tx.send(Ok(r));
 
                     let _ = actor_ref.ask(InputConnected).await;
@@ -473,7 +474,7 @@ impl Message<Lock> for CameraFeed {
         };
 
         let camera_info = attached.camera_info.clone();
-        let video_info = attached.video_info.clone();
+        let video_info = attached.video_info;
 
         self.state = State::Locked { inner: attached };
 

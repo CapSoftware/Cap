@@ -20,7 +20,7 @@ pub struct Pipeline {
 
 impl Pipeline {
     pub fn builder() -> PipelineBuilder {
-        PipelineBuilder::new()
+        PipelineBuilder::default()
     }
 
     pub async fn play(&mut self) -> Result<(), MediaError> {
