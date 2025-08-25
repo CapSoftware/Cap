@@ -303,7 +303,7 @@ pub async fn create_or_get_video(
         s3_config_url.push_str(&format!("&width={}", meta.width));
         s3_config_url.push_str(&format!("&height={}", meta.height));
         if let Some(fps) = meta.fps {
-            s3_config_url.push_str(&format!("&fps={}", fps));
+            s3_config_url.push_str(&format!("&fps={fps}"));
         }
     }
 

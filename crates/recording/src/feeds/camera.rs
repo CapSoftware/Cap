@@ -253,7 +253,6 @@ async fn setup_camera(
             let Ok(mut ff_frame) = frame.to_ffmpeg() else {
                 return;
             };
-            dbg!(ff_frame.format());
 
             ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
 

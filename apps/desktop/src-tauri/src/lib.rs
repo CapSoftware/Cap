@@ -383,7 +383,7 @@ async fn get_current_recording(
                     },
                     ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
                         screen: screen.clone(),
-                        bounds: bounds.clone(),
+                        bounds: *bounds,
                     },
                 };
 
@@ -1057,7 +1057,7 @@ async fn upload_exported_video(
     }
 
     let metadata = build_video_meta(&output_path)
-        .map_err(|err| format!("Error getting output video meta: {}", err.to_string()))?;
+        .map_err(|err| format!("Error getting output video meta: {}", err))?;
 
     if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
         return Ok(UploadResult::UpgradeRequired);

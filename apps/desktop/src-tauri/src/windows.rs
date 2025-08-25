@@ -360,7 +360,7 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let enable_native_camera_preview = GeneralSettingsStore::get(&app)
+                let enable_native_camera_preview = GeneralSettingsStore::get(app)
                     .ok()
                     .and_then(|v| v.map(|v| v.enable_native_camera_preview))
                     .unwrap_or_default();
@@ -371,7 +371,7 @@ impl ShowCapWindow {
 
                     if enable_native_camera_preview && state.camera_preview.is_initialized() {
                         error!("Unable to initialize camera preview as one already exists!");
-                        if let Some(window) = CapWindowId::Camera.get(&app) {
+                        if let Some(window) = CapWindowId::Camera.get(app) {
                             window.show().ok();
                         }
                         return Err(anyhow!(

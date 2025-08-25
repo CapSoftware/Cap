@@ -49,11 +49,11 @@ impl RelativeCursorPosition {
         {
             let logical_bounds = display.raw_handle().logical_bounds()?;
 
-            return Some(Self {
+            Some(Self {
                 x: raw.x - logical_bounds.position().x() as i32,
                 y: raw.y - logical_bounds.position().y() as i32,
                 display,
-            });
+            })
         }
     }
 

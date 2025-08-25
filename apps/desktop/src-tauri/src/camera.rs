@@ -517,7 +517,7 @@ impl Renderer {
                     let aspect_ratio = frame.frame.width() as f32 / frame.frame.height() as f32;
                     self.sync_aspect_ratio_uniforms(aspect_ratio);
 
-                    println!("2: {:?}", aspect_ratio);
+                    println!("2: {aspect_ratio:?}");
 
                     if let Ok(surface) = self.surface.get_current_texture().map_err(|err| {
                         error!("Error getting camera renderer surface texture: {err:?}")
