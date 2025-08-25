@@ -76,11 +76,7 @@ impl InterpolatedLayout {
                     .map(|s| s.mode)
                     .unwrap_or(LayoutMode::Default);
                 let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
-                (
-                    prev_mode,
-                    segment.mode,
-                    ease_in_out(progress as f32) as f64,
-                )
+                (prev_mode, segment.mode, ease_in_out(progress as f32) as f64)
             } else if cursor.time >= transition_end && cursor.time < segment.end {
                 if let Some(next_seg) = cursor.next_segment() {
                     let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;

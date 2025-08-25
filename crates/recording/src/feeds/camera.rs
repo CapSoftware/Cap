@@ -21,7 +21,7 @@ const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 pub struct RawCameraFrame {
     pub frame: frame::Video,
     pub timestamp: Duration,
-    pub refrence_time: Instant,
+    pub reference_time: Instant,
 }
 
 #[derive(Actor)]
@@ -275,7 +275,7 @@ async fn setup_camera(
                 .tell(NewFrame(RawCameraFrame {
                     frame: ff_frame,
                     timestamp: frame.timestamp,
-                    refrence_time: frame.reference_time,
+                    reference_time: frame.reference_time,
                 }))
                 .try_send();
         })
@@ -504,7 +504,6 @@ impl Message<InputConnected> for CameraFeed {
             let res = ready.await;
 
             if let Ok(data) = res {
-                println!("connected: {:?}", &id);
                 state.handle_input_connected(data, id);
             }
         }

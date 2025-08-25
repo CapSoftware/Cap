@@ -81,7 +81,7 @@ impl CameraSource {
         drop(frames_rx);
 
         for frame in frames {
-            let first_frame_instant = *self.first_frame_instant.get_or_insert(frame.refrence_time);
+            let first_frame_instant = *self.first_frame_instant.get_or_insert(frame.reference_time);
             let first_frame_timestamp = *self.first_frame_timestamp.get_or_insert(frame.timestamp);
 
             if let Err(error) =
@@ -117,7 +117,7 @@ impl PipelineSourceTask for CameraSource {
                 Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
                     Some(frame) => {
                         let first_frame_instant =
-                            *self.first_frame_instant.get_or_insert(frame.refrence_time);
+                            *self.first_frame_instant.get_or_insert(frame.reference_time);
                         let first_frame_timestamp =
                             *self.first_frame_timestamp.get_or_insert(frame.timestamp);
 
