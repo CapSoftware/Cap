@@ -18,11 +18,11 @@ use std::{
     thread,
     time::Duration,
 };
-use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
+use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Window, Wry};
 use tauri_plugin_store::Store;
 use tokio::sync::{broadcast, oneshot};
 use tracing::error;
-use wgpu::{CompositeAlphaMode, SurfaceTexture};
+use wgpu::{CompositeAlphaMode, Surface, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
 
@@ -202,8 +202,8 @@ impl CameraPreview {
                     .get_current_texture()
                     .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
                 {
-                    let output_width = 1280;
-                    let output_height = (1280.0 / camera_aspect_ratio) as u32;
+                    let output_width = 100; // 1280;
+                    let output_height = 100; // (1280.0 / camera_aspect_ratio) as u32;
 
                     let new_texture_value = if let Some(frame) = frame {
                         if loading {
@@ -245,12 +245,27 @@ impl CameraPreview {
                         None // This will reuse the existing texture
                     };
 
-                    renderer.render(
-                        surface,
-                        new_texture_value.as_ref().map(|(b, s)| (&**b, *s)),
-                        output_width,
-                        output_height,
-                    );
+                    // TODO: Remove this option but does that cause issues???
+                    if let Some((buffer, stride)) =
+                        new_texture_value.as_ref().map(|(b, s)| (&**b, *s))
+                    {
+                        renderer
+                            .texture
+                            .get_or_init((output_width, output_height), || {
+                                PreparedTexture::init(
+                                    renderer.device.clone(),
+                                    renderer.queue.clone(),
+                                    &renderer.sampler,
+                                    &renderer.bind_group_layout,
+                                    renderer.uniform_bind_group.clone(),
+                                    renderer.render_pipeline.clone(),
+                                    output_width,
+                                    output_height,
+                                )
+                            })
+                            .render(&surface, buffer, stride);
+                        surface.present();
+                    }
                 }
 
                 if !window_visible {
@@ -307,7 +322,7 @@ struct Renderer {
     state: CameraWindowState,
     frame_info: Cached<(format::Pixel, u32, u32)>,
     surface_size: Cached<(u32, u32)>,
-    texture: Cached<(u32, u32), (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
+    texture: Cached<(u32, u32), PreparedTexture>,
 }
 
 impl Renderer {
@@ -684,21 +699,92 @@ impl Renderer {
             bytemuck::cast_slice(&[camera_uniforms]),
         );
     }
+}
 
-    /// Render the camera preview to the window.
-    fn render(
-        &mut self,
-        surface: SurfaceTexture,
-        new_texture_value: Option<(&[u8], u32)>,
+fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {
+    let pixel_count = (height * width) as usize;
+    let buffer: Vec<u8> = color
+        .iter()
+        .cycle()
+        .take(pixel_count * 4)
+        .copied()
+        .collect();
+
+    (buffer, 4 * width)
+}
+
+pub struct PreparedTexture {
+    texture: wgpu::Texture,
+    texture_view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
+    uniform_bind_group: wgpu::BindGroup,
+    render_pipeline: wgpu::RenderPipeline,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    width: u32,
+    height: u32,
+}
+
+impl PreparedTexture {
+    pub fn init(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        sampler: &wgpu::Sampler,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        uniform_bind_group: wgpu::BindGroup,
+        render_pipeline: wgpu::RenderPipeline,
         width: u32,
         height: u32,
-    ) {
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Texture"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Texture Bind Group"),
+            layout: bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        });
+
+        Self {
+            texture,
+            texture_view,
+            bind_group,
+            uniform_bind_group,
+            render_pipeline,
+            device,
+            queue,
+            width,
+            height,
+        }
+    }
+
+    pub fn render(&self, surface: &SurfaceTexture, buffer: &[u8], stride: u32) {
         let surface_view = surface
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-
-        // let surface_width = surface.texture.width();
-        // let surface_height = surface.texture.height();
 
         let mut encoder = self
             .device
@@ -709,8 +795,7 @@ impl Renderer {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &surface_view,
-                    // depth_slice: None,
-                    resolve_target: None, // Some(&surface_view),
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.0,
@@ -726,86 +811,34 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            // Get or reinitialize the texture if necessary
-            let (texture, _, bind_group) = &*self.texture.get_or_init((width, height), || {
-                let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("Camera Texture"),
-                    size: wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                    view_formats: &[],
-                });
-
-                let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-                let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Texture Bind Group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&texture_view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                    ],
-                });
-
-                (texture, texture_view, bind_group)
-            });
-
-            if let Some((buffer, stride)) = new_texture_value {
-                self.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    buffer,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(stride),
-                        rows_per_image: Some(height),
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
+            self.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                buffer,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(stride),
+                    rows_per_image: Some(self.height),
+                },
+                wgpu::Extent3d {
+                    width: self.width,
+                    height: self.height,
+                    depth_or_array_layers: 1,
+                },
+            );
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, bind_group, &[]);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
             render_pass.set_bind_group(1, &self.uniform_bind_group, &[]);
             render_pass.draw(0..6, 0..1);
         }
 
         self.queue.submit(Some(encoder.finish()));
-        surface.present();
     }
-}
-
-fn render_solid_frame(color: [u8; 4], width: u32, height: u32) -> (Vec<u8>, u32) {
-    let pixel_count = (height * width) as usize;
-    let buffer: Vec<u8> = color
-        .iter()
-        .cycle()
-        .take(pixel_count * 4)
-        .copied()
-        .collect();
-
-    (buffer, 4 * width)
 }
 
 struct Cached<K, V = ()> {
