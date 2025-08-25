@@ -7,22 +7,29 @@ import { createSignal, For, Show, onMount } from "solid-js";
 
 import { commands } from "~/utils/tauri";
 import { apiClient, protectedHeaders } from "~/utils/web-api";
+import { clientEnv } from "~/utils/env";
 
 const sendFeedbackAction = action(async (feedback: string) => {
   const logsAndInfo = await commands.getLogsAndSystemInfo();
 
-  const response = await apiClient.desktop.submitFeedback({
-    body: {
-      feedback,
-      os: ostype() as any,
-      version: await getVersion(),
-      systemInfo: logsAndInfo.system_info,
+  const formData = new URLSearchParams();
+  formData.append("feedback", feedback);
+  formData.append("os", ostype() as any);
+  formData.append("version", await getVersion());
+  formData.append("systemInfo", JSON.stringify(logsAndInfo.system_info));
+
+  const headers = await protectedHeaders();
+  const response = await fetch(`${clientEnv.VITE_SERVER_URL}/api/desktop/feedback`, {
+    method: "POST",
+    headers: {
+      ...headers,
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    headers: await protectedHeaders(),
+    body: formData,
   });
 
   if (response.status !== 200) throw new Error("Failed to submit feedback");
-  return response.body;
+  return await response.json();
 });
 
 export default function FeedbackTab() {

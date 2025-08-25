@@ -23,23 +23,36 @@ app.post(
 			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
 			version: z.string().optional(),
 			systemInfo: z
-				.object({
-					os: z.string(),
-					os_version: z.string(),
-					arch: z.string(),
-					cpu_cores: z.number(),
-					memory_gb: z.number(),
-					displays: z.array(
-						z.object({
-							width: z.number(),
-							height: z.number(),
-							scale_factor: z.number(),
-						}),
-					),
-					cameras: z.array(z.string()),
-					microphones: z.array(z.string()),
+				.string()
+				.optional()
+				.transform((val) => {
+					if (!val) return undefined;
+					try {
+						return JSON.parse(val);
+					} catch {
+						return undefined;
+					}
 				})
-				.optional(),
+				.pipe(
+					z
+						.object({
+							os: z.string(),
+							os_version: z.string(),
+							arch: z.string(),
+							cpu_cores: z.number(),
+							memory_gb: z.number(),
+							displays: z.array(
+								z.object({
+									width: z.number(),
+									height: z.number(),
+									scale_factor: z.number(),
+								}),
+							),
+							cameras: z.array(z.string()),
+							microphones: z.array(z.string()),
+						})
+						.optional()
+				),
 		}),
 	),
 	async (c) => {
@@ -52,48 +65,8 @@ app.post(
 
 			let messageContent = `New feedback from ${c.get("user").email}:\n${feedback}`;
 			
-			if (os && version) {
-				messageContent += `\n${os} v${version}`;
-			}
-			
-			const embeds = [];
-			if (systemInfo) {
-				embeds.push({
-					title: "Device Information",
-					color: 5814783,
-					fields: [
-						{
-							name: "OS",
-							value: `${systemInfo.os} ${systemInfo.os_version}`,
-							inline: true,
-						},
-						{
-							name: "Architecture",
-							value: systemInfo.arch,
-							inline: true,
-						},
-						{
-							name: "CPU/Memory",
-							value: `${systemInfo.cpu_cores} cores, ${systemInfo.memory_gb.toFixed(1)} GB`,
-							inline: true,
-						},
-						{
-							name: "Displays",
-							value: systemInfo.displays.map(d => `${d.width}x${d.height}`).join(", "),
-							inline: false,
-						},
-						{
-							name: "Cameras",
-							value: systemInfo.cameras.slice(0, 3).join("\n") || "None",
-							inline: false,
-						},
-						{
-							name: "Microphones",
-							value: systemInfo.microphones.slice(0, 3).join("\n") || "None",
-							inline: false,
-						},
-					],
-				});
+			if (version) {
+				messageContent += `\nCap version: ${version}`;
 			}
 
 			const response = await fetch(discordWebhookUrl, {
@@ -101,7 +74,6 @@ app.post(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					content: messageContent,
-					embeds: embeds,
 				}),
 			});
 
@@ -166,7 +138,7 @@ app.post(
 			
 			const downloadUrl = await bucket.getSignedObjectUrl(recordingKey);
 			
-			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
 
@@ -282,10 +254,10 @@ app.post(
 		}),
 	),
 	async (c) => {
-		const { systemInfo, recentLogs, appVersion, logFiles } = c.req.valid("json");
+		const { systemInfo, appVersion, logFiles } = c.req.valid("json");
 
 		try {
-			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
 
