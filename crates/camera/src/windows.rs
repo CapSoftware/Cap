@@ -61,7 +61,7 @@ impl ModelID {
 #[derive(Debug)]
 pub struct NativeCapturedFrame(cap_camera_windows::Frame);
 
-pub type NativeRecordingHandle = WindowsCaptureHandle;
+pub type NativeCaptureHandle = WindowsCaptureHandle;
 
 pub(super) fn start_capturing_impl(
     camera: &CameraInfo,

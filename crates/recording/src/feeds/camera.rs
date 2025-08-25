@@ -298,7 +298,7 @@ pub enum SetupCameraError {
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 struct SetupCameraState {
-    handle: cap_camera::RecordingHandle,
+    handle: cap_camera::CaptureHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
     frame_rx: mpsc::Receiver<RawCameraFrame>,

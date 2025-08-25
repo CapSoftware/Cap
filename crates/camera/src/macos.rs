@@ -68,7 +68,7 @@ impl ModelID {
 
 pub type NativeFormat = arc::R<av::capture::device::Format>;
 
-pub type NativeRecordingHandle = AVFoundationRecordingHandle;
+pub type NativeCaptureHandle = AVFoundationRecordingHandle;
 
 fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
     let devices = list_video_devices();

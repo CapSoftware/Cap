@@ -652,8 +652,11 @@ async fn handle_recording_end(
         if let Some(v) = CapWindowId::Camera.get(&handle) {
             let _ = v.close();
         }
-        app.camera_feed.take();
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+        app.camera_feed.take();
+        if let Some(win) = CapWindowId::Camera.get(&handle) {
+            win.close().ok();
+        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();

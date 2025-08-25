@@ -58,8 +58,6 @@ export default function () {
 }
 
 function NativeCameraPreviewPage() {
-	const { rawOptions } = useRecordingOptions();
-
 	const [state, setState] = makePersisted(
 		createStore<CameraWindow.State>({
 			size: "sm",
