@@ -11,7 +11,7 @@ use std::{
 
 use crate::{
     RecordingError,
-    feeds::AudioInputFeed,
+    feeds::microphone::MicrophoneFeedLock,
     pipeline::builder::PipelineBuilder,
     sources::{
         AudioInputSource, AudioMixer, ScreenCaptureFormat, ScreenCaptureSource,
@@ -37,7 +37,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
-        audio: Option<&AudioInputFeed>,
+        audio: Option<Arc<MicrophoneFeedLock>>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
@@ -112,7 +112,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
-        audio: Option<&AudioInputFeed>,
+        audio: Option<Arc<MicrophoneFeedLock>>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
@@ -125,7 +125,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         }
 
         if let Some(audio) = audio {
-            let sink = audio_mixer.sink(audio.audio_info());
+            let sink = audio_mixer.sink(*audio.audio_info());
             let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);
@@ -276,7 +276,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
             ScreenCaptureSource<Self>,
             flume::Receiver<(Self::VideoFormat, f64)>,
         ),
-        audio: Option<&AudioInputFeed>,
+        audio: Option<Arc<MicrophoneFeedLock>>,
         system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
         output_path: PathBuf,
         _pause_flag: Arc<AtomicBool>,
@@ -294,7 +294,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
         }
 
         if let Some(audio) = audio {
-            let sink = audio_mixer.sink(audio.audio_info());
+            let sink = audio_mixer.sink(*audio.audio_info());
             let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
 
             builder.spawn_source("microphone_capture", source);

@@ -1,9 +1,9 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-	createMutation,
 	createQuery,
 	queryOptions,
+	useMutation,
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -152,26 +152,36 @@ export function createLicenseQuery() {
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
-	const setCameraInput = createMutation(() => ({
-		mutationFn: async (model: DeviceOrModelID | null) => {
-			const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
-			setOptions("cameraID", reconcile(model));
-			if (model) {
-				await commands.showWindow("Camera");
-				getCurrentWindow().setFocus();
-			}
+	const rawMutate = async (model: DeviceOrModelID | null) => {
+		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
+		setOptions("cameraID", reconcile(model));
+		if (model) {
+			await commands.showWindow("Camera");
+			getCurrentWindow().setFocus();
+		}
 
-			await commands.setCameraInput(model).catch(async (e) => {
-				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-					setOptions("cameraID", null);
-				} else setOptions("cameraID", reconcile(before));
+		await commands.setCameraInput(model).catch(async (e) => {
+			if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+				setOptions("cameraID", null);
+			} else setOptions("cameraID", reconcile(before));
 
-				throw e;
-			});
-		},
+			throw e;
+		});
+	};
+
+	const setCameraInput = useMutation(() => ({
+		mutationFn: rawMutate,
 	}));
 
-	return setCameraInput;
+	return new Proxy(
+		setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate },
+		{
+			get(target, key) {
+				if (key === "rawMutate") return rawMutate;
+				return Reflect.get(target, key);
+			},
+		},
+	);
 }
 
 export function createCustomDomainQuery() {

@@ -45,6 +45,7 @@ cpal.workspace = true
 indexmap = "2.10.0"
 kameo = "0.17.2"
 inquire = "0.7.5"
+replace_with = "0.1.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "0.3.5"
