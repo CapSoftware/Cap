@@ -1,6 +1,5 @@
 import { ToggleButton as KToggleButton } from "@kobalte/core/toggle-button";
 import { createElementBounds } from "@solid-primitives/bounds";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { cx } from "cva";
 import { createEffect, createSignal, onMount, Show } from "solid-js";
 
@@ -11,6 +10,7 @@ import AspectRatioSelect from "./AspectRatioSelect";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
 import { EditorButton, Slider } from "./ui";
 import { formatTime } from "./utils";
+import { useEditorShortcuts } from "./useEditorShortcuts";
 
 export function Player() {
 	const {
@@ -145,70 +145,52 @@ export function Player() {
 		}
 	};
 
-	//split shortcut
-	createEventListener(document, "keydown", (e: KeyboardEvent) => {
-		if (e.code === "KeyS" && e.target === document.body) {
-			e.preventDefault();
-			setEditorState(
-				"timeline",
-				"interactMode",
-				editorState.timeline.interactMode === "split" ? "seek" : "split",
-			);
-		}
-	});
+	// Register keyboard shortcuts in one place
+	useEditorShortcuts(
+		() => document.activeElement === document.body,
+		[
+			{
+				combo: "S",
+				handler: () =>
+					setEditorState(
+						"timeline",
+						"interactMode",
+						editorState.timeline.interactMode === "split" ? "seek" : "split",
+					),
+			},
+			{
+				combo: "Mod+=",
+				handler: () =>
+					editorState.timeline.transform.updateZoom(
+						editorState.timeline.transform.zoom / 1.1,
+						editorState.playbackTime,
+					),
+			},
+			{
+				combo: "Mod+-",
+				handler: () =>
+					editorState.timeline.transform.updateZoom(
+						editorState.timeline.transform.zoom * 1.1,
+						editorState.playbackTime,
+					),
+			},
+			{ combo: "C", handler: () => cropDialogHandler() },
+			{
+				combo: "Space",
+				handler: async () => {
+					const prevTime = editorState.previewTime;
 
-	//zoom-in shortct
-	createEventListener(document, "keydown", (e: KeyboardEvent) => {
-		if (
-			(e.metaKey || e.ctrlKey) &&
-			e.code === "Equal" &&
-			e.target === document.body
-		) {
-			e.preventDefault();
-			editorState.timeline.transform.updateZoom(
-				editorState.timeline.transform.zoom / 1.1,
-				editorState.playbackTime,
-			);
-		}
-	});
+					if (!editorState.playing) {
+						if (prevTime !== null) setEditorState("playbackTime", prevTime);
 
-	//zoom-out shortcut
-	createEventListener(document, "keydown", (e: KeyboardEvent) => {
-		if (
-			(e.metaKey || e.ctrlKey) &&
-			e.code === "Minus" &&
-			e.target === document.body
-		) {
-			e.preventDefault();
-			editorState.timeline.transform.updateZoom(
-				editorState.timeline.transform.zoom * 1.1,
-				editorState.playbackTime,
-			);
-		}
-	});
+						await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
+					}
 
-	//crop shortcut
-	createEventListener(document, "keydown", async (e: KeyboardEvent) => {
-		if (e.code === "KeyC" && e.target === document.body) {
-			e.preventDefault();
-			cropDialogHandler();
-		}
-	});
-
-	createEventListener(document, "keydown", async (e: KeyboardEvent) => {
-		if (e.code === "Space" && e.target === document.body) {
-			e.preventDefault();
-			const prevTime = editorState.previewTime;
-
-			if (!editorState.playing) {
-				if (prevTime !== null) setEditorState("playbackTime", prevTime);
-
-				await commands.seekTo(Math.floor(editorState.playbackTime * FPS));
-			}
-
-			await handlePlayPauseClick();
-		}
-	});
+					await handlePlayPauseClick();
+				},
+			},
+		],
+	);
 
 	return (
 		<div class="flex flex-col flex-1 rounded-xl border bg-gray-1 dark:bg-gray-2 border-gray-3">
