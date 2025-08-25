@@ -6,7 +6,7 @@ import {
 import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
-import { Menu, Submenu } from "@tauri-apps/api/menu";
+import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
@@ -649,56 +649,56 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 	const auth = authStore.createQuery();
 	const { rawOptions, setOptions } = createOptionsQuery();
 
+	const generalSetings = generalSettingsStore.createQuery();
+
 	const capitalize = (str: string) => {
 		return str.charAt(0).toUpperCase() + str.slice(1);
 	};
 
-	const menuModes = async () => {
-		return await Menu.new({
+	const menuModes = async () =>
+		await Menu.new({
 			items: [
-				{
-					id: "studio",
+				await CheckMenuItem.new({
 					text: "Studio Mode",
 					action: () => {
 						setOptions("mode", "studio");
 					},
-				},
-				{
-					id: "instant",
+					checked: rawOptions.mode === "studio",
+				}),
+				await CheckMenuItem.new({
 					text: "Instant Mode",
 					action: () => {
 						setOptions("mode", "instant");
 					},
-				},
+					checked: rawOptions.mode === "instant",
+				}),
 			],
 		});
-	};
 
 	const countdownMenu = async () =>
 		await Submenu.new({
 			text: "Recording Countdown",
 			items: [
-				{
-					id: "countdown-three",
+				await CheckMenuItem.new({
 					text: "3 seconds",
 					action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
-				},
-				{
-					id: "countdown-five",
+					checked: generalSetings.data?.recordingCountdown === 3,
+				}),
+				await CheckMenuItem.new({
 					text: "5 seconds",
 					action: () => generalSettingsStore.set({ recordingCountdown: 5 }),
-				},
-				{
-					id: "countdown-ten",
+					checked: generalSetings.data?.recordingCountdown === 5,
+				}),
+				await CheckMenuItem.new({
 					text: "10 seconds",
 					action: () => generalSettingsStore.set({ recordingCountdown: 10 }),
-				},
+					checked: generalSetings.data?.recordingCountdown === 10,
+				}),
 			],
 		});
+
 	const preRecordingMenu = async () => {
-		return await Menu.new({
-			items: [await countdownMenu()],
-		});
+		return await Menu.new({ items: [await countdownMenu()] });
 	};
 
 	return (
