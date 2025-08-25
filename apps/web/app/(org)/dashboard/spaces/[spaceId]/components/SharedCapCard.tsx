@@ -31,6 +31,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	organizationName,
 	userId,
 	hideSharedStatus,
+	isLoadingAnalytics,
 	spaceName,
 	onDragStart,
 	onDragEnd,
