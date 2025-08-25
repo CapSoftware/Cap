@@ -73,65 +73,63 @@ impl InterpolatedLayout {
             if cursor.time < segment.start && cursor.time >= transition_start {
                 let prev_mode = cursor
                     .prev_segment
-                    .map(|s| s.mode.clone())
+                    .map(|s| s.mode)
                     .unwrap_or(LayoutMode::Default);
                 let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
                 (
                     prev_mode,
-                    segment.mode.clone(),
+                    segment.mode,
                     ease_in_out(progress as f32) as f64,
                 )
             } else if cursor.time >= transition_end && cursor.time < segment.end {
                 if let Some(next_seg) = cursor.next_segment() {
                     let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
                     (
-                        segment.mode.clone(),
-                        next_seg.mode.clone(),
+                        segment.mode,
+                        next_seg.mode,
                         ease_in_out(progress as f32) as f64,
                     )
                 } else {
                     let progress = (cursor.time - transition_end) / LAYOUT_TRANSITION_DURATION;
                     (
-                        segment.mode.clone(),
+                        segment.mode,
                         LayoutMode::Default,
                         ease_in_out(progress as f32) as f64,
                     )
                 }
             } else {
-                (segment.mode.clone(), segment.mode.clone(), 1.0)
+                (segment.mode, segment.mode, 1.0)
             }
         } else if let Some(next_segment) = cursor.next_segment() {
             let transition_start = next_segment.start - LAYOUT_TRANSITION_DURATION;
             if cursor.time >= transition_start {
                 let prev_mode = cursor
                     .prev_segment
-                    .map(|s| s.mode.clone())
+                    .map(|s| s.mode)
                     .unwrap_or(LayoutMode::Default);
                 let progress = (cursor.time - transition_start) / LAYOUT_TRANSITION_DURATION;
                 (
                     prev_mode,
-                    next_segment.mode.clone(),
+                    next_segment.mode,
                     ease_in_out(progress as f32) as f64,
                 )
             } else if let Some(prev_segment) = cursor.prev_segment {
                 if cursor.time < prev_segment.end + 0.05 {
-                    (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
+                    (prev_segment.mode, LayoutMode::Default, 1.0)
                 } else {
                     (LayoutMode::Default, LayoutMode::Default, 1.0)
                 }
+            } else {
+                (LayoutMode::Default, LayoutMode::Default, 1.0)
+            }
+        } else if let Some(prev_segment) = cursor.prev_segment {
+            if cursor.time < prev_segment.end + 0.05 {
+                (prev_segment.mode, LayoutMode::Default, 1.0)
             } else {
                 (LayoutMode::Default, LayoutMode::Default, 1.0)
             }
         } else {
-            if let Some(prev_segment) = cursor.prev_segment {
-                if cursor.time < prev_segment.end + 0.05 {
-                    (prev_segment.mode.clone(), LayoutMode::Default, 1.0)
-                } else {
-                    (LayoutMode::Default, LayoutMode::Default, 1.0)
-                }
-            } else {
-                (LayoutMode::Default, LayoutMode::Default, 1.0)
-            }
+            (LayoutMode::Default, LayoutMode::Default, 1.0)
         };
 
         let (start_camera_opacity, start_screen_opacity, start_camera_scale) =
@@ -198,9 +196,9 @@ impl InterpolatedLayout {
             screen_opacity,
             camera_scale,
             layout_mode: if transition_progress > 0.5 {
-                next_mode.clone()
+                next_mode
             } else {
-                current_mode.clone()
+                current_mode
             },
             transition_progress,
             from_mode: current_mode,

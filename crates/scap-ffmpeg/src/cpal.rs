@@ -27,7 +27,7 @@ impl DataExt for ::cpal::Data {
 
         if matches!(format_typ, sample::Type::Planar) {
             for i in 0..config.channels {
-                let plane_size = sample_count * sample_size as usize;
+                let plane_size = sample_count * sample_size;
                 let base = (i as usize) * plane_size;
 
                 ffmpeg_frame
