@@ -117,7 +117,7 @@ export const authOptions = (): NextAuthOptions => {
 					httpOnly: true,
 					sameSite: "none",
 					path: "/",
-					secure: process.env.NODE_ENV === "production",
+					secure: true,
 				},
 			},
 		},

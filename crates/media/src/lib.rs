@@ -9,13 +9,6 @@ use std::borrow::Cow;
 use cap_media_info::AudioInfoError;
 use thiserror::Error;
 
-pub mod data;
-pub mod feeds;
-pub mod frame_ws;
-pub mod pipeline;
-pub mod platform;
-pub mod sources;
-
 pub fn init() -> Result<(), MediaError> {
     ffmpeg::init()?;
 

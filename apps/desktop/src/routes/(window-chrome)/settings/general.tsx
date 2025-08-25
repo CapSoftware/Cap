@@ -117,6 +117,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 			enableNativeCameraPreview: false,
 			enableNewRecordingFlow: false,
 			autoZoomOnClicks: false,
+			custom_cursor_capture2: true,
 		},
 	);
 

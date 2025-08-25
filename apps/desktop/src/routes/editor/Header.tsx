@@ -86,7 +86,10 @@ export function Header() {
 					leftIcon={<IconCapTrash class="w-5" />}
 				/>
 				<EditorButton
-					onClick={() => revealItemInDir(`${editorInstance.path}/`)}
+					onClick={() => {
+						console.log({ path: `${editorInstance.path}/` });
+						revealItemInDir(`${editorInstance.path}/`);
+					}}
 					tooltipText="Open recording bundle"
 					leftIcon={<IconLucideFolder class="w-5" />}
 				/>
