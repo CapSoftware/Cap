@@ -54,9 +54,98 @@ const protectedContract = c.router(
 				feedback: z.string(),
 				os: z.union([z.literal("macos"), z.literal("windows")]),
 				version: z.string(),
+				systemInfo: z.object({
+					os: z.string(),
+					os_version: z.string(),
+					arch: z.string(),
+					cpu_cores: z.number(),
+					memory_gb: z.number(),
+					displays: z.array(
+						z.object({
+							width: z.number(),
+							height: z.number(),
+							scale_factor: z.number(),
+						}),
+					),
+					cameras: z.array(z.string()),
+					microphones: z.array(z.string()),
+				}).optional(),
 			}),
 			responses: {
 				200: z.object({ success: z.boolean() }),
+			},
+		},
+		submitRecording: {
+			method: "POST",
+			path: "/desktop/recording",
+			body: z.object({
+				systemInfo: z.object({
+					os: z.string(),
+					os_version: z.string(),
+					arch: z.string(),
+					cpu_cores: z.number(),
+					memory_gb: z.number(),
+					displays: z.array(
+						z.object({
+							width: z.number(),
+							height: z.number(),
+							scale_factor: z.number(),
+						}),
+					),
+					cameras: z.array(z.string()),
+					microphones: z.array(z.string()),
+				}),
+				appVersion: z.string(),
+				recording: z.object({
+					name: z.string(),
+					content: z.string(),
+					size_mb: z.number(),
+				}),
+			}),
+			responses: {
+				200: z.object({ success: z.boolean(), message: z.string() }),
+			},
+		},
+		submitLogs: {
+			method: "POST",
+			path: "/desktop/logs",
+			body: z.object({
+				systemInfo: z.object({
+					os: z.string(),
+					os_version: z.string(),
+					arch: z.string(),
+					cpu_cores: z.number(),
+					memory_gb: z.number(),
+					displays: z.array(
+						z.object({
+							width: z.number(),
+							height: z.number(),
+							scale_factor: z.number(),
+						}),
+					),
+					cameras: z.array(z.string()),
+					microphones: z.array(z.string()),
+				}),
+				recentLogs: z.array(
+					z.object({
+						id: z.string(),
+						timestamp: z.string(),
+						duration_seconds: z.number().nullable(),
+						error: z.string().nullable(),
+						log_content: z.string().nullable(),
+						log_file_path: z.string().nullable().optional(),
+					}),
+				),
+				appVersion: z.string(),
+				logFiles: z.array(
+					z.object({
+						name: z.string(),
+						content: z.string(),
+					}),
+				).optional(),
+			}),
+			responses: {
+				200: z.object({ success: z.boolean(), message: z.string() }),
 			},
 		},
 		getUserPlan: {

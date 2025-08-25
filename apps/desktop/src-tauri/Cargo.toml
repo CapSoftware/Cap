@@ -77,6 +77,9 @@ clipboard-rs = "0.2.2"
 whisper-rs = "0.11.0"
 lazy_static = "1.4.0"
 log = "0.4.20"
+num_cpus = "1.16.0"
+sysinfo = "0.32.1"
+zip = "0.6"
 
 cap-audio = { path = "../../../crates/audio" }
 cap-camera = { path = "../../../crates/camera", features = ["serde", "specta"] }

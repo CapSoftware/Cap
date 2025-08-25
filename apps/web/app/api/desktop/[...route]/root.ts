@@ -9,6 +9,8 @@ import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import { z } from "zod";
 import { withAuth } from "../../utils";
+import { createBucketProvider } from "@/utils/s3";
+import { nanoId } from "@cap/database/helpers";
 
 export const app = new Hono().use(withAuth);
 
@@ -20,27 +22,86 @@ app.post(
 			feedback: z.string(),
 			os: z.union([z.literal("macos"), z.literal("windows")]).optional(),
 			version: z.string().optional(),
+			systemInfo: z
+				.object({
+					os: z.string(),
+					os_version: z.string(),
+					arch: z.string(),
+					cpu_cores: z.number(),
+					memory_gb: z.number(),
+					displays: z.array(
+						z.object({
+							width: z.number(),
+							height: z.number(),
+							scale_factor: z.number(),
+						}),
+					),
+					cameras: z.array(z.string()),
+					microphones: z.array(z.string()),
+				})
+				.optional(),
 		}),
 	),
 	async (c) => {
-		const { feedback, os, version } = c.req.valid("form");
+		const { feedback, os, version, systemInfo } = c.req.valid("form");
 
 		try {
 			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
 
+			let messageContent = `New feedback from ${c.get("user").email}:\n${feedback}`;
+			
+			if (os && version) {
+				messageContent += `\n${os} v${version}`;
+			}
+			
+			const embeds = [];
+			if (systemInfo) {
+				embeds.push({
+					title: "Device Information",
+					color: 5814783,
+					fields: [
+						{
+							name: "OS",
+							value: `${systemInfo.os} ${systemInfo.os_version}`,
+							inline: true,
+						},
+						{
+							name: "Architecture",
+							value: systemInfo.arch,
+							inline: true,
+						},
+						{
+							name: "CPU/Memory",
+							value: `${systemInfo.cpu_cores} cores, ${systemInfo.memory_gb.toFixed(1)} GB`,
+							inline: true,
+						},
+						{
+							name: "Displays",
+							value: systemInfo.displays.map(d => `${d.width}x${d.height}`).join(", "),
+							inline: false,
+						},
+						{
+							name: "Cameras",
+							value: systemInfo.cameras.slice(0, 3).join("\n") || "None",
+							inline: false,
+						},
+						{
+							name: "Microphones",
+							value: systemInfo.microphones.slice(0, 3).join("\n") || "None",
+							inline: false,
+						},
+					],
+				});
+			}
+
 			const response = await fetch(discordWebhookUrl, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
-					content: [
-						`New feedback from ${c.get("user").email}:`,
-						feedback,
-						os && version && `${os} v${version}`,
-					]
-						.filter(Boolean)
-						.join("\n"),
+					content: messageContent,
+					embeds: embeds,
 				}),
 			});
 
@@ -59,6 +120,285 @@ app.post(
 	},
 );
 
+app.post(
+	"/recording",
+	zValidator(
+		"json",
+		z.object({
+			systemInfo: z.object({
+				os: z.string(),
+				os_version: z.string(),
+				arch: z.string(),
+				cpu_cores: z.number(),
+				memory_gb: z.number(),
+				displays: z.array(
+					z.object({
+						width: z.number(),
+						height: z.number(),
+						scale_factor: z.number(),
+					}),
+				),
+				cameras: z.array(z.string()),
+				microphones: z.array(z.string()),
+			}),
+			appVersion: z.string(),
+			recording: z.object({
+				name: z.string(),
+				content: z.string(),
+				size_mb: z.number(),
+			}),
+		}),
+	),
+	async (c) => {
+		const { systemInfo, appVersion, recording } = c.req.valid("json");
+		const user = c.get("user");
+
+		try {
+			const bucket = await createBucketProvider();
+			const timestamp = new Date().toISOString().split('T')[0];
+			const recordingKey = `debug-recordings/${user.id}/${timestamp}-${nanoId()}.zip`;
+			
+			const buffer = Buffer.from(recording.content, "base64");
+			
+			await bucket.putObject(recordingKey, buffer, {
+				contentType: "application/zip",
+			});
+			
+			const downloadUrl = await bucket.getSignedObjectUrl(recordingKey);
+			
+			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			if (!discordWebhookUrl)
+				throw new Error("Discord webhook URL is not configured");
+
+			const formattedMessage = {
+				content: `📹 **Recording Submission from ${user.email}**`,
+				embeds: [
+					{
+						title: "Recording Details",
+						color: 5814783,
+						fields: [
+							{
+								name: "File",
+								value: recording.name,
+								inline: true,
+							},
+							{
+								name: "Size",
+								value: `${recording.size_mb.toFixed(2)} MB`,
+								inline: true,
+							},
+							{
+								name: "App Version",
+								value: appVersion,
+								inline: true,
+							},
+							{
+								name: "OS",
+								value: `${systemInfo.os} ${systemInfo.os_version}`,
+								inline: true,
+							},
+							{
+								name: "Architecture",
+								value: systemInfo.arch,
+								inline: true,
+							},
+							{
+								name: "Hardware",
+								value: `${systemInfo.cpu_cores} cores, ${systemInfo.memory_gb.toFixed(1)} GB RAM`,
+								inline: true,
+							},
+							{
+								name: "Download Link",
+								value: `[Download Recording (valid for 7 days)](${downloadUrl})`,
+								inline: false,
+							},
+						],
+					},
+				],
+			};
+			
+			const response = await fetch(discordWebhookUrl, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(formattedMessage),
+			});
+
+			if (!response.ok)
+				throw new Error(
+					`Failed to send notification to Discord: ${response.statusText}`,
+				);
+
+			return c.json({
+				success: true,
+				message: "Recording uploaded successfully",
+			});
+		} catch (error) {
+			console.error("Error submitting recording:", error);
+			return c.json({ error: "Failed to submit recording" }, { status: 500 });
+		}
+	},
+);
+
+app.post(
+	"/logs",
+	zValidator(
+		"json",
+		z.object({
+			systemInfo: z.object({
+				os: z.string(),
+				os_version: z.string(),
+				arch: z.string(),
+				cpu_cores: z.number(),
+				memory_gb: z.number(),
+				displays: z.array(
+					z.object({
+						width: z.number(),
+						height: z.number(),
+						scale_factor: z.number(),
+					}),
+				),
+				cameras: z.array(z.string()),
+				microphones: z.array(z.string()),
+			}),
+			recentLogs: z.array(
+				z.object({
+					id: z.string(),
+					timestamp: z.string(),
+					duration_seconds: z.number().nullable(),
+					error: z.string().nullable(),
+					log_content: z.string().nullable(),
+					log_file_path: z.string().nullable().optional(),
+				}),
+			),
+			appVersion: z.string(),
+			logFiles: z
+				.array(
+					z.object({
+						name: z.string(),
+						content: z.string(),
+					}),
+				)
+				.optional(),
+		}),
+	),
+	async (c) => {
+		const { systemInfo, recentLogs, appVersion, logFiles } = c.req.valid("json");
+
+		try {
+			const discordWebhookUrl = serverEnv().DISCORD_FEEDBACK_WEBHOOK_URL;
+			if (!discordWebhookUrl)
+				throw new Error("Discord webhook URL is not configured");
+
+			const formattedMessage = {
+				content: `🔧 **Logs Report from ${c.get("user").email}**`,
+				embeds: [
+					{
+						title: "System Information",
+						color: 5814783,
+						fields: [
+							{
+								name: "OS",
+								value: `${systemInfo.os} ${systemInfo.os_version}`,
+								inline: true,
+							},
+							{
+								name: "Architecture",
+								value: systemInfo.arch,
+								inline: true,
+							},
+							{
+								name: "App Version",
+								value: appVersion,
+								inline: true,
+							},
+							{
+								name: "CPU Cores",
+								value: systemInfo.cpu_cores.toString(),
+								inline: true,
+							},
+							{
+								name: "Memory",
+								value: `${systemInfo.memory_gb.toFixed(1)} GB`,
+								inline: true,
+							},
+							{
+								name: "Displays",
+								value: systemInfo.displays
+									.map((d) => `${d.width}x${d.height}`)
+									.join(", "),
+								inline: false,
+							},
+							{
+								name: "Cameras",
+								value:
+									systemInfo.cameras.slice(0, 3).join("\n") || "None detected",
+								inline: false,
+							},
+							{
+								name: "Microphones",
+								value:
+									systemInfo.microphones.slice(0, 3).join("\n") ||
+									"None detected",
+								inline: false,
+							},
+						],
+					},
+				] as Array<{
+					title: string;
+					color: number;
+					fields?: {
+						name: string;
+						value: string;
+						inline: boolean;
+					}[];
+					description?: string;
+				}>,
+			};
+
+
+			if (logFiles && logFiles.length > 0) {
+				const formData = new FormData();
+				
+				formData.append("payload_json", JSON.stringify(formattedMessage));
+				
+				logFiles.forEach((file, index) => {
+					const buffer = Buffer.from(file.content, "base64");
+					const blob = new Blob([buffer], { type: "text/plain" });
+					formData.append(`files[${index}]`, blob, file.name);
+				});
+				
+				const response = await fetch(discordWebhookUrl, {
+					method: "POST",
+					body: formData,
+				});
+				
+				if (!response.ok)
+					throw new Error(
+						`Failed to send logs to Discord: ${response.statusText}`,
+					);
+			} else {
+				const response = await fetch(discordWebhookUrl, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify(formattedMessage),
+				});
+
+				if (!response.ok)
+					throw new Error(
+						`Failed to send logs to Discord: ${response.statusText}`,
+					);
+			}
+
+			return c.json({
+				success: true,
+				message: "Logs submitted successfully",
+			});
+		} catch (error) {
+			return c.json({ error: "Failed to submit logs" }, { status: 500 });
+		}
+	},
+);
+
 app.get("/org-custom-domain", async (c) => {
 	const user = c.get("user");
 
@@ -72,7 +412,6 @@ app.get("/org-custom-domain", async (c) => {
 			.leftJoin(organizations, eq(users.activeOrganizationId, organizations.id))
 			.where(eq(users.id, user.id));
 
-		// Ensure custom domain has https:// prefix
 		let customDomain = result?.customDomain ?? null;
 		if (
 			customDomain &&
