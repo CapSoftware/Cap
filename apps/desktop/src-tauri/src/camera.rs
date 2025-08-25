@@ -18,7 +18,7 @@ use tokio::{
     sync::{broadcast, oneshot},
     task::LocalSet,
 };
-use tracing::{error, info};
+use tracing::{error, info, trace};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};
 
 static TOOLBAR_HEIGHT: f32 = 56.0; // also defined in Typescript
@@ -115,12 +115,15 @@ impl CameraPreviewManager {
 
         let (reconfigure, reconfigure_rx) = broadcast::channel(1);
         let mut renderer =
-            InitializedCameraPreview::init_wgpu(window.clone(), default_state).await?;
+            InitializedCameraPreview::init_wgpu(window.clone(), &default_state).await?;
         window.show().ok();
 
-        let rt = Runtime::new().unwrap();
+        let rt = Runtime::new().expect("Failed to get Tokio runtime!");
         thread::spawn(move || {
-            LocalSet::new().block_on(&rt, renderer.run(window, reconfigure_rx, camera_rx))
+            LocalSet::new().block_on(
+                &rt,
+                renderer.run(window, default_state, reconfigure_rx, camera_rx),
+            )
         });
 
         self.preview = Some(InitializedCameraPreview { reconfigure });
@@ -131,19 +134,6 @@ impl CameraPreviewManager {
             .context("Error attaching camera feed consumer")?;
 
         Ok(())
-    }
-
-    /// Called by Tauri's event loop in response to a window resize event.
-    /// In theory if we get the event loop right this isn't required,
-    /// but it means if we mistake we get a small glitch instead of it
-    /// being permanently incorrectly sized or scaled.
-    pub fn on_window_resize(&self, width: u32, height: u32) {
-        if let Some(preview) = &self.preview {
-            preview
-                .reconfigure
-                .send(ReconfigureEvent::WindowSize(width, height))
-                .ok();
-        }
     }
 
     /// Called by Tauri's event loop in response to a window destroy event.
@@ -161,7 +151,6 @@ impl CameraPreviewManager {
 
 #[derive(Clone)]
 enum ReconfigureEvent {
-    WindowSize(u32, u32),
     State(CameraPreviewState),
     Shutdown,
 }
@@ -173,7 +162,7 @@ struct InitializedCameraPreview {
 impl InitializedCameraPreview {
     async fn init_wgpu(
         window: WebviewWindow,
-        default_state: CameraPreviewState,
+        default_state: &CameraPreviewState,
     ) -> anyhow::Result<Renderer> {
         let aspect = if default_state.shape == CameraPreviewShape::Full {
             16.0 / 9.0
@@ -416,7 +405,7 @@ impl InitializedCameraPreview {
         };
 
         renderer.update_state_uniforms(&default_state);
-        renderer.sync_aspect_ratio_uniforms(aspect);
+        renderer.sync_ratio_uniform_and_resize_window_to_it(&window, &default_state, aspect);
         renderer.reconfigure_gpu_surface(size.0, size.1);
 
         // We initialize and render a blank color fallback.
@@ -473,10 +462,10 @@ impl Renderer {
     async fn run(
         &mut self,
         window: WebviewWindow,
+        default_state: CameraPreviewState,
         mut reconfigure: broadcast::Receiver<ReconfigureEvent>,
         camera_rx: flume::Receiver<RawCameraFrame>,
     ) {
-        // let mut window_size = (size.width, size.height);
         let mut resampler_frame = Cached::default();
         let Ok(mut scaler) = scaling::Context::get(
             Pixel::RGBA,
@@ -491,7 +480,7 @@ impl Renderer {
             return;
         };
 
-        let mut seen_first_frame = false;
+        let mut state = default_state;
         while let Some(event) = loop {
             tokio::select! {
                 frame = camera_rx.recv_async() => break frame.ok().map(Ok),
@@ -506,11 +495,8 @@ impl Renderer {
         } {
             match event {
                 Ok(frame) => {
-                    if !seen_first_frame {
-                        seen_first_frame = true;
-                    }
                     let aspect_ratio = frame.frame.width() as f32 / frame.frame.height() as f32;
-                    self.sync_aspect_ratio_uniforms(aspect_ratio);
+                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
 
                     if let Ok(surface) = self.surface.get_current_texture().map_err(|err| {
                         error!("Error getting camera renderer surface texture: {err:?}")
@@ -557,28 +543,28 @@ impl Renderer {
                         surface.present();
                     }
                 }
-                Err(ReconfigureEvent::WindowSize(width, height)) => {
-                    self.reconfigure_gpu_surface(width, height);
-                }
-                Err(ReconfigureEvent::State(state)) => {
-                    // Aspect ratio is hardcoded until we can derive it from the camera feed
-                    if !seen_first_frame {
-                        self.sync_aspect_ratio_uniforms(
-                            if state.shape == CameraPreviewShape::Full {
-                                16.0 / 9.0
-                            } else {
-                                1.0
-                            },
-                        );
-                    }
+                Err(ReconfigureEvent::State(new_state)) => {
+                    trace!("CameraPreview/ReconfigureEvent.State({new_state:?})");
 
+                    state = new_state;
+
+                    let aspect_ratio = self
+                        .aspect_ratio
+                        .get_latest_key()
+                        .copied()
+                        // Aspect ratio is hardcoded until we can derive it from the camera feed
+                        .unwrap_or(if state.shape == CameraPreviewShape::Full {
+                            16.0 / 9.0
+                        } else {
+                            1.0
+                        });
+
+                    self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
                     self.update_state_uniforms(&state);
-                    if let Some(aspect_ratio) = self.aspect_ratio.get_latest_key() {
-                        if let Ok((width, height)) = resize_window(&window, &state, *aspect_ratio)
-                            .map_err(|err| error!("Error resizing camera preview window: {err}"))
-                        {
-                            self.reconfigure_gpu_surface(width, height);
-                        }
+                    if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio)
+                        .map_err(|err| error!("Error resizing camera preview window: {err}"))
+                    {
+                        self.reconfigure_gpu_surface(width, height);
                     }
                 }
                 Err(ReconfigureEvent::Shutdown) => return,
@@ -640,8 +626,14 @@ impl Renderer {
         );
     }
 
-    /// Update the uniforms which hold the camera aspect ratio if it's changed
-    fn sync_aspect_ratio_uniforms(&mut self, aspect_ratio: f32) {
+    /// Update the uniforms which hold the camera aspect ratio if it's changed,
+    /// and resize the window to match the new aspect ratio if required.
+    fn sync_ratio_uniform_and_resize_window_to_it(
+        &mut self,
+        window: &WebviewWindow,
+        state: &CameraPreviewState,
+        aspect_ratio: f32,
+    ) {
         if self.aspect_ratio.update_key_and_should_init(aspect_ratio) {
             let camera_uniforms = CameraUniforms {
                 camera_aspect_ratio: aspect_ratio,
@@ -652,6 +644,12 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&[camera_uniforms]),
             );
+
+            if let Ok((width, height)) = resize_window(&window, &state, aspect_ratio)
+                .map_err(|err| error!("Error resizing camera preview window: {err}"))
+            {
+                self.reconfigure_gpu_surface(width, height);
+            }
         }
     }
 }
@@ -663,6 +661,8 @@ fn resize_window(
     state: &CameraPreviewState,
     aspect: f32,
 ) -> tauri::Result<(u32, u32)> {
+    trace!("CameraPreview/resize_window");
+
     let base: f32 = if state.size == CameraPreviewSize::Sm {
         230.0
     } else {

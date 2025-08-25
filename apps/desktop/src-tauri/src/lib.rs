@@ -2268,20 +2268,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     api.prevent_exit();
                 }
             }
-            tauri::RunEvent::WindowEvent {
-                event: WindowEvent::Resized(size),
-                ..
-            } => {
-                let handle = handle.clone();
-                tokio::spawn(async move {
-                    handle
-                        .state::<ArcLock<App>>()
-                        .read()
-                        .await
-                        .camera_preview
-                        .on_window_resize(size.width, size.height)
-                });
-            }
             _ => {}
         });
 }
