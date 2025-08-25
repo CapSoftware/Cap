@@ -1,6 +1,6 @@
-use std::sync::mpsc;
+use std::{ops::Deref, sync::mpsc};
 
-use cap_media_info::ffmpeg_sample_format_for;
+use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::{
     BuildStreamError, Device, InputCallbackInfo, PlayStreamError, SampleFormat, StreamConfig,
     StreamError, SupportedStreamConfig,
@@ -15,7 +15,7 @@ use tracing::{debug, error, info, trace, warn};
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 
 #[derive(Clone)]
-pub struct AudioInputSamples {
+pub struct MicrophoneSamples {
     pub data: Vec<u8>,
     pub format: SampleFormat,
     pub info: InputCallbackInfo,
@@ -23,8 +23,8 @@ pub struct AudioInputSamples {
 
 #[derive(Actor)]
 pub struct MicrophoneFeed {
-    state: Option<(StreamConfig, mpsc::SyncSender<()>)>,
-    senders: Vec<flume::Sender<AudioInputSamples>>,
+    state: Option<(SupportedStreamConfig, mpsc::SyncSender<()>)>,
+    senders: Vec<flume::Sender<MicrophoneSamples>>,
     error_sender: flume::Sender<StreamError>,
 }
 
@@ -102,31 +102,34 @@ pub struct SetInput {
     pub label: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SetInputError {
+    #[error("DeviceNotFound")]
     DeviceNotFound,
+    #[error("BuildStreamCrashed")]
     BuildStreamCrashed,
+    #[error("BuildStream: {0}")]
     BuildStream(BuildStreamError),
+    #[error("PlayStream: {0}")]
     PlayStream(PlayStreamError),
 }
 
 impl Message<SetInput> for MicrophoneFeed {
-    type Reply = Result<StreamConfig, SetInputError>;
+    type Reply = Result<SupportedStreamConfig, SetInputError>;
 
     async fn handle(&mut self, msg: SetInput, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        trace!("MicrophoneFeed.SetInput('{}')", &msg.label);
+        trace!("MicrophoneFeed.SetInput('{:?}')", &msg.label);
 
         let Some((device, config)) = Self::list().swap_remove(&msg.label) else {
             return Err(SetInputError::DeviceNotFound);
         };
 
         let sample_format = config.sample_format();
-        let stream_config: StreamConfig = config.into();
 
         let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        let _stream_config = stream_config.clone();
+        let _stream_config = config.clone().into();
         let actor_ref = ctx.actor_ref();
         let error_sender = self.error_sender.clone();
 
@@ -138,7 +141,7 @@ impl Message<SetInput> for MicrophoneFeed {
                     let actor_ref = actor_ref.clone();
                     move |data, info| {
                         let _ = actor_ref
-                            .tell(AudioInputSamples {
+                            .tell(MicrophoneSamples {
                                 data: data.bytes().to_vec(),
                                 format: data.sample_format(),
                                 info: info.clone(),
@@ -182,13 +185,25 @@ impl Message<SetInput> for MicrophoneFeed {
             .await
             .map_err(|_| SetInputError::BuildStreamCrashed)??;
 
-        self.state = Some((stream_config.clone(), done_tx));
+        self.state = Some((config.clone(), done_tx));
 
-        Ok(stream_config)
+        Ok(config)
     }
 }
 
-pub struct AddSender(pub flume::Sender<AudioInputSamples>);
+pub struct RemoveInput;
+
+impl Message<RemoveInput> for MicrophoneFeed {
+    type Reply = ();
+
+    async fn handle(&mut self, _: RemoveInput, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        if let Some((_, done_tx)) = self.state.take() {
+            let _ = done_tx.send(());
+        }
+    }
+}
+
+pub struct AddSender(pub flume::Sender<MicrophoneSamples>);
 
 impl Message<AddSender> for MicrophoneFeed {
     type Reply = ();
@@ -198,12 +213,12 @@ impl Message<AddSender> for MicrophoneFeed {
     }
 }
 
-impl Message<AudioInputSamples> for MicrophoneFeed {
+impl Message<MicrophoneSamples> for MicrophoneFeed {
     type Reply = ();
 
     async fn handle(
         &mut self,
-        msg: AudioInputSamples,
+        msg: MicrophoneSamples,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let mut to_remove = vec![];
@@ -221,5 +236,54 @@ impl Message<AudioInputSamples> for MicrophoneFeed {
                 self.senders.swap_remove(i);
             }
         }
+    }
+}
+
+pub struct Lock;
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum LockFeedError {
+    #[error("NoInput")]
+    NoInput,
+}
+
+impl Message<Lock> for MicrophoneFeed {
+    type Reply = Result<MicrophoneFeedLock, LockFeedError>;
+
+    async fn handle(&mut self, _: Lock, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        let Some((config, _)) = &self.state else {
+            return Err(LockFeedError::NoInput);
+        };
+
+        Ok(MicrophoneFeedLock {
+            config: config.clone(),
+            actor: ctx.actor_ref(),
+            audio_info: AudioInfo::from_stream_config(config),
+        })
+    }
+}
+
+#[derive(Reply)]
+pub struct MicrophoneFeedLock {
+    actor: ActorRef<MicrophoneFeed>,
+    config: SupportedStreamConfig,
+    audio_info: AudioInfo,
+}
+
+impl MicrophoneFeedLock {
+    pub fn config(&self) -> &SupportedStreamConfig {
+        &self.config
+    }
+
+    pub fn audio_info(&self) -> &AudioInfo {
+        &self.audio_info
+    }
+}
+
+impl Deref for MicrophoneFeedLock {
+    type Target = ActorRef<MicrophoneFeed>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.actor
     }
 }

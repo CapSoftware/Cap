@@ -6,15 +6,16 @@ use std::{
 
 use cap_media::{
     MediaError,
-    feeds::AudioInputFeed,
+    feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
 };
-use cap_media_info::VideoInfo;
+use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
+use kameo::actor::ActorRef;
 use tokio::sync::oneshot;
 use tracing::{Instrument, debug, error, info, trace};
 
@@ -118,7 +119,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         ScreenCaptureSource<TCaptureFormat>,
         flume::Receiver<(TCaptureFormat::VideoFormat, f64)>,
     ),
-    audio_input_feed: Option<&AudioInputFeed>,
+    mic_feed: Option<Arc<MicrophoneFeedLock>>,
     system_audio: Option<Receiver<(ffmpeg::frame::Audio, f64)>>,
 ) -> Result<
     (
@@ -127,6 +128,13 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     ),
     MediaError,
 > {
+    if let Some(mic_feed) = &mic_feed {
+        debug!(
+            "mic audio info: {:#?}",
+            AudioInfo::from_stream_config(mic_feed.config())
+        );
+    };
+
     let clock = RealTimeClock::<()>::new();
     let pipeline_builder = Pipeline::builder(clock);
 
@@ -135,7 +143,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     let pipeline_builder = TCaptureFormat::make_instant_mode_pipeline(
         pipeline_builder,
         screen_source,
-        audio_input_feed,
+        mic_feed,
         system_audio,
         output_path.clone(),
         pause_flag.clone(),
@@ -156,10 +164,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     ))
 }
 
-pub async fn spawn_instant_recording_actor<'a>(
+pub async fn spawn_instant_recording_actor(
     id: String,
     recording_dir: PathBuf,
-    inputs: RecordingBaseInputs<'a>,
+    inputs: RecordingBaseInputs,
 ) -> Result<
     (
         InstantRecordingHandle,
@@ -196,14 +204,10 @@ pub async fn spawn_instant_recording_actor<'a>(
 
     debug!("screen capture: {screen_source:#?}");
 
-    if let Some(audio_feed) = inputs.mic_feed {
-        debug!("mic audio info: {:#?}", audio_feed.audio_info())
-    }
-
     let (pipeline, pipeline_done_rx) = create_pipeline(
         content_dir.join("output.mp4"),
         (screen_source.clone(), screen_rx.clone()),
-        inputs.mic_feed.as_ref(),
+        inputs.mic_feed.clone(),
         system_audio.1,
     )
     .await?;

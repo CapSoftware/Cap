@@ -7,7 +7,10 @@ use std::{
 
 use cap_media::{
     MediaError,
-    feeds::{AudioInputFeed, CameraFeed},
+    feeds::{
+        CameraFeed,
+        microphone::{self, MicrophoneFeed, MicrophoneFeedLock},
+    },
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
@@ -17,6 +20,7 @@ use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
 use flume::Receiver;
+use kameo::actor::ActorRef;
 use relative_path::RelativePathBuf;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, trace};
@@ -126,10 +130,10 @@ impl StudioRecordingHandle {
     }
 }
 
-pub async fn spawn_studio_recording_actor<'a>(
+pub async fn spawn_studio_recording_actor(
     id: String,
     recording_dir: PathBuf,
-    base_inputs: RecordingBaseInputs<'a>,
+    base_inputs: RecordingBaseInputs,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     custom_cursor_capture: bool,
 ) -> Result<(StudioRecordingHandle, oneshot::Receiver<Result<(), String>>), RecordingError> {
@@ -156,16 +160,15 @@ pub async fn spawn_studio_recording_actor<'a>(
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
 
-    if let Some(audio_feed) = base_inputs.mic_feed {
-        debug!("mic audio info: {:#?}", audio_feed.audio_info())
-    }
-    let audio_input_feed = base_inputs.mic_feed.clone();
+    if let Some(mic_feed) = &base_inputs.mic_feed {
+        debug!("mic audio info: {:#?}", mic_feed.audio_info());
+    };
 
     let mut segment_pipeline_factory = SegmentPipelineFactory::new(
         segments_dir,
         cursors_dir,
         base_inputs.capture_target,
-        audio_input_feed,
+        base_inputs.mic_feed.clone(),
         base_inputs.capture_system_audio,
         camera_feed,
         custom_cursor_capture,
@@ -561,7 +564,7 @@ struct SegmentPipelineFactory {
     segments_dir: PathBuf,
     cursors_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
-    audio_input_feed: Option<AudioInputFeed>,
+    mic_feed: Option<Arc<MicrophoneFeedLock>>,
     capture_system_audio: bool,
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     custom_cursor_capture: bool,
@@ -576,7 +579,7 @@ impl SegmentPipelineFactory {
         segments_dir: PathBuf,
         cursors_dir: PathBuf,
         capture_target: ScreenCaptureTarget,
-        audio_input_feed: Option<AudioInputFeed>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         capture_system_audio: bool,
         camera_feed: Option<Arc<Mutex<CameraFeed>>>,
         custom_cursor_capture: bool,
@@ -587,7 +590,7 @@ impl SegmentPipelineFactory {
             segments_dir,
             cursors_dir,
             capture_target,
-            audio_input_feed,
+            mic_feed,
             capture_system_audio,
             camera_feed,
             custom_cursor_capture,
@@ -613,7 +616,7 @@ impl SegmentPipelineFactory {
             &self.cursors_dir,
             self.index,
             self.capture_target,
-            &self.audio_input_feed,
+            self.mic_feed.clone(),
             self.capture_system_audio,
             self.camera_feed.as_deref(),
             cursors,
@@ -637,7 +640,7 @@ async fn create_segment_pipeline(
     cursors_dir: &Path,
     index: u32,
     capture_target: ScreenCaptureTarget,
-    mic_feed: &Option<AudioInputFeed>,
+    mic_feed: Option<Arc<MicrophoneFeedLock>>,
     capture_system_audio: bool,
     camera_feed: Option<&Mutex<CameraFeed>>,
     prev_cursors: Cursors,
@@ -716,10 +719,10 @@ async fn create_segment_pipeline(
         }
     };
 
-    let microphone = if let Some(mic_source) = mic_feed {
+    let microphone = if let Some(mic_feed) = mic_feed {
         let (tx, rx) = flume::bounded(8);
 
-        let mic_source = AudioInputSource::init(mic_source, tx, start_time);
+        let mic_source = AudioInputSource::init(mic_feed, tx, start_time);
 
         let mic_config = mic_source.info();
         let output_path = dir.join("audio-input.ogg");

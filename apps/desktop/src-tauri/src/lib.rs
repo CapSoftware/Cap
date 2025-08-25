@@ -28,8 +28,8 @@ use camera::{CameraPreview, CameraWindowState};
 use cap_editor::{EditorInstance, EditorState};
 use cap_media::{
     feeds::{
-        self, AudioInputFeed, AudioInputSamplesSender, CameraFeed, RawCameraFrame,
-        microphone::MicrophoneFeed,
+        self, CameraFeed, RawCameraFrame,
+        microphone::{self, MicrophoneFeed},
     },
     platform::Bounds,
     sources::ScreenCaptureTarget,
@@ -103,10 +103,6 @@ pub struct App {
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     #[serde(skip)]
     camera_feed_initialization: Option<mpsc::Sender<()>>,
-    // #[serde(skip)]
-    // mic_feed: Option<AudioInputFeed>,
-    #[serde(skip)]
-    mic_samples_tx: AudioInputSamplesSender,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -114,7 +110,7 @@ pub struct App {
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
     #[serde(skip)]
-    mic_feed_actor: Option<ActorRef<feeds::microphone::MicrophoneFeed>>,
+    mic_feed_actor: ActorRef<feeds::microphone::MicrophoneFeed>,
     server_url: String,
 }
 
@@ -221,56 +217,20 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
     match label {
         None => {
-            app.mic_feed_actor.take();
+            let _ = app.mic_feed_actor.ask(microphone::RemoveInput).await;
+
+            Ok(())
         }
         Some(label) => {
-            let mic_feed_actor = app.mic_feed_actor.get_or_insert_with(|| {
-                let (error_tx, error_rx) = flume::bounded(1);
-
-                // TODO: make this part of a global actor one day
-                tokio::spawn(async move {
-                    let Ok(err) = error_rx.recv_async().await else {
-                        return;
-                    };
-
-                    error!("Mic feed actor error: {err}");
-                });
-
-                MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx))
-            });
-
-            let _ = mic_feed_actor
-                .ask(feeds::microphone::AddSender(app.mic_samples_tx.clone()))
-                .await;
-
-            drop(app);
-
-            let _config = mic_feed_actor
+            let _ = app
+                .mic_feed_actor
                 .ask(feeds::microphone::SetInput { label })
                 .await
                 .map_err(|e| e.to_string())?;
+
+            Ok(())
         }
     }
-
-    // match (label, &mut app.mic_feed) {
-    //     (Some(label), None) => {
-    //         AudioInputFeed::init(&label)
-    //             .await
-    //             .map_err(|e| e.to_string())
-    //             .map(async |feed| {
-    //                 feed.add_sender(app.mic_samples_tx.clone()).await.unwrap();
-    //                 app.mic_feed = Some(feed);
-    //             })
-    //             .transpose_async()
-    //             .await
-    //     }
-    //     (Some(label), Some(feed)) => feed.switch_input(&label).await.map_err(|e| e.to_string()),
-    //     (None, _) => {
-    //         debug!("removing mic in set_start_recording_options");
-    //         app.mic_feed.take();
-    //         Ok(())
-    //     }
-    // }
 }
 
 #[tauri::command]
@@ -1126,7 +1086,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
         return Ok(vec![]);
     }
 
-    Ok(AudioInputFeed::list_devices().keys().cloned().collect())
+    Ok(MicrophoneFeed::list().keys().cloned().collect())
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
@@ -2046,7 +2006,28 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
-    let (audio_input_tx, audio_input_rx) = AudioInputFeed::create_channel();
+    let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
+
+    let mic_feed = {
+        let (error_tx, error_rx) = flume::bounded(1);
+
+        let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+        // TODO: make this part of a global actor one day
+        tokio::spawn(async move {
+            let Ok(err) = error_rx.recv_async().await else {
+                return;
+            };
+
+            error!("Mic feed actor error: {err}");
+        });
+
+        let _ = mic_feed
+            .ask(feeds::microphone::AddSender(mic_samples_tx))
+            .await;
+
+        mic_feed
+    };
 
     tauri::async_runtime::set(tokio::runtime::Handle::current());
 
@@ -2143,11 +2124,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     handle: app.clone(),
                     camera_feed: None,
                     camera_feed_initialization: None,
-                    mic_samples_tx: audio_input_tx,
-                    mic_feed: None,
                     recording_state: RecordingState::None,
                     recording_logging_handle,
-                    mic_feed_actor: None,
+                    mic_feed_actor: mic_feed,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
                         .flatten()
@@ -2196,7 +2175,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
             });
 
-            audio_meter::spawn_event_emitter(app.clone(), audio_input_rx);
+            audio_meter::spawn_event_emitter(app.clone(), mic_samples_rx);
 
             tray::create_tray(&app).unwrap();
 
@@ -2236,7 +2215,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let app_state = &mut *state.write().await;
 
                                     if !app_state.is_recording_active_or_pending() {
-                                        app_state.mic_feed.take();
+                                        let _ = app_state
+                                            .mic_feed_actor
+                                            .ask(microphone::RemoveInput)
+                                            .await;
                                         app_state.camera_feed.take();
 
                                         if let Some(camera) = CapWindowId::Camera.get(&app) {

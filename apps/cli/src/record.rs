@@ -65,7 +65,7 @@ impl RecordStart {
             cap_recording::RecordingBaseInputs {
                 capture_target: target_info,
                 capture_system_audio: self.system_audio,
-                mic_feed: &None,
+                mic_feed: None,
             },
             camera.map(|c| Arc::new(Mutex::new(c))),
             false,

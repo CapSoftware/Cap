@@ -1,27 +1,35 @@
-use scap_direct3d::{Capturer, Display, PixelFormat, Settings};
-use std::time::Duration;
-
 fn main() {
-    let display = Display::primary().unwrap();
+    #[cfg(windows)]
+    win::main();
+}
 
-    let capturer = Capturer::new(
-        display.try_as_capture_item().unwrap(),
-        Settings {
-            is_border_required: Some(true),
-            is_cursor_capture_enabled: Some(true),
-            pixel_format: PixelFormat::R8G8B8A8Unorm,
-        },
-    );
+#[cfg(windows)]
+mod win {
+    use scap_direct3d::{Capturer, Display, PixelFormat, Settings};
+    use std::time::Duration;
 
-    let capture_handle = capturer.start(|frame| {
-        dbg!(frame);
+    pub fn main() {
+        let display = Display::primary().unwrap();
 
-        Ok(())
-    });
+        let capturer = Capturer::new(
+            display.try_as_capture_item().unwrap(),
+            Settings {
+                is_border_required: Some(true),
+                is_cursor_capture_enabled: Some(true),
+                pixel_format: PixelFormat::R8G8B8A8Unorm,
+            },
+        );
 
-    std::thread::sleep(Duration::from_secs(3));
+        let capture_handle = capturer.start(|frame| {
+            dbg!(frame);
 
-    capture_handle.stop().unwrap();
+            Ok(())
+        });
 
-    std::thread::sleep(Duration::from_secs(3));
+        std::thread::sleep(Duration::from_secs(3));
+
+        capture_handle.stop().unwrap();
+
+        std::thread::sleep(Duration::from_secs(3));
+    }
 }

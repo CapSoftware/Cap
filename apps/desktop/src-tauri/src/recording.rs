@@ -18,9 +18,12 @@ use crate::{
 };
 use cap_fail::fail;
 use cap_media::{
-    feeds::CameraFeed,
+    feeds::{
+        CameraFeed,
+        microphone::{self, SetInput},
+    },
     platform::{Bounds, display_for_window},
-    sources::{CaptureScreen, CaptureWindow, ScreenCaptureTarge},
+    sources::{CaptureScreen, CaptureWindow, ScreenCaptureTarget},
 };
 use cap_project::{
     CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
@@ -380,10 +383,17 @@ pub async fn start_recording(
             fail!("recording::spawn_actor");
             let mut state = state_mtx.write().await;
 
+            use kameo::error::SendError;
+            let mic_feed = match state.mic_feed_actor.ask(microphone::Lock).await {
+                Ok(lock) => Some(Arc::new(lock)),
+                Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
+                Err(e) => return Err(e.to_string()),
+            };
+
             let base_inputs = cap_recording::RecordingBaseInputs {
                 capture_target: inputs.capture_target,
                 capture_system_audio: inputs.capture_system_audio,
-                mic_feed: &state.mic_feed,
+                mic_feed,
             };
 
             let (actor, actor_done_rx) = match inputs.mode {
@@ -643,7 +653,7 @@ async fn handle_recording_end(
             let _ = v.close();
         }
         app.camera_feed.take();
-        app.mic_feed.take();
+        let _ = app.mic_feed_actor.ask(microphone::RemoveInput).await;
     }
 
     CurrentRecordingChanged.emit(&handle).ok();

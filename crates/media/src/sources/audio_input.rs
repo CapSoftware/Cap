@@ -4,13 +4,13 @@ use cpal::{Device, StreamInstant, SupportedStreamConfig};
 use ffmpeg_sys_next::AV_TIME_BASE_Q;
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 use tracing::{error, info};
 
 use crate::{
     MediaError,
     data::FFAudio,
-    feeds::{AudioInputConnection, AudioInputFeed, AudioInputSamples},
+    feeds::microphone::{self, MicrophoneFeedLock, MicrophoneSamples},
     pipeline::{
         clock::{LocalTimestamp, RealTimeClock},
         control::Control,
@@ -27,7 +27,7 @@ impl LocalTimestamp for StreamInstant {
 }
 
 pub struct AudioInputSource {
-    feed_connection: AudioInputConnection,
+    feed: Arc<MicrophoneFeedLock>,
     audio_info: AudioInfo,
     tx: Sender<(FFAudio, f64)>,
     start_timestamp: Option<(StreamInstant, SystemTime)>,
@@ -35,10 +35,14 @@ pub struct AudioInputSource {
 }
 
 impl AudioInputSource {
-    pub fn init(feed: &AudioInputFeed, tx: Sender<(FFAudio, f64)>, start_time: SystemTime) -> Self {
+    pub fn init(
+        feed: Arc<MicrophoneFeedLock>,
+        tx: Sender<(FFAudio, f64)>,
+        start_time: SystemTime,
+    ) -> Self {
         Self {
-            feed_connection: feed.create_connection(),
-            audio_info: feed.audio_info(),
+            audio_info: AudioInfo::from_stream_config(feed.config()),
+            feed,
             tx,
             start_timestamp: None,
             start_time: start_time
@@ -52,7 +56,7 @@ impl AudioInputSource {
         self.audio_info
     }
 
-    fn process_frame(&mut self, samples: AudioInputSamples) -> Result<(), MediaError> {
+    fn process_frame(&mut self, samples: MicrophoneSamples) -> Result<(), MediaError> {
         let start_timestamp = match self.start_timestamp {
             None => *self
                 .start_timestamp
@@ -89,8 +93,8 @@ impl AudioInputSource {
         Ok(())
     }
 
-    fn pause_and_drain_frames(&mut self, frames_rx: Receiver<AudioInputSamples>) {
-        let frames: Vec<AudioInputSamples> = frames_rx.drain().collect();
+    fn pause_and_drain_frames(&mut self, frames_rx: Receiver<MicrophoneSamples>) {
+        let frames: Vec<MicrophoneSamples> = frames_rx.drain().collect();
 
         for frame in frames {
             if let Err(error) = self.process_frame(frame) {
@@ -112,7 +116,7 @@ impl PipelineSourceTask for AudioInputSource {
     ) -> Result<(), String> {
         info!("Preparing audio input source thread...");
 
-        let mut samples_rx: Option<Receiver<AudioInputSamples>> = None;
+        let mut samples_rx: Option<Receiver<MicrophoneSamples>> = None;
         ready_signal.send(Ok(())).unwrap();
 
         fail!("media::sources::audio_input::run");
@@ -120,7 +124,11 @@ impl PipelineSourceTask for AudioInputSource {
         let res = loop {
             match control_signal.last() {
                 Some(Control::Play) => {
-                    let samples = samples_rx.get_or_insert_with(|| self.feed_connection.attach());
+                    let samples = samples_rx.get_or_insert_with(|| {
+                        let (tx, rx) = flume::bounded(5);
+                        let _ = self.feed.ask(microphone::AddSender(tx)).blocking_send();
+                        rx
+                    });
 
                     match samples.recv() {
                         Ok(samples) => {
