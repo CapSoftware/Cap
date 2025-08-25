@@ -1,14 +1,21 @@
 mod capture_pipeline;
 pub mod cursor;
+pub mod feeds;
 pub mod instant_recording;
+pub mod pipeline;
+pub mod sources;
 pub mod studio_recording;
 
+pub use sources::{camera, screen_capture};
 pub use studio_recording::{
     CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_media::{MediaError, feeds::microphone::MicrophoneFeedLock, platform::Bounds, sources::*};
+use cap_displays::bounds::LogicalBounds;
+use cap_media::MediaError;
+use feeds::microphone::MicrophoneFeedLock;
 use serde::{Deserialize, Serialize};
+use sources::*;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -41,9 +48,16 @@ pub struct RecordingBaseInputs {
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingOptionCaptureTarget {
-    Window { id: u32 },
-    Screen { id: u32 },
-    Area { screen_id: u32, bounds: Bounds },
+    Window {
+        id: u32,
+    },
+    Screen {
+        id: u32,
+    },
+    Area {
+        screen_id: u32,
+        bounds: LogicalBounds,
+    },
 }
 
 impl RecordingOptions {

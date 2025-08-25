@@ -1,10 +1,17 @@
 use std::time::Duration;
 
-use cap_media::sources::ScreenCaptureTarget;
-use cap_recording::RecordingBaseInputs;
+use cap_displays::Display;
+use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
 
 #[tokio::main]
 pub async fn main() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+    }
+
     tracing_subscriber::fmt::init();
 
     let _ = std::fs::remove_dir_all("/tmp/bruh");
@@ -18,12 +25,21 @@ pub async fn main() {
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::primary_display(),
-            capture_system_audio: false,
+            capture_target: ScreenCaptureTarget::Display {
+                id: Display::primary().id(),
+            },
+            // ScreenCaptureTarget::Window {
+            //     id: Window::list()
+            //         .into_iter()
+            //         .find(|w| w.owner_name().unwrap_or_default().contains("Brave"))
+            //         .unwrap()
+            //         .id(),
+            // },
+            capture_system_audio: true,
             mic_feed: &None,
         },
         None,
-        false,
+        true,
     )
     .await
     .unwrap();

@@ -1,5 +1,11 @@
 Copyright (c) 2023-present Cap Software, Inc.
-          
+
+Portions of this software are licensed as follows:
+
+- All code residing in the `cap-camera*` and `scap-*` families of crates is licensed under the MIT License (see LICENSE-MIT).
+- All third party components are licensed under the original license provided by the owner of the applicable component
+- All other content not mentioned above is available under the AGPLv3 license as defined below
+
                     GNU AFFERO GENERAL PUBLIC LICENSE
                        Version 3, 19 November 2007
 

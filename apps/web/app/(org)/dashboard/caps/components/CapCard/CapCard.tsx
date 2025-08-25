@@ -59,8 +59,10 @@ export interface CapCardProps extends PropsWithChildren {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
+		duration?: number;
 	};
 	analytics: number;
+	isLoadingAnalytics: boolean;
 	onDelete?: () => Promise<any>;
 	userId?: string;
 	sharedCapCard?: boolean;
@@ -81,6 +83,7 @@ export const CapCard = ({
 	children,
 	onDelete,
 	userId,
+	isLoadingAnalytics,
 	sharedCapCard = false,
 	hideSharedStatus = false,
 	customDomain,
@@ -429,7 +432,7 @@ export const CapCard = ({
 					href={`/s/${cap.id}`}
 				>
 					<VideoThumbnail
-						videoDuration={cap.metadata?.duration}
+						videoDuration={cap.duration}
 						imageClass={clsx(
 							anyCapSelected
 								? "opacity-50"
@@ -461,6 +464,7 @@ export const CapCard = ({
 					<CapCardAnalytics
 						capId={cap.id}
 						displayCount={analytics}
+						isLoadingAnalytics={isLoadingAnalytics}
 						totalComments={cap.totalComments}
 						totalReactions={cap.totalReactions}
 					/>

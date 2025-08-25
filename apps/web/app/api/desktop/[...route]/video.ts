@@ -5,12 +5,12 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq } from "drizzle-orm";
+import { and, count, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
-
+import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
@@ -20,33 +20,47 @@ app.get(
 	zValidator(
 		"query",
 		z.object({
-			duration: z.coerce.number().optional(),
 			recordingMode: z
 				.union([z.literal("hls"), z.literal("desktopMP4")])
 				.optional(),
 			isScreenshot: z.coerce.boolean().default(false),
 			videoId: z.string().optional(),
 			name: z.string().optional(),
+			durationInSecs: stringOrNumberOptional,
+			width: stringOrNumberOptional,
+			height: stringOrNumberOptional,
+			fps: stringOrNumberOptional,
 		}),
 	),
 	async (c) => {
 		try {
-			const { duration, recordingMode, isScreenshot, videoId, name } =
-				c.req.valid("query");
+			const {
+				recordingMode,
+				isScreenshot,
+				videoId,
+				name,
+				durationInSecs,
+				width,
+				height,
+				fps,
+			} = c.req.valid("query");
 			const user = c.get("user");
 
+			const isUpgraded = user.stripeSubscriptionStatus === "active";
+
+			if (!isUpgraded && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
+				return c.json({ error: "upgrade_required" }, { status: 403 });
+
 			console.log("Video create request:", {
-				duration,
 				recordingMode,
 				isScreenshot,
 				videoId,
 				userId: user.id,
+				durationInSecs,
+				height,
+				width,
+				fps,
 			});
-
-			const isUpgraded = user.stripeSubscriptionStatus === "active";
-
-			if (!isUpgraded && duration && duration > 300)
-				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			const [customBucket] = await db()
 				.select()
@@ -103,9 +117,10 @@ app.get(
 					isScreenshot,
 					bucket: customBucket?.id,
 					public: serverEnv().CAP_VIDEOS_DEFAULT_PUBLIC,
-					metadata: {
-						duration,
-					},
+					duration: durationInSecs,
+					width,
+					height,
+					fps,
 				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")

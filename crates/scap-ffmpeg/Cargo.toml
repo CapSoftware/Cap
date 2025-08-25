@@ -2,9 +2,13 @@
 name = "scap-ffmpeg"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 ffmpeg = { workspace = true }
+
+scap-cpal = { optional = true, path = "../scap-cpal" }
+cpal = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 scap-direct3d = { path = "../scap-direct3d" }
@@ -16,6 +20,8 @@ cidre = { workspace = true }
 
 [dev-dependencies]
 futures = { workspace = true }
+tokio = { workspace = true }
+cap-displays = { path = "../displays" }
 
 [lints]
 workspace = true

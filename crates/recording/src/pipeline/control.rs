@@ -8,12 +8,21 @@ pub enum Control {
     Shutdown,
 }
 
+#[derive(Clone)]
 pub struct PipelineControlSignal {
     last_value: Option<Control>,
     receiver: Receiver<Control>,
 }
 
 impl PipelineControlSignal {
+    pub fn receiver(&self) -> &Receiver<Control> {
+        &self.receiver
+    }
+
+    pub fn last_cached(&self) -> Option<Control> {
+        self.last_value
+    }
+
     pub fn last(&mut self) -> Option<Control> {
         self.blocking_last_if(false)
     }

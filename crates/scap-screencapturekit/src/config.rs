@@ -31,6 +31,10 @@ impl StreamCfgBuilder {
         });
     }
 
+    pub fn set_captures_audio(&mut self, captures_audio: bool) {
+        self.0.set_captures_audio(captures_audio);
+    }
+
     /// Logical width of the capture area
     pub fn with_width(mut self, width: usize) -> Self {
         self.set_width(width);
@@ -51,6 +55,11 @@ impl StreamCfgBuilder {
 
     pub fn with_shows_cursor(mut self, shows_cursor: bool) -> Self {
         self.set_shows_cursor(shows_cursor);
+        self
+    }
+
+    pub fn with_captures_audio(mut self, captures_audio: bool) -> Self {
+        self.set_captures_audio(captures_audio);
         self
     }
 

@@ -1,14 +1,21 @@
 use std::time::Duration;
 
 fn main() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+
+        unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+    }
+
     // Test display functionality
     println!("=== Display Information ===");
     for (index, display) in cap_displays::Display::list().iter().enumerate() {
-        println!("Display {}: {}", index + 1, display.name());
+        println!("Display {}: {}", index + 1, display.name().unwrap());
         println!("  ID: {}", display.id());
 
-        let logical_size = display.raw_handle().logical_size();
-        let physical_size = display.physical_size();
+        let logical_size = display.raw_handle().logical_size().unwrap();
+        let physical_size = display.physical_size().unwrap();
         let refresh_rate = display.refresh_rate();
 
         println!(
@@ -45,7 +52,10 @@ fn main() {
     }
 
     if let Some(cursor_display) = cap_displays::Display::get_containing_cursor() {
-        println!("🖱️  Cursor is currently on: {}", cursor_display.name());
+        println!(
+            "🖱️  Cursor is currently on: {}",
+            cursor_display.name().unwrap()
+        );
         println!();
     }
 
@@ -61,7 +71,8 @@ fn main() {
             // Limit to first 5 windows
             println!("\nWindow {}: {}", index + 1, window.id());
 
-            if let Some(bounds) = window.bounds() {
+            #[cfg(target_os = "macos")]
+            if let Some(bounds) = window.raw_handle().logical_bounds() {
                 println!(
                     "  Bounds: {}x{} at ({}, {})",
                     bounds.size().width(),

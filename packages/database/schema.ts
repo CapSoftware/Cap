@@ -235,6 +235,11 @@ export const videos = mysqlTable(
 		ownerId: nanoId("ownerId").notNull(),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket"),
+		// in seconds
+		duration: float("duration"),
+		width: int("width"),
+		height: int("height"),
+		fps: int("fps"),
 		metadata: json("metadata").$type<VideoMetadata>(),
 		public: boolean("public").notNull().default(true),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<

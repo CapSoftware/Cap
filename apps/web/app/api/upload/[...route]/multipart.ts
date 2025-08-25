@@ -1,13 +1,14 @@
-import { db } from "@cap/database";
+import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
 import { createBucketProvider } from "@/utils/s3";
+import { stringOrNumberOptional } from "@/utils/zod";
 import { parseVideoIdOrFileKey } from "../utils";
 
 export const app = new Hono().use(withAuth);
@@ -162,12 +163,10 @@ app.post(
 						size: z.number(),
 					}),
 				),
-				duration: z.string().optional(),
-				bandwidth: z.string().optional(),
-				resolution: z.string().optional(),
-				videoCodec: z.string().optional(),
-				audioCodec: z.string().optional(),
-				framerate: z.string().optional(),
+				durationInSecs: stringOrNumberOptional,
+				width: stringOrNumberOptional,
+				height: stringOrNumberOptional,
+				fps: stringOrNumberOptional,
 			})
 			.and(
 				z.union([
@@ -275,24 +274,23 @@ app.post(
 						console.error(`Warning: Unable to verify object: ${headError}`);
 					}
 
-					const videoMetadata: VideoMetadata = {
-						duration: body.duration,
-						bandwidth: body.bandwidth,
-						resolution: body.resolution,
-						videoCodec: body.videoCodec,
-						audioCodec: body.audioCodec,
-						framerate: body.framerate,
-					};
+					const videoIdFromFileKey = fileKey.split("/")[1];
 
-					if (Object.values(videoMetadata).length > 1 && "videoId" in body)
+					const videoIdToUse =
+						"videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (videoIdToUse)
 						await db()
 							.update(videos)
 							.set({
-								metadata: videoMetadata,
+								duration: updateIfDefined(body.durationInSecs, videos.duration),
+								width: updateIfDefined(body.width, videos.width),
+								height: updateIfDefined(body.height, videos.height),
+								fps: updateIfDefined(body.fps, videos.fps),
 							})
-							.where(eq(videos.id, body.videoId));
+							.where(
+								and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)),
+							);
 
-					const videoIdFromFileKey = fileKey.split("/")[1];
 					if (videoIdFromFileKey) {
 						try {
 							await fetch(`${serverEnv().WEB_URL}/api/revalidate`, {

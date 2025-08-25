@@ -1,30 +1,18 @@
+use crate::{
+    feeds::microphone::{self, MicrophoneFeedLock, MicrophoneSamples},
+    pipeline::{control::Control, task::PipelineSourceTask},
+};
 use cap_fail::fail;
+use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cpal::{Device, StreamInstant, SupportedStreamConfig};
-use ffmpeg_sys_next::AV_TIME_BASE_Q;
+use ffmpeg::{frame::Audio as FFAudio, sys::AV_TIME_BASE_Q};
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
 use std::{sync::Arc, time::SystemTime};
 use tracing::{error, info};
 
-use crate::{
-    MediaError,
-    data::FFAudio,
-    feeds::microphone::{self, MicrophoneFeedLock, MicrophoneSamples},
-    pipeline::{
-        clock::{LocalTimestamp, RealTimeClock},
-        control::Control,
-        task::PipelineSourceTask,
-    },
-};
-
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
-
-impl LocalTimestamp for StreamInstant {
-    fn elapsed_since(&self, other: &Self) -> std::time::Duration {
-        self.duration_since(other).unwrap()
-    }
-}
 
 pub struct AudioInputSource {
     feed: Arc<MicrophoneFeedLock>,
@@ -106,11 +94,8 @@ impl AudioInputSource {
 }
 
 impl PipelineSourceTask for AudioInputSource {
-    type Clock = RealTimeClock<StreamInstant>;
-
     fn run(
         &mut self,
-        _: Self::Clock,
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         mut control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {

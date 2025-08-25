@@ -16,7 +16,6 @@ import {
 	type CameraInfo,
 	commands,
 	type DeviceOrModelID,
-	ModelIDType,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
@@ -40,8 +39,8 @@ export const listWindows = queryOptions({
 });
 
 export const listScreens = queryOptions({
-	queryKey: ["capture", "screens"] as const,
-	queryFn: () => commands.listCaptureScreens(),
+	queryKey: ["capture", "displays"] as const,
+	queryFn: () => commands.listCaptureDisplays(),
 	reconcile: "id",
 	refetchInterval: 1000,
 });
@@ -86,18 +85,18 @@ export const getPermissions = queryOptions({
 });
 
 export function createOptionsQuery() {
-	const PERSIST_KEY = "recording-options-query";
+	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
 		captureTarget: ScreenCaptureTarget;
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "screen" | "window" | "area" | null;
+		targetMode?: "display" | "window" | "area" | null;
 		cameraID?: DeviceOrModelID | null;
 		/** @deprecated */
 		cameraLabel: string | null;
 	}>({
-		captureTarget: { variant: "screen", id: 0 },
+		captureTarget: { variant: "display", id: "0" },
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",

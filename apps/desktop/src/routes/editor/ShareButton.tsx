@@ -115,6 +115,7 @@ function ShareButton() {
 			}
 		},
 		onError: (error) => {
+			console.error(error);
 			commands.globalMessageDialog(
 				error instanceof Error ? error.message : "Failed to upload recording",
 			);

@@ -1,15 +1,19 @@
 fn main() {
     #[cfg(windows)]
-    win::main();
+    windows::main();
 }
 
 #[cfg(windows)]
-mod win {
-    use scap_direct3d::{Capturer, Display, PixelFormat, Settings};
+mod windows {
+    use cap_displays::*;
+    use scap_direct3d::{Capturer, PixelFormat, Settings};
+    use scap_ffmpeg::*;
     use std::time::Duration;
+    use windows::Win32::Graphics::Direct3D11::D3D11_BOX;
 
     pub fn main() {
-        let display = Display::primary().unwrap();
+        let display = Display::primary();
+        let display = display.raw_handle();
 
         let capturer = Capturer::new(
             display.try_as_capture_item().unwrap(),

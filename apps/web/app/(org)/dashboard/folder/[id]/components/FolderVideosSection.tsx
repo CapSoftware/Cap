@@ -10,28 +10,25 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { Rpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
+import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { useUploadingContext } from "../../../caps/UploadingContext";
-import { SharedCapCard } from "../../../spaces/[spaceId]/components/SharedCapCard";
-import { ClientCapCard } from "./index";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
 	dubApiKeyEnabled: boolean;
 	cardType?: "shared" | "default";
-	userId?: string;
 }
 
 export default function FolderVideosSection({
 	initialVideos,
 	dubApiKeyEnabled,
 	cardType = "default",
-	userId,
 }: FolderVideosSectionProps) {
 	const router = useRouter();
 	const { isUploading } = useUploadingContext();
-	const { activeOrganization } = useDashboardContext();
+	const { activeOrganization, user } = useDashboardContext();
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
@@ -145,8 +142,8 @@ export default function FolderVideosSection({
 			});
 			return analyticsData;
 		},
-		staleTime: 30000, // 30 seconds
 		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 	});
 
 	const analytics = analyticsData || {};
@@ -167,34 +164,20 @@ export default function FolderVideosSection({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-
-						{cardType === "shared"
-							? initialVideos.map((video) => (
-									<SharedCapCard
-										key={video.id}
-										cap={video}
-										hideSharedStatus
-										analytics={analytics[video.id] || 0}
-										organizationName={
-											activeOrganization?.organization.name || ""
-										}
-										userId={userId}
-									/>
-								))
-							: initialVideos.map((video) => (
-									<ClientCapCard
-										key={video.id}
-										videoId={video.id}
-										cap={video}
-										analytics={analytics[video.id] || 0}
-										isLoadingAnalytics={isLoadingAnalytics}
-										isSelected={selectedCaps.includes(video.id)}
-										anyCapSelected={selectedCaps.length > 0}
-										isDeleting={deleteCaps.isPending}
-										onSelectToggle={() => handleCapSelection(video.id)}
-										onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
-									/>
-								))}
+						{initialVideos.map((video) => (
+							<CapCard
+								key={video.id}
+								cap={video}
+								analytics={analytics[video.id] || 0}
+								userId={user?.id}
+								isLoadingAnalytics={isLoadingAnalytics}
+								isSelected={selectedCaps.includes(video.id)}
+								anyCapSelected={selectedCaps.length > 0}
+								isDeleting={deleteCaps.isPending}
+								onSelectToggle={() => handleCapSelection(video.id)}
+								onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
+							/>
+						))}
 					</>
 				)}
 			</div>

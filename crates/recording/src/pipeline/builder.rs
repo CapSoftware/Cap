@@ -8,8 +8,7 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::pipeline::{
-    MediaError, Pipeline, PipelineClock,
-    clock::CloneFrom,
+    MediaError, Pipeline,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
 };
@@ -20,32 +19,37 @@ struct Task {
     done_rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
 }
 
-pub struct PipelineBuilder<T> {
-    clock: T,
+pub struct PipelineBuilder {
     control: ControlBroadcast,
     tasks: IndexMap<String, Task>,
 }
 
-impl<T> PipelineBuilder<T> {
-    pub fn new(clock: T) -> Self {
+impl PipelineBuilder {
+    pub fn new() -> Self {
         Self {
-            clock,
             control: ControlBroadcast::default(),
             tasks: IndexMap::new(),
         }
     }
 
-    pub fn spawn_source<C: CloneFrom<T> + Send + 'static>(
+    pub fn spawn_source(
         &mut self,
         name: impl Into<String>,
-        mut task: impl PipelineSourceTask<Clock = C> + 'static,
+        mut task: impl PipelineSourceTask + 'static,
     ) {
         let name = name.into();
-        let clock = C::clone_from(&self.clock);
         let control_signal = self.control.add_listener(name.clone());
 
-        self.spawn_task(name, move |ready_signal| {
-            task.run(clock, ready_signal, control_signal)
+        self.spawn_task(name.clone(), move |ready_signal| {
+            let res = task.run(ready_signal.clone(), control_signal);
+
+            if let Err(e) = &res
+                && !ready_signal.is_disconnected()
+            {
+                let _ = ready_signal.send(Err(MediaError::Any(format!("Task/{name}/{e}").into())));
+            }
+
+            res
         });
     }
 
@@ -106,15 +110,11 @@ impl<T> PipelineBuilder<T> {
     }
 }
 
-impl<T: PipelineClock> PipelineBuilder<T> {
+impl PipelineBuilder {
     pub async fn build(
         self,
-    ) -> Result<(Pipeline<T>, oneshot::Receiver<Result<(), String>>), MediaError> {
-        let Self {
-            clock,
-            control,
-            tasks,
-        } = self;
+    ) -> Result<(Pipeline, oneshot::Receiver<Result<(), String>>), MediaError> {
+        let Self { control, tasks } = self;
 
         if tasks.is_empty() {
             return Err(MediaError::EmptyPipeline);
@@ -131,7 +131,7 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             tokio::time::timeout(Duration::from_secs(5), task.ready_signal.recv_async())
                 .await
                 .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
-                .map_err(|e| MediaError::TaskLaunch(format!("{name} build / {e}")))??;
+                .map_err(|e| MediaError::TaskLaunch(format!("'{name}' build / {e}")))??;
 
             task_handles.insert(name.clone(), task.join_handle);
             stop_rx.push(task.done_rx);
@@ -147,8 +147,8 @@ impl<T: PipelineClock> PipelineBuilder<T> {
             let task_name = &task_names[index];
 
             let result = match result {
-                Ok(Err(error)) => Err(format!("Task '{task_name}' failed: {error}")),
-                Err(_) => Err(format!("Task '{task_name}' failed for unknown reason")),
+                Ok(Err(error)) => Err(format!("Task/{task_name}/{error}")),
+                Err(_) => Err(format!("Task/{task_name}/Unknown")),
                 _ => Ok(()),
             };
 
@@ -161,7 +161,6 @@ impl<T: PipelineClock> PipelineBuilder<T> {
 
         Ok((
             Pipeline {
-                clock,
                 control,
                 task_handles,
                 is_shutdown: false,

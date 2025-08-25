@@ -9,6 +9,7 @@ mod editor_window;
 mod export;
 mod fake_window;
 mod flags;
+mod frame_ws;
 mod general_settings;
 mod hotkeys;
 mod notifications;
@@ -25,21 +26,22 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::{CameraPreview, CameraWindowState};
+use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::{EditorInstance, EditorState};
-use cap_media::{
-    feeds::{
-        self, CameraFeed, RawCameraFrame,
-        microphone::{self, MicrophoneFeed},
-    },
-    platform::Bounds,
-    sources::ScreenCaptureTarget,
-};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, XY,
     ZoomSegment,
 };
-use cap_rendering::ProjectRecordingsMeta;
-use clipboard_rs::{Clipboard, ClipboardContext, common::RustImage};
+use cap_recording::{
+    feeds::{
+        self, CameraFeed, DeviceOrModelID, RawCameraFrame,
+        microphone::{self, MicrophoneFeed},
+    },
+    sources::ScreenCaptureTarget,
+};
+use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
+use clipboard_rs::common::RustImage;
+use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::{EditorInstances, WindowEditorInstance};
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
@@ -79,10 +81,12 @@ use tokio::{
     sync::{Mutex, RwLock, mpsc},
     time::timeout,
 };
-use tracing::{debug, error, trace};
+use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
+
+use crate::upload::build_video_meta;
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -213,7 +217,7 @@ impl App {
 #[tauri::command]
 #[specta::specta]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    let mut app = state.write().await;
+    let app = state.write().await;
 
     match label {
         None => {
@@ -239,7 +243,7 @@ async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
     camera_preview: State<'_, CameraPreview>,
-    id: Option<cap_media::feeds::DeviceOrModelID>,
+    id: Option<DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
 
@@ -422,9 +426,17 @@ pub struct RecordingInfo {
 #[derive(Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 enum CurrentRecordingTarget {
-    Window { id: u32, bounds: Bounds },
-    Screen { id: u32 },
-    Area { screen: u32, bounds: Bounds },
+    Window {
+        id: WindowId,
+        bounds: LogicalBounds,
+    },
+    Screen {
+        id: DisplayId,
+    },
+    Area {
+        screen: DisplayId,
+        bounds: LogicalBounds,
+    },
 }
 
 #[derive(Serialize, Type)]
@@ -440,29 +452,37 @@ async fn get_current_recording(
     state: MutableState<'_, App>,
 ) -> Result<JsonValue<Option<CurrentRecording>>, ()> {
     let state = state.read().await;
-    Ok(JsonValue::new(&state.current_recording().map(|r| {
-        let bounds = r.bounds();
+    Ok(JsonValue::new(
+        &state
+            .current_recording()
+            .map(|r| {
+                let target = match r.capture_target() {
+                    ScreenCaptureTarget::Display { id } => {
+                        CurrentRecordingTarget::Screen { id: id.clone() }
+                    }
+                    ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
+                        id: id.clone(),
+                        bounds: cap_displays::Window::from_id(id)
+                            .ok_or(())?
+                            .display_relative_logical_bounds()
+                            .ok_or(())?,
+                    },
+                    ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
+                        screen: screen.clone(),
+                        bounds: bounds.clone(),
+                    },
+                };
 
-        let target = match r.capture_target() {
-            ScreenCaptureTarget::Screen { id } => CurrentRecordingTarget::Screen { id: *id },
-            ScreenCaptureTarget::Window { id } => CurrentRecordingTarget::Window {
-                id: *id,
-                bounds: *bounds,
-            },
-            ScreenCaptureTarget::Area { screen, bounds } => CurrentRecordingTarget::Area {
-                screen: *screen,
-                bounds: *bounds,
-            },
-        };
-
-        CurrentRecording {
-            target,
-            r#type: match r {
-                InProgressRecording::Instant { .. } => RecordingType::Instant,
-                InProgressRecording::Studio { .. } => RecordingType::Studio,
-            },
-        }
-    })))
+                Ok(CurrentRecording {
+                    target,
+                    r#type: match r {
+                        InProgressRecording::Instant { .. } => RecordingType::Instant,
+                        InProgressRecording::Studio { .. } => RecordingType::Studio,
+                    },
+                })
+            })
+            .transpose()?,
+    ))
 }
 
 #[derive(Serialize, Type, tauri_specta::Event, Clone)]
@@ -1114,34 +1134,19 @@ async fn upload_exported_video(
         return Ok(UploadResult::NotAuthenticated);
     };
 
-    let screen_metadata = get_video_metadata(path.clone()).await.map_err(|e| {
-        sentry::capture_message(
-            &format!("Failed to get video metadata: {e}"),
-            sentry::Level::Error,
-        );
-
-        "Failed to read video metadata. The recording may be from an incompatible version."
-            .to_string()
-    })?;
-
-    let camera_metadata = get_video_metadata(path.clone()).await.ok();
-
-    let duration = screen_metadata.duration.max(
-        camera_metadata
-            .map(|m| m.duration)
-            .unwrap_or(screen_metadata.duration),
-    );
-
-    if !auth.is_upgraded() && duration > 300.0 {
-        return Ok(UploadResult::UpgradeRequired);
-    }
-
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     let output_path = meta.output_path();
     if !output_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
+    }
+
+    let metadata = build_video_meta(&output_path)
+        .map_err(|err| format!("Error getting output video meta: {}", err.to_string()))?;
+
+    if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
+        return Ok(UploadResult::UpgradeRequired);
     }
 
     UploadProgress { progress: 0.0 }.emit(&app).ok();
@@ -1168,7 +1173,7 @@ async fn upload_exported_video(
             false,
             video_id,
             Some(meta.pretty_name.clone()),
-            Some(duration.to_string()),
+            Some(metadata.clone()),
         )
         .await
     }
@@ -1182,7 +1187,7 @@ async fn upload_exported_video(
         output_path,
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
-        Some(duration.to_string()),
+        Some(metadata),
     )
     .await
     {
@@ -1900,7 +1905,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::delete_recording,
             recording::list_cameras,
             recording::list_capture_windows,
-            recording::list_capture_screens,
+            recording::list_capture_displays,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -1996,13 +2001,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<general_settings::GeneralSettingsStore>()
         .typ::<cap_flags::Flags>();
 
-    // #[cfg(debug_assertions)]
-    // specta_builder
-    //     .export(
-    //         specta_typescript::Typescript::default(),
-    //         "../src/utils/tauri.ts",
-    //     )
-    //     .expect("Failed to export typescript bindings");
+    #[cfg(debug_assertions)]
+    specta_builder
+        .export(
+            specta_typescript::Typescript::default(),
+            "../src/utils/tauri.ts",
+        )
+        .expect("Failed to export typescript bindings");
 
     let (camera_tx, camera_ws_port, _shutdown) = camera_legacy::create_camera_preview_ws().await;
 
@@ -2333,16 +2338,21 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 async fn create_editor_instance_impl(
     app: &AppHandle,
     path: PathBuf,
+    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
 ) -> Result<Arc<EditorInstance>, String> {
     let app = app.clone();
 
-    let instance = EditorInstance::new(path, {
+    let instance = {
         let app = app.clone();
-        move |state| {
-            EditorStateChanged::new(state).emit(&app).ok();
-        }
-    })
-    .await?;
+        EditorInstance::new(
+            path,
+            move |state| {
+                let _ = EditorStateChanged::new(state).emit(&app);
+            },
+            frame_cb,
+        )
+        .await?
+    };
 
     RenderFrameEvent::listen_any(&app, {
         let preview_tx = instance.preview_tx.clone();

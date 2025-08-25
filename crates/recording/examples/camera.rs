@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use cap_media::feeds::{CameraFeed, DeviceOrModelID};
+use cap_recording::feeds::{CameraFeed, DeviceOrModelID};
 use ffmpeg::format::Pixel;
 use image::{ColorType, codecs::jpeg};
 

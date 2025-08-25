@@ -91,7 +91,7 @@ export const SharedCaps = ({
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const { data: analyticsData } = useQuery({
+	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
 		queryKey: ["analytics", data.map((video) => video.id)],
 		queryFn: async () => {
 			if (!dubApiKeyEnabled || data.length === 0) {
@@ -289,6 +289,7 @@ export const SharedCaps = ({
 							key={cap.id}
 							cap={cap}
 							hideSharedStatus
+							isLoadingAnalytics={isLoadingAnalytics}
 							analytics={analytics[cap.id] || 0}
 							organizationName={activeOrganization?.organization.name || ""}
 							spaceName={spaceData?.name || ""}

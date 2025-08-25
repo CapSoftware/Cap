@@ -1,30 +1,26 @@
+use cap_media::MediaError;
+use cap_media_info::{AudioInfo, VideoInfo};
+use cap_project::InstantRecordingMeta;
+use cap_utils::{ensure_dir, spawn_actor};
+use flume::Receiver;
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-use cap_media::{
-    MediaError,
-    feeds::microphone::MicrophoneFeedLock,
-    pipeline::{Pipeline, RealTimeClock},
-    platform::Bounds,
-    sources::{ScreenCaptureSource, ScreenCaptureTarget},
-};
-use cap_media_info::{AudioInfo, VideoInfo};
-use cap_project::InstantRecordingMeta;
-use cap_utils::{ensure_dir, spawn_actor};
-use flume::Receiver;
 use tokio::sync::oneshot;
 use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
     ActorError, RecordingBaseInputs, RecordingError,
     capture_pipeline::{MakeCapturePipeline, create_screen_capture},
+    feeds::microphone::MicrophoneFeedLock,
+    pipeline::Pipeline,
+    sources::{ScreenCaptureSource, ScreenCaptureTarget},
 };
 
 struct InstantRecordingPipeline {
-    pub inner: Pipeline<RealTimeClock<()>>,
+    pub inner: Pipeline,
     #[allow(unused)]
     pub output_path: PathBuf,
     pub pause_flag: Arc<AtomicBool>,
@@ -47,7 +43,7 @@ enum InstantRecordingActorState {
 pub struct InstantRecordingHandle {
     ctrl_tx: flume::Sender<InstantRecordingActorControlMessage>,
     pub capture_target: ScreenCaptureTarget,
-    pub bounds: Bounds,
+    // pub bounds: Bounds,
 }
 
 macro_rules! send_message {
@@ -134,8 +130,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         );
     };
 
-    let clock = RealTimeClock::<()>::new();
-    let pipeline_builder = Pipeline::builder(clock);
+    let pipeline_builder = Pipeline::builder();
 
     let pause_flag = Arc::new(AtomicBool::new(false));
     let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
@@ -191,15 +186,8 @@ pub async fn spawn_instant_recording_actor(
         (None, None)
     };
 
-    let (screen_source, screen_rx) = create_screen_capture(
-        &inputs.capture_target,
-        true,
-        true,
-        30,
-        system_audio.0,
-        start_time,
-    )
-    .await?;
+    let (screen_source, screen_rx) =
+        create_screen_capture(&inputs.capture_target, true, 30, system_audio.0, start_time).await?;
 
     debug!("screen capture: {screen_source:#?}");
 
@@ -256,7 +244,7 @@ pub async fn spawn_instant_recording_actor(
         InstantRecordingHandle {
             ctrl_tx,
             capture_target: inputs.capture_target,
-            bounds: *screen_source.get_bounds(),
+            // bounds: *screen_source.get_bounds(),
         },
         done_rx,
     ))
