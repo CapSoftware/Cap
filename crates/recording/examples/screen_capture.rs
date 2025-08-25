@@ -1,8 +1,8 @@
-use scap_targets::Window;
 use cap_recording::{
     pipeline::{control::PipelineControlSignal, task::PipelineSourceTask},
     sources::{CMSampleBufferCapture, ScreenCaptureSource, ScreenCaptureTarget},
 };
+use scap_targets::Window;
 use std::time::SystemTime;
 
 #[tokio::main]

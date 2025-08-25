@@ -1,5 +1,5 @@
-use scap_targets::*;
 use scap_ffmpeg::*;
+use scap_targets::*;
 use std::time::Duration;
 
 #[tokio::main]

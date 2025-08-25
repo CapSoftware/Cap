@@ -1,8 +1,8 @@
 use cap_cursor_capture::CursorCropBounds;
-use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;
+use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;

@@ -1,5 +1,5 @@
 use device_query::{DeviceQuery, DeviceState};
-use scap_targets::{bounds::*, Display};
+use scap_targets::{Display, bounds::*};
 
 // Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

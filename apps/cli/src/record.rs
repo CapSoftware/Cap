@@ -1,7 +1,7 @@
 use cap_camera::ModelID;
-use scap_targets::{DisplayId, WindowId};
 use cap_recording::screen_capture::ScreenCaptureTarget;
 use clap::Args;
+use scap_targets::{DisplayId, WindowId};
 use std::{env::current_dir, path::PathBuf, sync::Arc};
 use tokio::{io::AsyncBufReadExt, sync::Mutex};
 use uuid::Uuid;
