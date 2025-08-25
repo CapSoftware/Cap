@@ -2,6 +2,7 @@
 
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
 	startTransition,
@@ -19,7 +20,6 @@ import {
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
-import { Video } from "@cap/web-domain";
 
 const formatTime = (time: number) => {
 	const minutes = Math.floor(time / 60);

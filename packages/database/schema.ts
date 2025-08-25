@@ -1,4 +1,4 @@
-import { Video, type Folder } from "@cap/web-domain";
+import type { Folder, Video } from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -452,7 +452,7 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const verificationTokensRelations = relations(
 	verificationTokens,
-	({ }) => ({
+	({}) => ({
 		// No relations defined
 	}),
 );
