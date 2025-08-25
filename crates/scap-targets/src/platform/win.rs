@@ -51,6 +51,14 @@ use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize}
 // On Windows it's nigh impossible to get the logical position of a display
 // or window, since there's no simple API that accounts for each monitor having different DPI.
 
+static IGNORED_EXES: &'static [&str] = &[
+    // As it's a system webview it isn't owned by the Cap process.
+    "webview2",
+    "msedgewebview2",
+    // Just make sure, lol
+    "cap",
+];
+
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
 
@@ -994,11 +1002,7 @@ impl WindowImpl {
         // Also skip WebView2 and Cap-related processes
         if let Ok(exe_path) = unsafe { pid_to_exe_path(id) } {
             if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                let exe_name_lower = exe_name.to_lowercase();
-                if exe_name_lower.contains("webview2")
-                    || exe_name_lower.contains("msedgewebview2")
-                    || exe_name_lower.contains("cap")
-                {
+                if IGNORED_EXES.contains(&exe_name.to_lowercase()) {
                     return false;
                 }
             }
@@ -1041,11 +1045,7 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
         // Also skip WebView2 and Cap-related processes
         if let Ok(exe_path) = pid_to_exe_path(process_id) {
             if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
-                let exe_name_lower = exe_name.to_lowercase();
-                if exe_name_lower.contains("webview2")
-                    || exe_name_lower.contains("msedgewebview2")
-                    || exe_name_lower.contains("cap")
-                {
+                if IGNORED_EXES.contains(&exe_name.to_lowercase()) {
                     return false;
                 }
             }
