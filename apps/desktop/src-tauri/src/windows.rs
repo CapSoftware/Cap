@@ -1,6 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
+use anyhow::anyhow;
 use cap_displays::{Display, DisplayId};
 use futures::pin_mut;
 use serde::Deserialize;
@@ -16,7 +17,7 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{
     App, ArcLock, fake_window,
@@ -359,47 +360,75 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-                let mut window_builder = self
-                    .window_builder(app, "/camera")
-                    .maximized(false)
-                    .resizable(false)
-                    .shadow(false)
-                    .fullscreen(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .skip_taskbar(true)
-                    .position(
-                        100.0,
-                        (monitor.size().height as f64) / monitor.scale_factor()
-                            - WINDOW_SIZE
-                            - 100.0,
-                    )
-                    .initialization_script(format!(
-                        "
-			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {port};
-		                ",
-                    ))
-                    .transparent(true)
-                    .visible(false); // We set this true in `CameraWindowState::init_window`
+                let enable_native_camera_preview = GeneralSettingsStore::get(&app)
+                    .ok()
+                    .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                    .unwrap_or_default();
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
                 {
-                    _ = window.run_on_main_thread({
-                        let window = window.as_ref().window();
-                        move || unsafe {
-                            let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
-                            (*win).setCollectionBehavior(
-                            		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                            );
-                        }
-                    });
-                }
+                    let state = app.state::<ArcLock<App>>();
+                    let mut state = state.write().await;
 
-                window
+                    if enable_native_camera_preview && state.camera_preview.is_initialized() {
+                        error!("Unable to initialize camera preview as one already exists!");
+                        if let Some(window) = CapWindowId::Camera.get(&app) {
+                            window.show().ok();
+                        }
+                        return Err(anyhow!(
+                            "Unable to initialize camera preview as one already exists!"
+                        )
+                        .into());
+                    }
+
+                    let mut window_builder = self
+                        .window_builder(app, "/camera")
+                        .maximized(false)
+                        .resizable(false)
+                        .shadow(false)
+                        .fullscreen(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .skip_taskbar(true)
+                        .position(
+                            100.0,
+                            (monitor.size().height as f64) / monitor.scale_factor()
+                                - WINDOW_SIZE
+                                - 100.0,
+                        )
+                        .initialization_script(format!(
+                            "
+			                window.__CAP__ = window.__CAP__ ?? {{}};
+			                window.__CAP__.cameraWsPort = {};
+		                ",
+                            state.camera_ws_port
+                        ))
+                        .transparent(true)
+                        .visible(false); // We set this true in `CameraWindowState::init_window`
+
+                    let window = window_builder.build()?;
+
+                    if enable_native_camera_preview {
+                        if let Err(err) = state.camera_preview.init_window(window.clone()).await {
+                            error!("Error initializing camera preview: {err}");
+                            window.close().ok();
+                        }
+                    }
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        _ = window.run_on_main_thread({
+                            let window = window.as_ref().window();
+                            move || unsafe {
+                                let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                                (*win).setCollectionBehavior(
+                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                                );
+                            }
+                        });
+                    }
+
+                    window
+                }
             }
             Self::WindowCaptureOccluder { screen_id } => {
                 let Some(display) = Display::from_id(screen_id) else {

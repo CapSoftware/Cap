@@ -25,7 +25,7 @@ mod windows;
 
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
-use camera::{CameraPreview, CameraWindowState};
+use camera::CameraPreviewState;
 use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::EditorInstance;
 use cap_editor::EditorState;
@@ -62,7 +62,6 @@ use serde_json::json;
 use specta::Type;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
 use std::{
     fs::File,
     future::Future,
@@ -84,7 +83,6 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::mpsc;
 use tokio::sync::{Mutex, RwLock};
-use tokio::time::timeout;
 use tracing::debug;
 use tracing::error;
 use tracing::trace;
@@ -94,6 +92,7 @@ use windows::EditorWindowIds;
 use windows::set_window_transparent;
 use windows::{CapWindowId, ShowCapWindow};
 
+use crate::camera::CameraPreviewManager;
 use crate::upload::build_video_meta;
 
 #[allow(clippy::large_enum_variant)]
@@ -113,6 +112,8 @@ pub struct App {
     camera_ws_port: u16,
     #[serde(skip)]
     camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    #[serde(skip)]
+    camera_preview: CameraPreviewManager,
     #[serde(skip)]
     camera_feed_initialization: Option<mpsc::Sender<()>>,
     #[serde(skip)]
@@ -255,7 +256,6 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 async fn set_camera_input(
     app_handle: AppHandle,
     state: MutableState<'_, App>,
-    camera_preview: State<'_, CameraPreview>,
     id: Option<DeviceOrModelID>,
 ) -> Result<bool, String> {
     let mut app = state.write().await;
@@ -285,7 +285,7 @@ async fn set_camera_input(
                 app.camera_feed_initialization = Some(shutdown_tx);
             }
 
-            let window = ShowCapWindow::Camera.show(&app_handle).await.unwrap();
+            ShowCapWindow::Camera.show(&app_handle).await.unwrap();
             if let Some(win) = CapWindowId::Main.get(&app_handle) {
                 win.set_focus().ok();
             };
@@ -295,32 +295,11 @@ async fn set_camera_input(
                 .and_then(|v| v.map(|v| v.enable_native_camera_preview))
                 .unwrap_or_default()
             {
-                let (camera_tx, camera_rx) = flume::bounded::<RawCameraFrame>(4);
-
-                let prev_err = &mut None;
-                if timeout(Duration::from_secs(3), async {
-                    while let Err(err) = camera_preview
-                        .init_preview_window(window.clone(), camera_rx.clone())
-                        .await
-                    {
-                        error!("Error initializing camera feed: {err}");
-                        *prev_err = Some(err);
-                        tokio::time::sleep(Duration::from_millis(200)).await;
-                    }
-                })
-                .await
-                .is_err()
-                {
-                    let _ = window.close();
-                    return Err(format!("Timeout initializing camera preview: {prev_err:?}"));
-                };
-
-                Some(camera_tx)
+                app.camera_preview.attach()
             } else {
-                None
+                app.camera_tx.clone()
             };
 
-            let legacy_camera_tx = app.camera_tx.clone();
             drop(app);
 
             let fut = CameraFeed::init(id);
@@ -335,11 +314,7 @@ async fn set_camera_input(
                     }
 
                     if app.camera_feed.is_none() {
-                        if let Some(camera_tx) = camera_tx {
-                            feed.attach(camera_tx);
-                        } else {
-                            feed.attach(legacy_camera_tx);
-                        }
+                        feed.attach(camera_tx);
                         app.camera_feed = Some(Arc::new(Mutex::new(feed)));
                         Ok(true)
                     } else {
@@ -356,8 +331,8 @@ async fn set_camera_input(
                 cancel.send(()).await.ok();
             }
             app.camera_feed.take();
-            if let Some(w) = CapWindowId::Camera.get(&app_handle) {
-                w.close().ok();
+            if let Some(win) = CapWindowId::Camera.get(&app_handle) {
+                win.close().ok();
             }
             Ok(true)
         }
@@ -1871,19 +1846,21 @@ async fn set_server_url(app: MutableState<'_, App>, server_url: String) -> Resul
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_preview_state(
-    store: State<'_, CameraPreview>,
-    state: CameraWindowState,
-) -> Result<(), ()> {
-    store.save(&state).map_err(|err| {
-        error!("Error saving camera window state: {err}");
-    })?;
+    app: MutableState<'_, App>,
+    state: CameraPreviewState,
+) -> Result<(), String> {
+    app.read()
+        .await
+        .camera_preview
+        .set_state(state)
+        .map_err(|err| format!("Error saving camera window state: {err}"))?;
 
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-async fn await_camera_preview_ready(store: State<'_, CameraPreview>) -> Result<bool, ()> {
+async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, ()> {
     // store.wait_for_camera_to_load().await; // TODO: Reimplement this
     Ok(true)
 }
@@ -2121,6 +2098,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     handle: app.clone(),
                     camera_feed: None,
                     camera_feed_initialization: None,
+                    camera_preview: CameraPreviewManager::new(&app),
                     mic_samples_tx: audio_input_tx,
                     mic_feed: None,
                     recording_state: RecordingState::None,
@@ -2135,12 +2113,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 .to_string()
                         }),
                 })));
-
-                if let Ok(s) = CameraPreview::init(&app)
-                    .map_err(|err| error!("Error initializing camera preview: {err}"))
-                {
-                    app.manage(s);
-                }
 
                 app.manage(Arc::new(RwLock::new(
                     ClipboardContext::new().expect("Failed to create clipboard context"),
@@ -2209,16 +2181,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                             CapWindowId::Main => {
                                 let app = app.clone();
                                 tokio::spawn(async move {
-                                    let state = app.state::<Arc<RwLock<App>>>();
+                                    let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
 
                                     if !app_state.is_recording_active_or_pending() {
                                         app_state.mic_feed.take();
                                         app_state.camera_feed.take();
-
-                                        if let Some(camera) = CapWindowId::Camera.get(&app) {
-                                            let _ = camera.close();
-                                        }
                                     }
                                 });
                             }
@@ -2239,6 +2207,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                             CapWindowId::TargetSelectOverlay { display_id } => {
                                 app.state::<target_select_overlay::WindowFocusManager>()
                                     .destroy(&display_id, app.global_shortcut());
+                            }
+                            CapWindowId::Camera => {
+                                let app = app.clone();
+                                tokio::spawn(async move {
+                                    app.state::<ArcLock<App>>()
+                                        .write()
+                                        .await
+                                        .camera_preview
+                                        .on_window_close();
+                                });
                             }
                             _ => {}
                         };
@@ -2311,15 +2289,17 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             }
             tauri::RunEvent::WindowEvent {
                 event: WindowEvent::Resized(size),
-                label,
                 ..
             } => {
-                if let Some(window) = handle.get_webview_window(&label) {
-                    let size = size.to_logical(window.scale_factor().unwrap_or(1.0));
+                let handle = handle.clone();
+                tokio::spawn(async move {
                     handle
-                        .state::<CameraPreview>()
-                        .update_window_size(size.width, size.height);
-                }
+                        .state::<ArcLock<App>>()
+                        .read()
+                        .await
+                        .camera_preview
+                        .on_window_resize(size.width, size.height)
+                });
             }
             _ => {}
         });

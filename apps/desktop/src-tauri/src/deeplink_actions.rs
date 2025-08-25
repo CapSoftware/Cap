@@ -4,9 +4,7 @@ use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
 use tracing::trace;
 
-use crate::{
-    App, ArcLock, camera::CameraPreview, recording::StartRecordingInputs, windows::ShowCapWindow,
-};
+use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,9 +113,8 @@ impl DeepLinkAction {
                 mode,
             } => {
                 let state = app.state::<ArcLock<App>>();
-                let camera_preview = app.state::<CameraPreview>();
 
-                crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera).await?;
+                crate::set_camera_input(app.clone(), state.clone(), camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
                 let capture_target: ScreenCaptureTarget = match capture_mode {
