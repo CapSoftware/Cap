@@ -516,9 +516,8 @@ impl WindowImpl {
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
         unsafe {
-            // Try multiple approaches to get the highest quality icon
-            let mut best_result = None;
-            let mut best_size = 0;
+            // Target size for acceptable icon quality - early termination threshold
+            const GOOD_SIZE_THRESHOLD: i32 = 64;
 
             // Method 1: Try to get the window's large icon first
             let large_icon = SendMessageW(
@@ -529,89 +528,80 @@ impl WindowImpl {
             ); // ICON_BIG = 1
 
             if large_icon.0 != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(large_icon.0 as _)) {
-                    best_result = Some(result.0);
-                    best_size = result.1;
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(large_icon.0 as _)) {
+                    // If we got a good quality icon, return it immediately
+                    if result.1 >= GOOD_SIZE_THRESHOLD {
+                        return Some(result.0);
+                    }
                 }
             }
 
-            // Method 2: Try executable file extraction with priority on larger icons
+            // Method 2: Try executable file extraction (only first icon, most likely to be main app icon)
             if let Some(exe_path) = self.get_executable_path() {
                 let wide_path: Vec<u16> =
                     exe_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-                // Try extracting icons from multiple indices
-                for icon_index in 0..6 {
-                    let mut large_icon: HICON = HICON::default();
-                    let mut small_icon: HICON = HICON::default();
+                let mut large_icon: HICON = HICON::default();
+                let mut small_icon: HICON = HICON::default();
 
-                    let extracted = ExtractIconExW(
-                        PCWSTR(wide_path.as_ptr()),
-                        icon_index,
-                        Some(&mut large_icon),
-                        Some(&mut small_icon),
-                        1,
-                    );
+                let extracted = ExtractIconExW(
+                    PCWSTR(wide_path.as_ptr()),
+                    0, // Only try the first (main) icon
+                    Some(&mut large_icon),
+                    Some(&mut small_icon),
+                    1,
+                );
 
-                    if extracted > 0 {
-                        // Try large icon first
-                        if !large_icon.is_invalid() {
-                            if let Some(result) = self.hicon_to_png_bytes_high_res(large_icon) {
-                                if result.1 > best_size {
-                                    best_result = Some(result.0);
-                                    best_size = result.1;
-                                }
-                            }
+                if extracted > 0 {
+                    // Try large icon first
+                    if !large_icon.is_invalid() {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(large_icon) {
                             let _ = DestroyIcon(large_icon);
-                        }
-
-                        // Try small icon if we haven't found anything good yet
-                        if !small_icon.is_invalid() && best_size < 64 {
-                            if let Some(result) = self.hicon_to_png_bytes_high_res(small_icon) {
-                                if result.1 > best_size {
-                                    best_result = Some(result.0);
-                                    best_size = result.1;
-                                }
+                            if !small_icon.is_invalid() {
+                                let _ = DestroyIcon(small_icon);
                             }
-                            let _ = DestroyIcon(small_icon);
+                            // Return immediately if we got a good quality icon
+                            if result.1 >= GOOD_SIZE_THRESHOLD {
+                                return Some(result.0);
+                            }
                         }
+                        let _ = DestroyIcon(large_icon);
+                    }
+
+                    // Try small icon as fallback
+                    if !small_icon.is_invalid() {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(small_icon) {
+                            let _ = DestroyIcon(small_icon);
+                            return Some(result.0);
+                        }
+                        let _ = DestroyIcon(small_icon);
                     }
                 }
             }
 
-            // Method 3: Try small window icon if we still don't have anything good
-            if best_size < 32 {
-                let small_icon = SendMessageW(
-                    self.0,
-                    WM_GETICON,
-                    Some(WPARAM(0usize)),
-                    Some(LPARAM(0isize)),
-                ); // ICON_SMALL = 0
+            // Method 3: Try small window icon as fallback
+            let small_icon = SendMessageW(
+                self.0,
+                WM_GETICON,
+                Some(WPARAM(0usize)),
+                Some(LPARAM(0isize)),
+            ); // ICON_SMALL = 0
 
-                if small_icon.0 != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(small_icon.0 as _))
-                    {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                            best_size = result.1;
-                        }
-                    }
+            if small_icon.0 != 0 {
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(small_icon.0 as _)) {
+                    return Some(result.0);
                 }
             }
 
             // Method 4: Try class icon as last resort
-            if best_size < 32 {
-                let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
-                if class_icon != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(class_icon as _)) {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                        }
-                    }
+            let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
+            if class_icon != 0 {
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(class_icon as _)) {
+                    return Some(result.0);
                 }
             }
 
-            best_result
+            None
         }
     }
 
@@ -674,7 +664,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
+    fn hicon_to_png_bytes_optimized(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -689,124 +679,34 @@ impl WindowImpl {
             // Get the native icon size to prioritize it
             let native_size = self.get_icon_size(icon);
 
-            // Always try for the highest resolution possible, starting with the largest sizes
-            let mut sizes = vec![2048, 1024, 512, 256, 128, 96, 64, 48, 32, 24, 16];
-
-            // If we have native size info, prioritize it
-            if let Some((width, height)) = native_size {
+            // Determine the best size to try based on native size
+            let target_sizes = if let Some((width, height)) = native_size {
                 let native_dim = width.max(height);
-                const MAX_SIZE: i32 = 4096;
-                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= MAX_SIZE {
-                    sizes.insert(0, native_dim);
+                if native_dim >= 256 {
+                    vec![native_dim, 256, 128] // High-res icon
+                } else if native_dim >= 64 {
+                    vec![native_dim, 64, 32] // Medium-res icon
+                } else if native_dim >= 32 {
+                    vec![native_dim, 32, 16] // Standard icon
+                } else {
+                    vec![32, 16] // Small icon, try standard sizes
                 }
-            }
+            } else {
+                // No native size info, try reasonable defaults
+                vec![128, 64, 32, 16]
+            };
 
-            let mut best_result = None;
-            let mut best_size = 0;
+            // Try each target size, return the first successful one
+            for &size in &target_sizes {
+                if let Some(result) = self.try_convert_icon_to_png(icon, size, screen_dc, mem_dc) {
+                    // Cleanup
+                    let _ = DeleteDC(mem_dc);
+                    let _ = ReleaseDC(Some(HWND::default()), screen_dc);
+                    let _ = DeleteObject(icon_info.hbmColor.into());
+                    let _ = DeleteObject(icon_info.hbmMask.into());
 
-            for &size in &sizes {
-                let width = size;
-                let height = size;
-
-                // Create bitmap info for this size
-                let mut bitmap_info = BITMAPINFO {
-                    bmiHeader: BITMAPINFOHEADER {
-                        biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                        biWidth: width,
-                        biHeight: -height, // Top-down DIB
-                        biPlanes: 1,
-                        biBitCount: 32, // 32 bits per pixel (BGRA)
-                        biCompression: BI_RGB.0,
-                        biSizeImage: 0,
-                        biXPelsPerMeter: 0,
-                        biYPelsPerMeter: 0,
-                        biClrUsed: 0,
-                        biClrImportant: 0,
-                    },
-                    bmiColors: [Default::default(); 1],
-                };
-
-                // Create a bitmap
-                let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-                if bitmap.is_invalid() {
-                    continue;
+                    return Some((result, size));
                 }
-
-                let old_bitmap = SelectObject(mem_dc, bitmap.into());
-
-                // Fill with transparent background
-                let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
-                let rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: width,
-                    bottom: height,
-                };
-                let _ = FillRect(mem_dc, &rect, brush);
-                let _ = DeleteObject(brush.into());
-
-                // Draw the icon onto the bitmap with proper scaling
-                let draw_result = DrawIconEx(
-                    mem_dc,
-                    0,
-                    0,
-                    icon,
-                    width,
-                    height,
-                    0,
-                    Some(HBRUSH::default()),
-                    DI_FLAGS(0x0003), // DI_NORMAL
-                );
-
-                if draw_result.is_ok() {
-                    // Get bitmap bits
-                    let mut buffer = vec![0u8; (width * height * 4) as usize];
-                    let result = GetDIBits(
-                        mem_dc,
-                        bitmap,
-                        0,
-                        height as u32,
-                        Some(buffer.as_mut_ptr() as *mut _),
-                        &mut bitmap_info,
-                        DIB_RGB_COLORS,
-                    );
-
-                    if result > 0 {
-                        // Check if we have any non-transparent pixels
-                        let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
-
-                        if has_content {
-                            // Convert BGRA to RGBA
-                            for chunk in buffer.chunks_exact_mut(4) {
-                                chunk.swap(0, 2); // Swap B and R
-                            }
-
-                            // Create PNG using the image crate
-                            if let Some(img) =
-                                image::RgbaImage::from_raw(width as u32, height as u32, buffer)
-                            {
-                                let mut png_data = Vec::new();
-                                if img
-                                    .write_to(
-                                        &mut std::io::Cursor::new(&mut png_data),
-                                        image::ImageFormat::Png,
-                                    )
-                                    .is_ok()
-                                {
-                                    // Keep the result if it's our first success or if this size is larger
-                                    if best_result.is_none() || size > best_size {
-                                        best_result = Some((png_data, size));
-                                        best_size = size;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Cleanup for this iteration
-                let _ = SelectObject(mem_dc, old_bitmap);
-                let _ = DeleteObject(bitmap.into());
             }
 
             // Cleanup
@@ -815,7 +715,120 @@ impl WindowImpl {
             let _ = DeleteObject(icon_info.hbmColor.into());
             let _ = DeleteObject(icon_info.hbmMask.into());
 
-            best_result
+            None
+        }
+    }
+
+    fn try_convert_icon_to_png(
+        &self,
+        icon: HICON,
+        size: i32,
+        screen_dc: HDC,
+        mem_dc: HDC,
+    ) -> Option<Vec<u8>> {
+        unsafe {
+            let width = size;
+            let height = size;
+
+            // Create bitmap info for this size
+            let mut bitmap_info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height, // Top-down DIB
+                    biPlanes: 1,
+                    biBitCount: 32, // 32 bits per pixel (BGRA)
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [Default::default(); 1],
+            };
+
+            // Create a bitmap
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                return None;
+            }
+
+            let old_bitmap = SelectObject(mem_dc, bitmap.into());
+
+            // Fill with transparent background
+            let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            };
+            let _ = FillRect(mem_dc, &rect, brush);
+            let _ = DeleteObject(brush.into());
+
+            // Draw the icon onto the bitmap with proper scaling
+            let draw_result = DrawIconEx(
+                mem_dc,
+                0,
+                0,
+                icon,
+                width,
+                height,
+                0,
+                Some(HBRUSH::default()),
+                DI_FLAGS(0x0003), // DI_NORMAL
+            );
+
+            let mut result = None;
+
+            if draw_result.is_ok() {
+                // Get bitmap bits
+                let mut buffer = vec![0u8; (width * height * 4) as usize];
+                let get_bits_result = GetDIBits(
+                    mem_dc,
+                    bitmap,
+                    0,
+                    height as u32,
+                    Some(buffer.as_mut_ptr() as *mut _),
+                    &mut bitmap_info,
+                    DIB_RGB_COLORS,
+                );
+
+                if get_bits_result > 0 {
+                    // Check if we have any non-transparent pixels
+                    let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
+
+                    if has_content {
+                        // Convert BGRA to RGBA
+                        for chunk in buffer.chunks_exact_mut(4) {
+                            chunk.swap(0, 2); // Swap B and R
+                        }
+
+                        // Create PNG using the image crate
+                        if let Some(img) =
+                            image::RgbaImage::from_raw(width as u32, height as u32, buffer)
+                        {
+                            let mut png_data = Vec::new();
+                            if img
+                                .write_to(
+                                    &mut std::io::Cursor::new(&mut png_data),
+                                    image::ImageFormat::Png,
+                                )
+                                .is_ok()
+                            {
+                                result = Some(png_data);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cleanup for this iteration
+            let _ = SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap.into());
+
+            result
         }
     }
 
