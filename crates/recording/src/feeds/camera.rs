@@ -29,6 +29,7 @@ pub struct CameraFeed {
     state: State,
     senders: Vec<flume::Sender<RawCameraFrame>>,
     on_ready: Vec<oneshot::Sender<()>>,
+    on_disconnect: Vec<Box<dyn Fn() + Send>>,
 }
 
 enum State {
@@ -88,6 +89,7 @@ impl CameraFeed {
             }),
             senders: Vec::new(),
             on_ready: Vec::new(),
+            on_disconnect: Vec::new(),
         }
     }
 }
@@ -149,6 +151,8 @@ pub struct RemoveInput;
 pub struct AddSender(pub flume::Sender<RawCameraFrame>);
 
 pub struct ListenForReady(pub oneshot::Sender<()>);
+
+pub struct OnFeedDisconnect(pub Box<dyn Fn() + Send>);
 
 pub struct Lock;
 
@@ -365,6 +369,10 @@ impl Message<RemoveInput> for CameraFeed {
             let _ = handle.stop_capturing();
         }
 
+        for cb in &self.on_disconnect {
+            (cb)();
+        }
+
         Ok(())
     }
 }
@@ -400,12 +408,22 @@ impl Message<ListenForReady> for CameraFeed {
     }
 }
 
+impl Message<OnFeedDisconnect> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: OnFeedDisconnect,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.on_disconnect.push(msg.0);
+    }
+}
+
 impl Message<NewFrame> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        println!("EMIT FRAME TO {}", self.senders.len());
-
         let mut to_remove = vec![];
 
         for (i, sender) in self.senders.iter().enumerate() {

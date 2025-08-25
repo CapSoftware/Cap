@@ -29,7 +29,7 @@ impl CameraSource {
         start_instant: Instant,
     ) -> Self {
         Self {
-            video_info: feed.video_info().clone(),
+            video_info: *feed.video_info(),
             feed,
             output,
             first_frame_instant: None,

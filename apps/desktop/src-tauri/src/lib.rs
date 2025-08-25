@@ -241,6 +241,7 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
+    app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
@@ -255,6 +256,12 @@ async fn set_camera_input(
                 .map_err(|e| e.to_string())?;
         }
         Some(id) => {
+            ShowCapWindow::Camera
+                .show(&app_handle)
+                .await
+                .map_err(|err| error!("Failed to show camera preview window: {err}"))
+                .ok();
+
             camera_feed
                 .ask(feeds::camera::SetInput { id })
                 .await
@@ -2027,6 +2034,25 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+
+            tokio::spawn({
+                let camera_feed = camera_feed.clone();
+                let app = app.clone();
+                async move {
+                    camera_feed
+                        .tell(feeds::camera::OnFeedDisconnect(Box::new({
+                            move || {
+                                if let Some(win) = CapWindowId::Camera.get(&app) {
+                                    win.close().ok();
+                                }
+                            }
+                        })))
+                        .send()
+                        .await
+                        .map_err(|err| error!("Error registering on camera feed disconnect: {err}"))
+                        .ok();
+                }
+            });
 
             if let Ok(Some(auth)) = AuthStore::load(&app) {
                 sentry::configure_scope(|scope| {
