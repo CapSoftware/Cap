@@ -74,7 +74,6 @@ const FolderPage = async ({
 				cardType="shared"
 				initialVideos={videosData}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
-				userId={userId}
 			/>
 		</div>
 	);

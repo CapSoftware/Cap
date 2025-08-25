@@ -113,10 +113,9 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add space-level sharing
 	spaceSharing.forEach((space) => {
-		if (!sharedSpacesMap[space.videoId]) {
-			sharedSpacesMap[space.videoId] = [];
-		}
-		sharedSpacesMap[space.videoId].push({
+		const spaces = sharedSpacesMap[space.videoId] ?? [];
+		sharedSpacesMap[space.videoId] = spaces;
+		spaces.push({
 			id: space.id,
 			name: space.name,
 			organizationId: space.organizationId,
@@ -127,10 +126,10 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 
 	// Add organization-level sharing
 	orgSharing.forEach((org) => {
-		if (!sharedSpacesMap[org.videoId]) {
-			sharedSpacesMap[org.videoId] = [];
-		}
-		sharedSpacesMap[org.videoId].push({
+		const spaces = sharedSpacesMap[org.videoId] ?? [];
+		sharedSpacesMap[org.videoId] = spaces;
+
+		spaces.push({
 			id: org.id,
 			name: org.name,
 			organizationId: org.organizationId,

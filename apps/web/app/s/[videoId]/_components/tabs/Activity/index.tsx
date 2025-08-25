@@ -46,6 +46,7 @@ export const Activity = Object.assign(
 								videoId={videoId}
 								views={props.views}
 								comments={comments}
+								isLoadingAnalytics={false}
 							/>
 						</Suspense>
 					}

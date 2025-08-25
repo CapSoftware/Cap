@@ -103,7 +103,11 @@ export function ClientCapCard(props: ClientCapCardProps) {
 			onDragEnd={handleDragEnd}
 			className={isDragging ? "opacity-50" : ""}
 		>
-			<CapCard {...rest} analytics={analytics} />
+			<CapCard
+				{...rest}
+				isLoadingAnalytics={props.isLoadingAnalytics}
+				analytics={analytics}
+			/>
 		</div>
 	);
 }

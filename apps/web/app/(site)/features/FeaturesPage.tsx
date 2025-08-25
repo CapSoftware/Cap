@@ -236,13 +236,6 @@ const features: Feature[] = [
 		size: "medium",
 	},
 	{
-		icon: faLock,
-		title: "End-to-End Encryption",
-		description: "Military-grade encryption for cloud-stored recordings",
-		category: "privacy",
-		isPro: true,
-	},
-	{
 		icon: faCode,
 		title: "100% Open Source",
 		description:

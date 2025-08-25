@@ -17,7 +17,7 @@ cap-flags = { path = "../flags" }
 cap-audio = { path = "../audio" }
 cap-camera = { path = "../camera", features = ["specta", "serde"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
-scap-targets = { path = "../scap-targets" }
+cap-cpal-ffmpeg = { path = "../cpal-ffmpeg" }
 cap-fail = { path = "../fail" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }
@@ -42,6 +42,7 @@ kameo = "0.17.2"
 scap = { workspace = true }
 sync_wrapper = "1.0.2"
 scap-ffmpeg = { path = "../scap-ffmpeg" }
+scap-targets = { path = "../scap-targets" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }

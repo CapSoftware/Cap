@@ -8,15 +8,15 @@ pub mod studio_recording;
 
 pub use sources::{camera, screen_capture};
 pub use studio_recording::{
-    spawn_studio_recording_actor, CompletedStudioRecording, StudioRecordingHandle,
+    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use feeds::AudioInputFeed;
-use sources::*;
-
 use cap_media::MediaError;
+use feeds::microphone::MicrophoneFeedLock;
 use scap_targets::bounds::LogicalBounds;
 use serde::{Deserialize, Serialize};
+use sources::*;
+use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
@@ -39,10 +39,10 @@ pub struct RecordingOptions {
 }
 
 #[derive(Clone)]
-pub struct RecordingBaseInputs<'a> {
+pub struct RecordingBaseInputs {
     pub capture_target: ScreenCaptureTarget,
     pub capture_system_audio: bool,
-    pub mic_feed: &'a Option<AudioInputFeed>,
+    pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
