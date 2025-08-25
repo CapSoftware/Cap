@@ -84,7 +84,6 @@ impl CameraPreview {
         thread::spawn(move || {
             let mut window_visible = false;
             let mut first = true;
-            let mut loading = true;
             let mut window_size = None;
             let mut resampler_frame = Cached::default();
             let mut aspect_ratio = None;
@@ -100,6 +99,35 @@ impl CameraPreview {
             .map_err(|err| error!("Error initializing ffmpeg scaler: {err:?}")) else {
                 return;
             };
+
+            if let Ok(surface) = renderer
+                .surface
+                .get_current_texture()
+                .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
+            {
+                // TODO: Smaller???
+                let output_width = 50;
+                let output_height = 50;
+
+                let (buffer, stride) = render_solid_frame(
+                    [0x11, 0x11, 0x11, 0xFF], // #111111
+                    output_width,
+                    output_height,
+                );
+
+                let fallback_texture = PreparedTexture::init(
+                    renderer.device.clone(),
+                    renderer.queue.clone(),
+                    &renderer.sampler,
+                    &renderer.bind_group_layout,
+                    renderer.uniform_bind_group.clone(),
+                    renderer.render_pipeline.clone(),
+                    output_width,
+                    output_height,
+                )
+                .render(&surface, &buffer, stride);
+                surface.present();
+            }
 
             while let Some((frame, reconfigure)) = block_on({
                 let camera_rx = &camera_rx;
@@ -223,14 +251,6 @@ impl CameraPreview {
                             resampler_frame.data(0).to_vec(),
                             resampler_frame.stride(0) as u32,
                         ))
-                    } else if loading {
-                        let (buffer, stride) = render_solid_frame(
-                            [0x11, 0x11, 0x11, 0xFF], // #111111
-                            output_width,
-                            output_height,
-                        );
-
-                        Some((buffer, stride))
                     } else {
                         None // This will reuse the existing texture
                     };
