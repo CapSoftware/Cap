@@ -26,7 +26,6 @@ mod windows;
 use audio::AppSounds;
 use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::CameraPreviewState;
-use cap_displays::{DisplayId, WindowId, bounds::LogicalBounds};
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
     ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, XY,
@@ -36,7 +35,7 @@ use cap_recording::{
     RecordingMode,
     feeds::{
         self,
-        camera::{CameraFeed, DeviceOrModelID, RawCameraFrame},
+        camera::{CameraFeed, DeviceOrModelID},
         microphone::{self, MicrophoneFeed},
     },
     sources::ScreenCaptureTarget,
@@ -79,7 +78,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
@@ -101,9 +100,6 @@ pub enum RecordingState {
 #[derive(specta::Type, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct App {
-    #[serde(skip)]
-    #[deprecated = "can be removed when native camera preview is ready"]
-    camera_tx: flume::Sender<RawCameraFrame>,
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_port: u16,
     #[serde(skip)]
@@ -248,7 +244,8 @@ async fn set_camera_input(
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    let camera_feed = state.read().await.camera_feed.clone();
+    let app = state.read().await;
+    let camera_feed = app.camera_feed.clone();
 
     match id {
         None => {
@@ -1776,8 +1773,15 @@ async fn set_camera_preview_state(
 
 #[tauri::command]
 #[specta::specta]
-async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, ()> {
-    // store.wait_for_camera_to_load().await; // TODO: Reimplement this
+async fn await_camera_preview_ready(app: MutableState<'_, App>) -> Result<bool, String> {
+    let app = app.read().await.camera_feed.clone();
+
+    let (tx, rx) = oneshot::channel();
+    app.tell(feeds::camera::ListenForReady(tx))
+        .await
+        .map_err(|err| format!("error registering ready listener: {err}"))?;
+    rx.await
+        .map_err(|err| format!("error receiving ready signal: {err}"))?;
     Ok(true)
 }
 
@@ -1922,6 +1926,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
 
     let camera_feed = CameraFeed::spawn(CameraFeed::new());
+    let _ = camera_feed.ask(feeds::camera::AddSender(camera_tx)).await;
 
     let mic_feed = {
         let (error_tx, error_rx) = flume::bounded(1);
@@ -2034,7 +2039,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             {
                 app.manage(Arc::new(RwLock::new(App {
-                    camera_tx,
                     camera_ws_port,
                     handle: app.clone(),
                     camera_preview: CameraPreviewManager::new(&app),

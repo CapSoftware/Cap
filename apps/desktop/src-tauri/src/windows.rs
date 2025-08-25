@@ -1,6 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
+use anyhow::anyhow;
 use futures::pin_mut;
 use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
@@ -442,7 +443,12 @@ impl ShowCapWindow {
                     let window = window_builder.build()?;
 
                     if enable_native_camera_preview {
-                        if let Err(err) = state.camera_preview.init_window(window.clone()).await {
+                        let camera_feed = state.camera_feed.clone();
+                        if let Err(err) = state
+                            .camera_preview
+                            .init_window(window.clone(), camera_feed)
+                            .await
+                        {
                             error!("Error initializing camera preview: {err}");
                             window.close().ok();
                         }

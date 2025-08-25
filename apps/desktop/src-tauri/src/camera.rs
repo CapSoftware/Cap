@@ -1,10 +1,14 @@
 use anyhow::{Context, anyhow};
-use cap_recording::feeds::camera::RawCameraFrame;
+use cap_recording::feeds::{
+    self,
+    camera::{CameraFeed, RawCameraFrame},
+};
 use ffmpeg::{
     format::{self, Pixel},
     frame,
     software::scaling,
 };
+use kameo::actor::ActorRef;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{sync::Arc, thread};
@@ -51,12 +55,6 @@ pub struct CameraPreviewState {
 pub struct CameraPreviewManager {
     store: Result<Arc<tauri_plugin_store::Store<tauri::Wry>>, String>,
     preview: Option<InitializedCameraPreview>,
-    // TODO: Reusing flume channels can be unsafe as the frames will only
-    // go to a single receiver, not all of them.
-    channel: (
-        flume::Sender<RawCameraFrame>,
-        flume::Receiver<RawCameraFrame>,
-    ),
 }
 
 impl CameraPreviewManager {
@@ -67,7 +65,6 @@ impl CameraPreviewManager {
                 .build()
                 .map_err(|err| format!("Error initializing camera preview store: {err}")),
             preview: None,
-            channel: flume::bounded(4),
         }
     }
 
@@ -99,19 +96,18 @@ impl CameraPreviewManager {
         Ok(())
     }
 
-    pub fn attach(&self) -> flume::Sender<RawCameraFrame> {
-        // Drain the channel so when the preview is opened it doesn't show an old frame.
-        while let Ok(_) = self.channel.1.try_recv() {}
-
-        self.channel.0.clone()
-    }
-
     pub fn is_initialized(&self) -> bool {
         self.preview.is_some()
     }
 
     /// Initialize the camera preview for a specific Tauri window
-    pub async fn init_window(&mut self, window: WebviewWindow) -> anyhow::Result<()> {
+    pub async fn init_window(
+        &mut self,
+        window: WebviewWindow,
+        actor: ActorRef<CameraFeed>,
+    ) -> anyhow::Result<()> {
+        let (camera_tx, camera_rx) = flume::bounded(4);
+
         let default_state = self
             .get_state()
             .map_err(|err| error!("Error getting camera preview state: {err}"))
@@ -122,13 +118,17 @@ impl CameraPreviewManager {
             InitializedCameraPreview::init_wgpu(window.clone(), default_state).await?;
         window.show().ok();
 
-        let camera_rx = self.channel.1.clone();
         let rt = Runtime::new().unwrap();
         thread::spawn(move || {
             LocalSet::new().block_on(&rt, renderer.run(window, reconfigure_rx, camera_rx))
         });
 
         self.preview = Some(InitializedCameraPreview { reconfigure });
+
+        actor
+            .ask(feeds::camera::AddSender(camera_tx))
+            .await
+            .context("Error attaching camera feed consumer")?;
 
         Ok(())
     }
@@ -156,9 +156,6 @@ impl CameraPreviewManager {
                 .map_err(|err| error!("Error sending camera preview shutdown event: {err}"))
                 .ok();
         }
-
-        // Drain the channel so when the preview is opened it doesn't show it.
-        while let Ok(_) = self.channel.1.try_recv() {}
     }
 }
 
@@ -430,7 +427,7 @@ impl InitializedCameraPreview {
             .map_err(|err| error!("Error getting camera renderer surface texture: {err:?}"))
         {
             let output_width = 5;
-            let output_height = (5.0 * 1.7777778) as u32; // TODO
+            let output_height = 5;
 
             let (buffer, stride) = render_solid_frame(
                 [0x11, 0x11, 0x11, 0xFF], // #111111
@@ -450,8 +447,6 @@ impl InitializedCameraPreview {
             )
             .render(&surface, &buffer, stride);
             surface.present();
-
-            println!("1: {:?} {:?} {:?}", size.0, size.1, aspect);
         }
 
         Ok(renderer)
@@ -517,8 +512,6 @@ impl Renderer {
                     let aspect_ratio = frame.frame.width() as f32 / frame.frame.height() as f32;
                     self.sync_aspect_ratio_uniforms(aspect_ratio);
 
-                    println!("2: {:?}", aspect_ratio);
-
                     if let Ok(surface) = self.surface.get_current_texture().map_err(|err| {
                         error!("Error getting camera renderer surface texture: {err:?}")
                     }) {
@@ -569,15 +562,15 @@ impl Renderer {
                 }
                 Err(ReconfigureEvent::State(state)) => {
                     // Aspect ratio is hardcoded until we can derive it from the camera feed
-                    // if !seen_first_frame { // TODO
-                    //     self.sync_aspect_ratio_uniforms(
-                    //         if state.shape == CameraPreviewShape::Full {
-                    //             16.0 / 9.0
-                    //         } else {
-                    //             1.0
-                    //         },
-                    //     );
-                    // }
+                    if !seen_first_frame {
+                        self.sync_aspect_ratio_uniforms(
+                            if state.shape == CameraPreviewShape::Full {
+                                16.0 / 9.0
+                            } else {
+                                1.0
+                            },
+                        );
+                    }
 
                     self.update_state_uniforms(&state);
                     if let Some(aspect_ratio) = self.aspect_ratio.get_latest_key() {

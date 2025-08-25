@@ -28,6 +28,7 @@ pub struct RawCameraFrame {
 pub struct CameraFeed {
     state: State,
     senders: Vec<flume::Sender<RawCameraFrame>>,
+    on_ready: Vec<oneshot::Sender<()>>,
 }
 
 enum State {
@@ -86,6 +87,7 @@ impl CameraFeed {
                 attached: None,
             }),
             senders: Vec::new(),
+            on_ready: Vec::new(),
         }
     }
 }
@@ -145,6 +147,8 @@ pub struct SetInput {
 pub struct RemoveInput;
 
 pub struct AddSender(pub flume::Sender<RawCameraFrame>);
+
+pub struct ListenForReady(pub oneshot::Sender<()>);
 
 pub struct Lock;
 
@@ -373,10 +377,35 @@ impl Message<AddSender> for CameraFeed {
     }
 }
 
+impl Message<ListenForReady> for CameraFeed {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: ListenForReady,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match self.state {
+            State::Locked { .. }
+            | State::Open(OpenState {
+                connecting: None,
+                attached: Some(..),
+            }) => {
+                msg.0.send(()).ok();
+            }
+            _ => {
+                self.on_ready.push(msg.0);
+            }
+        }
+    }
+}
+
 impl Message<NewFrame> for CameraFeed {
     type Reply = ();
 
     async fn handle(&mut self, msg: NewFrame, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        println!("EMIT FRAME TO {}", self.senders.len());
+
         let mut to_remove = vec![];
 
         for (i, sender) in self.senders.iter().enumerate() {
@@ -460,6 +489,10 @@ impl Message<InputConnected> for CameraFeed {
                 println!("connected: {:?}", &id);
                 state.handle_input_connected(data, id);
             }
+        }
+
+        for tx in &mut self.on_ready.drain(..) {
+            tx.send(()).ok();
         }
 
         Ok(())
