@@ -1006,6 +1006,7 @@ dependencies = [
  "futures-intrusive",
  "global-hotkey",
  "image 0.25.6",
+ "kameo",
  "keyed_priority_queue",
  "lazy_static",
  "log",

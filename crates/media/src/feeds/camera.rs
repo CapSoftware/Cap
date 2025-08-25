@@ -1,62 +1,328 @@
-use cap_fail::{fail, fail_err};
-use cap_media_info::VideoInfo;
-use ffmpeg::frame;
-use flume::{Receiver, Sender, TryRecvError, TrySendError};
-use futures::channel::oneshot;
 use std::{
     cmp::Ordering,
+    pin::Pin,
     sync::mpsc,
-    thread,
     time::{Duration, Instant},
 };
-use tracing::{debug, error, info, trace, warn};
 
-use cap_camera_ffmpeg::*;
+use cap_camera::{CameraInfo, CaptureHandle, Format};
+use cap_camera_ffmpeg::CapturedFrameExt;
+use cap_media_info::VideoInfo;
+use ffmpeg::frame;
+use flume::TrySendError;
+use futures::{
+    FutureExt, TryFutureExt,
+    future::Shared,
+    stream::{AbortHandle, Abortable},
+};
+use kameo::{Actor, prelude::*};
+use tracing::{debug, error, info, warn};
 
-pub struct CameraFeedInfo {
-    pub camera: cap_camera::CameraInfo,
-    pub video_info: VideoInfo,
-    pub reference_time: Instant,
+type SharedInitTaskHandle = Abortable<
+    Shared<Pin<Box<dyn Future<Output = Result<Result<(), SetupCameraError>, String>> + Send>>>,
+>;
+
+#[derive(Debug, Clone)]
+pub struct CameraFeed(ActorRef<CameraFeedActor>);
+
+impl CameraFeed {
+    pub fn init() -> Self {
+        Self(CameraFeedActor::spawn(Default::default()))
+    }
+
+    pub async fn set_camera(&self, id: DeviceOrModelID) -> Result<(), SetupCameraError> {
+        let camera = cap_camera::list_cameras()
+            .find(|c| match &id {
+                DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
+                DeviceOrModelID::ModelID(model_id) => c.model_id() == Some(model_id),
+            })
+            .ok_or(SetupCameraError::CameraNotFound)?;
+        let formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
+        if formats.is_empty() {
+            return Err(SetupCameraError::InvalidFormat);
+        }
+
+        self.0
+            .ask(SetCamera { camera, formats })
+            .await
+            .map_err(|_| SetupCameraError::ActorSendError)?
+            .await
+            // We treat the future being aborted as a success
+            // As it means another camera is being initialized
+            .unwrap_or(Ok(Ok(())))
+            .map_err(SetupCameraError::TaskError)??;
+        Ok(())
+    }
+
+    pub fn create_connection(&self) -> flume::Receiver<RawCameraFrame> {
+        todo!();
+    }
+
+    pub fn video_info(&self) -> VideoInfo {
+        todo!()
+    }
+
+    /// Detach the camera feed from the actor.
+    pub async fn detach(&self) -> Result<(), ()> {
+        self.0.ask(Detach).await.map_err(|_| ())
+    }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum SwitchCameraError {
-    #[error("Setup/{0}")]
-    Setup(#[from] SetupCameraError),
-    #[error("Failed to send request")]
-    RequestFailed(oneshot::Canceled),
-    #[error("Failed to initialize camera")]
-    InitializeFailed(oneshot::Canceled),
+impl Drop for CameraFeed {
+    fn drop(&mut self) {
+        let actor = self.0.clone();
+        tokio::spawn(async move {
+            actor
+                .stop_gracefully()
+                .await
+                .map_err(|err| error!("Error stopping camera feed: {err:?}"))
+                .ok();
+        });
+    }
 }
 
-enum CameraControl {
-    Switch(
-        DeviceOrModelID,
-        oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
-    ),
-    AttachConsumer(Sender<RawCameraFrame>),
-    Shutdown,
+#[derive(Actor, Default)]
+struct CameraFeedActor {
+    senders: Vec<flume::Sender<RawCameraFrame>>,
+    state: State,
 }
 
-#[derive(Clone)]
-pub struct RawCameraFrame {
-    pub frame: frame::Video,
-    pub timestamp: Duration,
-    pub refrence_time: Instant,
+struct AttachedCamera {
+    handle: CaptureHandle,
+    video_info: VideoInfo,
+    reference_time: Instant,
 }
 
-pub struct CameraConnection {
-    control: Sender<CameraControl>,
+#[derive(Default)]
+enum State {
+    #[default]
+    Detached,
+    Initializing {
+        handle: SharedInitTaskHandle,
+        abort_handle: AbortHandle,
+    },
+    Attached(AttachedCamera),
 }
 
-impl CameraConnection {
-    pub fn attach(&self) -> Receiver<RawCameraFrame> {
-        let (sender, receiver) = flume::bounded(60);
-        self.control
-            .send(CameraControl::AttachConsumer(sender))
-            .ok();
+pub struct SetCamera {
+    camera: CameraInfo,
+    formats: Vec<Format>,
+}
 
-        receiver
+impl Message<SetCamera> for CameraFeedActor {
+    type Reply = Result<SharedInitTaskHandle, ()>;
+
+    async fn handle(
+        &mut self,
+        msg: SetCamera,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match std::mem::replace(&mut self.state, State::Detached) {
+            State::Detached => {}
+            State::Initializing { abort_handle, .. } => {
+                info!("Switching initializing camera feed");
+                abort_handle.abort();
+            }
+            State::Attached(camera) => {
+                info!("Switching existing camera feed");
+                camera
+                    .handle
+                    .stop_capturing()
+                    .map_err(|err| error!("Failed to stop capturing: {err}"))
+                    .ok();
+            }
+        }
+
+        let actor = ctx.actor_ref();
+        let actor_ref = actor.clone();
+        let handle = tokio::spawn(async move {
+            let actor_ref2 = actor_ref.clone();
+
+            let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+            let mut ready_signal = Some(ready_tx);
+
+            let format = determine_idea_format(msg.formats);
+            let frame_rate = format.frame_rate() as u32;
+
+            let capture_handle = msg.camera.start_capturing(format, move |frame| {
+                let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+                    return;
+                };
+
+                ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
+
+                if let Some(signal) = ready_signal.take() {
+                    let video_info = VideoInfo::from_raw_ffmpeg(
+                        ff_frame.format(),
+                        ff_frame.width(),
+                        ff_frame.height(),
+                        frame_rate,
+                    );
+
+                    let _ = signal.send((video_info, frame.reference_time));
+                }
+
+                actor_ref2
+                    .tell(FrameReady(RawCameraFrame {
+                        frame: ff_frame,
+                        timestamp: frame.timestamp,
+                        reference_time: frame.reference_time,
+                    }))
+                    .blocking_send()
+                    .map_err(|err| error!("Error sending camera frame to actor: {err}"))
+                    .ok();
+            })?;
+
+            let (video_info, reference_time) = ready_rx
+                .recv_timeout(CAMERA_INIT_TIMEOUT)
+                .map_err(SetupCameraError::Timeout)?;
+
+            actor_ref
+                .tell(CameraReady(Ok(AttachedCamera {
+                    handle: capture_handle,
+                    video_info,
+                    reference_time,
+                })))
+                .await
+                .map_err(|err| error!("Error sending camera ready message to actor: {err}"))
+                .ok();
+
+            Ok::<_, SetupCameraError>(())
+        })
+        .map_err(|err| format!("Error joining camera feed actor task: {err}"))
+        .boxed()
+        .shared();
+
+        let (abort_handle, abort_registration) = AbortHandle::new_pair();
+        let handle = Abortable::new(handle, abort_registration);
+
+        // We use a separate actor so panics and errors can be caught.
+        tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                if handle
+                    .await
+                    .map(|r| r.map_err(|_| ()))
+                    .map_err(|_| ())
+                    .flatten()
+                    .is_err()
+                {
+                    actor.tell(CameraReady(Err(()))).await.ok();
+                }
+            }
+        });
+
+        self.state = State::Initializing {
+            handle: handle.clone(),
+            abort_handle,
+        };
+
+        Ok(handle)
+    }
+}
+
+struct CameraReady(Result<AttachedCamera, ()>);
+
+impl Message<CameraReady> for CameraFeedActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: CameraReady,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        match (msg.0, &mut self.state) {
+            (Ok(camera), State::Detached) => {
+                // Indicates a bug in `SetCamera` but we can make it work.
+                error!("Skipping camera initialization state");
+                self.state = State::Attached(camera);
+            }
+            (Ok(camera), State::Initializing { .. }) => self.state = State::Attached(camera),
+            (Ok(camera), State::Attached { .. }) => {
+                // Indicates a bug in `SetCamera` but we can make it work.
+                error!("CameraReady received while in attached state");
+                self.state = State::Attached(camera);
+            }
+            (Err(_), State::Initializing { .. }) => {
+                error!("Failed to attach camera, detaching it...");
+                self.state = State::Detached;
+            }
+            (Err(_), State::Detached | State::Attached(..)) => {
+                // If this is reached the handling of `SetCamera` has a bug.
+                // As it won't affect UX we can just ignore it.
+                error!("Error initializing camera with one already attached.");
+            }
+        }
+    }
+}
+
+struct Detach;
+
+impl Message<Detach> for CameraFeedActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _: Detach, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        match std::mem::replace(&mut self.state, State::Detached) {
+            State::Detached => {}
+            State::Initializing { abort_handle, .. } => {
+                abort_handle.abort();
+            }
+            State::Attached(camera) => {
+                camera
+                    .handle
+                    .stop_capturing()
+                    .map_err(|err| error!("Error stopping camera feed: {err}"))
+                    .ok();
+            }
+        }
+    }
+}
+
+struct FrameReady(RawCameraFrame);
+
+impl Message<FrameReady> for CameraFeedActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        FrameReady(frame): FrameReady,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        // This shouldn't happen but let's guard it anyway
+        if matches!(self.state, State::Detached) {
+            error!("FrameRead received while in detached state. Ignoring it!");
+            return;
+        }
+
+        let mut to_remove = vec![];
+
+        for (i, sender) in self.senders.iter().enumerate() {
+            if let Err(TrySendError::Disconnected(_)) = sender.try_send(frame.clone()) {
+                warn!("Camera sender {} disconnected, will be removed", i);
+                to_remove.push(i);
+            };
+        }
+
+        if !to_remove.is_empty() {
+            debug!("Removing {} disconnected camera senders", to_remove.len());
+            for i in to_remove.into_iter().rev() {
+                self.senders.swap_remove(i);
+            }
+        }
+    }
+}
+
+struct AttachConsumer(flume::Sender<RawCameraFrame>);
+
+impl Message<AttachConsumer> for CameraFeedActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AttachConsumer,
+        _: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.senders.push(msg.0);
     }
 }
 
@@ -74,214 +340,14 @@ impl DeviceOrModelID {
     }
 }
 
-pub struct CameraFeed {
-    pub camera_info: cap_camera::CameraInfo,
-    video_info: VideoInfo,
-    reference_time: Instant,
-    control: Sender<CameraControl>,
+#[derive(Clone)]
+pub struct RawCameraFrame {
+    pub frame: frame::Video,
+    pub timestamp: Duration,
+    pub reference_time: Instant,
 }
 
-impl CameraFeed {
-    pub async fn init(selected_camera: DeviceOrModelID) -> Result<CameraFeed, SetupCameraError> {
-        trace!("Initializing camera feed for: {:?}", &selected_camera);
-
-        fail_err!(
-            "media::feeds::camera::init",
-            SetupCameraError::Initialisation
-        );
-
-        let camera_info = find_camera(&selected_camera).ok_or(SetupCameraError::CameraNotFound)?;
-        let (control, control_receiver) = flume::bounded(1);
-
-        let (ready_tx, ready_rx) = oneshot::channel();
-
-        thread::spawn(move || {
-            run_camera_feed(selected_camera, control_receiver, ready_tx);
-        });
-
-        let state = ready_rx
-            .await
-            .map_err(|_| SetupCameraError::Initialisation)??;
-
-        let camera_feed = Self {
-            camera_info,
-            control,
-            video_info: state.video_info,
-            reference_time: state.reference_time,
-        };
-
-        Ok(camera_feed)
-    }
-
-    /// Initialize camera asynchronously, returning a receiver immediately.
-    /// The actual initialization happens in a background task.
-    /// Dropping the receiver cancels the initialization.
-    pub fn init_async(
-        id: DeviceOrModelID,
-    ) -> flume::Receiver<Result<CameraFeed, SetupCameraError>> {
-        let (tx, rx) = flume::bounded(1);
-
-        tokio::spawn(async move {
-            let result = Self::init(id).await;
-            let _ = tx.send(result);
-        });
-
-        rx
-    }
-
-    pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
-        cap_camera::list_cameras().collect()
-    }
-
-    pub fn camera_info(&self) -> cap_camera::CameraInfo {
-        self.camera_info.clone()
-    }
-
-    pub fn video_info(&self) -> VideoInfo {
-        self.video_info
-    }
-
-    pub async fn switch_cameras(&mut self, id: DeviceOrModelID) -> Result<(), SwitchCameraError> {
-        fail_err!(
-            "media::feeds::camera::switch_cameras",
-            SwitchCameraError::Setup(SetupCameraError::CameraNotFound)
-        );
-
-        let (result_tx, result_rx) = oneshot::channel();
-
-        let _ = self
-            .control
-            .send_async(CameraControl::Switch(id, result_tx))
-            .await;
-
-        let data = result_rx
-            .await
-            .map_err(SwitchCameraError::RequestFailed)??;
-
-        self.camera_info = data.camera;
-        self.video_info = data.video_info;
-        self.reference_time = data.reference_time;
-
-        Ok(())
-    }
-
-    pub fn create_connection(&self) -> CameraConnection {
-        CameraConnection {
-            control: self.control.clone(),
-        }
-    }
-
-    pub fn attach(&self, sender: Sender<RawCameraFrame>) {
-        self.control
-            .send(CameraControl::AttachConsumer(sender))
-            .ok();
-    }
-}
-
-impl Drop for CameraFeed {
-    fn drop(&mut self) {
-        let _ = self.control.send(CameraControl::Shutdown);
-    }
-}
-
-fn find_camera(selected_camera: &DeviceOrModelID) -> Option<cap_camera::CameraInfo> {
-    cap_camera::list_cameras().find(|c| match selected_camera {
-        DeviceOrModelID::DeviceID(device_id) => c.device_id() == device_id,
-        DeviceOrModelID::ModelID(model_id) => c.model_id() == Some(model_id),
-    })
-}
-
-// #[tracing::instrument(skip_all)]
-fn run_camera_feed(
-    id: DeviceOrModelID,
-    control: Receiver<CameraControl>,
-    ready_tx: oneshot::Sender<Result<CameraFeedInfo, SetupCameraError>>,
-) {
-    fail!("media::feeds::camera::run panic");
-
-    let mut senders: Vec<Sender<RawCameraFrame>> = vec![];
-
-    let mut state = match setup_camera(id) {
-        Ok(state) => {
-            let _ = ready_tx.send(Ok(CameraFeedInfo {
-                camera: state.camera_info.clone(),
-                video_info: state.video_info,
-                reference_time: state.reference_time,
-            }));
-            state
-        }
-        Err(e) => {
-            let _ = ready_tx.send(Err(e));
-            return;
-        }
-    };
-
-    'outer: loop {
-        debug!("Video feed camera format: {:#?}", &state.video_info);
-
-        loop {
-            match control.try_recv() {
-                Err(TryRecvError::Disconnected) => {
-                    trace!("Control disconnected");
-                    break 'outer;
-                }
-                Ok(CameraControl::Shutdown) => {
-                    state
-                        .handle
-                        .stop_capturing()
-                        .map_err(|err| error!("Error stopping capture: {err:?}"))
-                        .ok();
-                    println!("Deliberate shutdown");
-                    break 'outer;
-                }
-                Err(TryRecvError::Empty) => {}
-                Ok(CameraControl::AttachConsumer(sender)) => {
-                    senders.push(sender);
-                }
-                Ok(CameraControl::Switch(new_id, switch_result)) => match setup_camera(new_id) {
-                    Ok(new_state) => {
-                        let _ = switch_result.send(Ok(CameraFeedInfo {
-                            camera: new_state.camera_info.clone(),
-                            video_info: new_state.video_info,
-                            reference_time: new_state.reference_time,
-                        }));
-                        state = new_state;
-
-                        break;
-                    }
-                    Err(e) => {
-                        let _ = switch_result.send(Err(e));
-                        continue;
-                    }
-                },
-            }
-
-            let Ok(frame) = state.frame_rx.recv_timeout(Duration::from_secs(5)) else {
-                return;
-            };
-
-            let mut to_remove = vec![];
-
-            for (i, sender) in senders.iter().enumerate() {
-                if let Err(TrySendError::Disconnected(_)) = sender.try_send(frame.clone()) {
-                    warn!("Camera sender {} disconnected, will be removed", i);
-                    to_remove.push(i);
-                };
-            }
-
-            if !to_remove.is_empty() {
-                // debug!("Removing {} disconnected audio senders", to_remove.len());
-                for i in to_remove.into_iter().rev() {
-                    senders.swap_remove(i);
-                }
-            }
-        }
-    }
-
-    info!("Camera feed stopping");
-}
-
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum SetupCameraError {
     #[error("Camera not found")]
     CameraNotFound,
@@ -291,27 +357,15 @@ pub enum SetupCameraError {
     Timeout(mpsc::RecvTimeoutError),
     #[error("StartCapturing/{0}")]
     StartCapturing(#[from] cap_camera::StartCapturingError),
-    #[error("Failed to initialize camera")]
-    Initialisation,
+    #[error("Task error: {0}")]
+    TaskError(String),
+    #[error("Actor send error")]
+    ActorSendError,
 }
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
-struct SetupCameraState {
-    handle: cap_camera::RecordingHandle,
-    camera_info: cap_camera::CameraInfo,
-    video_info: VideoInfo,
-    frame_rx: mpsc::Receiver<RawCameraFrame>,
-    reference_time: Instant,
-}
-
-fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraError> {
-    let camera = find_camera(&id).ok_or(SetupCameraError::CameraNotFound)?;
-    let formats = camera.formats().ok_or(SetupCameraError::InvalidFormat)?;
-    if formats.is_empty() {
-        return Err(SetupCameraError::InvalidFormat);
-    }
-
+pub fn determine_idea_format(formats: Vec<Format>) -> Format {
     let mut ideal_formats = formats
         .clone()
         .into_iter()
@@ -346,48 +400,5 @@ fn setup_camera(id: DeviceOrModelID) -> Result<SetupCameraState, SetupCameraErro
             .then(fr_cmp.unwrap_or(Ordering::Equal).reverse())
     });
 
-    let format = ideal_formats.swap_remove(0);
-    let frame_rate = format.frame_rate() as u32;
-
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-    let mut ready_signal = Some(ready_tx);
-
-    let (frame_tx, frame_rx) = mpsc::sync_channel(8);
-
-    let capture_handle = camera.start_capturing(format.clone(), move |frame| {
-        let Ok(mut ff_frame) = frame.to_ffmpeg() else {
-            return;
-        };
-
-        ff_frame.set_pts(Some(frame.timestamp.as_micros() as i64));
-
-        if let Some(signal) = ready_signal.take() {
-            let video_info = VideoInfo::from_raw_ffmpeg(
-                ff_frame.format(),
-                ff_frame.width(),
-                ff_frame.height(),
-                frame_rate,
-            );
-
-            let _ = signal.send((video_info, frame.reference_time));
-        }
-
-        let _ = frame_tx.send(RawCameraFrame {
-            frame: ff_frame,
-            timestamp: frame.timestamp,
-            refrence_time: frame.reference_time,
-        });
-    })?;
-
-    let (video_info, reference_time) = ready_rx
-        .recv_timeout(CAMERA_INIT_TIMEOUT)
-        .map_err(SetupCameraError::Timeout)?;
-
-    Ok(SetupCameraState {
-        handle: capture_handle,
-        camera_info: camera,
-        video_info,
-        frame_rx,
-        reference_time,
-    })
+    ideal_formats.swap_remove(0)
 }

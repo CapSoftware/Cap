@@ -169,7 +169,7 @@ impl Display for ModelID {
 
 // Capture
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, Clone)]
 pub enum StartCapturingError {
     #[cfg(windows)]
     #[error("GetDevicesFailed/{0}")]
@@ -210,28 +210,40 @@ impl CameraInfo {
         &self,
         format: Format,
         callback: impl FnMut(CapturedFrame) + 'static,
-    ) -> Result<RecordingHandle, StartCapturingError> {
+    ) -> Result<CaptureHandle, StartCapturingError> {
         #[cfg(target_os = "macos")]
         {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
+            Ok(CaptureHandle {
+                native: Some(start_capturing_impl(self, format, Box::new(callback))?),
             })
         }
         #[cfg(windows)]
         {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
+            Ok(CaptureHandle {
+                native: Some(start_capturing_impl(self, format, Box::new(callback))?),
             })
         }
     }
 }
 
-pub struct RecordingHandle {
-    native: NativeRecordingHandle,
+#[must_use = "must be held for the duration of the recording"]
+pub struct CaptureHandle {
+    native: Option<NativeCaptureHandle>,
 }
 
-impl RecordingHandle {
-    pub fn stop_capturing(self) -> Result<(), String> {
-        self.native.stop_capturing()
+impl CaptureHandle {
+    pub fn stop_capturing(mut self) -> Result<(), String> {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CaptureHandle {
+    fn drop(&mut self) {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing().ok();
+        }
     }
 }

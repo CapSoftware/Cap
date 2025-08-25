@@ -68,7 +68,7 @@ impl ModelID {
 
 pub type NativeFormat = arc::R<av::capture::device::Format>;
 
-pub type NativeRecordingHandle = AVFoundationRecordingHandle;
+pub type NativeCaptureHandle = AVFoundationRecordingHandle;
 
 fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
     let devices = list_video_devices();
@@ -161,7 +161,7 @@ impl AVFoundationRecordingHandle {
     }
 }
 
-#[derive(thiserror::Error)]
+#[derive(thiserror::Error, Clone)]
 pub enum AVFoundationError {
     #[error("{0}")]
     Static(&'static cidre::ns::Error),

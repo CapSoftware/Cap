@@ -5,7 +5,6 @@ use ffmpeg::{
     frame,
     software::scaling,
 };
-use flume::Receiver;
 use futures::{executor::block_on, future::Either};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -13,7 +12,7 @@ use std::{
     collections::HashMap,
     pin::pin,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -21,10 +20,7 @@ use std::{
 };
 use tauri::{LogicalPosition, LogicalSize, Manager, PhysicalSize, WebviewWindow, Wry};
 use tauri_plugin_store::Store;
-use tokio::{
-    sync::{broadcast, oneshot},
-    task::JoinHandle,
-};
+use tokio::sync::{broadcast, oneshot};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use wgpu::{CompositeAlphaMode, SurfaceTexture};

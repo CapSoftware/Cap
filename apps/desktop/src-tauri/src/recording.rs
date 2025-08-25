@@ -18,11 +18,11 @@ use crate::{
     windows::{CapWindowId, ShowCapWindow},
 };
 use cap_fail::fail;
-use cap_media::{feeds::CameraFeed, platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_media::{
     platform::Bounds,
     sources::{CaptureScreen, CaptureWindow},
 };
+use cap_media::{platform::display_for_window, sources::ScreenCaptureTarget};
 use cap_project::{
     CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
     SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
@@ -191,7 +191,7 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
-    CameraFeed::list_cameras()
+    cap_camera::list_cameras().collect()
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
@@ -655,7 +655,7 @@ async fn handle_recording_end(
         //     let _ = v.close();
         // }
         println!("I WANT YOU TO SHUTDOWN PLZ");
-        app.camera_feed.take();
+        app.camera_feed.detach().await;
         app.mic_feed.take();
 
         // TODO: This shouldn't be required

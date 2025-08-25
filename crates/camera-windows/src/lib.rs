@@ -256,7 +256,7 @@ impl Debug for VideoDeviceInfoInner {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum GetDevicesError {
     #[error("MediaFoundation: {0}")]
     MFDeviceEnumerationFailed(windows_core::Error),

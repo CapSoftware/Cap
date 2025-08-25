@@ -130,7 +130,7 @@ pub async fn spawn_studio_recording_actor<'a>(
     id: String,
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs<'a>,
-    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    camera_feed: CameraFeed,
     custom_cursor_capture: bool,
 ) -> Result<(StudioRecordingHandle, oneshot::Receiver<Result<(), String>>), RecordingError> {
     ensure_dir(&recording_dir)?;
@@ -151,7 +151,6 @@ pub async fn spawn_studio_recording_actor<'a>(
     // debug!("screen capture: {screen_source:#?}");
 
     if let Some(camera_feed) = &camera_feed {
-        let camera_feed = camera_feed.lock().await;
         // debug!("camera device info: {:#?}", camera_feed.camera_info());
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
@@ -563,7 +562,7 @@ struct SegmentPipelineFactory {
     capture_target: ScreenCaptureTarget,
     audio_input_feed: Option<AudioInputFeed>,
     capture_system_audio: bool,
-    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    camera_feed: Option<CameraFeed>,
     custom_cursor_capture: bool,
     start_time: SystemTime,
     start_instant: Instant,
@@ -578,7 +577,7 @@ impl SegmentPipelineFactory {
         capture_target: ScreenCaptureTarget,
         audio_input_feed: Option<AudioInputFeed>,
         capture_system_audio: bool,
-        camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+        camera_feed: Option<CameraFeed>,
         custom_cursor_capture: bool,
         start_time: SystemTime,
         start_instant: Instant,
@@ -615,7 +614,7 @@ impl SegmentPipelineFactory {
             self.capture_target,
             &self.audio_input_feed,
             self.capture_system_audio,
-            self.camera_feed.as_deref(),
+            self.camera_feed.as_ref(),
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -639,7 +638,7 @@ async fn create_segment_pipeline(
     capture_target: ScreenCaptureTarget,
     mic_feed: &Option<AudioInputFeed>,
     capture_system_audio: bool,
-    camera_feed: Option<&Mutex<CameraFeed>>,
+    camera_feed: Option<&CameraFeed>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
@@ -671,11 +670,11 @@ async fn create_segment_pipeline(
     #[cfg(target_os = "macos")]
     let screen_crop_ratio = screen_source.crop_ratio();
 
-    let camera_feed = match camera_feed.as_ref() {
-        Some(camera_feed) => Some(camera_feed.lock().await),
-        None => None,
-    };
-    let camera_feed = camera_feed.as_deref();
+    // let camera_feed = match camera_feed.as_ref() {
+    //     Some(camera_feed) => Some(camera_feed.lock().await),
+    //     None => None,
+    // };
+    // let camera_feed = camera_feed.as_deref();
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
@@ -801,7 +800,7 @@ async fn create_segment_pipeline(
     let camera = if let Some(camera_feed) = camera_feed {
         let (tx, rx) = flume::bounded(8);
 
-        let camera_source = CameraSource::init(camera_feed, tx, start_instant);
+        let camera_source = CameraSource::init(camera_feed.clone(), tx, start_instant);
         let camera_config = camera_source.info();
         let output_path = dir.join("camera.mp4");
 

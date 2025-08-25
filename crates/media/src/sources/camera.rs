@@ -6,12 +6,12 @@ use tracing::{error, info};
 
 use crate::{
     MediaError,
-    feeds::{CameraConnection, CameraFeed, RawCameraFrame},
+    feeds::{CameraFeed, RawCameraFrame},
     pipeline::{clock::RealTimeClock, control::Control, task::PipelineSourceTask},
 };
 
 pub struct CameraSource {
-    feed_connection: CameraConnection,
+    feed: CameraFeed,
     video_info: VideoInfo,
     output: Sender<(frame::Video, f64)>,
     first_frame_instant: Option<Instant>,
@@ -21,13 +21,13 @@ pub struct CameraSource {
 
 impl CameraSource {
     pub fn init(
-        feed: &CameraFeed,
+        feed: CameraFeed,
         output: Sender<(frame::Video, f64)>,
         start_instant: Instant,
     ) -> Self {
         Self {
-            feed_connection: feed.create_connection(),
             video_info: feed.video_info(),
+            feed,
             output,
             first_frame_instant: None,
             first_frame_timestamp: None,
@@ -78,7 +78,7 @@ impl CameraSource {
         drop(frames_rx);
 
         for frame in frames {
-            let first_frame_instant = *self.first_frame_instant.get_or_insert(frame.refrence_time);
+            let first_frame_instant = *self.first_frame_instant.get_or_insert(frame.reference_time);
             let first_frame_timestamp = *self.first_frame_timestamp.get_or_insert(frame.timestamp);
 
             if let Err(error) =
@@ -105,7 +105,7 @@ impl PipelineSourceTask for CameraSource {
 
         info!("Camera source ready");
 
-        let frames = frames_rx.get_or_insert_with(|| self.feed_connection.attach());
+        let frames = frames_rx.get_or_insert_with(|| self.feed.create_connection());
 
         ready_signal.send(Ok(())).unwrap();
 
@@ -114,7 +114,7 @@ impl PipelineSourceTask for CameraSource {
                 Some(Control::Play) => match frames.drain().last().or_else(|| frames.recv().ok()) {
                     Some(frame) => {
                         let first_frame_instant =
-                            *self.first_frame_instant.get_or_insert(frame.refrence_time);
+                            *self.first_frame_instant.get_or_insert(frame.reference_time);
                         let first_frame_timestamp =
                             *self.first_frame_timestamp.get_or_insert(frame.timestamp);
 
