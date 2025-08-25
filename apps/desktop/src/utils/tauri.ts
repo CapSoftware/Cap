@@ -583,8 +583,7 @@ export type Hotkey = {
 export type HotkeyAction =
 	| "startRecording"
 	| "stopRecording"
-	| "restartRecording"
-	| "openSettings";
+	| "restartRecording";
 export type HotkeysConfiguration = { show: boolean };
 export type HotkeysStore = { hotkeys: { [key in HotkeyAction]: Hotkey } };
 export type InstantRecordingMeta = { fps: number; sample_rate: number | null };
