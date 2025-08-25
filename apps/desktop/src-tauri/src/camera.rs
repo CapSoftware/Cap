@@ -1,5 +1,5 @@
 use anyhow::Context;
-use cap_media::feeds::RawCameraFrame;
+use cap_recording::feeds::RawCameraFrame;
 use ffmpeg::{
     format::{self, Pixel},
     frame,

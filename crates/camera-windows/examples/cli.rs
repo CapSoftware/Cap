@@ -1,6 +1,6 @@
 fn main() {
     #[cfg(windows)]
-    windows::run();
+    windows::main();
     #[cfg(not(windows))]
     panic!("This example is only available on Windows");
 }
@@ -11,7 +11,7 @@ mod windows {
 
     use cap_camera_windows::*;
 
-    fn run() {
+    pub fn main() {
         let devices = get_devices()
             .unwrap()
             .into_iter()

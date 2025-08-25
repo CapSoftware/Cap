@@ -7,12 +7,16 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
+import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { Option } from "effect";
+import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createFolder } from "@/actions/folders/createFolder";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { BlueFolder, NormalFolder, RedFolder, YellowFolder } from "./Folders";
 
 interface Props {
@@ -54,31 +58,33 @@ export const NewFolderDialog: React.FC<Props> = ({
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
 	const folderRefs = useRef<Record<string, any>>({});
-	const [loading, setLoading] = useState<boolean>(false);
+	const router = useRouter();
 
 	useEffect(() => {
 		if (!open) setSelectedColor(null);
 	}, [open]);
 
-	const createFolderHandler = async () => {
-		if (!selectedColor) return;
-		try {
-			setLoading(true);
-			await createFolder({
-				name: folderName,
-				color: selectedColor,
-				spaceId,
-			});
+	const createFolder = useEffectMutation({
+		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
+			withRpc((r) =>
+				r.FolderCreate({
+					name: data.name,
+					color: data.color,
+					spaceId: Option.fromNullable(spaceId),
+					parentId: Option.none(),
+				}),
+			),
+		onSuccess: () => {
 			setFolderName("");
 			setSelectedColor(null);
 			onOpenChange(false);
+			router.refresh();
 			toast.success("Folder created successfully");
-		} catch (error: any) {
+		},
+		onError: () => {
 			toast.error("Failed to create folder");
-		} finally {
-			setLoading(false);
-		}
-	};
+		},
+	});
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -141,13 +147,20 @@ export const NewFolderDialog: React.FC<Props> = ({
 						Cancel
 					</Button>
 					<Button
-						onClick={createFolderHandler}
+						onClick={() => {
+							if (selectedColor === null) return;
+							createFolder.mutate({ name: folderName, color: selectedColor });
+						}}
 						size="sm"
-						spinner={loading}
+						spinner={createFolder.isPending}
 						variant="dark"
-						disabled={!selectedColor || !folderName.trim().length || loading}
+						disabled={
+							!selectedColor ||
+							!folderName.trim().length ||
+							createFolder.isPending
+						}
 					>
-						{loading ? "Creating..." : "Create"}
+						{createFolder.isPending ? "Creating..." : "Create"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

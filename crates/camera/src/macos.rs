@@ -25,8 +25,8 @@ impl CameraInfo {
 
         for format in device.formats().iter() {
             let desc = format.format_desc();
-            let width = desc.dimensions().width as u32;
-            let height = desc.dimensions().height as u32;
+            let width = desc.dims().width as u32;
+            let height = desc.dims().height as u32;
 
             for fr_range in format.video_supported_frame_rate_ranges().iter() {
                 // SAFETY: trust me bro it crashes on intel mac otherwise

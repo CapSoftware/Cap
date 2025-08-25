@@ -7,6 +7,7 @@ import {
 	users,
 } from "@cap/database/schema";
 import { and, eq, ne, or } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import type { NextRequest } from "next/server";
 
 export async function POST(request: NextRequest) {
@@ -15,7 +16,6 @@ export async function POST(request: NextRequest) {
 
 	if (!user) {
 		console.error("User not found");
-
 		return Response.json({ error: true }, { status: 401 });
 	}
 
@@ -90,6 +90,8 @@ export async function POST(request: NextRequest) {
 			.set({ activeOrganizationId: organizationId })
 			.where(eq(users.id, user.id));
 	}
+
+	revalidatePath("/onboarding");
 
 	return Response.json(
 		{

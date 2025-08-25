@@ -36,7 +36,7 @@ import {
 } from "~/utils/queries";
 import {
 	type CameraInfo,
-	type CaptureScreen,
+	type CaptureDisplay,
 	type CaptureWindow,
 	commands,
 	events,
@@ -143,9 +143,9 @@ function Page() {
 	// allowing us to define fallbacks if the selected options aren't actually available
 	const options = {
 		screen: () => {
-			let screen;
+			let screen: CaptureDisplay | undefined;
 
-			if (rawOptions.captureTarget.variant === "screen") {
+			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
 				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
@@ -156,7 +156,7 @@ function Page() {
 			return screen;
 		},
 		window: () => {
-			let win;
+			let win: CaptureWindow | undefined;
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
@@ -170,11 +170,15 @@ function Page() {
 				const { cameraID } = rawOptions;
 				if (!cameraID) return;
 				if ("ModelID" in cameraID && c.model_id === cameraID.ModelID) return c;
-				if ("DeviceID" in cameraID && c.device_id == cameraID.DeviceID)
+				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
 			}),
 		micName: () => mics.data?.find((name) => name === rawOptions.micName),
 	};
+
+	createEffect(() => {
+		console.log(_windows());
+	});
 
 	// if target is window and no windows are available, switch to screen capture
 	createEffect(() => {
@@ -187,7 +191,7 @@ function Page() {
 		) {
 			setOptions(
 				"captureTarget",
-				reconcile({ variant: "screen", id: screen.id }),
+				reconcile({ variant: "display", id: screen.id }),
 			);
 		}
 	});
@@ -197,7 +201,7 @@ function Page() {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
-						case "screen": {
+						case "display": {
 							const screen = options.screen();
 							if (!screen)
 								throw new Error(
@@ -205,7 +209,7 @@ function Page() {
 										_screens()?.length
 									}`,
 								);
-							return { variant: "screen", id: screen.id };
+							return { variant: "display", id: screen.id };
 						}
 						case "window": {
 							const win = options.window();
@@ -366,12 +370,14 @@ function Page() {
 							: rawOptions.captureTarget.variant
 					}
 					onChange={(area) => {
+						const screen = options.screen();
+						if (!screen) return;
 						if (!area)
 							setOptions(
 								"captureTarget",
 								reconcile({
-									variant: "screen",
-									id: options.screen()?.id ?? -1,
+									variant: "display",
+									id: screen.id,
 								}),
 							);
 					}}
@@ -379,7 +385,7 @@ function Page() {
 				<div
 					class={cx(
 						"flex flex-row items-center rounded-[0.5rem] relative border h-8 transition-all duration-500",
-						(rawOptions.captureTarget.variant === "screen" ||
+						(rawOptions.captureTarget.variant === "display" ||
 							rawOptions.captureTarget.variant === "area") &&
 							"ml-[2.4rem]",
 					)}
@@ -399,7 +405,7 @@ function Page() {
 					>
 						<div class="flex-1 bg-gray-2" />
 					</div>
-					<TargetSelect<CaptureScreen>
+					<TargetSelect<CaptureDisplay>
 						options={_screens() ?? []}
 						onChange={(value) => {
 							if (!value) return;
@@ -412,14 +418,14 @@ function Page() {
 
 							setOptions(
 								"captureTarget",
-								reconcile({ variant: "screen", id: value.id }),
+								reconcile({ variant: "display", id: value.id }),
 							);
 						}}
 						value={options.screen() ?? null}
-						placeholder="Screen"
+						placeholder="Display"
 						optionsEmptyText="No screens found"
 						selected={
-							rawOptions.captureTarget.variant === "screen" ||
+							rawOptions.captureTarget.variant === "display" ||
 							rawOptions.captureTarget.variant === "area"
 						}
 					/>
@@ -585,8 +591,8 @@ function createUpdateCheck() {
 }
 
 function AreaSelectButton(props: {
-	targetVariant: "screen" | "area" | "other";
-	screen: CaptureScreen | undefined;
+	targetVariant: "display" | "area" | "other";
+	screen: CaptureDisplay | undefined;
 	onChange(area?: number): void;
 }) {
 	const [areaSelection, setAreaSelection] = createStore({ pending: false });
@@ -750,6 +756,7 @@ function CameraSelect(props: {
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
+				type="button"
 				disabled={!!currentRecording.data || props.disabled}
 				class="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect"
 				onClick={() => {
@@ -856,6 +863,7 @@ function MicrophoneSelect(props: {
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
+				type="button"
 				disabled={!!currentRecording.data || props.disabled}
 				class="relative flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors KSelect overflow-hidden z-10"
 				onClick={() => {
@@ -921,6 +929,7 @@ function SystemAudio() {
 
 	return (
 		<button
+			type="button"
 			onClick={() => {
 				if (!rawOptions) return;
 				setOptions({ captureSystemAudio: !rawOptions.captureSystemAudio });
@@ -943,7 +952,7 @@ function SystemAudio() {
 	);
 }
 
-function TargetSelect<T extends { id: number; name: string }>(props: {
+function TargetSelect<T extends { id: string; name: string }>(props: {
 	options: Array<T>;
 	onChange: (value: T) => void;
 	value: T | null;
@@ -969,6 +978,7 @@ function TargetSelect<T extends { id: number; name: string }>(props: {
 
 	return (
 		<button
+			type="button"
 			class="group flex-1 text-gray-11 py-1 z-10 data-[selected='true']:text-gray-12 disabled:text-gray-10 peer focus:outline-none transition-colors duration-100 w-full text-nowrap overflow-hidden px-2 flex gap-2 items-center justify-center"
 			data-selected={props.selected}
 			disabled={props.disabled}

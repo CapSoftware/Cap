@@ -16,7 +16,6 @@ cap-cursor-info = { path = "../cursor-info" }
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio.workspace = true
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
 image = "0.25.2"

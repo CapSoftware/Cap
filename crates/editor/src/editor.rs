@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
-use cap_media::frame_ws::WSFrame;
 use cap_project::{CursorEvents, RecordingMeta, StudioRecordingMeta};
 use cap_rendering::{
     DecodedSegmentFrames, FrameRenderer, ProjectRecordingsMeta, ProjectUniforms,
-    RenderVideoConstants, RendererLayers,
+    RenderVideoConstants, RenderedFrame, RendererLayers,
 };
 use tokio::{
     sync::{mpsc, oneshot},
@@ -26,7 +25,7 @@ pub enum RendererMessage {
 
 pub struct Renderer {
     rx: mpsc::Receiver<RendererMessage>,
-    frame_tx: flume::Sender<WSFrame>,
+    frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     render_constants: Arc<RenderVideoConstants>,
     #[allow(unused)]
     total_frames: u32,
@@ -39,7 +38,7 @@ pub struct RendererHandle {
 impl Renderer {
     pub fn spawn(
         render_constants: Arc<RenderVideoConstants>,
-        frame_tx: flume::Sender<WSFrame>,
+        frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
         recording_meta: &RecordingMeta,
         meta: &StudioRecordingMeta,
     ) -> Result<RendererHandle, String> {
@@ -63,7 +62,7 @@ impl Renderer {
 
         let this = Self {
             rx,
-            frame_tx,
+            frame_cb,
             render_constants,
             total_frames,
         };
@@ -98,24 +97,14 @@ impl Renderer {
                             }
                         }
 
-                        let frame_tx = self.frame_tx.clone();
-
-                        let output_size = uniforms.output_size;
-
                         let frame = frame_renderer
                             .render(segment_frames, uniforms, &cursor, &mut layers)
                             .await
                             .unwrap();
 
-                        frame_tx
-                            .try_send(WSFrame {
-                                data: frame.data,
-                                width: output_size.0,
-                                height: output_size.1,
-                                stride: frame.padded_bytes_per_row,
-                            })
-                            .ok();
-                        finished.send(()).ok();
+                        (self.frame_cb)(frame);
+
+                        let _ = finished.send(());
                     }
                     RendererMessage::Stop { finished } => {
                         if let Some(task) = frame_task.take() {

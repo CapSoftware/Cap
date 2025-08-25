@@ -161,9 +161,10 @@ impl H264Encoder {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to convert frame: {:?} from format {:?} to YUV420P",
+                        "Failed to convert frame: {} from format {:?} to {:?}",
                         e,
-                        frame.format()
+                        frame.format(),
+                        converter.output().format
                     );
                     // Return early as we can't process this frame
                     return;

@@ -45,7 +45,11 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 					),
 				);
 
-				return { id: user.id, email: user.email };
+				return {
+					id: user.id,
+					email: user.email,
+					activeOrgId: user.activeOrganizationId,
+				};
 			}).pipe(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
@@ -71,6 +75,7 @@ export const provideOptionalAuth = <A, E, R>(
 				CurrentUser.context({
 					id: user.id,
 					email: user.email,
+					activeOrgId: user.activeOrganizationId,
 				}),
 			),
 			Option.match({
