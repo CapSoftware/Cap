@@ -217,17 +217,17 @@ impl App {
 #[tauri::command]
 #[specta::specta]
 async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> Result<(), String> {
-    let app = state.write().await;
+    let mic_feed = state.read().await.mic_feed.clone();
 
     match label {
         None => {
-            app.mic_feed
+            mic_feed
                 .ask(microphone::RemoveInput)
                 .await
                 .map_err(|e| e.to_string())?;
         }
         Some(label) => {
-            app.mic_feed
+            mic_feed
                 .ask(feeds::microphone::SetInput { label })
                 .await
                 .map_err(|e| e.to_string())?
