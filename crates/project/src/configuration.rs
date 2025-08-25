@@ -193,6 +193,15 @@ pub struct ShadowConfiguration {
     pub blur: f32,    // Shadow blur amount (0-100)
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BorderConfiguration {
+    pub enabled: bool,
+    pub width: f32,     // Border width in pixels
+    pub color: Color,   // Border color (RGB)
+    pub opacity: f32,   // Border opacity (0-100)
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundConfiguration {
@@ -206,6 +215,19 @@ pub struct BackgroundConfiguration {
     pub shadow: f32,
     #[serde(default)]
     pub advanced_shadow: Option<ShadowConfiguration>,
+    #[serde(default)]
+    pub border: Option<BorderConfiguration>,
+}
+
+impl Default for BorderConfiguration {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: 5.0,
+            color: [255, 255, 255], // White
+            opacity: 80.0,          // 80% opacity
+        }
+    }
 }
 
 impl Default for BackgroundConfiguration {
@@ -219,6 +241,7 @@ impl Default for BackgroundConfiguration {
             crop: None,
             shadow: 73.6,
             advanced_shadow: Some(ShadowConfiguration::default()),
+            border: None, // Border is disabled by default for backwards compatibility
         }
     }
 }

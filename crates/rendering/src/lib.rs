@@ -636,7 +636,38 @@ impl ProjectUniforms {
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
                 opacity: layout.screen_opacity as f32,
-                _padding: [0.0; 3],
+                border_enabled: if project
+                    .background
+                    .border
+                    .as_ref()
+                    .map_or(false, |b| b.enabled)
+                {
+                    1.0
+                } else {
+                    0.0
+                },
+                border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                _padding0: 0.0,
+                _padding1: [0.0; 2],
+                _padding1b: [0.0; 2],
+                border_color: {
+                    let border = project.background.border.as_ref().unwrap_or(
+                        &cap_project::BorderConfiguration {
+                            enabled: false,
+                            width: 5.0,
+                            color: [255, 255, 255],
+                            opacity: 80.0,
+                        },
+                    );
+
+                    [
+                        border.color[0] as f32 / 255.0,
+                        border.color[1] as f32 / 255.0,
+                        border.color[2] as f32 / 255.0,
+                        (border.opacity / 100.0).clamp(0.0, 1.0),
+                    ]
+                },
+                _padding2: [0.0; 4],
             }
         };
 
@@ -745,7 +776,13 @@ impl ProjectUniforms {
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
                     opacity: layout.regular_camera_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
                 }
             });
 
@@ -808,7 +845,13 @@ impl ProjectUniforms {
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
                     opacity: layout.camera_only_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
                 }
             });
 
