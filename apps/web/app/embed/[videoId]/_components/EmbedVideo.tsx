@@ -44,7 +44,7 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect;
+		data: Omit<typeof videos.$inferSelect, "password">;
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
