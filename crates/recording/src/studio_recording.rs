@@ -7,10 +7,7 @@ use std::{
 
 use cap_media::{
     MediaError,
-    feeds::{
-        CameraFeed,
-        microphone::{self, MicrophoneFeed, MicrophoneFeedLock},
-    },
+    feeds::{CameraFeed, microphone::MicrophoneFeedLock},
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
@@ -20,7 +17,6 @@ use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
 use flume::Receiver;
-use kameo::actor::ActorRef;
 use relative_path::RelativePathBuf;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, info, trace};

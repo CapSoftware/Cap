@@ -2422,28 +2422,6 @@ trait EventExt: tauri_specta::Event {
 
 impl<T: tauri_specta::Event> EventExt for T {}
 
-trait TransposeAsync {
-    type Output;
-
-    fn transpose_async(self) -> impl Future<Output = Self::Output>
-    where
-        Self: Sized;
-}
-
-impl<F: Future<Output = T>, T, E> TransposeAsync for Result<F, E> {
-    type Output = Result<T, E>;
-
-    async fn transpose_async(self) -> Self::Output
-    where
-        Self: Sized,
-    {
-        match self {
-            Ok(f) => Ok(f.await),
-            Err(e) => Err(e),
-        }
-    }
-}
-
 fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;
 

@@ -7,13 +7,7 @@ pub use studio_recording::{
     CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_media::{
-    MediaError,
-    feeds::microphone::{MicrophoneFeed, MicrophoneFeedLock},
-    platform::Bounds,
-    sources::*,
-};
-use kameo::actor::ActorRef;
+use cap_media::{MediaError, feeds::microphone::MicrophoneFeedLock, platform::Bounds, sources::*};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use thiserror::Error;

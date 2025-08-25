@@ -6,7 +6,7 @@ use std::{
 
 use cap_media::{
     MediaError,
-    feeds::microphone::{self, MicrophoneFeed, MicrophoneFeedLock},
+    feeds::microphone::MicrophoneFeedLock,
     pipeline::{Pipeline, RealTimeClock},
     platform::Bounds,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
@@ -15,7 +15,6 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
-use kameo::actor::ActorRef;
 use tokio::sync::oneshot;
 use tracing::{Instrument, debug, error, info, trace};
 
