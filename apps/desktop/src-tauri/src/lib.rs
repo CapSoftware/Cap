@@ -114,7 +114,7 @@ pub struct App {
     #[serde(skip)]
     recording_logging_handle: LoggingHandle,
     #[serde(skip)]
-    mic_feed_actor: ActorRef<feeds::microphone::MicrophoneFeed>,
+    mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
     server_url: String,
 }
 
@@ -221,20 +221,22 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 
     match label {
         None => {
-            let _ = app.mic_feed_actor.ask(microphone::RemoveInput).await;
-
-            Ok(())
-        }
-        Some(label) => {
-            let _ = app
-                .mic_feed_actor
-                .ask(feeds::microphone::SetInput { label })
+            app.mic_feed
+                .ask(microphone::RemoveInput)
                 .await
                 .map_err(|e| e.to_string())?;
-
-            Ok(())
+        }
+        Some(label) => {
+            app.mic_feed
+                .ask(feeds::microphone::SetInput { label })
+                .await
+                .map_err(|e| e.to_string())?
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -2131,7 +2133,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_feed_initialization: None,
                     recording_state: RecordingState::None,
                     recording_logging_handle,
-                    mic_feed_actor: mic_feed,
+                    mic_feed,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
                         .flatten()
@@ -2220,10 +2222,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     let app_state = &mut *state.write().await;
 
                                     if !app_state.is_recording_active_or_pending() {
-                                        let _ = app_state
-                                            .mic_feed_actor
-                                            .ask(microphone::RemoveInput)
-                                            .await;
+                                        let _ =
+                                            app_state.mic_feed.ask(microphone::RemoveInput).await;
                                         app_state.camera_feed.take();
 
                                         if let Some(camera) = CapWindowId::Camera.get(&app) {

@@ -353,7 +353,7 @@ pub async fn start_recording(
                 let mut state = state_mtx.write().await;
 
                 use kameo::error::SendError;
-                let mic_feed = match state.mic_feed_actor.ask(microphone::Lock).await {
+                let mic_feed = match state.mic_feed.ask(microphone::Lock).await {
                     Ok(lock) => Some(Arc::new(lock)),
                     Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
@@ -653,7 +653,7 @@ async fn handle_recording_end(
             let _ = v.close();
         }
         app.camera_feed.take();
-        let _ = app.mic_feed_actor.ask(microphone::RemoveInput).await;
+        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
