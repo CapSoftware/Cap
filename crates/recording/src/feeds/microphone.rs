@@ -72,6 +72,7 @@ struct ConnectingState {
 }
 
 struct AttachedState {
+    #[allow(dead_code)]
     id: u32,
     config: SupportedStreamConfig,
     done_tx: mpsc::SyncSender<()>,

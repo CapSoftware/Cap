@@ -2231,8 +2231,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                             CapWindowId::Settings
                             | CapWindowId::Upgrade
                             | CapWindowId::ModeSelect => {
-                                if let Some(window) = CapWindowId::Main.get(app) {
-                                    let _ = window.show();
+                                for (label, window) in app.webview_windows() {
+                                    if let Ok(id) = CapWindowId::from_str(&label)
+                                        && matches!(
+                                            id,
+                                            CapWindowId::TargetSelectOverlay { .. }
+                                                | CapWindowId::Main
+                                        )
+                                    {
+                                        let _ = window.show();
+                                    }
                                 }
                                 return;
                             }

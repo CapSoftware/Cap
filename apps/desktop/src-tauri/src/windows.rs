@@ -235,6 +235,7 @@ impl ShowCapWindow {
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
+                        .minimizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
                         .content_protected(true)
@@ -322,9 +323,16 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window when settings window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
+                // Hide main window and target select overlays when settings window opens
+                for (label, window) in app.webview_windows() {
+                    if let Ok(id) = CapWindowId::from_str(&label)
+                        && matches!(
+                            id,
+                            CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main
+                        )
+                    {
+                        let _ = window.hide();
+                    }
                 }
 
                 self.window_builder(

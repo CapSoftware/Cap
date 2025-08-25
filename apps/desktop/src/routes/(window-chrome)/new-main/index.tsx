@@ -2,7 +2,7 @@ import { Button } from "@cap/ui-solid";
 import { createEventListener } from "@solid-primitives/event-listener";
 import { useNavigate } from "@solidjs/router";
 import { createMutation, useQuery } from "@tanstack/solid-query";
-import { listen, once } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import {
 	getAllWebviewWindows,
 	WebviewWindow,
@@ -18,7 +18,6 @@ import * as updater from "@tauri-apps/plugin-updater";
 import { cx } from "cva";
 import {
 	createEffect,
-	createSignal,
 	ErrorBoundary,
 	onCleanup,
 	onMount,
@@ -29,7 +28,6 @@ import { reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
-import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCameraMutation,
 	createLicenseQuery,
@@ -54,6 +52,7 @@ import ChangelogButton from "./ChangeLogButton";
 import MicrophoneSelect from "./MicrophoneSelect";
 import SystemAudio from "./SystemAudio";
 import TargetTypeButton from "./TargetTypeButton";
+import { addEventListener } from "solid-js/web";
 
 function getWindowSize() {
 	return {

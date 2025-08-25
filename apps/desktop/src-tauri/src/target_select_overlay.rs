@@ -145,25 +145,24 @@ impl WindowFocusManager {
             tokio::spawn(async move {
                 let app = window.app_handle();
                 loop {
-                    let Some(cap_main) = CapWindowId::Main.get(app) else {
-                        window.close().ok();
-                        break;
-                    };
+                    let cap_main = CapWindowId::Main.get(app);
+                    let cap_settings = CapWindowId::Settings.get(app);
 
-                    // If the main window is minimized or not visible, close the overlay
-                    //
-                    // This is a workaround for the fact that the Cap main window
-                    // is minimized when opening settings, etc instead of it being
-                    // closed.
-                    if cap_main.is_minimized().ok().unwrap_or_default()
-                        || cap_main.is_visible().map(|v| !v).ok().unwrap_or_default()
-                    {
-                        window.close().ok();
+                    let has_cap_main = cap_main
+                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
+                        .unwrap_or(true);
+                    let has_cap_settings = cap_settings
+                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
+                        .unwrap_or(true);
+
+                    // Close the overlay if the cap main and settings are not available.
+                    if has_cap_main && has_cap_settings {
+                        window.hide().ok();
                         break;
                     }
 
                     #[cfg(windows)]
-                    {
+                    if let Some(cap_main) = cap_main {
                         let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
@@ -174,7 +173,7 @@ impl WindowFocusManager {
                         }
                     }
 
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 }
             }),
         );

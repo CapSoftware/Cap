@@ -7,7 +7,6 @@ import { useSearchParams } from "@solidjs/router";
 import { createQuery } from "@tanstack/solid-query";
 import { emit } from "@tauri-apps/api/event";
 import { CheckMenuItem, Menu, Submenu } from "@tauri-apps/api/menu";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cx } from "cva";
 import {
 	type ComponentProps,
@@ -99,10 +98,6 @@ export default function () {
 		setOptions("targetMode", null),
 	);
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
-
-	createEffect(() => {
-		if (rawOptions.captureTarget === undefined) getCurrentWindow().close();
-	});
 
 	// This prevents browser keyboard shortcuts from firing.
 	// Eg. on Windows Ctrl+P would open the print dialog without this

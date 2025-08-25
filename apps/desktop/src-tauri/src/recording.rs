@@ -14,15 +14,15 @@ use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
 use serde::Deserialize;
 use specta::Type;
-use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::{error, info};
 
 use crate::{
-    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStarted,
-    RecordingStopped, VideoUploadInfo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStopped,
+    VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
