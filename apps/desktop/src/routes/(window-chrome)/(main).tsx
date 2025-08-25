@@ -176,10 +176,6 @@ function Page() {
 		micName: () => mics.data?.find((name) => name === rawOptions.micName),
 	};
 
-	createEffect(() => {
-		console.log(_windows());
-	});
-
 	// if target is window and no windows are available, switch to screen capture
 	createEffect(() => {
 		const screen = _screens()?.[0];
@@ -257,7 +253,8 @@ function Page() {
 	const setCamera = createCameraMutation();
 
 	onMount(() => {
-		if (rawOptions.cameraID) setCamera.mutate(rawOptions.cameraID);
+		if (rawOptions.micName) commands.setMicInput(rawOptions.micName);
+		if (rawOptions.cameraID) setCamera.rawMutate(rawOptions.cameraID);
 	});
 
 	return (
@@ -821,7 +818,6 @@ function MicrophoneSelect(props: {
 	const currentRecording = createCurrentRecordingQuery();
 
 	const [dbs, setDbs] = createSignal<number | undefined>();
-	const [isInitialized, setIsInitialized] = createSignal(false);
 
 	const requestPermission = useRequestPermission();
 
@@ -851,14 +847,6 @@ function MicrophoneSelect(props: {
 	// visual audio level from 0 -> 1
 	const audioLevel = () =>
 		(1 - Math.max((dbs() ?? 0) + DB_SCALE, 0) / DB_SCALE) ** 0.5;
-
-	// Initialize audio input if needed - only once when component mounts
-	onMount(() => {
-		if (!props.value || !permissionGranted() || isInitialized()) return;
-
-		setIsInitialized(true);
-		handleMicrophoneChange({ name: props.value });
-	});
 
 	return (
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
@@ -893,7 +881,7 @@ function MicrophoneSelect(props: {
 						});
 				}}
 			>
-				<Show when={dbs()}>
+				<Show when={props.value !== null && dbs()}>
 					{(_) => (
 						<div
 							class="bg-blue-100 opacity-50 left-0 inset-y-0 absolute -z-10 transition-[right] duration-100"

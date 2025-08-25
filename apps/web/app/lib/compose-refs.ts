@@ -1,6 +1,6 @@
 import * as React from "react";
 
-type PossibleRef<T> = React.Ref<T> | undefined;
+type PossibleRef<T> = React.LegacyRef<T> | React.Ref<T> | undefined;
 
 /**
  * Set a given ref to a given value
@@ -12,7 +12,7 @@ function setRef<T>(ref: PossibleRef<T>, value: T) {
 	}
 
 	if (ref !== null && ref !== undefined) {
-		ref.current = value;
+		(ref as any).current = value;
 	}
 }
 

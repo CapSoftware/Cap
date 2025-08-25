@@ -13,8 +13,8 @@ const MotionButton = motion.create(Button);
 interface ToolbarProps {
 	data: typeof videos.$inferSelect;
 	user: typeof userSelectProps | null;
-	onOptimisticComment: (comment: CommentType) => void;
-	onCommentSuccess: (comment: CommentType) => void;
+	onOptimisticComment?: (comment: CommentType) => void;
+	onCommentSuccess?: (comment: CommentType) => void;
 }
 
 export const Toolbar = ({
@@ -68,7 +68,7 @@ export const Toolbar = ({
 			sending: true,
 		};
 
-		onOptimisticComment(optimisticComment);
+		onOptimisticComment?.(optimisticComment);
 
 		try {
 			const newCommentData = await newComment({
@@ -78,7 +78,7 @@ export const Toolbar = ({
 				type: "emoji",
 			});
 			startTransition(() => {
-				onCommentSuccess(newCommentData);
+				onCommentSuccess?.(newCommentData);
 			});
 		} catch (error) {
 			console.error("Error posting comment:", error);
@@ -107,7 +107,7 @@ export const Toolbar = ({
 			sending: true,
 		};
 
-		onOptimisticComment(optimisticComment);
+		onOptimisticComment?.(optimisticComment);
 
 		try {
 			const newCommentData = await newComment({
@@ -117,7 +117,7 @@ export const Toolbar = ({
 				type: "text",
 			});
 			startTransition(() => {
-				onCommentSuccess(newCommentData);
+				onCommentSuccess?.(newCommentData);
 			});
 		} catch (error) {
 			console.error("Error posting comment:", error);

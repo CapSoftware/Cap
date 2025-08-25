@@ -1992,7 +1992,7 @@ function ZoomSegmentConfig(props: {
 						<KTabs.Trigger
 							value="auto"
 							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							disabled={!generalSettings.data?.customCursorCapture}
+							disabled={!generalSettings.data?.customCursorCapture2}
 						>
 							Auto
 						</KTabs.Trigger>

@@ -948,6 +948,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-cpal-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cpal 0.16.0",
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "cap-cursor-capture"
 version = "0.1.0"
 dependencies = [
@@ -1006,6 +1014,7 @@ dependencies = [
  "futures-intrusive",
  "global-hotkey",
  "image 0.25.6",
+ "kameo",
  "keyed_priority_queue",
  "lazy_static",
  "log",
@@ -1158,6 +1167,7 @@ dependencies = [
  "cap-camera",
  "cap-camera-ffmpeg",
  "cap-camera-windows",
+ "cap-cpal-ffmpeg",
  "cap-displays",
  "cap-fail",
  "cap-flags",
@@ -1275,6 +1285,7 @@ dependencies = [
  "objc",
  "objc2-app-kit",
  "relative-path",
+ "replace_with",
  "ringbuf",
  "scap-cpal",
  "scap-direct3d",
@@ -3773,7 +3784,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -4435,7 +4446,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "07033963ba89ebaf1584d767badaa2e8fcec21aedea6b8c0346d487d49c28667"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.53.3",
 ]
 
 [[package]]
@@ -6632,6 +6643,12 @@ name = "renderdoc-sys"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
+
+[[package]]
+name = "replace_with"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51743d3e274e2b18df81c4dc6caf8a5b8e15dbe799e0dca05c7617380094e884"
 
 [[package]]
 name = "reqwest"
@@ -10146,7 +10163,7 @@ version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

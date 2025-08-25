@@ -548,7 +548,7 @@ export type GeneralSettingsStore = {
 	windowTransparency?: boolean;
 	postStudioRecordingBehaviour?: PostStudioRecordingBehaviour;
 	mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour;
-	customCursorCapture?: boolean;
+	customCursorCapture2?: boolean;
 	serverUrl?: string;
 	recordingCountdown?: number | null;
 	enableNativeCameraPreview: boolean;

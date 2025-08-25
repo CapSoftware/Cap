@@ -45,13 +45,11 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 					metadata: {
 						...metadata,
 						aiProcessing: false,
-						generationError: null,
 					},
 				})
 				.where(eq(videos.id, videoId));
 
 			metadata.aiProcessing = false;
-			metadata.generationError = null;
 		} else {
 			return;
 		}
@@ -296,8 +294,6 @@ ${transcriptText}`;
 						metadata: {
 							...currentMetadata,
 							aiProcessing: false,
-							generationError:
-								error instanceof Error ? error.message : String(error),
 						},
 					})
 					.where(eq(videos.id, videoId));

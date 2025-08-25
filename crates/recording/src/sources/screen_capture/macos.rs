@@ -214,8 +214,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .map_err(SourceError::CreateActor)?,
                 );
 
-                let stop_recipient = capturer.clone().reply_recipient::<StopCapturing>();
-
                 let _ = capturer
                     .ask(StartCapturing)
                     .await

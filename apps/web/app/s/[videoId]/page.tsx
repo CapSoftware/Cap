@@ -280,6 +280,11 @@ export default async function ShareVideoPage(props: Props) {
 					skipProcessing: videos.skipProcessing,
 					transcriptionStatus: videos.transcriptionStatus,
 					source: videos.source,
+					width: videos.width,
+					height: videos.height,
+					duration: videos.duration,
+					fps: videos.fps,
+					hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
@@ -334,6 +339,7 @@ async function AuthorizedContent({
 }: {
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
+		hasPassword: number;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -490,7 +496,7 @@ async function AuthorizedContent({
 		!currentMetadata.aiProcessing &&
 		!currentMetadata.summary &&
 		!currentMetadata.chapters &&
-		!currentMetadata.generationError &&
+		// !currentMetadata.generationError &&
 		aiGenerationEnabled
 	) {
 		try {
@@ -640,11 +646,11 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
+		hasPassword: video.hasPassword === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
 		password: null,
-		hasPassword: video.password !== null,
 		folderId: null,
 	};
 
@@ -667,7 +673,6 @@ async function AuthorizedContent({
 					sharedSpaces={sharedSpaces}
 					userOrganizations={userOrganizations}
 					spacesData={spacesData}
-					NODE_ENV={process.env.NODE_ENV}
 				/>
 
 				<Share

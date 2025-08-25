@@ -6,7 +6,7 @@ use cap_project::{
 };
 use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
-    feeds::CameraFeed,
+    feeds::{CameraFeed, microphone},
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
     sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
 };
@@ -348,15 +348,21 @@ pub async fn start_recording(
         spawn_actor({
             let state_mtx = Arc::clone(&state_mtx);
             let general_settings = general_settings.cloned();
-            let capture_target = inputs.capture_target.clone();
             async move {
                 fail!("recording::spawn_actor");
                 let mut state = state_mtx.write().await;
 
+                use kameo::error::SendError;
+                let mic_feed = match state.mic_feed.ask(microphone::Lock).await {
+                    Ok(lock) => Some(Arc::new(lock)),
+                    Err(SendError::HandlerError(microphone::LockFeedError::NoInput)) => None,
+                    Err(e) => return Err(e.to_string()),
+                };
+
                 let base_inputs = cap_recording::RecordingBaseInputs {
-                    capture_target,
+                    capture_target: inputs.capture_target.clone(),
                     capture_system_audio: inputs.capture_system_audio,
-                    mic_feed: &state.mic_feed,
+                    mic_feed,
                 };
 
                 let (actor, actor_done_rx) = match inputs.mode {
@@ -646,7 +652,7 @@ async fn handle_recording_end(
         if let Some(v) = CapWindowId::Camera.get(&handle) {
             let _ = v.close();
         }
-        app.mic_feed.take();
+        let _ = app.mic_feed.ask(microphone::RemoveInput).await;
         app.camera_feed.take();
         if let Some(win) = CapWindowId::Camera.get(&handle) {
             win.close().ok();
