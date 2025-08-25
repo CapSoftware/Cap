@@ -61,23 +61,37 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
         async move {
             loop {
-                let display = scap_targets::Display::get_containing_cursor();
-                let window = scap_targets::Window::get_topmost_at_cursor();
+                {
+                    let display = scap_targets::Display::get_containing_cursor();
+                    let window = scap_targets::Window::get_topmost_at_cursor();
 
-                let _ = TargetUnderCursor {
-                    display_id: display.map(|d| d.id()),
-                    window: window.and_then(|w| {
-                        Some(WindowUnderCursor {
-                            id: w.id(),
-                            bounds: w.display_relative_logical_bounds()?,
-                            app_name: w.owner_name()?,
-                            icon: w.app_icon().map(|bytes| {
-                                format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))
-                            }),
-                        })
-                    }),
+                    println!(
+                        "TUC: {:?}",
+                        window.as_ref().map(|w| (
+                            w.owner_name().unwrap(),
+                            w.display_relative_logical_bounds()
+                        ))
+                    ); // TODO
+
+                    let _ = TargetUnderCursor {
+                        display_id: display.map(|d| d.id()),
+                        window: window.and_then(|w| {
+                            Some(WindowUnderCursor {
+                                id: w.id(),
+                                bounds: w.display_relative_logical_bounds()?,
+                                app_name: w.owner_name()?,
+                                icon: None,
+                                // w.app_icon().map(|bytes| {
+                                //     format!(
+                                //         "data:image/png;base64,{}",
+                                //         BASE64_STANDARD.encode(&bytes)
+                                //     )
+                                // }),
+                            })
+                        }),
+                    }
+                    .emit(&app);
                 }
-                .emit(&app);
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }

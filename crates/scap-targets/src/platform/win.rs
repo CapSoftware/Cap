@@ -978,6 +978,19 @@ impl WindowImpl {
             return false;
         }
 
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = unsafe { pid_to_exe_path(id) } {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                let exe_name_lower = exe_name.to_lowercase();
+                if exe_name_lower.contains("webview2")
+                    || exe_name_lower.contains("msedgewebview2")
+                    || exe_name_lower.contains("cap")
+                {
+                    return false;
+                }
+            }
+        }
+
         let mut rect = RECT::default();
         let result = unsafe { GetClientRect(self.0, &mut rect) };
         if result.is_ok() {
@@ -1008,7 +1021,24 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
         // Skip own process windows
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-        process_id != current_process_id
+        if process_id == current_process_id {
+            return false;
+        }
+
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = pid_to_exe_path(process_id) {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                let exe_name_lower = exe_name.to_lowercase();
+                if exe_name_lower.contains("webview2")
+                    || exe_name_lower.contains("msedgewebview2")
+                    || exe_name_lower.contains("cap")
+                {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -1028,6 +1058,19 @@ fn is_window_valid_for_topmost_selection(
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         if process_id == current_process_id {
             return false;
+        }
+
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = pid_to_exe_path(process_id) {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                let exe_name_lower = exe_name.to_lowercase();
+                if exe_name_lower.contains("webview2")
+                    || exe_name_lower.contains("msedgewebview2")
+                    || exe_name_lower.contains("cap")
+                {
+                    return false;
+                }
+            }
         }
 
         // Check if point is actually in this window
