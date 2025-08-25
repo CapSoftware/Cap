@@ -6,7 +6,7 @@ use cap_project::{
 };
 use cap_recording::{
     CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
-    feeds::{CameraFeed, microphone},
+    feeds::{camera, microphone},
     instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
     sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
 };
@@ -180,7 +180,7 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
-    CameraFeed::list_cameras()
+    cap_camera::list_cameras().collect()
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
@@ -359,10 +359,17 @@ pub async fn start_recording(
                     Err(e) => return Err(e.to_string()),
                 };
 
+                let camera_feed = match state.camera_feed.ask(camera::Lock).await {
+                    Ok(lock) => Some(Arc::new(lock)),
+                    Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+                    Err(e) => return Err(e.to_string()),
+                };
+
                 let base_inputs = cap_recording::RecordingBaseInputs {
                     capture_target: inputs.capture_target.clone(),
                     capture_system_audio: inputs.capture_system_audio,
                     mic_feed,
+                    camera_feed,
                 };
 
                 let (actor, actor_done_rx) = match inputs.mode {
@@ -371,7 +378,6 @@ pub async fn start_recording(
                             id.clone(),
                             recording_dir.clone(),
                             base_inputs,
-                            state.camera_feed.clone(),
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
@@ -653,7 +659,7 @@ async fn handle_recording_end(
             let _ = v.close();
         }
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
-        app.camera_feed.take();
+        let _ = app.camera_feed.ask(camera::RemoveInput).await;
         if let Some(win) = CapWindowId::Camera.get(&handle) {
             win.close().ok();
         }

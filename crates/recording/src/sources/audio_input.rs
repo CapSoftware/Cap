@@ -29,7 +29,7 @@ impl AudioInputSource {
         start_time: SystemTime,
     ) -> Self {
         Self {
-            audio_info: AudioInfo::from_stream_config(feed.config()),
+            audio_info: feed.audio_info().clone(),
             feed,
             tx,
             start_timestamp: None,

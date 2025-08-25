@@ -34,7 +34,8 @@ use cap_project::{
 };
 use cap_recording::{
     feeds::{
-        self, CameraFeed, DeviceOrModelID, RawCameraFrame,
+        self,
+        camera::{CameraFeed, DeviceOrModelID, RawCameraFrame},
         microphone::{self, MicrophoneFeed},
     },
     sources::ScreenCaptureTarget,
@@ -67,7 +68,6 @@ use std::{
     process::Command,
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 use tauri::{AppHandle, Manager, State, Window, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -77,10 +77,7 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
-use tokio::{
-    sync::{Mutex, RwLock, mpsc},
-    time::timeout,
-};
+use tokio::sync::RwLock;
 use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
@@ -105,11 +102,7 @@ pub struct App {
     #[deprecated = "can be removed when native camera preview is ready"]
     camera_ws_port: u16,
     #[serde(skip)]
-    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
-    #[serde(skip)]
     camera_preview: CameraPreviewManager,
-    #[serde(skip)]
-    camera_feed_initialization: Option<mpsc::Sender<()>>,
     #[serde(skip)]
     handle: AppHandle,
     #[serde(skip)]
@@ -118,6 +111,8 @@ pub struct App {
     recording_logging_handle: LoggingHandle,
     #[serde(skip)]
     mic_feed: ActorRef<feeds::microphone::MicrophoneFeed>,
+    #[serde(skip)]
+    camera_feed: ActorRef<feeds::camera::CameraFeed>,
     server_url: String,
 }
 
@@ -245,89 +240,29 @@ async fn set_mic_input(state: MutableState<'_, App>, label: Option<String>) -> R
 #[tauri::command]
 #[specta::specta]
 async fn set_camera_input(
-    app_handle: AppHandle,
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
-) -> Result<bool, String> {
-    let mut app = state.write().await;
+) -> Result<(), String> {
+    let camera_feed = state.read().await.camera_feed.clone();
 
-    match (id, app.camera_feed.as_ref()) {
-        (Some(id), Some(camera_feed)) => {
+    match id {
+        None => {
             camera_feed
-                .lock()
-                .await
-                .switch_cameras(id)
+                .ask(feeds::camera::RemoveInput)
                 .await
                 .map_err(|e| e.to_string())?;
-            Ok(true)
         }
-        (Some(id), None) => {
-            let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
-            if let Some(cancel) = app.camera_feed_initialization.as_ref() {
-                // Ask currently running setup to abort
-                cancel.send(()).await.ok();
-
-                // We can assume a window was already initialized.
-                // Stop it so we can recreate it with the correct `camera_tx`
-                if let Some(win) = CapWindowId::Camera.get(&app_handle) {
-                    win.close().unwrap(); // TODO: Error handling
-                };
-            } else {
-                app.camera_feed_initialization = Some(shutdown_tx);
-            }
-
-            ShowCapWindow::Camera.show(&app_handle).await.unwrap();
-            if let Some(win) = CapWindowId::Main.get(&app_handle) {
-                win.set_focus().ok();
-            };
-
-            let camera_tx = if GeneralSettingsStore::get(&app_handle)
-                .ok()
-                .and_then(|v| v.map(|v| v.enable_native_camera_preview))
-                .unwrap_or_default()
-            {
-                app.camera_preview.attach()
-            } else {
-                app.camera_tx.clone()
-            };
-
-            drop(app);
-
-            let fut = CameraFeed::init(id);
-
-            tokio::select! {
-                result = fut => {
-                    let feed = result.map_err(|err| err.to_string())?;
-                    let mut app = state.write().await;
-
-                    if let Some(cancel) = app.camera_feed_initialization.take() {
-                        cancel.send(()).await.ok();
-                    }
-
-                    if app.camera_feed.is_none() {
-                        feed.attach(camera_tx);
-                        app.camera_feed = Some(Arc::new(Mutex::new(feed)));
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
-                }
-                _ = shutdown_rx.recv() => {
-                    Ok(false)
-                }
-            }
-        }
-        (None, _) => {
-            if let Some(cancel) = app.camera_feed_initialization.take() {
-                cancel.send(()).await.ok();
-            }
-            app.camera_feed.take();
-            if let Some(win) = CapWindowId::Camera.get(&app_handle) {
-                win.close().ok();
-            }
-            Ok(true)
+        Some(id) => {
+            camera_feed
+                .ask(feeds::camera::SetInput { id })
+                .await
+                .map_err(|e| e.to_string())?
+                .await
+                .map_err(|e| e.to_string())?;
         }
     }
+
+    Ok(())
 }
 
 #[derive(specta::Type, Serialize, tauri_specta::Event, Clone)]
@@ -1994,6 +1929,23 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
     let (mic_samples_tx, mic_samples_rx) = flume::bounded(8);
 
+    let camera_feed = {
+        let (error_tx, error_rx) = flume::bounded(1);
+
+        let mic_feed = CameraFeed::spawn(CameraFeed::new(error_tx));
+
+        // TODO: make this part of a global actor one day
+        tokio::spawn(async move {
+            let Ok(err) = error_rx.recv_async().await else {
+                return;
+            };
+
+            error!("Camera feed actor error: {err:?}");
+        });
+
+        mic_feed
+    };
+
     let mic_feed = {
         let (error_tx, error_rx) = flume::bounded(1);
 
@@ -2108,12 +2060,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     camera_tx,
                     camera_ws_port,
                     handle: app.clone(),
-                    camera_feed: None,
-                    camera_feed_initialization: None,
                     camera_preview: CameraPreviewManager::new(&app),
                     recording_state: RecordingState::None,
                     recording_logging_handle,
                     mic_feed,
+                    camera_feed,
                     server_url: GeneralSettingsStore::get(&app)
                         .ok()
                         .flatten()
@@ -2198,7 +2149,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                     if !app_state.is_recording_active_or_pending() {
                                         let _ =
                                             app_state.mic_feed.ask(microphone::RemoveInput).await;
-                                        app_state.camera_feed.take();
+                                        let _ = app_state
+                                            .camera_feed
+                                            .ask(feeds::camera::RemoveInput)
+                                            .await;
                                     }
                                 });
                             }
