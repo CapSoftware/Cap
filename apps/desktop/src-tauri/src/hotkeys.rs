@@ -101,7 +101,7 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let mut store = match HotkeysStore::get(app) {
+    let store = match HotkeysStore::get(app) {
         Ok(Some(s)) => s,
         Ok(None) => HotkeysStore::default(),
         Err(e) => {

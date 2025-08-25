@@ -10,7 +10,7 @@ fn main() {
 
     // Test display functionality
     println!("=== Display Information ===");
-    for (index, display) in cap_displays::Display::list().iter().enumerate() {
+    for (index, display) in scap_targets::Display::list().iter().enumerate() {
         println!("Display {}: {}", index + 1, display.name().unwrap());
         println!("  ID: {}", display.id());
 
@@ -36,7 +36,7 @@ fn main() {
         }
 
         // Check if this is the main display
-        let main_display_id = cap_displays::Display::list().first().map(|d| d.id());
+        let main_display_id = scap_targets::Display::list().first().map(|d| d.id());
 
         if let Some(main_id) = main_display_id {
             if display.id() == main_id {
@@ -51,7 +51,7 @@ fn main() {
         println!();
     }
 
-    if let Some(cursor_display) = cap_displays::Display::get_containing_cursor() {
+    if let Some(cursor_display) = scap_targets::Display::get_containing_cursor() {
         println!(
             "🖱️  Cursor is currently on: {}",
             cursor_display.name().unwrap()
@@ -61,7 +61,7 @@ fn main() {
 
     // Test window functionality
     println!("=== Windows Under Cursor ===");
-    let windows = cap_displays::Window::list_containing_cursor();
+    let windows = scap_targets::Window::list_containing_cursor();
 
     if windows.is_empty() {
         println!("No windows found under cursor");
@@ -101,7 +101,7 @@ fn main() {
     }
 
     println!("\n=== Topmost Window Icon Test ===");
-    if let Some(topmost) = cap_displays::Window::get_topmost_at_cursor()
+    if let Some(topmost) = scap_targets::Window::get_topmost_at_cursor()
         && let Some(owner) = topmost.owner_name()
     {
         println!("Testing icon extraction for: {}", owner);
@@ -120,7 +120,7 @@ fn main() {
     println!("Monitoring window levels under cursor...\n");
 
     loop {
-        let mut relevant_windows = cap_displays::WindowImpl::list_containing_cursor()
+        let mut relevant_windows = scap_targets::WindowImpl::list_containing_cursor()
             .into_iter()
             .filter_map(|window| {
                 let level = window.level()?;

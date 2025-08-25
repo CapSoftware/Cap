@@ -21,7 +21,7 @@ cidre = { workspace = true }
 [dev-dependencies]
 futures = { workspace = true }
 tokio = { workspace = true }
-cap-displays = { path = "../displays" }
+scap-targets = { path = "../scap-targets" }
 
 [lints]
 workspace = true

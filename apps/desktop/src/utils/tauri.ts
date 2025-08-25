@@ -142,7 +142,7 @@ export const commands = {
 	async getRecordingMeta(
 		path: string,
 		fileType: FileType,
-	): Promise<RecordingMetaWithType> {
+	): Promise<RecordingMetaWithMode> {
 		return await TAURI_INVOKE("get_recording_meta", { path, fileType });
 	},
 	async saveFileDialog(
@@ -151,7 +151,7 @@ export const commands = {
 	): Promise<string | null> {
 		return await TAURI_INVOKE("save_file_dialog", { fileName, fileType });
 	},
-	async listRecordings(): Promise<[string, RecordingMetaWithType][]> {
+	async listRecordings(): Promise<[string, RecordingMetaWithMode][]> {
 		return await TAURI_INVOKE("list_recordings");
 	},
 	async listScreenshots(): Promise<[string, RecordingMeta][]> {
@@ -301,6 +301,12 @@ export const commands = {
 	},
 	async closeTargetSelectOverlays(): Promise<null> {
 		return await TAURI_INVOKE("close_target_select_overlays");
+	},
+	async displayInformation(displayId: string): Promise<DisplayInformation> {
+		return await TAURI_INVOKE("display_information", { displayId });
+	},
+	async getWindowIcon(windowId: string): Promise<string | null> {
+		return await TAURI_INVOKE("get_window_icon", { windowId });
 	},
 };
 
@@ -483,7 +489,7 @@ export type CommercialLicense = {
 export type Crop = { position: XY<number>; size: XY<number> };
 export type CurrentRecording = {
 	target: CurrentRecordingTarget;
-	type: RecordingType;
+	mode: RecordingMode;
 };
 export type CurrentRecordingChanged = null;
 export type CurrentRecordingTarget =
@@ -515,6 +521,11 @@ export type Cursors =
 	| { [key in string]: CursorMeta };
 export type DeviceOrModelID = { DeviceID: string } | { ModelID: ModelIDType };
 export type DisplayId = string;
+export type DisplayInformation = {
+	name: string | null;
+	physical_size: PhysicalSize | null;
+	refresh_rate: string;
+};
 export type DownloadProgress = { progress: number; message: string };
 export type EditorStateChanged = { playhead_position: number };
 export type ExportCompression = "Minimal" | "Social" | "Web" | "Potato";
@@ -548,7 +559,7 @@ export type GeneralSettingsStore = {
 	windowTransparency?: boolean;
 	postStudioRecordingBehaviour?: PostStudioRecordingBehaviour;
 	mainWindowRecordingStartBehaviour?: MainWindowRecordingStartBehaviour;
-	customCursorCapture2?: boolean;
+	custom_cursor_capture2?: boolean;
 	serverUrl?: string;
 	recordingCountdown?: number | null;
 	enableNativeCameraPreview: boolean;
@@ -660,19 +671,18 @@ export type RecordingMeta = (StudioRecordingMeta | InstantRecordingMeta) & {
 	pretty_name: string;
 	sharing?: SharingMeta | null;
 };
-export type RecordingMetaWithType = ((
+export type RecordingMetaWithMode = ((
 	| StudioRecordingMeta
 	| InstantRecordingMeta
 ) & {
 	platform?: Platform | null;
 	pretty_name: string;
 	sharing?: SharingMeta | null;
-}) & { type: RecordingType };
+}) & { mode: RecordingMode };
 export type RecordingMode = "studio" | "instant";
 export type RecordingOptionsChanged = null;
 export type RecordingStarted = null;
 export type RecordingStopped = null;
-export type RecordingType = "studio" | "instant";
 export type RenderFrameEvent = {
 	frame_number: number;
 	fps: number;
@@ -686,11 +696,6 @@ export type ScreenCaptureTarget =
 	| { variant: "window"; id: WindowId }
 	| { variant: "display"; id: DisplayId }
 	| { variant: "area"; screen: DisplayId; bounds: LogicalBounds };
-export type ScreenUnderCursor = {
-	name: string;
-	physical_size: PhysicalSize;
-	refresh_rate: string;
-};
 export type SegmentRecordings = {
 	display: Video;
 	camera: Video | null;
@@ -741,7 +746,6 @@ export type StudioRecordingMeta =
 export type TargetUnderCursor = {
 	display_id: DisplayId | null;
 	window: WindowUnderCursor | null;
-	screen: ScreenUnderCursor | null;
 };
 export type TimelineConfiguration = {
 	segments: TimelineSegment[];
@@ -789,7 +793,6 @@ export type WindowUnderCursor = {
 	id: WindowId;
 	app_name: string;
 	bounds: LogicalBounds;
-	icon: string | null;
 };
 export type XY<T> = { x: T; y: T };
 export type ZoomMode = "auto" | { manual: { x: number; y: number } };

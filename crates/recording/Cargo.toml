@@ -13,7 +13,7 @@ cap-project = { path = "../project" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
-cap-displays = { path = "../displays" }
+scap-targets = { path = "../scap-targets" }
 cap-cursor-capture = { path = "../cursor-capture" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }

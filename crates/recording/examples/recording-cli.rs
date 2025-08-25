@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use cap_displays::Display;
 use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
+use scap_targets::Display;
 
 #[tokio::main]
 pub async fn main() {

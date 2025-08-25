@@ -37,7 +37,7 @@ impl CursorActor {
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
     crop_bounds: CursorCropBounds,
-    display: cap_displays::Display,
+    display: scap_targets::Display,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,

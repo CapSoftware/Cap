@@ -222,7 +222,7 @@ export default function () {
 						)}
 					</div>
 
-					{(currentRecording.data?.type === "studio" ||
+					{(currentRecording.data?.mode === "studio" ||
 						ostype() === "macos") && (
 						<ActionButton
 							disabled={togglePause.isPending}

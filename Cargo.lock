@@ -841,7 +841,6 @@ name = "cap"
 version = "0.1.0"
 dependencies = [
  "cap-camera",
- "cap-displays",
  "cap-editor",
  "cap-export",
  "cap-flags",
@@ -853,6 +852,7 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "flume",
+ "scap-targets",
  "serde",
  "serde_json",
  "tokio",
@@ -959,9 +959,9 @@ dependencies = [
 name = "cap-cursor-capture"
 version = "0.1.0"
 dependencies = [
- "cap-displays",
  "core-graphics 0.24.0",
  "device_query",
+ "scap-targets",
 ]
 
 [[package]]
@@ -988,7 +988,6 @@ dependencies = [
  "bytemuck",
  "cap-audio",
  "cap-camera",
- "cap-displays",
  "cap-editor",
  "cap-export",
  "cap-fail",
@@ -1029,6 +1028,7 @@ dependencies = [
  "reqwest",
  "rodio",
  "scap",
+ "scap-targets",
  "sentry",
  "serde",
  "serde_json",
@@ -1068,22 +1068,6 @@ dependencies = [
  "whisper-rs",
  "windows 0.60.0",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "cap-displays"
-version = "0.1.0"
-dependencies = [
- "cidre 0.11.0",
- "cocoa 0.26.1",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "image 0.24.9",
- "objc",
- "serde",
- "specta",
- "tracing",
- "windows 0.60.0",
 ]
 
 [[package]]
@@ -1168,7 +1152,6 @@ dependencies = [
  "cap-camera-ffmpeg",
  "cap-camera-windows",
  "cap-cpal-ffmpeg",
- "cap-displays",
  "cap-fail",
  "cap-flags",
  "cap-media-encoders",
@@ -1196,6 +1179,7 @@ dependencies = [
  "scap-direct3d",
  "scap-ffmpeg",
  "scap-screencapturekit",
+ "scap-targets",
  "screencapturekit",
  "serde",
  "specta",
@@ -1260,7 +1244,6 @@ dependencies = [
  "cap-camera-ffmpeg",
  "cap-cursor-capture",
  "cap-cursor-info",
- "cap-displays",
  "cap-fail",
  "cap-flags",
  "cap-media",
@@ -1291,6 +1274,7 @@ dependencies = [
  "scap-direct3d",
  "scap-ffmpeg",
  "scap-screencapturekit",
+ "scap-targets",
  "screencapturekit",
  "serde",
  "serde_json",
@@ -6994,8 +6978,8 @@ dependencies = [
 name = "scap-direct3d"
 version = "0.1.0"
 dependencies = [
- "cap-displays",
  "scap-ffmpeg",
+ "scap-targets",
  "thiserror 1.0.69",
  "windows 0.60.0",
 ]
@@ -7004,7 +6988,6 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
- "cap-displays",
  "cidre 0.11.0",
  "cpal 0.16.0",
  "ffmpeg-next",
@@ -7012,6 +6995,7 @@ dependencies = [
  "scap-cpal",
  "scap-direct3d",
  "scap-screencapturekit",
+ "scap-targets",
  "tokio",
  "windows 0.60.0",
 ]
@@ -7020,7 +7004,6 @@ dependencies = [
 name = "scap-screencapturekit"
 version = "0.1.0"
 dependencies = [
- "cap-displays",
  "cidre 0.11.0",
  "clap",
  "futures",
@@ -7028,7 +7011,24 @@ dependencies = [
  "objc2 0.6.1",
  "objc2-app-kit",
  "objc2-foundation 0.3.1",
+ "scap-targets",
  "tracing",
+]
+
+[[package]]
+name = "scap-targets"
+version = "0.1.0"
+dependencies = [
+ "cidre 0.11.0",
+ "cocoa 0.26.1",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "image 0.24.9",
+ "objc",
+ "serde",
+ "specta",
+ "tracing",
+ "windows 0.60.0",
 ]
 
 [[package]]

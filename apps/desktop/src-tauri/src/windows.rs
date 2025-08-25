@@ -1,8 +1,8 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use cap_displays::{Display, DisplayId};
 use futures::pin_mut;
+use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
@@ -235,6 +235,7 @@ impl ShowCapWindow {
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
+                        .minimizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
                         .content_protected(true)
@@ -252,19 +253,9 @@ impl ShowCapWindow {
                 }
             }
             Self::TargetSelectOverlay { display_id } => {
-                let Some(display) = cap_displays::Display::from_id(display_id) else {
+                let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
-
-                #[cfg(target_os = "macos")]
-                let position = display.raw_handle().logical_position();
-                #[cfg(target_os = "macos")]
-                let size = display.logical_size().unwrap();
-
-                #[cfg(windows)]
-                let position = display.raw_handle().physical_position().unwrap();
-                #[cfg(windows)]
-                let size = display.physical_size().unwrap();
 
                 let mut window_builder = self
                     .window_builder(
@@ -275,14 +266,51 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .always_on_top(cfg!(target_os = "macos"))
+                    .content_protected(true)
+                    .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
-                    .inner_size(size.width(), size.height())
-                    .position(position.x(), position.y())
                     .transparent(true);
 
+                #[cfg(target_os = "macos")]
+                {
+                    let position = display.raw_handle().logical_position();
+                    let size = display.logical_size().unwrap();
+
+                    window_builder = window_builder
+                        .inner_size(size.width(), size.height())
+                        .position(position.x(), position.y());
+                }
+
+                #[cfg(windows)]
+                {
+                    window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
+                }
+
                 let window = window_builder.build()?;
+
+                #[cfg(windows)]
+                {
+                    let position = display.raw_handle().physical_position().unwrap();
+                    let logical_size = display.logical_size().unwrap();
+                    let physical_size = display.physical_size().unwrap();
+                    use tauri::{LogicalSize, PhysicalPosition, PhysicalSize};
+                    let _ = window.set_size(LogicalSize::new(
+                        logical_size.width(),
+                        logical_size.height(),
+                    ));
+                    let _ = window.set_position(PhysicalPosition::new(position.x(), position.y()));
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+                    let actual_physical_size = window.inner_size().unwrap();
+                    // this third time makes it work when the resulting size is wrong, god knows why
+                    if physical_size.width() != actual_physical_size.width as f64 {
+                        let _ = window.set_size(LogicalSize::new(
+                            logical_size.width(),
+                            logical_size.height(),
+                        ));
+                    }
+                }
 
                 app.state::<WindowFocusManager>()
                     .spawn(display_id, window.clone());
@@ -295,9 +323,16 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window when settings window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
+                // Hide main window and target select overlays when settings window opens
+                for (label, window) in app.webview_windows() {
+                    if let Ok(id) = CapWindowId::from_str(&label)
+                        && matches!(
+                            id,
+                            CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main
+                        )
+                    {
+                        let _ = window.hide();
+                    }
                 }
 
                 self.window_builder(

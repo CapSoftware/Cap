@@ -1,4 +1,4 @@
-use cap_displays::bounds::LogicalBounds;
+use scap_targets::bounds::LogicalBounds;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::{sync::RwLock, time::sleep};
