@@ -3,9 +3,7 @@ import type { Folder } from "@cap/web-domain";
 import { faTrash } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
-import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
-import { Effect } from "effect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -382,6 +380,7 @@ const FolderCard = ({
 					icon={<FontAwesomeIcon icon={faTrash} />}
 					onConfirm={() => deleteFolder.mutate(id)}
 					onCancel={() => setConfirmDeleteFolderOpen(false)}
+					confirmLabel={deleteFolder.isPending ? "Deleting..." : "Delete"}
 					title="Delete Folder"
 					description={`Are you sure you want to delete the folder "${name}"? This action cannot be undone.`}
 				/>

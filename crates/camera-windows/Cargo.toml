@@ -2,6 +2,7 @@
 name = "cap-camera-windows"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 thiserror.workspace = true
@@ -19,9 +20,3 @@ workspace = true
 
 [dev-dependencies]
 inquire = "0.7.5"
-
-cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
-cap-camera-directshow = { path = "../camera-directshow" }
-
-windows = { workspace = true }
-windows-core = { workspace = true }

@@ -7,7 +7,7 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-cap-displays = { path = "../displays" }
+scap-targets = { path = "../scap-targets" }
 
 device_query = "4.0.1"
 

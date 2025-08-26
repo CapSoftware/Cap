@@ -12,7 +12,7 @@ async function resetStuckAiProcessingFlags() {
 		.select()
 		.from(videos)
 		.where(sql`
-      (metadata->>'aiProcessing')::boolean = true 
+      (metadata->>'aiProcessing')::boolean = true
       AND updated_at < ${tenMinutesAgo}
     `);
 
@@ -32,7 +32,7 @@ async function resetStuckAiProcessingFlags() {
 				metadata: {
 					...metadata,
 					aiProcessing: false,
-					generationError: "AI processing was stuck and has been reset",
+					// generationError: "AI processing was stuck and has been reset",
 				},
 			})
 			.where(sql`id = ${video.id}`);

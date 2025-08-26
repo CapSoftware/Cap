@@ -16,6 +16,7 @@ interface SharedCapCardProps {
 		metadata?: VideoMetadata;
 	};
 	analytics: number;
+	isLoadingAnalytics: boolean;
 	organizationName: string;
 	userId?: string;
 	hideSharedStatus?: boolean;
@@ -30,6 +31,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 	organizationName,
 	userId,
 	hideSharedStatus,
+	isLoadingAnalytics,
 	spaceName,
 	onDragStart,
 	onDragEnd,
@@ -44,6 +46,7 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 		<div onDragStart={onDragStart} onDragEnd={onDragEnd}>
 			<CapCard
 				hideSharedStatus={hideSharedStatus}
+				isLoadingAnalytics={isLoadingAnalytics}
 				cap={cap}
 				analytics={displayCount}
 				sharedCapCard

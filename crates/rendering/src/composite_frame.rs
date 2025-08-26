@@ -8,7 +8,7 @@ pub struct CompositeVideoFramePipeline {
     pub render_pipeline: wgpu::RenderPipeline,
 }
 
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
 pub struct CompositeVideoFrameUniforms {
     pub crop_bounds: [f32; 4],
@@ -25,7 +25,31 @@ pub struct CompositeVideoFrameUniforms {
     pub shadow_size: f32,
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
+    pub opacity: f32,
     pub _padding: [f32; 3],
+}
+
+impl Default for CompositeVideoFrameUniforms {
+    fn default() -> Self {
+        Self {
+            crop_bounds: Default::default(),
+            target_bounds: Default::default(),
+            output_size: Default::default(),
+            frame_size: Default::default(),
+            velocity_uv: Default::default(),
+            target_size: Default::default(),
+            rounding_px: Default::default(),
+            mirror_x: Default::default(),
+            motion_blur_amount: Default::default(),
+            camera_motion_blur_amount: Default::default(),
+            shadow: Default::default(),
+            shadow_size: Default::default(),
+            shadow_opacity: Default::default(),
+            shadow_blur: Default::default(),
+            opacity: 1.0,
+            _padding: Default::default(),
+        }
+    }
 }
 
 impl CompositeVideoFrameUniforms {

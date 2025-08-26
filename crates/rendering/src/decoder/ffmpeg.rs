@@ -1,3 +1,5 @@
+use ffmpeg::{format, frame, software, sys::AVHWDeviceType};
+use log::debug;
 use std::{
     cell::RefCell,
     collections::BTreeMap,
@@ -5,10 +7,6 @@ use std::{
     rc::Rc,
     sync::{Arc, mpsc},
 };
-
-use ffmpeg::{format, frame, software};
-use ffmpeg_sys_next::AVHWDeviceType;
-use log::debug;
 use tokio::sync::oneshot;
 
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};

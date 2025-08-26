@@ -13,7 +13,7 @@ export function SignInButton(
 			size="md"
 			class="flex flex-grow justify-center items-center"
 			{...props}
-			variant={signIn.isPending ? "secondary" : props.variant}
+			variant={signIn.isPending ? "secondary" : "primary"}
 			onClick={() => {
 				if (signIn.isPending) {
 					signIn.variables.abort();

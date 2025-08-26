@@ -1,10 +1,11 @@
 use ffmpeg::{
     codec as avcodec,
     format::{self as avformat, context::input::PacketIter},
-    frame as avframe, util as avutil,
+    frame as avframe,
+    sys::{AVHWDeviceType, EAGAIN},
+    util as avutil,
 };
 use ffmpeg_hw_device::{CodecContextExt, HwDevice};
-use ffmpeg_sys_next::{AVHWDeviceType, EAGAIN};
 use std::path::PathBuf;
 use tracing::debug;
 

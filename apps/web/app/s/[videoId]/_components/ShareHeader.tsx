@@ -1,8 +1,8 @@
 "use client";
 
 import type { userSelectProps } from "@cap/database/auth/session";
-import { type videos } from "@cap/database/schema";
-import { buildEnv } from "@cap/env";
+import type { videos } from "@cap/database/schema";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
@@ -31,7 +31,6 @@ export const ShareHeader = ({
 	sharedOrganizations = [],
 	sharedSpaces = [],
 	spacesData = null,
-	NODE_ENV,
 }: {
 	data: typeof videos.$inferSelect;
 	user: typeof userSelectProps | null;
@@ -52,7 +51,6 @@ export const ShareHeader = ({
 		organizationId: string;
 	}[];
 	spacesData?: Spaces[] | null;
-	NODE_ENV: "production" | "development" | "test";
 }) => {
 	const { push, refresh } = useRouter();
 	const [isEditing, setIsEditing] = useState(false);

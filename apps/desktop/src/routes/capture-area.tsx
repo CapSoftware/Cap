@@ -56,7 +56,7 @@ export default function CaptureArea() {
 
 	async function handleConfirm() {
 		const target = rawOptions.captureTarget;
-		if (target.variant !== "screen") return;
+		if (target.variant !== "display") return;
 		setPendingState(false);
 
 		setOptions(
@@ -65,10 +65,14 @@ export default function CaptureArea() {
 				variant: "area",
 				screen: target.id,
 				bounds: {
-					x: crop.position.x,
-					y: crop.position.y,
-					width: crop.size.x,
-					height: crop.size.y,
+					position: {
+						x: crop.position.x,
+						y: crop.position.y,
+					},
+					size: {
+						width: crop.size.x,
+						height: crop.size.y,
+					},
 				},
 			}),
 		);

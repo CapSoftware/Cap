@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"

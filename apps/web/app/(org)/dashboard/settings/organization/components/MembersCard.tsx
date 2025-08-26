@@ -130,6 +130,7 @@ export const MembersCard = ({
          from your organization? this action cannot be undone.`
 						: ""
 				}
+				confirmLabel={removing ? "Removing..." : "Remove"}
 				cancelLabel="Cancel"
 				loading={removing}
 				onConfirm={confirmRemoveMember}

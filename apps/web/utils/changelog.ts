@@ -14,11 +14,12 @@ function parseFrontmatter(fileContent: string) {
 	const match = frontmatterRegex.exec(fileContent);
 	const frontMatterBlock = match![1];
 	const content = fileContent.replace(frontmatterRegex, "").trim();
-	const frontMatterLines = frontMatterBlock.trim().split("\n");
+	const frontMatterLines = frontMatterBlock!.trim().split("\n");
 	const metadata: Partial<ChangelogMetadata> = {};
 
 	frontMatterLines.forEach((line) => {
 		const [key, ...valueArr] = line.split(": ");
+		if (!key) return;
 		let value = valueArr.join(": ").trim();
 		value = value.replace(/^['"](.*)['"]$/, "$1"); // Remove quotes
 		metadata[key.trim() as keyof ChangelogMetadata] = value;

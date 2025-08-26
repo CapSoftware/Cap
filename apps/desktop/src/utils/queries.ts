@@ -1,9 +1,9 @@
 import { createEventListener } from "@solid-primitives/event-listener";
 import { makePersisted } from "@solid-primitives/storage";
 import {
-	createMutation,
 	createQuery,
 	queryOptions,
+	useMutation,
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -16,7 +16,6 @@ import {
 	type CameraInfo,
 	commands,
 	type DeviceOrModelID,
-	ModelIDType,
 	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "./tauri";
@@ -40,8 +39,8 @@ export const listWindows = queryOptions({
 });
 
 export const listScreens = queryOptions({
-	queryKey: ["capture", "screens"] as const,
-	queryFn: () => commands.listCaptureScreens(),
+	queryKey: ["capture", "displays"] as const,
+	queryFn: () => commands.listCaptureDisplays(),
 	reconcile: "id",
 	refetchInterval: 1000,
 });
@@ -86,18 +85,18 @@ export const getPermissions = queryOptions({
 });
 
 export function createOptionsQuery() {
-	const PERSIST_KEY = "recording-options-query";
+	const PERSIST_KEY = "recording-options-query-2";
 	const [_state, _setState] = createStore<{
 		captureTarget: ScreenCaptureTarget;
 		micName: string | null;
 		mode: RecordingMode;
 		captureSystemAudio?: boolean;
-		targetMode?: "screen" | "window" | "area" | null;
+		targetMode?: "display" | "window" | "area" | null;
 		cameraID?: DeviceOrModelID | null;
 		/** @deprecated */
 		cameraLabel: string | null;
 	}>({
-		captureTarget: { variant: "screen", id: 0 },
+		captureTarget: { variant: "display", id: "0" },
 		micName: null,
 		cameraLabel: null,
 		mode: "studio",
@@ -153,26 +152,36 @@ export function createLicenseQuery() {
 export function createCameraMutation() {
 	const { setOptions, rawOptions } = useRecordingOptions();
 
-	const setCameraInput = createMutation(() => ({
-		mutationFn: async (model: DeviceOrModelID | null) => {
-			const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
-			setOptions("cameraID", reconcile(model));
-			if (model) {
-				await commands.showWindow("Camera");
-				getCurrentWindow().setFocus();
-			}
+	const rawMutate = async (model: DeviceOrModelID | null) => {
+		const before = rawOptions.cameraID ? { ...rawOptions.cameraID } : null;
+		setOptions("cameraID", reconcile(model));
+		if (model) {
+			await commands.showWindow("Camera");
+			getCurrentWindow().setFocus();
+		}
 
-			await commands.setCameraInput(model).catch(async (e) => {
-				if (JSON.stringify(before) === JSON.stringify(model) || !before) {
-					setOptions("cameraID", null);
-				} else setOptions("cameraID", reconcile(before));
+		await commands.setCameraInput(model).catch(async (e) => {
+			if (JSON.stringify(before) === JSON.stringify(model) || !before) {
+				setOptions("cameraID", null);
+			} else setOptions("cameraID", reconcile(before));
 
-				throw e;
-			});
-		},
+			throw e;
+		});
+	};
+
+	const setCameraInput = useMutation(() => ({
+		mutationFn: rawMutate,
 	}));
 
-	return setCameraInput;
+	return new Proxy(
+		setCameraInput as typeof setCameraInput & { rawMutate: typeof rawMutate },
+		{
+			get(target, key) {
+				if (key === "rawMutate") return rawMutate;
+				return Reflect.get(target, key);
+			},
+		},
+	);
 }
 
 export function createCustomDomainQuery() {

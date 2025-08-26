@@ -1,8 +1,5 @@
-use std::{sync::Arc, time::Duration};
-
+use cap_audio::FromSampleBytes;
 use cap_media::MediaError;
-use cap_media::data::FromSampleBytes;
-use cap_media::feeds::{AudioPlaybackBuffer, AudioSegment};
 use cap_media_info::AudioInfo;
 use cap_project::{ProjectConfiguration, XY};
 use cap_rendering::{ProjectUniforms, RenderVideoConstants};
@@ -10,12 +7,16 @@ use cpal::{
     BufferSize, SampleFormat,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
+use std::{sync::Arc, time::Duration};
 use tokio::{sync::watch, time::Instant};
 use tracing::{error, info};
 
-use crate::editor;
-use crate::editor_instance::Segment;
-use crate::segments::get_audio_segments;
+use crate::{
+    audio::{AudioPlaybackBuffer, AudioSegment},
+    editor,
+    editor_instance::Segment,
+    segments::get_audio_segments,
+};
 
 pub struct Playback {
     pub renderer: Arc<editor::RendererHandle>,
