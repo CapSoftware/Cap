@@ -12,6 +12,7 @@ use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use specta::Type;
 use std::path::PathBuf;
 use std::time::Duration;
