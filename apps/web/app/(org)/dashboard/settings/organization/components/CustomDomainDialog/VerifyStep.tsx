@@ -174,7 +174,7 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-															{TXTDomainValueHandler(record)}
+															{TXTDomainValueHandler(record, domain)}
 														</code>
 													</dd>
 												</div>
