@@ -100,7 +100,7 @@ pub struct CameraFeedLock {
     actor: ActorRef<CameraFeed>,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
-    lock_tx: Recipient<Unlock>,
+    drop_tx: Option<oneshot::Sender<()>>,
 }
 
 impl CameraFeedLock {
@@ -123,7 +123,9 @@ impl Deref for CameraFeedLock {
 
 impl Drop for CameraFeedLock {
     fn drop(&mut self) {
-        let _ = self.lock_tx.tell(Unlock).blocking_send();
+        if let Some(drop_tx) = self.drop_tx.take() {
+            let _ = drop_tx.send(());
+        }
     }
 }
 
@@ -478,11 +480,19 @@ impl Message<Lock> for CameraFeed {
 
         self.state = State::Locked { inner: attached };
 
+        let (drop_tx, drop_rx) = oneshot::channel();
+
+        let actor_ref = ctx.actor_ref();
+        tokio::spawn(async move {
+            let _ = drop_rx.await;
+            let _ = actor_ref.tell(Unlock).await;
+        });
+
         Ok(CameraFeedLock {
             camera_info,
             video_info,
             actor: ctx.actor_ref(),
-            lock_tx: ctx.actor_ref().recipient(),
+            drop_tx: Some(drop_tx),
         })
     }
 }
