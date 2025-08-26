@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import { db } from "@cap/database";
+import { nanoId } from "@cap/database/helpers";
 import { organizations, users } from "@cap/database/schema";
 import { buildEnv, serverEnv } from "@cap/env";
 import { stripe, userIsPro } from "@cap/utils";
@@ -8,9 +9,8 @@ import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
 import { z } from "zod";
-import { withAuth } from "../../utils";
 import { createBucketProvider } from "@/utils/s3";
-import { nanoId } from "@cap/database/helpers";
+import { withAuth } from "../../utils";
 
 export const app = new Hono().use(withAuth);
 
@@ -51,7 +51,7 @@ app.post(
 							cameras: z.array(z.string()),
 							microphones: z.array(z.string()),
 						})
-						.optional()
+						.optional(),
 				),
 		}),
 	),
@@ -64,7 +64,7 @@ app.post(
 				throw new Error("Discord webhook URL is not configured");
 
 			let messageContent = `New feedback from ${c.get("user").email}:\n${feedback}`;
-			
+
 			if (version) {
 				messageContent += `\nCap version: ${version}`;
 			}
@@ -127,17 +127,17 @@ app.post(
 
 		try {
 			const bucket = await createBucketProvider();
-			const timestamp = new Date().toISOString().split('T')[0];
+			const timestamp = new Date().toISOString().split("T")[0];
 			const recordingKey = `debug-recordings/${user.id}/${timestamp}-${nanoId()}.zip`;
-			
+
 			const buffer = Buffer.from(recording.content, "base64");
-			
+
 			await bucket.putObject(recordingKey, buffer, {
 				contentType: "application/zip",
 			});
-			
+
 			const downloadUrl = await bucket.getSignedObjectUrl(recordingKey);
-			
+
 			const discordWebhookUrl = serverEnv().DISCORD_LOGS_WEBHOOK_URL;
 			if (!discordWebhookUrl)
 				throw new Error("Discord webhook URL is not configured");
@@ -188,7 +188,7 @@ app.post(
 					},
 				],
 			};
-			
+
 			const response = await fetch(discordWebhookUrl, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -327,23 +327,22 @@ app.post(
 				}>,
 			};
 
-
 			if (logFiles && logFiles.length > 0) {
 				const formData = new FormData();
-				
+
 				formData.append("payload_json", JSON.stringify(formattedMessage));
-				
+
 				logFiles.forEach((file, index) => {
 					const buffer = Buffer.from(file.content, "base64");
 					const blob = new Blob([buffer], { type: "text/plain" });
 					formData.append(`files[${index}]`, blob, file.name);
 				});
-				
+
 				const response = await fetch(discordWebhookUrl, {
 					method: "POST",
 					body: formData,
 				});
-				
+
 				if (!response.ok)
 					throw new Error(
 						`Failed to send logs to Discord: ${response.statusText}`,

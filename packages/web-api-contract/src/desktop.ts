@@ -54,22 +54,24 @@ const protectedContract = c.router(
 				feedback: z.string(),
 				os: z.union([z.literal("macos"), z.literal("windows")]),
 				version: z.string(),
-				systemInfo: z.object({
-					os: z.string(),
-					os_version: z.string(),
-					arch: z.string(),
-					cpu_cores: z.number(),
-					memory_gb: z.number(),
-					displays: z.array(
-						z.object({
-							width: z.number(),
-							height: z.number(),
-							scale_factor: z.number(),
-						}),
-					),
-					cameras: z.array(z.string()),
-					microphones: z.array(z.string()),
-				}).optional(),
+				systemInfo: z
+					.object({
+						os: z.string(),
+						os_version: z.string(),
+						arch: z.string(),
+						cpu_cores: z.number(),
+						memory_gb: z.number(),
+						displays: z.array(
+							z.object({
+								width: z.number(),
+								height: z.number(),
+								scale_factor: z.number(),
+							}),
+						),
+						cameras: z.array(z.string()),
+						microphones: z.array(z.string()),
+					})
+					.optional(),
 			}),
 			responses: {
 				200: z.object({ success: z.boolean() }),
@@ -137,12 +139,14 @@ const protectedContract = c.router(
 					}),
 				),
 				appVersion: z.string(),
-				logFiles: z.array(
-					z.object({
-						name: z.string(),
-						content: z.string(),
-					}),
-				).optional(),
+				logFiles: z
+					.array(
+						z.object({
+							name: z.string(),
+							content: z.string(),
+						}),
+					)
+					.optional(),
 			}),
 			responses: {
 				200: z.object({ success: z.boolean(), message: z.string() }),
