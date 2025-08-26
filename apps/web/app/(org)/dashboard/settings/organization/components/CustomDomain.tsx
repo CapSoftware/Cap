@@ -8,7 +8,6 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
-import { CheckCircle, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -98,48 +97,6 @@ export function CustomDomain() {
 								Set up a custom domain for your organization's shared caps.
 							</p>
 						</div>
-						{/* {process.env.NODE_ENV === "development" && (
-							<div className="flex gap-2 items-center p-2 text-xs bg-red-900 rounded-full w-fit text-gray-10">
-								<FontAwesomeIcon
-									className="text-red-200 min-size-3"
-									icon={faExclamationCircle}
-								/>
-								<p className="text-xs text-white">
-									Custom domains are not available in development mode
-								</p>
-							</div>
-						)} */}
-						{isVerified && orgCustomDomain ? (
-							<Tooltip content="Remove custom domain">
-								<div
-									onClick={() => setConfirmOpen(true)}
-									className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit"
-								>
-									<CheckCircle className="text-green-200 size-2.5" />
-									<p className="text-[11px] italic font-medium text-white">
-										{orgCustomDomain}
-										<span className="ml-1 not-italic text-white/60">
-											verified
-										</span>
-									</p>
-								</div>
-							</Tooltip>
-						) : orgCustomDomain ? (
-							<Tooltip content="Remove custom domain">
-								<div
-									onClick={() => setConfirmOpen(true)}
-									className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit"
-								>
-									<XCircle className="text-red-200 size-2.5" />
-									<p className="text-[11px] italic font-medium text-white">
-										{orgCustomDomain}
-										<span className="ml-1 not-italic text-white/60">
-											not verified
-										</span>
-									</p>
-								</div>
-							</Tooltip>
-						) : null}
 					</div>
 					<div className="flex flex-1 gap-2 justify-between items-center w-full">
 						<div className="flex gap-2 justify-between items-center px-3 flex-1 h-[44px] rounded-xl border bg-gray-2 border-gray-3">
