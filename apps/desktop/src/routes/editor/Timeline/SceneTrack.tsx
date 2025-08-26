@@ -13,9 +13,7 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
-import IconLucideEyeOff from "~icons/lucide/eye-off";
-import IconLucideMonitor from "~icons/lucide/monitor";
-import IconLucideVideo from "~icons/lucide/video";
+
 import { useEditorContext } from "../context";
 import {
 	useSegmentContext,
