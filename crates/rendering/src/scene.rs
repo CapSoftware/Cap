@@ -304,7 +304,7 @@ impl InterpolatedScene {
     }
 
     pub fn should_render_screen(&self) -> bool {
-        true
+        self.screen_opacity > 0.01 || self.screen_blur > 0.01
     }
 
     pub fn is_transitioning_camera_only(&self) -> bool {
