@@ -391,95 +391,99 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 										class={cx(
 											"mb-3 text-sm text-gray-12 w-fit",
 											group.titleStyling,
-									)}
-								>
-									{group.title}
-								</h3>
-								<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-									<For each={group.items}>
-										{(item) => {
-											// Check OS compatibility
-											if (
-												item.type === "toggle" &&
-												item.os &&
-												item.os !== ostype
-											) {
-												return null;
-											}
-
-											if (item.type === "toggle") {
-												return (
-													<ToggleSetting
-														pro={group.title === "Cap Pro"}
-														label={item.label}
-														description={item.description}
-														value={item.value}
-														onChange={item.onChange}
-													/>
-												);
-											} else if (item.type === "select") {
+										)}
+									>
+										{group.title}
+									</h3>
+									<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+										<For each={group.items}>
+											{(item) => {
+												// Check OS compatibility
 												if (
-													item.label === "Main window recording start behaviour"
+													item.type === "toggle" &&
+													item.os &&
+													item.os !== ostype
 												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Close", value: "close" },
-															{ text: "Minimise", value: "minimise" },
-														],
-													);
-												} else if (
-													item.label === "Studio recording finish behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Open editor", value: "openEditor" },
-															{ text: "Show in overlay", value: "showOverlay" },
-														],
-													);
-												} else if (item.label === "Recording countdown") {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Off", value: 0 },
-															{ text: "3 seconds", value: 3 },
-															{ text: "5 seconds", value: 5 },
-															{ text: "10 seconds", value: 10 },
-														],
-													);
-												} else if (
-													item.label === "After deleting recording behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Do Nothing", value: "doNothing" },
-															{
-																text: "Reopen Recording Window",
-																value: "reopenRecordingWindow",
-															},
-														],
-													);
+													return null;
 												}
-											}
-											return null;
-										}}
-									</For>
+
+												if (item.type === "toggle") {
+													return (
+														<ToggleSetting
+															pro={group.title === "Cap Pro"}
+															label={item.label}
+															description={item.description}
+															value={item.value}
+															onChange={item.onChange}
+														/>
+													);
+												} else if (item.type === "select") {
+													if (
+														item.label ===
+														"Main window recording start behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Close", value: "close" },
+																{ text: "Minimise", value: "minimise" },
+															],
+														);
+													} else if (
+														item.label === "Studio recording finish behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Open editor", value: "openEditor" },
+																{
+																	text: "Show in overlay",
+																	value: "showOverlay",
+																},
+															],
+														);
+													} else if (item.label === "Recording countdown") {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Off", value: 0 },
+																{ text: "3 seconds", value: 3 },
+																{ text: "5 seconds", value: 5 },
+																{ text: "10 seconds", value: 10 },
+															],
+														);
+													} else if (
+														item.label === "After deleting recording behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Do Nothing", value: "doNothing" },
+																{
+																	text: "Reopen Recording Window",
+																	value: "reopenRecordingWindow",
+																},
+															],
+														);
+													}
+												}
+												return null;
+											}}
+										</For>
+									</div>
 								</div>
-							</div>
 							</Show>
 						)}
 					</For>
