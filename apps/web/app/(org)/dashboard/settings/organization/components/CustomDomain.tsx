@@ -151,8 +151,6 @@ export function CustomDomain() {
 								type="submit"
 								size="sm"
 								className="min-w-fit"
-								spinner={removeDomainMutation.isPending}
-								disabled={removeDomainMutation.isPending}
 								variant="dark"
 								onClick={(e) => {
 									e.preventDefault();
