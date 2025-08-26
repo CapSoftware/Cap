@@ -1,5 +1,5 @@
-use cap_displays::{Display, bounds::*};
 use device_query::{DeviceQuery, DeviceState};
+use scap_targets::{Display, bounds::*};
 
 // Physical on Windows, Logical on macOS
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,11 +49,11 @@ impl RelativeCursorPosition {
         {
             let logical_bounds = display.raw_handle().logical_bounds()?;
 
-            return Some(Self {
+            Some(Self {
                 x: raw.x - logical_bounds.position().x() as i32,
                 y: raw.y - logical_bounds.position().y() as i32,
                 display,
-            });
+            })
         }
     }
 
@@ -208,7 +208,7 @@ impl std::fmt::Debug for NormalizedCursorPosition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cap_displays::Display;
+    use scap_targets::Display;
 
     // Helper function to create a mock Display for testing
     fn mock_display() -> Display {

@@ -3,15 +3,7 @@ use tracing::error;
 use windows::{
     Graphics::Capture::GraphicsCaptureItem,
     Win32::{
-        Devices::Display::{
-            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-            DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-            DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
-            DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS, DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY,
-            DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS,
-            QueryDisplayConfig,
-        },
-        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WIN32_ERROR, WPARAM},
+        Foundation::{CloseHandle, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
         Graphics::{
             Dwm::{DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DwmGetWindowAttribute},
             Gdi::{
@@ -26,10 +18,6 @@ use windows::{
         },
         Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
         System::{
-            Registry::{
-                HKEY, HKEY_LOCAL_MACHINE, KEY_READ, REG_BINARY, REG_SZ, RegCloseKey, RegEnumKeyExW,
-                RegOpenKeyExW, RegQueryValueExW,
-            },
             Threading::{
                 GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
                 PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -62,6 +50,14 @@ use crate::bounds::{LogicalSize, PhysicalBounds, PhysicalPosition, PhysicalSize}
 //
 // On Windows it's nigh impossible to get the logical position of a display
 // or window, since there's no simple API that accounts for each monitor having different DPI.
+
+static IGNORED_EXES: &'static [&str] = &[
+    // As it's a system webview it isn't owned by the Cap process.
+    "webview2",
+    "msedgewebview2",
+    // Just make sure, lol
+    "cap",
+];
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(HMONITOR);
@@ -251,385 +247,6 @@ impl DisplayImpl {
             }
         }
 
-        None
-    }
-
-    fn get_friendly_name_from_displayconfig(&self) -> Option<String> {
-        unsafe {
-            // Get the device name first
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
-            if !GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                return None;
-            }
-
-            let device_name = &info.szDevice;
-            let null_pos = device_name
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(device_name.len());
-            let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
-
-            // Get display configuration
-            let mut num_paths = 0u32;
-            let mut num_modes = 0u32;
-
-            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut num_paths, &mut num_modes)
-                != WIN32_ERROR(0)
-            {
-                return None;
-            }
-
-            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); num_paths as usize];
-            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); num_modes as usize];
-
-            if QueryDisplayConfig(
-                QDC_ONLY_ACTIVE_PATHS,
-                &mut num_paths,
-                paths.as_mut_ptr(),
-                &mut num_modes,
-                modes.as_mut_ptr(),
-                None,
-            ) != WIN32_ERROR(0)
-            {
-                return None;
-            }
-
-            // Find the matching path for our monitor
-            for path in &paths {
-                // Get source device name to match with our monitor
-                let mut source_name = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
-                    header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                        r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
-                        size: mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32,
-                        adapterId: path.sourceInfo.adapterId,
-                        id: path.sourceInfo.id,
-                    },
-                    viewGdiDeviceName: [0; 32],
-                };
-
-                if DisplayConfigGetDeviceInfo(&mut source_name.header as *mut _ as *mut _) != 0 {
-                    continue;
-                }
-
-                let source_device_name = String::from_utf16_lossy(&source_name.viewGdiDeviceName);
-                let source_null_pos = source_device_name
-                    .chars()
-                    .position(|c| c == '\0')
-                    .unwrap_or(source_device_name.len());
-                let source_trimmed = &source_device_name[..source_null_pos];
-
-                // Check if this matches our monitor
-                if source_trimmed == device_name_str {
-                    // Get the target (monitor) friendly name
-                    let mut target_name = DISPLAYCONFIG_TARGET_DEVICE_NAME {
-                        header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
-                            r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
-                            size: mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
-                            adapterId: path.sourceInfo.adapterId,
-                            id: path.targetInfo.id,
-                        },
-                        flags: DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS::default(),
-                        outputTechnology: DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY::default(),
-                        edidManufactureId: 0,
-                        edidProductCodeId: 0,
-                        connectorInstance: 0,
-                        monitorFriendlyDeviceName: [0; 64],
-                        monitorDevicePath: [0; 128],
-                    };
-
-                    if DisplayConfigGetDeviceInfo(&mut target_name.header as *mut _ as *mut _) == 0
-                    {
-                        let friendly_name =
-                            String::from_utf16_lossy(&target_name.monitorFriendlyDeviceName);
-                        let null_pos = friendly_name
-                            .chars()
-                            .position(|c| c == '\0')
-                            .unwrap_or(friendly_name.len());
-                        let trimmed_name = friendly_name[..null_pos].trim();
-
-                        if !trimmed_name.is_empty() && trimmed_name != "Generic PnP Monitor" {
-                            return Some(trimmed_name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    fn get_friendly_name_from_wmi(&self) -> Option<String> {
-        unsafe {
-            // Get the device name first for matching
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = mem::size_of::<MONITORINFOEXW>() as u32;
-
-            if !GetMonitorInfoW(self.0, &mut info as *mut _ as *mut _).as_bool() {
-                return None;
-            }
-
-            let device_name = &info.szDevice;
-            let null_pos = device_name
-                .iter()
-                .position(|&c| c == 0)
-                .unwrap_or(device_name.len());
-            let device_name_str = String::from_utf16_lossy(&device_name[..null_pos]);
-
-            // Try alternative registry paths for monitor information
-            let alt_registry_paths = [
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers\\Configuration\\{}",
-                    device_name_str.replace("\\\\.\\", "")
-                ),
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Hardware Profiles\\Current\\System\\CurrentControlSet\\Control\\VIDEO\\{}",
-                    device_name_str.replace("\\\\.\\DISPLAY", "")
-                ),
-            ];
-
-            for registry_path in &alt_registry_paths {
-                let registry_path_wide: Vec<u16> = registry_path
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut key: HKEY = HKEY::default();
-                if RegOpenKeyExW(
-                    HKEY_LOCAL_MACHINE,
-                    PCWSTR(registry_path_wide.as_ptr()),
-                    Some(0),
-                    KEY_READ,
-                    &mut key,
-                )
-                .is_ok()
-                {
-                    // Try to get monitor description from alternative locations
-                    let value_names = ["Monitor_Name", "Description", "FriendlyName"];
-
-                    for value_name in &value_names {
-                        let value_name_wide = format!("{}\0", value_name)
-                            .encode_utf16()
-                            .collect::<Vec<u16>>();
-                        let mut buffer = [0u16; 512];
-                        let mut buffer_size = (buffer.len() * 2) as u32;
-                        let mut value_type = REG_SZ;
-
-                        if RegQueryValueExW(
-                            key,
-                            PCWSTR(value_name_wide.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(buffer.as_mut_ptr() as *mut u8),
-                            Some(&mut buffer_size),
-                        )
-                        .is_ok()
-                        {
-                            let null_pos =
-                                buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-                            let desc = String::from_utf16_lossy(&buffer[..null_pos]);
-                            let cleaned_name = desc.trim().to_string();
-
-                            if !cleaned_name.is_empty() && cleaned_name != "Default Monitor" {
-                                let _ = RegCloseKey(key);
-                                return Some(cleaned_name);
-                            }
-                        }
-                    }
-                    let _ = RegCloseKey(key);
-                }
-            }
-        }
-        None
-    }
-
-    fn get_friendly_name_from_registry(&self, device_name: &str) -> Option<String> {
-        unsafe {
-            // Try multiple registry paths for better name resolution
-            let registry_paths = [
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{}",
-                    device_name.replace("\\\\.\\", "")
-                ),
-                format!(
-                    "SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e96e-e325-11ce-bfc1-08002be10318}}"
-                ),
-            ];
-
-            for registry_path in &registry_paths {
-                let registry_path_wide: Vec<u16> = registry_path
-                    .encode_utf16()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut key: HKEY = HKEY::default();
-                if RegOpenKeyExW(
-                    HKEY_LOCAL_MACHINE,
-                    PCWSTR(registry_path_wide.as_ptr()),
-                    Some(0),
-                    KEY_READ,
-                    &mut key,
-                )
-                .is_ok()
-                {
-                    // Try multiple value names for better localization
-                    let value_names = ["FriendlyName", "DeviceDesc", "DriverDesc"];
-
-                    for value_name in &value_names {
-                        let value_name_wide = format!("{}\0", value_name)
-                            .encode_utf16()
-                            .collect::<Vec<u16>>();
-                        let mut buffer = [0u16; 512];
-                        let mut buffer_size = (buffer.len() * 2) as u32;
-                        let mut value_type = REG_SZ;
-
-                        if RegQueryValueExW(
-                            key,
-                            PCWSTR(value_name_wide.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(buffer.as_mut_ptr() as *mut u8),
-                            Some(&mut buffer_size),
-                        )
-                        .is_ok()
-                        {
-                            let null_pos =
-                                buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
-                            let desc = String::from_utf16_lossy(&buffer[..null_pos]);
-
-                            // Clean up the description
-                            let cleaned_name = if let Some(semicolon_pos) = desc.rfind(';') {
-                                desc[semicolon_pos + 1..].trim().to_string()
-                            } else {
-                                desc.trim().to_string()
-                            };
-
-                            if !cleaned_name.is_empty()
-                                && !cleaned_name.contains("PCI\\VEN_")
-                                && cleaned_name != "Generic PnP Monitor"
-                            {
-                                let _ = RegCloseKey(key);
-                                return Some(cleaned_name);
-                            }
-                        }
-                    }
-                    let _ = RegCloseKey(key);
-                }
-            }
-        }
-        None
-    }
-
-    fn get_friendly_name_from_edid(&self, device_name: &str) -> Option<String> {
-        unsafe {
-            // Registry path for EDID data
-            let edid_path = format!(
-                "SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\{}",
-                device_name.replace("\\\\.\\", "")
-            );
-            let edid_path_wide: Vec<u16> =
-                edid_path.encode_utf16().chain(std::iter::once(0)).collect();
-
-            let mut key: HKEY = HKEY::default();
-            if RegOpenKeyExW(
-                HKEY_LOCAL_MACHINE,
-                PCWSTR(edid_path_wide.as_ptr()),
-                Some(0),
-                KEY_READ,
-                &mut key,
-            )
-            .is_ok()
-            {
-                // Enumerate subkeys to find device instances
-                let mut index = 0;
-                loop {
-                    let mut subkey_name = [0u16; 256];
-                    let mut subkey_size = subkey_name.len() as u32;
-
-                    if RegEnumKeyExW(
-                        key,
-                        index,
-                        Some(PWSTR(subkey_name.as_mut_ptr())),
-                        &mut subkey_size,
-                        None,
-                        Some(PWSTR::null()),
-                        None,
-                        None,
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-
-                    // Open device parameters subkey
-                    let subkey_str = String::from_utf16_lossy(&subkey_name[..subkey_size as usize]);
-                    let params_path = format!("{}\\Device Parameters", subkey_str);
-                    let params_path_wide: Vec<u16> = params_path
-                        .encode_utf16()
-                        .chain(std::iter::once(0))
-                        .collect();
-
-                    let mut params_key: HKEY = HKEY::default();
-                    if RegOpenKeyExW(
-                        key,
-                        PCWSTR(params_path_wide.as_ptr()),
-                        Some(0),
-                        KEY_READ,
-                        &mut params_key,
-                    )
-                    .is_ok()
-                    {
-                        // Read EDID data
-                        let edid_value = "EDID\0".encode_utf16().collect::<Vec<u16>>();
-                        let mut edid_buffer = [0u8; 256];
-                        let mut edid_size = edid_buffer.len() as u32;
-                        let mut value_type = REG_BINARY;
-
-                        if RegQueryValueExW(
-                            params_key,
-                            PCWSTR(edid_value.as_ptr()),
-                            None,
-                            Some(&mut value_type),
-                            Some(edid_buffer.as_mut_ptr()),
-                            Some(&mut edid_size),
-                        )
-                        .is_ok()
-                            && edid_size >= 128
-                        {
-                            // Parse EDID for monitor name (descriptor blocks start at offset 54)
-                            for i in (54..126).step_by(18) {
-                                if i + 18 > edid_buffer.len() {
-                                    break;
-                                }
-                                if edid_buffer[i] == 0
-                                    && edid_buffer[i + 1] == 0
-                                    && edid_buffer[i + 2] == 0
-                                    && edid_buffer[i + 3] == 0xFC
-                                {
-                                    // Monitor name descriptor found
-                                    if i + 18 <= edid_buffer.len() {
-                                        let name_bytes = &edid_buffer[i + 5..i + 18];
-                                        let name_str = String::from_utf8_lossy(name_bytes);
-                                        let name =
-                                            name_str.trim_end_matches('\0').trim().to_string();
-
-                                        if !name.is_empty() {
-                                            let _ = RegCloseKey(params_key);
-                                            let _ = RegCloseKey(key);
-                                            return Some(name);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let _ = RegCloseKey(params_key);
-                    }
-                    index += 1;
-                }
-                let _ = RegCloseKey(key);
-            }
-        }
         None
     }
 
@@ -907,9 +524,8 @@ impl WindowImpl {
 
     pub fn app_icon(&self) -> Option<Vec<u8>> {
         unsafe {
-            // Try multiple approaches to get the highest quality icon
-            let mut best_result = None;
-            let mut best_size = 0;
+            // Target size for acceptable icon quality - early termination threshold
+            const GOOD_SIZE_THRESHOLD: i32 = 64;
 
             // Method 1: Try to get the window's large icon first
             let large_icon = SendMessageW(
@@ -920,89 +536,80 @@ impl WindowImpl {
             ); // ICON_BIG = 1
 
             if large_icon.0 != 0 {
-                if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(large_icon.0 as _)) {
-                    best_result = Some(result.0);
-                    best_size = result.1;
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(large_icon.0 as _)) {
+                    // If we got a good quality icon, return it immediately
+                    if result.1 >= GOOD_SIZE_THRESHOLD {
+                        return Some(result.0);
+                    }
                 }
             }
 
-            // Method 2: Try executable file extraction with priority on larger icons
+            // Method 2: Try executable file extraction (only first icon, most likely to be main app icon)
             if let Some(exe_path) = self.get_executable_path() {
                 let wide_path: Vec<u16> =
                     exe_path.encode_utf16().chain(std::iter::once(0)).collect();
 
-                // Try extracting icons from multiple indices
-                for icon_index in 0..6 {
-                    let mut large_icon: HICON = HICON::default();
-                    let mut small_icon: HICON = HICON::default();
+                let mut large_icon: HICON = HICON::default();
+                let mut small_icon: HICON = HICON::default();
 
-                    let extracted = ExtractIconExW(
-                        PCWSTR(wide_path.as_ptr()),
-                        icon_index,
-                        Some(&mut large_icon),
-                        Some(&mut small_icon),
-                        1,
-                    );
+                let extracted = ExtractIconExW(
+                    PCWSTR(wide_path.as_ptr()),
+                    0, // Only try the first (main) icon
+                    Some(&mut large_icon),
+                    Some(&mut small_icon),
+                    1,
+                );
 
-                    if extracted > 0 {
-                        // Try large icon first
-                        if !large_icon.is_invalid() {
-                            if let Some(result) = self.hicon_to_png_bytes_high_res(large_icon) {
-                                if result.1 > best_size {
-                                    best_result = Some(result.0);
-                                    best_size = result.1;
-                                }
-                            }
+                if extracted > 0 {
+                    // Try large icon first
+                    if !large_icon.is_invalid() {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(large_icon) {
                             let _ = DestroyIcon(large_icon);
-                        }
-
-                        // Try small icon if we haven't found anything good yet
-                        if !small_icon.is_invalid() && best_size < 64 {
-                            if let Some(result) = self.hicon_to_png_bytes_high_res(small_icon) {
-                                if result.1 > best_size {
-                                    best_result = Some(result.0);
-                                    best_size = result.1;
-                                }
+                            if !small_icon.is_invalid() {
+                                let _ = DestroyIcon(small_icon);
                             }
-                            let _ = DestroyIcon(small_icon);
+                            // Return immediately if we got a good quality icon
+                            if result.1 >= GOOD_SIZE_THRESHOLD {
+                                return Some(result.0);
+                            }
                         }
+                        let _ = DestroyIcon(large_icon);
+                    }
+
+                    // Try small icon as fallback
+                    if !small_icon.is_invalid() {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(small_icon) {
+                            let _ = DestroyIcon(small_icon);
+                            return Some(result.0);
+                        }
+                        let _ = DestroyIcon(small_icon);
                     }
                 }
             }
 
-            // Method 3: Try small window icon if we still don't have anything good
-            if best_size < 32 {
-                let small_icon = SendMessageW(
-                    self.0,
-                    WM_GETICON,
-                    Some(WPARAM(0usize)),
-                    Some(LPARAM(0isize)),
-                ); // ICON_SMALL = 0
+            // Method 3: Try small window icon as fallback
+            let small_icon = SendMessageW(
+                self.0,
+                WM_GETICON,
+                Some(WPARAM(0usize)),
+                Some(LPARAM(0isize)),
+            ); // ICON_SMALL = 0
 
-                if small_icon.0 != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(small_icon.0 as _))
-                    {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                            best_size = result.1;
-                        }
-                    }
+            if small_icon.0 != 0 {
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(small_icon.0 as _)) {
+                    return Some(result.0);
                 }
             }
 
             // Method 4: Try class icon as last resort
-            if best_size < 32 {
-                let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
-                if class_icon != 0 {
-                    if let Some(result) = self.hicon_to_png_bytes_high_res(HICON(class_icon as _)) {
-                        if result.1 > best_size {
-                            best_result = Some(result.0);
-                        }
-                    }
+            let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
+            if class_icon != 0 {
+                if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(class_icon as _)) {
+                    return Some(result.0);
                 }
             }
 
-            best_result
+            None
         }
     }
 
@@ -1065,7 +672,7 @@ impl WindowImpl {
         }
     }
 
-    fn hicon_to_png_bytes_high_res(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
+    fn hicon_to_png_bytes_optimized(&self, icon: HICON) -> Option<(Vec<u8>, i32)> {
         unsafe {
             // Get icon info to determine actual size
             let mut icon_info = ICONINFO::default();
@@ -1080,124 +687,34 @@ impl WindowImpl {
             // Get the native icon size to prioritize it
             let native_size = self.get_icon_size(icon);
 
-            // Always try for the highest resolution possible, starting with the largest sizes
-            let mut sizes = vec![2048, 1024, 512, 256, 128, 96, 64, 48, 32, 24, 16];
-
-            // If we have native size info, prioritize it
-            if let Some((width, height)) = native_size {
+            // Determine the best size to try based on native size
+            let target_sizes = if let Some((width, height)) = native_size {
                 let native_dim = width.max(height);
-                const MAX_SIZE: i32 = 4096;
-                if !sizes.contains(&native_dim) && native_dim > 0 && native_dim <= MAX_SIZE {
-                    sizes.insert(0, native_dim);
+                if native_dim >= 256 {
+                    vec![native_dim, 256, 128] // High-res icon
+                } else if native_dim >= 64 {
+                    vec![native_dim, 64, 32] // Medium-res icon
+                } else if native_dim >= 32 {
+                    vec![native_dim, 32, 16] // Standard icon
+                } else {
+                    vec![32, 16] // Small icon, try standard sizes
                 }
-            }
+            } else {
+                // No native size info, try reasonable defaults
+                vec![128, 64, 32, 16]
+            };
 
-            let mut best_result = None;
-            let mut best_size = 0;
+            // Try each target size, return the first successful one
+            for &size in &target_sizes {
+                if let Some(result) = self.try_convert_icon_to_png(icon, size, screen_dc, mem_dc) {
+                    // Cleanup
+                    let _ = DeleteDC(mem_dc);
+                    let _ = ReleaseDC(Some(HWND::default()), screen_dc);
+                    let _ = DeleteObject(icon_info.hbmColor.into());
+                    let _ = DeleteObject(icon_info.hbmMask.into());
 
-            for &size in &sizes {
-                let width = size;
-                let height = size;
-
-                // Create bitmap info for this size
-                let mut bitmap_info = BITMAPINFO {
-                    bmiHeader: BITMAPINFOHEADER {
-                        biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
-                        biWidth: width,
-                        biHeight: -height, // Top-down DIB
-                        biPlanes: 1,
-                        biBitCount: 32, // 32 bits per pixel (BGRA)
-                        biCompression: BI_RGB.0,
-                        biSizeImage: 0,
-                        biXPelsPerMeter: 0,
-                        biYPelsPerMeter: 0,
-                        biClrUsed: 0,
-                        biClrImportant: 0,
-                    },
-                    bmiColors: [Default::default(); 1],
-                };
-
-                // Create a bitmap
-                let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
-                if bitmap.is_invalid() {
-                    continue;
+                    return Some((result, size));
                 }
-
-                let old_bitmap = SelectObject(mem_dc, bitmap.into());
-
-                // Fill with transparent background
-                let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
-                let rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: width,
-                    bottom: height,
-                };
-                let _ = FillRect(mem_dc, &rect, brush);
-                let _ = DeleteObject(brush.into());
-
-                // Draw the icon onto the bitmap with proper scaling
-                let draw_result = DrawIconEx(
-                    mem_dc,
-                    0,
-                    0,
-                    icon,
-                    width,
-                    height,
-                    0,
-                    Some(HBRUSH::default()),
-                    DI_FLAGS(0x0003), // DI_NORMAL
-                );
-
-                if draw_result.is_ok() {
-                    // Get bitmap bits
-                    let mut buffer = vec![0u8; (width * height * 4) as usize];
-                    let result = GetDIBits(
-                        mem_dc,
-                        bitmap,
-                        0,
-                        height as u32,
-                        Some(buffer.as_mut_ptr() as *mut _),
-                        &mut bitmap_info,
-                        DIB_RGB_COLORS,
-                    );
-
-                    if result > 0 {
-                        // Check if we have any non-transparent pixels
-                        let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
-
-                        if has_content {
-                            // Convert BGRA to RGBA
-                            for chunk in buffer.chunks_exact_mut(4) {
-                                chunk.swap(0, 2); // Swap B and R
-                            }
-
-                            // Create PNG using the image crate
-                            if let Some(img) =
-                                image::RgbaImage::from_raw(width as u32, height as u32, buffer)
-                            {
-                                let mut png_data = Vec::new();
-                                if img
-                                    .write_to(
-                                        &mut std::io::Cursor::new(&mut png_data),
-                                        image::ImageFormat::Png,
-                                    )
-                                    .is_ok()
-                                {
-                                    // Keep the result if it's our first success or if this size is larger
-                                    if best_result.is_none() || size > best_size {
-                                        best_result = Some((png_data, size));
-                                        best_size = size;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Cleanup for this iteration
-                let _ = SelectObject(mem_dc, old_bitmap);
-                let _ = DeleteObject(bitmap.into());
             }
 
             // Cleanup
@@ -1206,7 +723,120 @@ impl WindowImpl {
             let _ = DeleteObject(icon_info.hbmColor.into());
             let _ = DeleteObject(icon_info.hbmMask.into());
 
-            best_result
+            None
+        }
+    }
+
+    fn try_convert_icon_to_png(
+        &self,
+        icon: HICON,
+        size: i32,
+        screen_dc: HDC,
+        mem_dc: HDC,
+    ) -> Option<Vec<u8>> {
+        unsafe {
+            let width = size;
+            let height = size;
+
+            // Create bitmap info for this size
+            let mut bitmap_info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height, // Top-down DIB
+                    biPlanes: 1,
+                    biBitCount: 32, // 32 bits per pixel (BGRA)
+                    biCompression: BI_RGB.0,
+                    biSizeImage: 0,
+                    biXPelsPerMeter: 0,
+                    biYPelsPerMeter: 0,
+                    biClrUsed: 0,
+                    biClrImportant: 0,
+                },
+                bmiColors: [Default::default(); 1],
+            };
+
+            // Create a bitmap
+            let bitmap = CreateCompatibleBitmap(screen_dc, width, height);
+            if bitmap.is_invalid() {
+                return None;
+            }
+
+            let old_bitmap = SelectObject(mem_dc, bitmap.into());
+
+            // Fill with transparent background
+            let brush = CreateSolidBrush(windows::Win32::Foundation::COLORREF(0));
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            };
+            let _ = FillRect(mem_dc, &rect, brush);
+            let _ = DeleteObject(brush.into());
+
+            // Draw the icon onto the bitmap with proper scaling
+            let draw_result = DrawIconEx(
+                mem_dc,
+                0,
+                0,
+                icon,
+                width,
+                height,
+                0,
+                Some(HBRUSH::default()),
+                DI_FLAGS(0x0003), // DI_NORMAL
+            );
+
+            let mut result = None;
+
+            if draw_result.is_ok() {
+                // Get bitmap bits
+                let mut buffer = vec![0u8; (width * height * 4) as usize];
+                let get_bits_result = GetDIBits(
+                    mem_dc,
+                    bitmap,
+                    0,
+                    height as u32,
+                    Some(buffer.as_mut_ptr() as *mut _),
+                    &mut bitmap_info,
+                    DIB_RGB_COLORS,
+                );
+
+                if get_bits_result > 0 {
+                    // Check if we have any non-transparent pixels
+                    let has_content = buffer.chunks_exact(4).any(|chunk| chunk[3] != 0);
+
+                    if has_content {
+                        // Convert BGRA to RGBA
+                        for chunk in buffer.chunks_exact_mut(4) {
+                            chunk.swap(0, 2); // Swap B and R
+                        }
+
+                        // Create PNG using the image crate
+                        if let Some(img) =
+                            image::RgbaImage::from_raw(width as u32, height as u32, buffer)
+                        {
+                            let mut png_data = Vec::new();
+                            if img
+                                .write_to(
+                                    &mut std::io::Cursor::new(&mut png_data),
+                                    image::ImageFormat::Png,
+                                )
+                                .is_ok()
+                            {
+                                result = Some(png_data);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Cleanup for this iteration
+            let _ = SelectObject(mem_dc, old_bitmap);
+            let _ = DeleteObject(bitmap.into());
+
+            result
         }
     }
 
@@ -1369,6 +999,15 @@ impl WindowImpl {
             return false;
         }
 
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = unsafe { pid_to_exe_path(id) } {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
+                    return false;
+                }
+            }
+        }
+
         let mut rect = RECT::default();
         let result = unsafe { GetClientRect(self.0, &mut rect) };
         if result.is_ok() {
@@ -1399,7 +1038,20 @@ fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool 
         // Skip own process windows
         let mut process_id = 0u32;
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
-        process_id != current_process_id
+        if process_id == current_process_id {
+            return false;
+        }
+
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = pid_to_exe_path(process_id) {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                if IGNORED_EXES.contains(&&*exe_name.to_lowercase()) {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -1419,6 +1071,19 @@ fn is_window_valid_for_topmost_selection(
         GetWindowThreadProcessId(hwnd, Some(&mut process_id));
         if process_id == current_process_id {
             return false;
+        }
+
+        // Also skip WebView2 and Cap-related processes
+        if let Ok(exe_path) = pid_to_exe_path(process_id) {
+            if let Some(exe_name) = exe_path.file_name().and_then(|n| n.to_str()) {
+                let exe_name_lower = exe_name.to_lowercase();
+                if exe_name_lower.contains("webview2")
+                    || exe_name_lower.contains("msedgewebview2")
+                    || exe_name_lower.contains("cap")
+                {
+                    return false;
+                }
+            }
         }
 
         // Check if point is actually in this window

@@ -23,7 +23,8 @@ export function createSignInMutation() {
 
 			await shell.open(session.url.toString());
 
-			await processAuthData(await session.complete());
+			const res = await session.complete();
+			if (res) await processAuthData(res);
 
 			getCurrentWindow().setFocus();
 		},
@@ -67,7 +68,8 @@ async function createLocalServerSession(signal: AbortSignal) {
 		invoke("plugin:oauth|stop").catch(() => {});
 	};
 
-	let res: (url: URL) => void;
+	let res: (url: URL | null) => void;
+
 	const stopListening = await listen(
 		"oauth://url",
 		(data: { payload: string }) => {
@@ -83,16 +85,19 @@ async function createLocalServerSession(signal: AbortSignal) {
 		},
 	);
 
+	signal.onabort = (e: Event) => {
+		res(null);
+	};
+
 	return {
 		url: await createSessionRequestUrl(port, "web"),
 		complete: async () => {
-			const url = await new Promise<URL>((r) => {
-				res = r;
+			const url = await new Promise<URL | null>((_res) => {
+				res = _res;
 			});
 
-			console.log(url);
 			stopListening();
-
+			if (!url) return null;
 			if (signal.aborted) throw new Error("Sign in aborted");
 
 			const a = [...url.searchParams].reduce((acc, [k, v]) => {

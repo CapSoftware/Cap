@@ -1,5 +1,5 @@
 use cap_cursor_capture::RawCursorPosition;
-use cap_displays::Display;
+use scap_targets::Display;
 
 fn main() {
     loop {

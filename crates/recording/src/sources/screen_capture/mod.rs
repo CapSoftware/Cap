@@ -1,8 +1,8 @@
 use cap_cursor_capture::CursorCropBounds;
-use cap_displays::{Display, DisplayId, Window, WindowId, bounds::*};
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;
+use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
@@ -77,6 +77,7 @@ impl ScreenCaptureTarget {
         match self {
             Self::Display { .. } => {
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_macos(LogicalBounds::new(
@@ -86,6 +87,7 @@ impl ScreenCaptureTarget {
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
@@ -98,6 +100,7 @@ impl ScreenCaptureTarget {
                 let window = Window::from_id(id)?;
 
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     let display_position = display.raw_handle().logical_position();
@@ -113,6 +116,7 @@ impl ScreenCaptureTarget {
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display_bounds = self.display()?.raw_handle().physical_bounds()?;
                     let window_bounds = window.raw_handle().physical_bounds()?;
@@ -131,11 +135,13 @@ impl ScreenCaptureTarget {
             }
             Self::Area { bounds, .. } => {
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     return Some(CursorCropBounds::new_macos(*bounds));
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     let display_bounds = display.raw_handle().physical_bounds()?;
@@ -275,7 +281,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         let crop_bounds = match target {
             ScreenCaptureTarget::Display { .. } => None,
             ScreenCaptureTarget::Window { id } => {
-                let window = Window::from_id(&id).ok_or(ScreenCaptureInitError::NoWindow)?;
+                let window = Window::from_id(id).ok_or(ScreenCaptureInitError::NoWindow)?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -402,7 +408,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 }
 
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
-    cap_displays::Display::list()
+    scap_targets::Display::list()
         .into_iter()
         .filter_map(|display| {
             Some((
@@ -418,7 +424,7 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
-    cap_displays::Window::list()
+    scap_targets::Window::list()
         .into_iter()
         .flat_map(|v| {
             let name = v.name()?;

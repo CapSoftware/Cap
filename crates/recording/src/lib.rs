@@ -11,13 +11,15 @@ pub use studio_recording::{
     CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
 };
 
-use cap_displays::bounds::LogicalBounds;
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;
+use scap_targets::bounds::LogicalBounds;
 use serde::{Deserialize, Serialize};
 use sources::*;
 use std::sync::Arc;
 use thiserror::Error;
+
+use crate::feeds::camera::CameraFeedLock;
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +45,7 @@ pub struct RecordingBaseInputs {
     pub capture_target: ScreenCaptureTarget,
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
+    pub camera_feed: Option<Arc<CameraFeedLock>>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]

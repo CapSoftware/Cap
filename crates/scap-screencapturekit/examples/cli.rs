@@ -1,4 +1,4 @@
-use cap_displays::Display;
+use scap_targets::Display;
 use std::time::Duration;
 
 use futures::executor::block_on;

@@ -105,8 +105,7 @@ fn default_enable_native_camera_preview() -> bool {
 }
 
 fn default_enable_new_recording_flow() -> bool {
-    false
-    // cfg!(debug_assertions)
+    cfg!(debug_assertions)
 }
 
 fn no(_: &bool) -> bool {

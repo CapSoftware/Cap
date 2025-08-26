@@ -8,8 +8,8 @@ use std::{
 use base64::prelude::*;
 
 use crate::windows::{CapWindowId, ShowCapWindow};
-use cap_displays::{
-    DisplayId, WindowId,
+use scap_targets::{
+    Display, DisplayId, Window, WindowId,
     bounds::{LogicalBounds, PhysicalSize},
 };
 use serde::Serialize;
@@ -24,7 +24,6 @@ use tracing::error;
 pub struct TargetUnderCursor {
     display_id: Option<DisplayId>,
     window: Option<WindowUnderCursor>,
-    screen: Option<ScreenUnderCursor>,
 }
 
 #[derive(Serialize, Type, Clone)]
@@ -32,13 +31,12 @@ pub struct WindowUnderCursor {
     id: WindowId,
     app_name: String,
     bounds: LogicalBounds,
-    icon: Option<String>,
 }
 
 #[derive(Serialize, Type, Clone)]
-pub struct ScreenUnderCursor {
-    name: String,
-    physical_size: PhysicalSize,
+pub struct DisplayInformation {
+    name: Option<String>,
+    physical_size: Option<PhysicalSize>,
     refresh_rate: String,
 }
 
@@ -48,7 +46,7 @@ pub async fn open_target_select_overlays(
     app: AppHandle,
     state: tauri::State<'_, WindowFocusManager>,
 ) -> Result<(), String> {
-    let displays = cap_displays::Display::list()
+    let displays = scap_targets::Display::list()
         .into_iter()
         .map(|d| d.id())
         .collect::<Vec<_>>();
@@ -62,30 +60,22 @@ pub async fn open_target_select_overlays(
         let app = app.clone();
         async move {
             loop {
-                let display = cap_displays::Display::get_containing_cursor();
-                let window = cap_displays::Window::get_topmost_at_cursor();
+                {
+                    let display = scap_targets::Display::get_containing_cursor();
+                    let window = scap_targets::Window::get_topmost_at_cursor();
 
-                let _ = TargetUnderCursor {
-                    display_id: display.map(|d| d.id()),
-                    window: window.and_then(|w| {
-                        Some(WindowUnderCursor {
-                            id: w.id(),
-                            bounds: w.display_relative_logical_bounds()?,
-                            app_name: w.owner_name()?,
-                            icon: w.app_icon().map(|bytes| {
-                                format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))
-                            }),
-                        })
-                    }),
-                    screen: display.and_then(|d| {
-                        Some(ScreenUnderCursor {
-                            name: d.name().unwrap_or_default(),
-                            physical_size: d.physical_size()?,
-                            refresh_rate: d.refresh_rate().to_string(),
-                        })
-                    }),
+                    let _ = TargetUnderCursor {
+                        display_id: display.map(|d| d.id()),
+                        window: window.and_then(|w| {
+                            Some(WindowUnderCursor {
+                                id: w.id(),
+                                bounds: w.display_relative_logical_bounds()?,
+                                app_name: w.owner_name()?,
+                            })
+                        }),
+                    }
+                    .emit(&app);
                 }
-                .emit(&app);
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
@@ -112,10 +102,7 @@ pub async fn open_target_select_overlays(
 
 #[specta::specta]
 #[tauri::command]
-pub async fn close_target_select_overlays(
-    app: AppHandle,
-    // state: tauri::State<'_, WindowFocusManager>,
-) -> Result<(), String> {
+pub async fn close_target_select_overlays(app: AppHandle) -> Result<(), String> {
     for (id, window) in app.webview_windows() {
         if let Ok(CapWindowId::TargetSelectOverlay { .. }) = CapWindowId::from_str(&id) {
             let _ = window.close();
@@ -123,6 +110,34 @@ pub async fn close_target_select_overlays(
     }
 
     Ok(())
+}
+
+#[specta::specta]
+#[tauri::command]
+pub async fn get_window_icon(window_id: &str) -> Result<Option<String>, String> {
+    let window_id = window_id
+        .parse::<WindowId>()
+        .map_err(|err| format!("Invalid window ID: {}", err))?;
+
+    Ok(Window::from_id(&window_id)
+        .ok_or("Window not found")?
+        .app_icon()
+        .map(|bytes| format!("data:image/png;base64,{}", BASE64_STANDARD.encode(&bytes))))
+}
+
+#[specta::specta]
+#[tauri::command]
+pub async fn display_information(display_id: &str) -> Result<DisplayInformation, String> {
+    let display_id = display_id
+        .parse::<DisplayId>()
+        .map_err(|err| format!("Invalid display ID: {}", err))?;
+    let display = Display::from_id(&display_id).ok_or("Display not found")?;
+
+    Ok(DisplayInformation {
+        name: display.name(),
+        physical_size: display.physical_size(),
+        refresh_rate: display.refresh_rate().to_string(),
+    })
 }
 
 // Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
@@ -141,25 +156,25 @@ impl WindowFocusManager {
             tokio::spawn(async move {
                 let app = window.app_handle();
                 loop {
-                    let Some(cap_main) = CapWindowId::Main.get(app) else {
-                        window.close().ok();
-                        break;
-                    };
+                    let cap_main = CapWindowId::Main.get(app);
+                    let cap_settings = CapWindowId::Settings.get(app);
 
-                    // If the main window is minimized or not visible, close the overlay
-                    //
-                    // This is a workaround for the fact that the Cap main window
-                    // is minimized when opening settings, etc instead of it being
-                    // closed.
-                    if cap_main.is_minimized().ok().unwrap_or_default()
-                        || cap_main.is_visible().map(|v| !v).ok().unwrap_or_default()
-                    {
-                        window.close().ok();
+                    let has_cap_main = cap_main
+                        .as_ref()
+                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
+                        .unwrap_or(true);
+                    let has_cap_settings = cap_settings
+                        .and_then(|v| Some(v.is_minimized().ok()? || !v.is_visible().ok()?))
+                        .unwrap_or(true);
+
+                    // Close the overlay if the cap main and settings are not available.
+                    if has_cap_main && has_cap_settings {
+                        window.hide().ok();
                         break;
                     }
 
                     #[cfg(windows)]
-                    {
+                    if let Some(cap_main) = cap_main {
                         let should_refocus = cap_main.is_focused().ok().unwrap_or_default()
                             || window.is_focused().unwrap_or_default();
 
@@ -170,7 +185,7 @@ impl WindowFocusManager {
                         }
                     }
 
-                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
                 }
             }),
         );
