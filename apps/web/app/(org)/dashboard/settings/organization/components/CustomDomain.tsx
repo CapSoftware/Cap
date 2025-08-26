@@ -77,11 +77,11 @@ export function CustomDomain() {
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
 			/>
-			<div className="flex gap-3 justify-between items-center w-full h-fit">
+			<div className="flex flex-col flex-1 gap-3 justify-between md:flex-row md:items-center h-fit">
 				<div className="space-y-1">
 					<div
 						className={clsx(
-							"flex gap-3 items-center",
+							"flex flex-col md:flex-row gap-3 md:items-center",
 							(isVerified && orgCustomDomain) ||
 								(!isVerified && orgCustomDomain)
 								? "mb-3"
@@ -92,7 +92,7 @@ export function CustomDomain() {
 						{process.env.NODE_ENV === "development" && (
 							<div className="flex gap-2 items-center p-2 text-xs bg-red-900 rounded-full w-fit text-gray-10">
 								<FontAwesomeIcon
-									className="text-red-200 size-3"
+									className="text-red-200 min-size-3"
 									icon={faExclamationCircle}
 								/>
 								<p className="text-xs text-white">
@@ -136,9 +136,8 @@ export function CustomDomain() {
 							</>
 						) : null}
 					</div>
-					<p className="text-sm w-full max-w-[375px] text-gray-10">
-						Set up a custom domain for your organization's shared caps and make
-						it unique.
+					<p className="w-full text-sm text-gray-10">
+						Set up a custom domain for your organization's shared caps.
 					</p>
 				</div>
 				<Button

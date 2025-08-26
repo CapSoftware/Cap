@@ -31,7 +31,7 @@ export const AccessEmailDomain = () => {
 	};
 
 	return (
-		<div className="space-y-4">
+		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
 				<Label htmlFor="allowedEmailDomain">Access email domain</Label>
 				<p className="text-sm text-gray-10">
@@ -41,7 +41,7 @@ export const AccessEmailDomain = () => {
 					</span>
 				</p>
 			</div>
-			<div className="flex gap-3 items-center w-full h-fit">
+			<div className="flex flex-col gap-3 w-full md:items-center md:flex-row h-fit">
 				<Input
 					type="text"
 					placeholder="e.g. company.com"

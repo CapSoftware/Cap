@@ -16,12 +16,12 @@ export const OrganizationDetailsCard = () => {
 					organization icon.
 				</CardDescription>
 			</CardHeader>
-			<OrgName />
-			<AccessEmailDomain />
-			<div className="mt-2 w-full h-px border-t border-dashed border-gray-3" />
-			<CustomDomain />
-			<div className="w-full h-px border-t border-dashed border-gray-3" />
-			<OrganizationIcon />
+			<div className="grid grid-cols-1 gap-12 md:grid-cols-2">
+				<OrgName />
+				<CustomDomain />
+				<AccessEmailDomain />
+				<OrganizationIcon />
+			</div>
 		</Card>
 	);
 };

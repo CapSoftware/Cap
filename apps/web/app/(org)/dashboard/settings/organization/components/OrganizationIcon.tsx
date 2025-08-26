@@ -58,11 +58,11 @@ export const OrganizationIcon = () => {
 	};
 
 	return (
-		<div className="space-y-4">
+		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
 				<Label htmlFor="icon">Organization Icon</Label>
 				<CardDescription className="w-full">
-					Upload a custom logo or icon for your organization and make it unique.
+					Upload a custom logo or icon for your organization.
 				</CardDescription>
 			</div>
 			<FileInput
