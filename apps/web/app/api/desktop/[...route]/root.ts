@@ -97,10 +97,6 @@ app.get("/plan", async (c) => {
 
 	let isSubscribed = userIsPro(user);
 
-	if (user.thirdPartyStripeSubscriptionId) {
-		isSubscribed = true;
-	}
-
 	if (!isSubscribed && !user.stripeSubscriptionId && user.stripeCustomerId) {
 		try {
 			const subscriptions = await stripe().subscriptions.list({
