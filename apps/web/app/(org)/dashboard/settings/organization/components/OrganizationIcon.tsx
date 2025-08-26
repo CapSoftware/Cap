@@ -66,8 +66,8 @@ export const OrganizationIcon = () => {
 				</CardDescription>
 			</div>
 			<FileInput
-				height={62}
-				previewIconSize={32}
+				height={44}
+				previewIconSize={20}
 				id="icon"
 				name="icon"
 				onChange={handleFileChange}

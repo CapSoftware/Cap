@@ -1,7 +1,9 @@
 import { Button } from "@cap/ui";
 import {
+	faCheckCircle,
 	faExclamationCircle,
 	faGlobe,
+	faX,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -77,8 +79,8 @@ export function CustomDomain() {
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}
 			/>
-			<div className="flex flex-col flex-1 gap-3 justify-between md:flex-row md:items-center h-fit">
-				<div className="space-y-1">
+			<div className="flex flex-col flex-1 gap-3 justify-between w-full md:flex-row md:items-center h-fit">
+				<div className="space-y-4 w-full">
 					<div
 						className={clsx(
 							"flex flex-col md:flex-row gap-3 md:items-center",
@@ -88,8 +90,15 @@ export function CustomDomain() {
 								: "mb-0",
 						)}
 					>
-						<h1 className="text-sm font-medium text-gray-12">Custom Domain</h1>
-						{process.env.NODE_ENV === "development" && (
+						<div className="flex flex-col gap-1">
+							<h1 className="text-sm font-medium text-gray-12">
+								Custom Domain
+							</h1>
+							<p className="w-full text-sm text-gray-10">
+								Set up a custom domain for your organization's shared caps.
+							</p>
+						</div>
+						{/* {process.env.NODE_ENV === "development" && (
 							<div className="flex gap-2 items-center p-2 text-xs bg-red-900 rounded-full w-fit text-gray-10">
 								<FontAwesomeIcon
 									className="text-red-200 min-size-3"
@@ -99,65 +108,98 @@ export function CustomDomain() {
 									Custom domains are not available in development mode
 								</p>
 							</div>
-						)}
+						)} */}
 						{isVerified && orgCustomDomain ? (
-							<>
-								<Tooltip content="Remove custom domain">
-									<div
-										onClick={() => setConfirmOpen(true)}
-										className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit"
-									>
-										<CheckCircle className="text-green-200 size-2.5" />
-										<p className="text-[11px] italic font-medium text-white">
-											{orgCustomDomain}
-											<span className="ml-1 not-italic text-white/60">
-												verified
-											</span>
-										</p>
-									</div>
-								</Tooltip>
-							</>
+							<Tooltip content="Remove custom domain">
+								<div
+									onClick={() => setConfirmOpen(true)}
+									className="flex gap-2 items-center hover:bg-green-800 transition-colors cursor-pointer px-3 py-0.5 bg-green-900 rounded-full w-fit"
+								>
+									<CheckCircle className="text-green-200 size-2.5" />
+									<p className="text-[11px] italic font-medium text-white">
+										{orgCustomDomain}
+										<span className="ml-1 not-italic text-white/60">
+											verified
+										</span>
+									</p>
+								</div>
+							</Tooltip>
 						) : orgCustomDomain ? (
-							<>
-								<Tooltip content="Remove custom domain">
-									<div
-										onClick={() => setConfirmOpen(true)}
-										className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit"
-									>
-										<XCircle className="text-red-200 size-2.5" />
-										<p className="text-[11px] italic font-medium text-white">
-											{orgCustomDomain}
-											<span className="ml-1 not-italic text-white/60">
-												not verified
-											</span>
-										</p>
-									</div>
-								</Tooltip>
-							</>
+							<Tooltip content="Remove custom domain">
+								<div
+									onClick={() => setConfirmOpen(true)}
+									className="flex gap-2 items-center px-3 py-0.5 cursor-pointer hover:bg-red-800 transition-colors bg-red-900 rounded-full w-fit"
+								>
+									<XCircle className="text-red-200 size-2.5" />
+									<p className="text-[11px] italic font-medium text-white">
+										{orgCustomDomain}
+										<span className="ml-1 not-italic text-white/60">
+											not verified
+										</span>
+									</p>
+								</div>
+							</Tooltip>
 						) : null}
 					</div>
-					<p className="w-full text-sm text-gray-10">
-						Set up a custom domain for your organization's shared caps.
-					</p>
+					<div className="flex flex-1 gap-2 justify-between items-center w-full">
+						<div className="flex gap-2 justify-between items-center px-3 flex-1 h-[44px] rounded-xl border bg-gray-2 border-gray-3">
+							<p className="text-[13px] text-gray-10">
+								{orgCustomDomain || "No custom domain"}
+							</p>
+							<div className="flex items-center">
+								<Tooltip content="Setup not complete">
+									<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
+										{isVerified ? (
+											<FontAwesomeIcon
+												className="text-green-500 size-5"
+												icon={faCheckCircle}
+											/>
+										) : (
+											<FontAwesomeIcon
+												className="text-red-500 size-5"
+												icon={faExclamationCircle}
+											/>
+										)}
+									</div>
+								</Tooltip>
+
+								<Tooltip content="Remove custom domain">
+									<div
+										onClick={(e) => {
+											e.preventDefault();
+											setConfirmOpen(true);
+										}}
+										className="flex justify-center items-center text-xs rounded-full border transition-colors duration-200 cursor-pointer hover:bg-gray-8 hover:border-gray-9 size-5 bg-gray-6 border-gray-7"
+									>
+										<FontAwesomeIcon
+											icon={faX}
+											className="text-gray-12 size-[10px]"
+										/>
+									</div>
+								</Tooltip>
+							</div>
+						</div>
+
+						<Button
+							type="submit"
+							size="sm"
+							className="min-w-fit"
+							spinner={isVerified ? removeDomainMutation.isPending : undefined}
+							disabled={isVerified ? removeDomainMutation.isPending : undefined}
+							variant="dark"
+							onClick={(e) => {
+								e.preventDefault();
+								if (isVerified) {
+									setConfirmOpen(true);
+								} else {
+									setShowCustomDomainDialog(true);
+								}
+							}}
+						>
+							{isVerified ? "Remove" : "Setup"}
+						</Button>
+					</div>
 				</div>
-				<Button
-					type="submit"
-					size="sm"
-					className="min-w-fit"
-					spinner={isVerified ? removeDomainMutation.isPending : undefined}
-					disabled={isVerified ? removeDomainMutation.isPending : undefined}
-					variant="dark"
-					onClick={async (e) => {
-						e.preventDefault();
-						if (isVerified) {
-							setConfirmOpen(true);
-						} else {
-							setShowCustomDomainDialog(true);
-						}
-					}}
-				>
-					{isVerified ? "Remove" : "Setup"}
-				</Button>
 			</div>
 
 			{showUpgradeModal && (

@@ -16,7 +16,7 @@ export const OrganizationDetailsCard = () => {
 					organization icon.
 				</CardDescription>
 			</CardHeader>
-			<div className="grid grid-cols-1 gap-12 md:grid-cols-2">
+			<div className="grid grid-cols-1 gap-8 md:grid-cols-2">
 				<OrgName />
 				<CustomDomain />
 				<AccessEmailDomain />

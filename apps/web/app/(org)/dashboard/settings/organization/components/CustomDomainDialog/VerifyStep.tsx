@@ -17,6 +17,16 @@ interface VerifyStepProps {
 
 const POLL_INTERVAL = 5000;
 
+const TXTDomainValueHandler = (record: DomainVerification, domain: string) => {
+	if (!record.domain) return "@";
+	if (record.domain === domain) return "@";
+	const suffix = `.${domain}`;
+	if (record.domain.endsWith(suffix)) {
+		return record.domain.replace(suffix, "") || "@";
+	}
+	return record.domain;
+};
+
 const VerifyStep = ({
 	domain,
 	domainConfig,
@@ -88,6 +98,7 @@ const VerifyStep = ({
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
+	console.log(aRecordConfigured, "a record configured");
 	console.log(showARecord, "show A record const");
 	console.log(domainConfig, "domain config");
 
@@ -116,16 +127,6 @@ const VerifyStep = ({
 			clearInterval(interval);
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
-
-	const TXTDomainValueHandler = (record: DomainVerification) => {
-		if (!record.domain) return "@";
-		if (record.domain === domain) return "@";
-		const suffix = `.${domain}`;
-		if (record.domain.endsWith(suffix)) {
-			return record.domain.replace(suffix, "") || "@";
-		}
-		return record.domain;
-	};
 
 	return (
 		<div className="space-y-6">

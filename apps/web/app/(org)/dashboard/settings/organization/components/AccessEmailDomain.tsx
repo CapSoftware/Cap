@@ -44,6 +44,7 @@ export const AccessEmailDomain = () => {
 			<div className="flex flex-col gap-3 w-full md:items-center md:flex-row h-fit">
 				<Input
 					type="text"
+					className="bg-gray-2"
 					placeholder="e.g. company.com"
 					value={emailDomain || ""}
 					id="allowedEmailDomain"

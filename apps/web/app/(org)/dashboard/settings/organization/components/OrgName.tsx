@@ -43,6 +43,7 @@ const OrgName = () => {
 			<div className="flex flex-col gap-3 w-full md:items-center md:flex-row">
 				<Input
 					type="text"
+					className="bg-gray-2"
 					value={orgName}
 					id="organizationName"
 					name="organizationName"
