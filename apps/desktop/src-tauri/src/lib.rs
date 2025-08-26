@@ -2178,6 +2178,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                             id,
                                             CapWindowId::TargetSelectOverlay { .. }
                                                 | CapWindowId::Main
+                                                | CapWindowId::Camera
                                         )
                                     {
                                         let _ = window.show();

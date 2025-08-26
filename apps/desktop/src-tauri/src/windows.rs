@@ -329,7 +329,9 @@ impl ShowCapWindow {
                     if let Ok(id) = CapWindowId::from_str(&label)
                         && matches!(
                             id,
-                            CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main
+                            CapWindowId::TargetSelectOverlay { .. }
+                                | CapWindowId::Main
+                                | CapWindowId::Camera
                         )
                     {
                         let _ = window.hide();
