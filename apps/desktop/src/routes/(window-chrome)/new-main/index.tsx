@@ -292,11 +292,7 @@ function Page() {
 	return (
 		<div class="flex relative justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
-				<div
-					dir={ostype() === "windows" ? "rtl" : "rtl"}
-					class="flex gap-1 items-center mx-2 w-full"
-					data-tauri-drag-region
-				>
+				<div class="flex items-center mx-2 w-full" data-tauri-drag-region>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
 							<button
@@ -337,7 +333,9 @@ function Page() {
 							</button>
 						)}
 					</div>
-					<div class="flex-1" data-tauri-drag-region />
+					{ostype() === "macos" && (
+						<div class="flex-1" data-tauri-drag-region />
+					)}
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
@@ -351,6 +349,7 @@ function Page() {
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
+									ostype() === "windows" && "ml-2",
 								)}
 							>
 								{license.data?.type === "commercial"

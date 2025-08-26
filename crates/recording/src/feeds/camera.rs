@@ -8,9 +8,10 @@ use replace_with::replace_with_or_abort;
 use std::{
     cmp::Ordering,
     ops::Deref,
+    sync::mpsc::{self, SyncSender},
     time::{Duration, Instant},
 };
-use tokio::sync::oneshot;
+use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
 
 use cap_camera_ffmpeg::*;
@@ -53,15 +54,15 @@ struct OpenState {
 }
 
 impl OpenState {
-    fn handle_input_connected(&mut self, data: SetupCameraResult, id: DeviceOrModelID) {
+    fn handle_input_connected(&mut self, data: InputConnected, id: DeviceOrModelID) {
         if let Some(connecting) = &self.connecting
             && id == connecting.id
         {
             self.attached = Some(AttachedState {
                 id,
-                handle: data.handle,
                 camera_info: data.camera_info,
                 video_info: data.video_info,
+                done_tx: data.done_tx,
             });
             self.connecting = None;
         }
@@ -70,15 +71,15 @@ impl OpenState {
 
 struct ConnectingState {
     id: DeviceOrModelID,
-    ready: BoxFuture<'static, Result<SetupCameraResult, SetInputError>>,
+    ready: BoxFuture<'static, Result<InputConnected, SetInputError>>,
 }
 
 struct AttachedState {
     #[allow(dead_code)]
     id: DeviceOrModelID,
-    handle: cap_camera::CaptureHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    done_tx: mpsc::SyncSender<()>,
 }
 
 impl Default for CameraFeed {
@@ -162,7 +163,11 @@ pub struct Lock;
 // Private Events
 
 #[derive(Clone)]
-struct InputConnected;
+struct InputConnected {
+    done_tx: SyncSender<()>,
+    camera_info: cap_camera::CameraInfo,
+    video_info: VideoInfo,
+}
 
 struct InputConnectFailed {
     id: DeviceOrModelID,
@@ -310,51 +315,64 @@ impl Message<SetInput> for CameraFeed {
 
         let state = self.state.try_as_open()?;
 
-        let (internal_ready_tx, internal_ready_rx) =
-            oneshot::channel::<Result<SetupCameraResult, SetInputError>>();
-        let (ready_tx, ready_rx) =
-            oneshot::channel::<Result<(CameraInfo, VideoInfo), SetInputError>>();
+        let (ready_tx, ready_rx) = oneshot::channel::<Result<InputConnected, SetInputError>>();
+        let (done_tx, done_rx) = std::sync::mpsc::sync_channel(0);
 
-        let ready = {
-            ready_rx
-                .map(|v| {
-                    v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .and_then(|v| v)
-                })
-                .shared()
-        };
+        let ready = ready_rx
+            .map(|v| {
+                v.map_err(|_| SetInputError::BuildStreamCrashed)
+                    .and_then(|v| v)
+            })
+            .shared();
 
         state.connecting = Some(ConnectingState {
             id: msg.id.clone(),
-            ready: internal_ready_rx
-                .map(|v| {
-                    v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .and_then(|v| v)
-                })
-                .boxed(),
+            ready: ready.clone().boxed(),
         });
 
         let id = msg.id.clone();
         let actor_ref = ctx.actor_ref();
         let new_frame_recipient = actor_ref.clone().recipient();
-        tokio::spawn(async move {
-            match setup_camera(&id, new_frame_recipient).await {
-                Ok(r) => {
-                    let _ = ready_tx.send(Ok((r.camera_info.clone(), r.video_info)));
-                    let _ = internal_ready_tx.send(Ok(r));
 
-                    let _ = actor_ref.ask(InputConnected).await;
-                }
-                Err(e) => {
-                    let _ = ready_tx.send(Err(e.clone()));
-                    let _ = internal_ready_tx.send(Err(e));
+        let rt = Runtime::new().expect("Failed to get Tokio runtime!");
+        std::thread::spawn(move || {
+            LocalSet::new().block_on(&rt, async move {
+                let handle = match setup_camera(&id, new_frame_recipient).await {
+                    Ok(r) => {
+                        let _ = ready_tx.send(Ok(InputConnected {
+                            camera_info: r.camera_info.clone(),
+                            video_info: r.video_info.clone(),
+                            done_tx: done_tx.clone(),
+                        }));
 
-                    let _ = actor_ref.tell(InputConnectFailed { id }).await;
-                }
-            }
+                        let _ = actor_ref
+                            .ask(InputConnected {
+                                camera_info: r.camera_info.clone(),
+                                video_info: r.video_info.clone(),
+                                done_tx: done_tx.clone(),
+                            })
+                            .await;
+
+                        r.handle
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e.clone()));
+
+                        let _ = actor_ref.tell(InputConnectFailed { id }).await;
+
+                        return;
+                    }
+                };
+
+                let _ = done_rx.recv();
+
+                let _ = handle.stop_capturing();
+            })
         });
 
-        Ok(ready.map(|v| v).boxed())
+        Ok(ready
+            .map(|v| v.map(|v| (v.camera_info, v.video_info)))
+            .boxed())
     }
 }
 
@@ -368,8 +386,8 @@ impl Message<RemoveInput> for CameraFeed {
 
         state.connecting = None;
 
-        if let Some(AttachedState { handle, .. }) = state.attached.take() {
-            let _ = handle.stop_capturing();
+        if let Some(AttachedState { done_tx, .. }) = state.attached.take() {
+            let _ = done_tx.send(());
         }
 
         for cb in &self.on_disconnect {
