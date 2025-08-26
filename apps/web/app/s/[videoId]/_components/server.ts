@@ -6,6 +6,8 @@ import * as Db from "@cap/database/schema";
 import * as Dz from "drizzle-orm";
 
 export async function getUploadProgress({ videoId }: { videoId: string }) {
+	console.log("getUploadProgress");
+
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId)
 		throw new Error("Unauthorized or no active organization");

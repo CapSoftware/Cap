@@ -281,7 +281,10 @@ function UploadProgress({ videoId }: { videoId: string }) {
 		queryKey: ["uploadProgress", videoId],
 		queryFn: () => getUploadProgress({ videoId }),
 		// if a result is returned then an upload is in progress.
-		refetchInterval: (query) => (!!query.state.data ? 3000 : undefined),
+		// refetchInterval: (query) => (!!query.state.data ? 3000 : undefined),
+
+		// TODO: Fix this
+		refetchInterval: 3000,
 	});
 	if (!result.data) return null;
 
