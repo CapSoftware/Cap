@@ -17,6 +17,16 @@ interface VerifyStepProps {
 
 const POLL_INTERVAL = 5000;
 
+const TXTDomainValueHandler = (record: DomainVerification, domain: string) => {
+	if (!record.domain) return "@";
+	if (record.domain === domain) return "@";
+	const suffix = `.${domain}`;
+	if (record.domain.endsWith(suffix)) {
+		return record.domain.replace(suffix, "") || "@";
+	}
+	return record.domain;
+};
+
 const VerifyStep = ({
 	domain,
 	domainConfig,
@@ -114,16 +124,6 @@ const VerifyStep = ({
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
 
-	const TXTDomainValueHandler = (record: DomainVerification) => {
-		if (!record.domain) return "@";
-		if (record.domain === domain) return "@";
-		const suffix = `.${domain}`;
-		if (record.domain.endsWith(suffix)) {
-			return record.domain.replace(suffix, "") || "@";
-		}
-		return record.domain;
-	};
-
 	return (
 		<div className="space-y-6">
 			<div className="text-center">
@@ -174,7 +174,7 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-															{TXTDomainValueHandler(record)}
+															{TXTDomainValueHandler(record, domain)}
 														</code>
 													</dd>
 												</div>
