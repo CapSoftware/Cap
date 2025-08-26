@@ -189,24 +189,22 @@ export function CustomDomain() {
 							</div>
 						</div>
 
-						<Button
-							type="submit"
-							size="sm"
-							className="min-w-fit"
-							spinner={isVerified ? removeDomainMutation.isPending : undefined}
-							disabled={isVerified ? removeDomainMutation.isPending : undefined}
-							variant="dark"
-							onClick={(e) => {
-								e.preventDefault();
-								if (isVerified) {
-									setConfirmOpen(true);
-								} else {
+						{!isVerified && (
+							<Button
+								type="submit"
+								size="sm"
+								className="min-w-fit"
+								spinner={removeDomainMutation.isPending}
+								disabled={removeDomainMutation.isPending}
+								variant="dark"
+								onClick={(e) => {
+									e.preventDefault();
 									setShowCustomDomainDialog(true);
-								}
-							}}
-						>
-							{isVerified ? "Remove" : "Setup"}
-						</Button>
+								}}
+							>
+								Setup
+							</Button>
+						)}
 					</div>
 				</div>
 			</div>
