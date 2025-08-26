@@ -2,6 +2,7 @@
 
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import {
 	startTransition,
@@ -62,7 +63,7 @@ interface ShareProps {
 }
 
 const useVideoStatus = (
-	videoId: string,
+	videoId: Video.VideoId,
 	aiGenerationEnabled: boolean,
 	initialData?: {
 		transcriptionStatus?: string | null;
@@ -93,7 +94,6 @@ const useVideoStatus = (
 					aiTitle: initialData.aiData?.title || null,
 					summary: initialData.aiData?.summary || null,
 					chapters: initialData.aiData?.chapters || null,
-					generationError: null,
 				}
 			: undefined,
 		refetchInterval: (query) => {
@@ -177,7 +177,7 @@ export const Share = ({
 			summary: videoStatus?.summary || null,
 			chapters: videoStatus?.chapters || null,
 			processing: videoStatus?.aiProcessing || false,
-			generationError: videoStatus?.generationError || null,
+			// generationError: videoStatus?.generationError || null,
 		}),
 		[videoStatus],
 	);
@@ -196,9 +196,9 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiData.generationError) {
-				return false;
-			}
+			// if (aiData.generationError) {
+			// 	return false;
+			// }
 			if (aiData.processing === true) {
 				return true;
 			}

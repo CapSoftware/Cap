@@ -16,18 +16,6 @@ export interface VideoMetadata {
 	 */
 	sourceName?: string;
 	/**
-	 * Duration of the video in seconds
-	 */
-	duration?: string | number;
-	/**
-	 * Resolution of the recording (e.g. 1920x1080)
-	 */
-	resolution?: string;
-	/**
-	 * Frames per second of the recording
-	 */
-	fps?: number;
-	/**
 	 * AI generated title for the video
 	 */
 	aiTitle?: string;
@@ -40,19 +28,18 @@ export interface VideoMetadata {
 	 */
 	chapters?: { title: string; start: number }[];
 	aiProcessing?: boolean;
-	[key: string]: any;
 }
 
 /**
  * Space metadata structure
  */
 export interface SpaceMetadata {
-	[key: string]: any;
+	[key: string]: never;
 }
 
 /**
  * User metadata structure
  */
 export interface UserMetadata {
-	[key: string]: any;
+	[key: string]: never;
 }

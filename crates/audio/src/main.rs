@@ -1,21 +1,9 @@
-use cap_audio::AudioData;
+use cap_audio::{AudioData, cast_f32_slice_to_bytes};
 use ffmpeg::{
     codec as avcodec,
     format::{self as avformat},
 };
 use std::path::Path;
-
-/// # Safety
-/// This function assumes that the input slice contains valid f32 values and that the length of the slice is a multiple of 4.
-pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4) }
-}
-
-/// # Safety
-/// This function assumes that the input slice contains valid f32 values and that the length of the slice is a multiple of 4.
-pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
-    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / 4) }
-}
 
 pub fn opus_encode_audio(path: impl AsRef<Path>, samples: &AudioData) {
     let mut output = avformat::output(&path).unwrap();

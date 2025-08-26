@@ -1,3 +1,4 @@
+use ffmpeg::format::Pixel;
 use scap_direct3d::PixelFormat;
 
 pub type AsFFmpegError = windows::core::Error;
@@ -34,6 +35,18 @@ impl<'a> super::AsFFmpeg for scap_direct3d::Frame<'a> {
 
                 Ok(ff_frame)
             }
+        }
+    }
+}
+
+pub trait PixelFormatExt {
+    fn as_ffmpeg(&self) -> Pixel;
+}
+
+impl PixelFormatExt for PixelFormat {
+    fn as_ffmpeg(&self) -> Pixel {
+        match self {
+            PixelFormat::R8G8B8A8Unorm => Pixel::RGBA,
         }
     }
 }

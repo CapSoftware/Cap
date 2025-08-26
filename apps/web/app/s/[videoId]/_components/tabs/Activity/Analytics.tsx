@@ -9,6 +9,7 @@ const Analytics = (props: {
 	videoId: string;
 	views: MaybePromise<number>;
 	comments: CommentType[];
+	isLoadingAnalytics: boolean;
 }) => {
 	const [views, setViews] = useState(
 		props.views instanceof Promise ? use(props.views) : props.views,
@@ -40,6 +41,7 @@ const Analytics = (props: {
 
 	return (
 		<CapCardAnalytics
+			isLoadingAnalytics={props.isLoadingAnalytics}
 			capId={props.videoId}
 			displayCount={views}
 			totalComments={totalComments}

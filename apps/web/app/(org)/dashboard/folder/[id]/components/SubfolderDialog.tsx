@@ -9,12 +9,16 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
+import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
+import { Option } from "effect";
+import { useRouter } from "next/navigation";
 import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { createFolder } from "@/actions/folders/createFolder";
+import { useEffectMutation } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,
@@ -26,7 +30,7 @@ import {
 interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	parentFolderId: string;
+	parentFolderId: Folder.FolderId;
 }
 
 const FolderOptions = [
@@ -62,8 +66,8 @@ export const SubfolderDialog: React.FC<Props> = ({
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
 	const folderRefs = useRef<Record<string, any>>({});
-	const [loading, setLoading] = useState<boolean>(false);
 	const { activeSpace } = useDashboardContext();
+	const router = useRouter();
 
 	useEffect(() => {
 		if (!open) {
@@ -72,26 +76,27 @@ export const SubfolderDialog: React.FC<Props> = ({
 		}
 	}, [open]);
 
-	const createSubfolderHandler = async () => {
-		if (!selectedColor) return;
-		try {
-			setLoading(true);
-			await createFolder({
-				name: folderName,
-				color: selectedColor,
-				parentId: parentFolderId,
-				spaceId: activeSpace?.id,
-			});
+	const createSubfolder = useEffectMutation({
+		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
+			withRpc((r) =>
+				r.FolderCreate({
+					name: data.name,
+					color: data.color,
+					spaceId: Option.fromNullable(activeSpace?.id),
+					parentId: Option.some(parentFolderId),
+				}),
+			),
+		onSuccess: () => {
 			setFolderName("");
 			setSelectedColor(null);
 			onOpenChange(false);
+			router.refresh();
 			toast.success("Subfolder created successfully");
-		} catch (error: any) {
+		},
+		onError: () => {
 			toast.error("Failed to create subfolder");
-		} finally {
-			setLoading(false);
-		}
-	};
+		},
+	});
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -154,11 +159,21 @@ export const SubfolderDialog: React.FC<Props> = ({
 						Cancel
 					</Button>
 					<Button
-						onClick={createSubfolderHandler}
+						onClick={() => {
+							if (selectedColor === null) return;
+							createSubfolder.mutate({
+								name: folderName,
+								color: selectedColor,
+							});
+						}}
 						size="sm"
-						spinner={loading}
+						spinner={createSubfolder.isPending}
 						variant="dark"
-						disabled={!selectedColor || !folderName.trim().length || loading}
+						disabled={
+							!selectedColor ||
+							!folderName.trim().length ||
+							createSubfolder.isPending
+						}
 					>
 						Create
 					</Button>

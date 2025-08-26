@@ -25,8 +25,8 @@ impl CameraInfo {
 
         for format in device.formats().iter() {
             let desc = format.format_desc();
-            let width = desc.dimensions().width as u32;
-            let height = desc.dimensions().height as u32;
+            let width = desc.dims().width as u32;
+            let height = desc.dims().height as u32;
 
             for fr_range in format.video_supported_frame_rate_ranges().iter() {
                 // SAFETY: trust me bro it crashes on intel mac otherwise
@@ -68,7 +68,7 @@ impl ModelID {
 
 pub type NativeFormat = arc::R<av::capture::device::Format>;
 
-pub type NativeRecordingHandle = AVFoundationRecordingHandle;
+pub type NativeCaptureHandle = AVFoundationRecordingHandle;
 
 fn find_device(info: &CameraInfo) -> Option<arc::R<av::CaptureDevice>> {
     let devices = list_video_devices();

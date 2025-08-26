@@ -231,7 +231,7 @@ export default function BrowseSpacesPage() {
 						? `Are you sure you want to delete the space "${pendingDeleteSpace?.name || "selected"}"? This action cannot be undone.`
 						: "Are you sure you want to delete this space? This action cannot be undone."
 				}
-				confirmLabel="Delete"
+				confirmLabel={removing ? "Deleting..." : "Delete"}
 				cancelLabel="Cancel"
 				loading={removing}
 				onConfirm={confirmRemoveSpace}

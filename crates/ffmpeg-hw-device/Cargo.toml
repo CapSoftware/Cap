@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
 
 [lints]
 workspace = true

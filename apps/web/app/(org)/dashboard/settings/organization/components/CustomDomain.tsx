@@ -72,7 +72,7 @@ export function CustomDomain() {
 				icon={<FontAwesomeIcon icon={faGlobe} />}
 				description={`Are you sure you want to remove this custom domain: ${orgCustomDomain}?`}
 				onConfirm={handleRemoveDomain}
-				confirmLabel="Remove"
+				confirmLabel={removeDomainMutation.isPending ? "Removing..." : "Remove"}
 				cancelLabel="Cancel"
 				loading={removeDomainMutation.isPending}
 				onCancel={() => setConfirmOpen(false)}

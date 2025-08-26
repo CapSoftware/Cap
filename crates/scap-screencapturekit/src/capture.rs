@@ -2,11 +2,13 @@ use cidre::{
     arc, cm, cv, define_obj_type, dispatch, ns, objc,
     sc::{self, StreamDelegate, StreamDelegateImpl, StreamOutput, StreamOutputImpl},
 };
-use tracing::warn;
 
 define_obj_type!(
     pub CapturerCallbacks + StreamOutputImpl + StreamDelegateImpl, CapturerCallbacksInner, CAPTURER
 );
+
+unsafe impl Send for CapturerCallbacks {}
+unsafe impl Sync for CapturerCallbacks {}
 
 impl sc::stream::Output for CapturerCallbacks {}
 
@@ -15,26 +17,25 @@ impl sc::stream::OutputImpl for CapturerCallbacks {
     extern "C" fn impl_stream_did_output_sample_buf(
         &mut self,
         _cmd: Option<&objc::Sel>,
-        stream: &sc::Stream,
+        _: &sc::Stream,
         sample_buf: &mut cm::SampleBuf,
         kind: sc::OutputType,
     ) {
         if let Some(cb) = &mut self.inner_mut().did_output_sample_buf_cb {
+            let sample_buf = sample_buf.retained();
             let frame = match kind {
                 sc::OutputType::Screen => {
                     let Some(image_buf) = sample_buf.image_buf().map(|v| v.retained()) else {
-                        warn!("Screen sample buffer has no image buffer");
                         return;
                     };
 
                     Frame::Screen(VideoFrame {
-                        stream,
                         sample_buf,
                         image_buf,
                     })
                 }
-                sc::OutputType::Audio => Frame::Audio(AudioFrame { stream, sample_buf }),
-                sc::OutputType::Mic => Frame::Mic(AudioFrame { stream, sample_buf }),
+                sc::OutputType::Audio => Frame::Audio(AudioFrame { sample_buf }),
+                sc::OutputType::Mic => Frame::Mic(AudioFrame { sample_buf }),
             };
             (cb)(frame);
         }
@@ -67,10 +68,9 @@ pub struct CapturerCallbacksInner {
 }
 
 pub struct Capturer {
-    target: arc::R<sc::ContentFilter>,
-    config: arc::R<sc::StreamCfg>,
     _queue: arc::R<dispatch::Queue>,
     stream: arc::R<sc::Stream>,
+    // READING THIS IS NOT THREAD SAFE, IT JUST HAS TO EXIST
     _callbacks: arc::R<CapturerCallbacks>,
 }
 
@@ -86,14 +86,6 @@ impl Capturer {
         }
     }
 
-    pub fn config(&self) -> &sc::StreamCfg {
-        &self.config
-    }
-
-    pub fn target(&self) -> &sc::ContentFilter {
-        &self.target
-    }
-
     pub async fn start(&self) -> Result<(), arc::R<ns::Error>> {
         self.stream.start().await
     }
@@ -103,67 +95,65 @@ impl Capturer {
     }
 }
 
-pub struct VideoFrame<'a> {
-    stream: &'a sc::Stream,
-    sample_buf: &'a mut cm::SampleBuf,
+pub struct VideoFrame {
+    sample_buf: arc::R<cm::SampleBuf>,
     image_buf: arc::R<cv::ImageBuf>,
 }
 
-impl<'a> VideoFrame<'a> {
-    pub fn stream(&self) -> &sc::Stream {
-        self.stream
-    }
+unsafe impl Send for VideoFrame {}
 
+impl VideoFrame {
     pub fn sample_buf(&self) -> &cm::SampleBuf {
-        self.sample_buf
+        self.sample_buf.as_ref()
     }
 
     pub fn sample_buf_mut(&mut self) -> &mut cm::SampleBuf {
-        self.sample_buf
+        self.sample_buf.as_mut()
     }
 
     pub fn image_buf(&self) -> &cv::ImageBuf {
-        &self.image_buf
+        self.image_buf.as_ref()
     }
 
     pub fn image_buf_mut(&mut self) -> &mut cv::ImageBuf {
-        &mut self.image_buf
+        self.image_buf.as_mut()
     }
 }
 
-pub struct AudioFrame<'a> {
-    stream: &'a sc::Stream,
-    sample_buf: &'a mut cm::SampleBuf,
+pub struct AudioFrame {
+    sample_buf: arc::R<cm::SampleBuf>,
 }
 
-pub enum Frame<'a> {
-    Screen(VideoFrame<'a>),
-    Audio(AudioFrame<'a>),
-    Mic(AudioFrame<'a>),
-}
-
-impl<'a> Frame<'a> {
-    pub fn stream(&self) -> &sc::Stream {
-        match self {
-            Frame::Screen(frame) => frame.stream,
-            Frame::Audio(frame) => frame.stream,
-            Frame::Mic(frame) => frame.stream,
-        }
+impl AudioFrame {
+    pub fn sample_buf(&self) -> &cm::SampleBuf {
+        self.sample_buf.as_ref()
     }
 
+    pub fn sample_buf_mut(&mut self) -> &mut cm::SampleBuf {
+        self.sample_buf.as_mut()
+    }
+}
+
+pub enum Frame {
+    Screen(VideoFrame),
+    Audio(AudioFrame),
+    Mic(AudioFrame),
+}
+
+impl Frame {
     pub fn sample_buf(&self) -> &cm::SampleBuf {
         match self {
-            Frame::Screen(frame) => frame.sample_buf,
-            Frame::Audio(frame) => frame.sample_buf,
-            Frame::Mic(frame) => frame.sample_buf,
+            Frame::Screen(frame) => frame.sample_buf(),
+            Frame::Audio(frame) => frame.sample_buf(),
+            Frame::Mic(frame) => frame.sample_buf(),
         }
     }
 
     pub fn sample_buf_mut(&mut self) -> &mut cm::SampleBuf {
         match self {
-            Frame::Screen(frame) => frame.sample_buf,
-            Frame::Audio(frame) => frame.sample_buf,
-            Frame::Mic(frame) => frame.sample_buf,
+            Frame::Screen(frame) => frame.sample_buf_mut(),
+            Frame::Audio(frame) => frame.sample_buf_mut(),
+            Frame::Mic(frame) => frame.sample_buf_mut(),
         }
     }
 
@@ -214,8 +204,6 @@ impl CapturerBuilder {
             .map_err(|e| e.retained())?;
 
         Ok(Capturer {
-            target: self.target,
-            config: self.config,
             _queue: queue,
             stream,
             _callbacks: callbacks,

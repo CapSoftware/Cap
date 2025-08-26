@@ -17,17 +17,16 @@ cap-flags = { path = "../flags" }
 cap-audio = { path = "../audio" }
 cap-camera = { path = "../camera", features = ["specta", "serde"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+cap-cpal-ffmpeg = { path = "../cpal-ffmpeg" }
 cap-fail = { path = "../fail" }
 cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }
 cpal.workspace = true
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
 flume.workspace = true
 indexmap = "2.5.0"
 num-traits = "0.2.19"
 ringbuf = "0.4.7"
-scap.workspace = true
 serde = { workspace = true }
 specta.workspace = true
 tempfile = "3.12.0"
@@ -40,6 +39,10 @@ image = { version = "0.25.2", features = ["gif"] }
 gif = "0.13.1"
 tokio-util = "0.7.15"
 kameo = "0.17.2"
+scap = { workspace = true }
+sync_wrapper = "1.0.2"
+scap-ffmpeg = { path = "../scap-ffmpeg" }
+scap-targets = { path = "../scap-targets" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
@@ -50,6 +53,7 @@ objc = "0.2.7"
 objc-foundation = "0.1.1"
 objc2-foundation = { version = "0.2.2", features = ["NSValue"] }
 screencapturekit = "0.3.5"
+scap-screencapturekit = { path = "../scap-screencapturekit" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
@@ -64,6 +68,7 @@ windows = { workspace = true, features = [
 ] }
 windows-capture = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
+scap-direct3d = { path = "../scap-direct3d" }
 
 [dev-dependencies]
 inquire = "0.7.5"

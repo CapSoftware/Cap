@@ -24,13 +24,14 @@ import {
 	createRoot,
 	createSignal,
 	For,
+	Index,
 	on,
 	onMount,
 	Show,
 	Suspense,
 	type ValidComponent,
 } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
 import colorBg from "~/assets/illustrations/color.webp";
@@ -43,10 +44,12 @@ import {
 	type BackgroundSource,
 	type CameraShape,
 	commands,
+	type LayoutSegment,
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
@@ -212,8 +215,15 @@ const TAB_IDS = {
 } as const;
 
 export function ConfigSidebar() {
-	const { project, setProject, editorInstance, editorState, meta } =
-		useEditorContext();
+	const {
+		project,
+		setProject,
+		setEditorState,
+		projectActions,
+		editorInstance,
+		editorState,
+		meta,
+	} = useEditorContext();
 
 	const [state, setState] = createStore({
 		selectedTab: "background" as
@@ -291,6 +301,9 @@ export function ConfigSidebar() {
 			</KTabs.List>
 			<div
 				ref={scrollRef}
+				style={{
+					"--margin-top-scroll": "5px",
+				}}
 				class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] h-full"
 			>
 				<BackgroundConfig scrollRef={scrollRef} />
@@ -564,22 +577,112 @@ export function ConfigSidebar() {
 			</div>
 			<Show when={editorState.timeline.selection}>
 				{(selection) => (
-					<div class="absolute inset-0 p-[0.75rem] text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in">
+					<div
+						style={{
+							"--margin-top-scroll": "5px",
+						}}
+						class="absolute custom-scroll p-5 inset-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
+					>
 						<Suspense>
 							<Show
 								when={(() => {
 									const zoomSelection = selection();
 									if (zoomSelection.type !== "zoom") return;
 
-									const segment =
-										project.timeline?.zoomSegments?.[zoomSelection.index];
-									if (!segment) return;
+									const segments = zoomSelection.indices
+										.map((index) => ({
+											index,
+											segment: project.timeline?.zoomSegments?.[index],
+										}))
+										.filter(
+											(item): item is { index: number; segment: ZoomSegment } =>
+												item.segment !== undefined,
+										);
 
-									return { selection: zoomSelection, segment };
+									if (segments.length === 0) {
+										setEditorState("timeline", "selection", null);
+										return;
+									}
+									return { selection: zoomSelection, segments };
 								})()}
 							>
 								{(value) => (
-									<ZoomSegmentConfig
+									<div class="space-y-4">
+										<div class="flex flex-row justify-between items-center">
+											<div class="flex gap-2 items-center">
+												<EditorButton
+													onClick={() =>
+														setEditorState("timeline", "selection", null)
+													}
+													leftIcon={<IconLucideCheck />}
+												>
+													Done
+												</EditorButton>
+												<span class="text-sm text-gray-10">
+													{value().segments.length} zoom{" "}
+													{value().segments.length === 1
+														? "segment"
+														: "segments"}{" "}
+													selected
+												</span>
+											</div>
+											<EditorButton
+												variant="danger"
+												onClick={() => {
+													projectActions.deleteZoomSegments(
+														value().segments.map((s) => s.index),
+													);
+												}}
+												leftIcon={<IconCapTrash />}
+											>
+												Delete
+											</EditorButton>
+										</div>
+										<Show
+											when={value().segments.length === 1}
+											fallback={
+												<div class="grid grid-cols-3 gap-4">
+													<Index each={value().segments}>
+														{(item, index) => (
+															<div class="p-2.5 rounded-lg border border-gray-4 bg-gray-3">
+																<ZoomSegmentPreview
+																	segment={item().segment}
+																	segmentIndex={index}
+																/>
+															</div>
+														)}
+													</Index>
+												</div>
+											}
+										>
+											<For each={value().segments}>
+												{(item) => (
+													<div class="p-4 rounded-lg border border-gray-200">
+														<ZoomSegmentConfig
+															segment={item.segment}
+															segmentIndex={item.index}
+														/>
+													</div>
+												)}
+											</For>
+										</Show>
+									</div>
+								)}
+							</Show>
+							<Show
+								when={(() => {
+									const layoutSelection = selection();
+									if (layoutSelection.type !== "layout") return;
+
+									const segment =
+										project.timeline?.layoutSegments?.[layoutSelection.index];
+									if (!segment) return;
+
+									return { selection: layoutSelection, segment };
+								})()}
+							>
+								{(value) => (
+									<LayoutSegmentConfig
 										segment={value().segment}
 										segmentIndex={value().selection.index}
 									/>
@@ -641,6 +744,12 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 				rawPath: path!,
 			}));
 	});
+
+	// set padding if background is selected
+	const ensurePaddingForBackground = () => {
+		if (project.background.padding === 0)
+			setProject("background", "padding", 10);
+	};
 
 	// Validate background source path on mount
 	onMount(async () => {
@@ -784,6 +893,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					value={project.background.source.type}
 					onChange={(v) => {
 						const tab = v as BackgroundSource["type"];
+						ensurePaddingForBackground();
 						switch (tab) {
 							case "image": {
 								setProject("background", "source", {
@@ -913,9 +1023,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 													) {
 														const selectedWallpaper = wallpapers()?.find((w) =>
 															(
-																project.background.source as {
-																	path?: string;
-																}
+																project.background.source as { path?: string }
 															).path?.includes(w.id),
 														);
 														// Only use wallpaper URL if it exists
@@ -1017,6 +1125,8 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 									// Get the raw path without any URL prefixes
 
 									debouncedSetProject(wallpaper.rawPath);
+
+									ensurePaddingForBackground();
 								} catch (err) {
 									toast.error("Failed to set wallpaper");
 								}
@@ -1287,10 +1397,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 
 														createRoot((dispose) =>
 															createEventListenerMap(window, {
-																mouseup: () => {
-																	dispose();
-																	resumeHistory();
-																},
+																mouseup: () => dispose(),
 																mousemove: (moveEvent) => {
 																	const rawNewAngle =
 																		Math.round(
@@ -1514,7 +1621,7 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 										<RadioGroup.ItemInput class="peer" />
 										<RadioGroup.ItemControl
 											class={cx(
-												"cursor-pointer size-6 shink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-offset-2 outline-blue-9 transition-colors duration-100",
+												"cursor-pointer size-6 shrink-0 rounded-[0.375rem] bg-gray-5 absolute flex justify-center items-center ui-checked:bg-blue-9 focus-visible:outline peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 transition-colors duration-100",
 												item.x === "left"
 													? "left-2"
 													: item.x === "right"
@@ -1705,6 +1812,125 @@ function CameraConfig(props: { scrollRef: HTMLDivElement }) {
 	);
 }
 
+function ZoomSegmentPreview(props: {
+	segmentIndex: number;
+	segment: ZoomSegment;
+}) {
+	const { project, editorInstance } = useEditorContext();
+
+	const start = createMemo(() => props.segment.start);
+
+	const segmentIndex = createMemo(() => {
+		const st = start();
+		const i = project.timeline?.segments.findIndex(
+			(s) => s.start <= st && s.end > st,
+		);
+		if (i === undefined || i === -1) return 0;
+		return i;
+	});
+
+	const relativeTime = createMemo(() => {
+		const st = start();
+		const segment = project.timeline?.segments[segmentIndex()];
+		if (!segment) return 0;
+		return Math.max(0, st - segment.start);
+	});
+
+	const video = document.createElement("video");
+	createEffect(() => {
+		const path = convertFileSrc(
+			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+		);
+		video.src = path;
+		video.preload = "auto";
+		video.load();
+	});
+
+	createEffect(() => {
+		const t = relativeTime();
+		if (t === undefined) return;
+
+		if (video.readyState >= 2) {
+			video.currentTime = t;
+		} else {
+			const handleCanPlay = () => {
+				video.currentTime = t;
+				video.removeEventListener("canplay", handleCanPlay);
+			};
+			video.addEventListener("canplay", handleCanPlay);
+		}
+	});
+
+	const render = () => {
+		if (!canvasRef || video.readyState < 2) return;
+
+		const ctx = canvasRef.getContext("2d");
+		if (!ctx) return;
+
+		ctx.imageSmoothingEnabled = false;
+		ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
+
+		const raw = editorInstance.recordings.segments[0].display;
+		const croppedPosition = project.background.crop?.position || { x: 0, y: 0 };
+		const croppedSize = project.background.crop?.size || {
+			x: raw.width,
+			y: raw.height,
+		};
+
+		ctx.drawImage(
+			video,
+			croppedPosition.x,
+			croppedPosition.y,
+			croppedSize.x,
+			croppedSize.y,
+			0,
+			0,
+			canvasRef.width,
+			canvasRef.height,
+		);
+	};
+
+	const [loaded, setLoaded] = createSignal(false);
+	video.onloadeddata = () => {
+		setLoaded(true);
+		render();
+	};
+	video.onseeked = render;
+	video.onerror = () => {
+		setTimeout(() => video.load(), 100);
+	};
+
+	let canvasRef!: HTMLCanvasElement;
+
+	return (
+		<>
+			<div class="space-y-1.5">
+				<div class="text-xs font-medium text-center text-gray-12">
+					Zoom {props.segmentIndex + 1}
+				</div>
+				<div class="overflow-hidden relative rounded border aspect-video border-gray-3 bg-gray-3">
+					<canvas
+						ref={canvasRef}
+						width={160}
+						height={90}
+						data-loaded={loaded()}
+						class="w-full h-full opacity-0 transition-opacity data-[loaded='true']:opacity-100 duration-200"
+					/>
+					<Show when={!loaded()}>
+						<p class="flex absolute inset-0 justify-center items-center text-xs text-gray-11">
+							Loading...
+						</p>
+					</Show>
+				</div>
+			</div>
+			<div class="flex gap-1 justify-center items-center mt-3 w-full text-xs text-center text-gray-11">
+				<IconLucideSearch class="size-3" />
+				<p>{props.segment.amount.toFixed(1)}x</p>
+			</div>
+		</>
+	);
+}
+
 function ZoomSegmentConfig(props: {
 	segmentIndex: number;
 	segment: ZoomSegment;
@@ -1716,7 +1942,6 @@ function ZoomSegmentConfig(props: {
 		editorInstance,
 		setEditorState,
 		projectHistory,
-		projectActions,
 	} = useEditorContext();
 
 	const states = {
@@ -1728,26 +1953,10 @@ function ZoomSegmentConfig(props: {
 
 	return (
 		<>
-			<div class="flex flex-row justify-between items-center">
-				<div class="flex gap-2 items-center">
-					<EditorButton
-						onClick={() => setEditorState("timeline", "selection", null)}
-						leftIcon={<IconLucideCheck />}
-					>
-						Done
-					</EditorButton>
-				</div>
-				<EditorButton
-					variant="danger"
-					onClick={() => {
-						projectActions.deleteZoomSegment(props.segmentIndex);
-					}}
-					leftIcon={<IconCapTrash />}
-				>
-					Delete
-				</EditorButton>
-			</div>
-			<Field name="Zoom Amount" icon={<IconLucideSearch />}>
+			<Field
+				name={`Zoom ${props.segmentIndex + 1}`}
+				icon={<IconLucideSearch />}
+			>
 				<Slider
 					value={[props.segment.amount]}
 					onChange={(v) =>
@@ -1783,7 +1992,7 @@ function ZoomSegmentConfig(props: {
 						<KTabs.Trigger
 							value="auto"
 							class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							disabled={!generalSettings.data?.customCursorCapture}
+							disabled={!generalSettings.data?.custom_cursor_capture2}
 						>
 							Auto
 						</KTabs.Trigger>
@@ -1802,12 +2011,14 @@ function ZoomSegmentConfig(props: {
 							when={(() => {
 								const m = props.segment.mode;
 								if (m === "auto") return;
+
 								return m.manual;
 							})()}
 						>
 							{(mode) => {
 								const start = createMemo<number>((prev) => {
 									if (projectHistory.isPaused()) return prev;
+
 									return props.segment.start;
 								}, 0);
 
@@ -1822,20 +2033,44 @@ function ZoomSegmentConfig(props: {
 									return i;
 								}, 0);
 
+								// Calculate the time relative to the video segment
+								const relativeTime = createMemo(() => {
+									const st = start();
+									const segment = project.timeline?.segments[segmentIndex()];
+									if (!segment) return 0;
+									// The time within the actual video file
+									return Math.max(0, st - segment.start);
+								});
+
 								const video = document.createElement("video");
 								createEffect(() => {
-									video.src = convertFileSrc(
+									const path = convertFileSrc(
 										// TODO: this shouldn't be so hardcoded
 										`${
 											editorInstance.path
 										}/content/segments/segment-${segmentIndex()}/display.mp4`,
 									);
+									video.src = path;
+									video.preload = "auto";
+									// Force reload if video fails to load
+									video.load();
 								});
 
 								createEffect(() => {
-									const s = start();
-									if (s === undefined) return;
-									video.currentTime = s;
+									const t = relativeTime();
+									if (t === undefined) return;
+
+									// Ensure video is ready before seeking
+									if (video.readyState >= 2) {
+										video.currentTime = t;
+									} else {
+										// Wait for video to be ready, then seek
+										const handleCanPlay = () => {
+											video.currentTime = t;
+											video.removeEventListener("canplay", handleCanPlay);
+										};
+										video.addEventListener("canplay", handleCanPlay);
+									}
 								});
 
 								createEffect(
@@ -1845,15 +2080,24 @@ function ZoomSegmentConfig(props: {
 											croppedSize();
 										},
 										() => {
-											render();
+											if (loaded()) {
+												render();
+											}
 										},
 									),
 								);
 
 								const render = () => {
+									if (!canvasRef || video.readyState < 2) return;
+
 									const ctx = canvasRef.getContext("2d");
-									ctx!.imageSmoothingEnabled = false;
-									ctx!.drawImage(
+									if (!ctx) return;
+
+									ctx.imageSmoothingEnabled = false;
+									// Clear canvas first
+									ctx.clearRect(0, 0, canvasRef.width, canvasRef.height);
+									// Draw video frame
+									ctx.drawImage(
 										video,
 										croppedPosition().x,
 										croppedPosition().y,
@@ -1872,6 +2116,15 @@ function ZoomSegmentConfig(props: {
 									render();
 								};
 								video.onseeked = render;
+
+								// Add error handling
+								video.onerror = (e) => {
+									console.error("Failed to load video for zoom preview:", e);
+									// Try to reload after a short delay
+									setTimeout(() => {
+										video.load();
+									}, 100);
+								};
 
 								let canvasRef!: HTMLCanvasElement;
 
@@ -1910,7 +2163,7 @@ function ZoomSegmentConfig(props: {
 											const bounds =
 												downEvent.currentTarget.getBoundingClientRect();
 
-											createRoot((dispose) => {
+											createRoot((dispose) =>
 												createEventListenerMap(window, {
 													mouseup: () => dispose(),
 													mousemove: (moveEvent) => {
@@ -1940,29 +2193,34 @@ function ZoomSegmentConfig(props: {
 															},
 														);
 													},
-												});
-											});
+												}),
+											);
 										}}
 									>
 										<div
 											class="absolute z-10 w-6 h-6 rounded-full border border-gray-400 -translate-x-1/2 -translate-y-1/2 bg-gray-1"
 											style={{
-												left: `calc(${mode().x * 100}% + ${
-													2 + mode().x * -6
-												}px)`,
-												top: `calc(${mode().y * 100}% + ${
-													2 + mode().y * -6
-												}px)`,
+												left: `${mode().x * 100}%`,
+												top: `${mode().y * 100}%`,
 											}}
-										/>
-										<div class="overflow-hidden rounded-lg border border-gray-3 bg-gray-2">
+										>
+											<div class="size-1.5 bg-gray-5 rounded-full" />
+										</div>
+										<div class="overflow-hidden relative rounded-lg border border-gray-3 bg-gray-2">
 											<canvas
 												ref={canvasRef}
 												width={croppedSize().x}
 												height={croppedSize().y}
 												data-loaded={loaded()}
-												class="z-10 bg-red-500 opacity-0 transition-opacity data-[loaded='true']:opacity-100 w-full h-full duration-200"
+												class="z-10 bg-gray-3 opacity-0 transition-opacity data-[loaded='true']:opacity-100 w-full h-full duration-200"
 											/>
+											<Show when={!loaded()}>
+												<div class="flex absolute inset-0 justify-center items-center bg-gray-2">
+													<div class="text-sm text-gray-11">
+														Loading preview...
+													</div>
+												</div>
+											</Show>
 										</div>
 									</div>
 								);
@@ -2020,6 +2278,112 @@ function ClipSegmentConfig(props: {
 					value={<Toggle disabled />}
 				/>
 			</ComingSoonTooltip>
+		</>
+	);
+}
+
+function LayoutSegmentConfig(props: {
+	segmentIndex: number;
+	segment: LayoutSegment;
+}) {
+	const { setProject, setEditorState, projectActions } = useEditorContext();
+
+	return (
+		<>
+			<div class="flex flex-row justify-between items-center">
+				<div class="flex gap-2 items-center">
+					<EditorButton
+						onClick={() => setEditorState("timeline", "selection", null)}
+						leftIcon={<IconLucideCheck />}
+					>
+						Done
+					</EditorButton>
+				</div>
+				<EditorButton
+					variant="danger"
+					onClick={() => {
+						projectActions.deleteLayoutSegment(props.segmentIndex);
+					}}
+					leftIcon={<IconCapTrash />}
+				>
+					Delete
+				</EditorButton>
+			</div>
+			<Field name="Camera Layout" icon={<IconLucideLayout />}>
+				<KTabs
+					class="space-y-6"
+					value={props.segment.mode || "default"}
+					onChange={(v) => {
+						setProject(
+							"timeline",
+							"layoutSegments",
+							props.segmentIndex,
+							"mode",
+							v as "default" | "cameraOnly" | "hideCamera",
+						);
+					}}
+				>
+					<KTabs.List class="flex flex-col gap-3">
+						<div class="flex flex-row items-center rounded-[0.5rem] relative border">
+							<KTabs.Trigger
+								value="default"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								Default
+							</KTabs.Trigger>
+							<KTabs.Trigger
+								value="cameraOnly"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								Camera Only
+							</KTabs.Trigger>
+							<KTabs.Trigger
+								value="hideCamera"
+								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
+							>
+								Hide Camera
+							</KTabs.Trigger>
+							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
+								<div class="flex-1 bg-gray-3" />
+							</KTabs.Indicator>
+						</div>
+
+						<div class="relative">
+							<div
+								class="absolute -top-3 w-px h-3 transition-all duration-200 bg-gray-3"
+								style={{
+									left:
+										props.segment.mode === "cameraOnly"
+											? "50%"
+											: props.segment.mode === "hideCamera"
+												? "83.33%"
+												: "16.67%",
+								}}
+							/>
+							<div
+								class="absolute -top-1 w-2 h-2 rounded-full transition-all duration-200 -translate-x-1/2 bg-gray-3"
+								style={{
+									left:
+										props.segment.mode === "cameraOnly"
+											? "50%"
+											: props.segment.mode === "hideCamera"
+												? "83.33%"
+												: "16.67%",
+								}}
+							/>
+							<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
+								<div class="text-xs text-center text-gray-11">
+									{props.segment.mode === "cameraOnly"
+										? "Shows only the camera feed"
+										: props.segment.mode === "hideCamera"
+											? "Shows only the screen recording"
+											: "Shows both screen and camera"}
+								</div>
+							</div>
+						</div>
+					</KTabs.List>
+				</KTabs>
+			</Field>
 		</>
 	);
 }

@@ -1,4 +1,4 @@
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Video } from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -231,10 +231,15 @@ export const folders = mysqlTable(
 export const videos = mysqlTable(
 	"videos",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket"),
+		// in seconds
+		duration: float("duration"),
+		width: int("width"),
+		height: int("height"),
+		fps: int("fps"),
 		metadata: json("metadata").$type<VideoMetadata>(),
 		public: boolean("public").notNull().default(true),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<

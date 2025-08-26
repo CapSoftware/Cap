@@ -4,6 +4,8 @@ use ffmpeg::{
 };
 use std::path::Path;
 
+use crate::cast_bytes_to_f32_slice;
+
 // F32 Packed 48kHz audio
 pub struct AudioData {
     samples: Vec<f32>,
@@ -168,10 +170,4 @@ impl AudioData {
     pub fn sample_count(&self) -> usize {
         self.samples.len() / self.channels as usize
     }
-}
-
-/// # Safety
-/// This function assumes that the input slice is aligned to a 4-byte boundary.
-pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
-    unsafe { std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / 4) }
 }
