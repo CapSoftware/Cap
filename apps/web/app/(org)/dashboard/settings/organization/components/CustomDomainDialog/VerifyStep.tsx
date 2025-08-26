@@ -88,6 +88,9 @@ const VerifyStep = ({
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
+	console.log(showARecord, "show A record const");
+	console.log(domainConfig, "domain config");
+
 	const handleCopy = async (text: string, fieldId: string) => {
 		try {
 			await navigator.clipboard.writeText(text);
