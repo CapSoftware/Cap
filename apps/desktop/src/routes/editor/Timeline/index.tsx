@@ -11,7 +11,7 @@ import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
-import { type LayoutSegmentDragState, LayoutTrack } from "./LayoutTrack";
+import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
@@ -74,13 +74,13 @@ export function Timeline() {
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
-	let layoutSegmentDragState = { type: "idle" } as LayoutSegmentDragState;
+	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
 			zoomSegmentDragState.type !== "moving" &&
-			layoutSegmentDragState.type !== "moving"
+			sceneSegmentDragState.type !== "moving"
 		) {
 			setEditorState(
 				"playbackTime",
@@ -103,8 +103,8 @@ export function Timeline() {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
-			} else if (selection.type === "layout") {
-				projectActions.deleteLayoutSegment(selection.index);
+			} else if (selection.type === "scene") {
+				projectActions.deleteSceneSegment(selection.index);
 			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			if (!editorState.previewTime) return;
@@ -242,9 +242,9 @@ export function Timeline() {
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>
 				<Show when={meta().hasCamera && !project.camera.hide}>
-					<LayoutTrack
+					<SceneTrack
 						onDragStateChanged={(v) => {
-							layoutSegmentDragState = v;
+							sceneSegmentDragState = v;
 						}}
 						handleUpdatePlayhead={handleUpdatePlayhead}
 					/>
