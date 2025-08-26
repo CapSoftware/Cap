@@ -402,6 +402,7 @@ export type BackgroundConfiguration = {
 	crop: Crop | null;
 	shadow?: number;
 	advancedShadow?: ShadowConfiguration | null;
+	border?: BorderConfiguration | null;
 };
 export type BackgroundSource =
 	| { type: "wallpaper"; path: string | null }
@@ -413,6 +414,12 @@ export type BackgroundSource =
 			to: [number, number, number];
 			angle?: number;
 	  };
+export type BorderConfiguration = {
+	enabled: boolean;
+	width: number;
+	color: [number, number, number];
+	opacity: number;
+};
 export type Camera = {
 	hide: boolean;
 	mirror: boolean;

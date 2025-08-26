@@ -1510,6 +1510,88 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					formatTooltip="%"
 				/>
 			</Field>
+			<Field
+				name="Border"
+				icon={<IconCapSettings class="size-4" />}
+				value={
+					<Toggle
+						checked={project.background.border?.enabled ?? false}
+						onChange={(enabled) => {
+							const prev = project.background.border ?? {
+								enabled: false,
+								width: 5.0,
+								color: [255, 255, 255],
+								opacity: 80.0,
+							};
+
+							setProject("background", "border", {
+								...prev,
+								enabled,
+							});
+						}}
+					/>
+				}
+			/>
+			{project.background.border?.enabled && (
+				<>
+					<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
+						<Slider
+							value={[project.background.border?.width ?? 5.0]}
+							onChange={(v) =>
+								setProject("background", "border", {
+									...(project.background.border ?? {
+										enabled: true,
+										width: 5.0,
+										color: [255, 255, 255],
+										opacity: 80.0,
+									}),
+									width: v[0],
+								})
+							}
+							minValue={1}
+							maxValue={20}
+							step={0.1}
+							formatTooltip="px"
+						/>
+					</Field>
+					<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
+						<RgbInput
+							value={project.background.border?.color ?? [255, 255, 255]}
+							onChange={(color) =>
+								setProject("background", "border", {
+									...(project.background.border ?? {
+										enabled: true,
+										width: 5.0,
+										color: [255, 255, 255],
+										opacity: 80.0,
+									}),
+									color,
+								})
+							}
+						/>
+					</Field>
+					<Field name="Border Opacity" icon={<IconCapShadow class="size-4" />}>
+						<Slider
+							value={[project.background.border?.opacity ?? 80.0]}
+							onChange={(v) =>
+								setProject("background", "border", {
+									...(project.background.border ?? {
+										enabled: true,
+										width: 5.0,
+										color: [255, 255, 255],
+										opacity: 80.0,
+									}),
+									opacity: v[0],
+								})
+							}
+							minValue={0}
+							maxValue={100}
+							step={0.1}
+							formatTooltip="%"
+						/>
+					</Field>
+				</>
+			)}
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<Slider
 					value={[project.background.shadow!]}
@@ -1839,7 +1921,9 @@ function ZoomSegmentPreview(props: {
 	const video = document.createElement("video");
 	createEffect(() => {
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${
+				editorInstance.path
+			}/content/segments/segment-${segmentIndex()}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2411,6 +2495,7 @@ function RgbInput(props: {
 				ref={colorInput}
 				type="color"
 				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
 					if (value) props.onChange(value);
