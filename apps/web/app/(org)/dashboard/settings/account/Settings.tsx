@@ -18,13 +18,17 @@ export const Settings = ({
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
-			await fetch("/api/settings/user/name", {
+			const res = await fetch("/api/settings/user/name", {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({ firstName, lastName }),
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					firstName: firstName.trim(),
+					lastName: lastName.trim() ? lastName.trim() : null,
+				}),
 			});
+			if (!res.ok) {
+				throw new Error("Failed to update name");
+			}
 		},
 		onSuccess: () => {
 			toast.success("Name updated successfully");
