@@ -2,7 +2,9 @@
 
 import type { users } from "@cap/database/schema";
 import { Button, Card, CardDescription, CardTitle, Input } from "@cap/ui";
+import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { toast } from "sonner";
 
 export const Settings = ({
@@ -10,41 +12,36 @@ export const Settings = ({
 }: {
 	user?: typeof users.$inferSelect | null;
 }) => {
-	const firstName = user ? user?.name : "";
-	const lastName = user ? user?.lastName : "";
-	const email = user ? user?.email : "";
+	const [firstName, setFirstName] = useState(user?.name || "");
+	const [lastName, setLastName] = useState(user?.lastName || "");
 	const router = useRouter();
 
-	const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-		e.preventDefault();
-
-		const formData = new FormData(e.currentTarget);
-		const firstName = formData.get("firstName") as string;
-		const lastName = formData.get("lastName") as string;
-
-		try {
-			const response = await fetch("/api/settings/user/name", {
+	const { mutate: updateName, isPending: updateNamePending } = useMutation({
+		mutationFn: async () => {
+			await fetch("/api/settings/user/name", {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
 				},
 				body: JSON.stringify({ firstName, lastName }),
 			});
-
-			if (response.ok) {
-				toast.success("Name updated successfully");
-				router.refresh();
-			} else {
-				toast.error("Failed to update name");
-			}
-		} catch (error) {
-			console.error("Error updating name:", error);
-			toast.error("An error occurred while updating name");
-		}
-	};
+		},
+		onSuccess: () => {
+			toast.success("Name updated successfully");
+			router.refresh();
+		},
+		onError: () => {
+			toast.error("Failed to update name");
+		},
+	});
 
 	return (
-		<form onSubmit={handleSubmit}>
+		<form
+			onSubmit={(e) => {
+				e.preventDefault();
+				updateName();
+			}}
+		>
 			<div className="flex flex-col flex-wrap gap-6 w-full md:flex-row">
 				<Card className="flex-1 space-y-1">
 					<CardTitle>Your name</CardTitle>
@@ -57,6 +54,7 @@ export const Settings = ({
 							<Input
 								type="text"
 								placeholder="First name"
+								onChange={(e) => setFirstName(e.target.value)}
 								defaultValue={firstName as string}
 								id="firstName"
 								name="firstName"
@@ -66,6 +64,7 @@ export const Settings = ({
 							<Input
 								type="text"
 								placeholder="Last name"
+								onChange={(e) => setLastName(e.target.value)}
 								defaultValue={lastName as string}
 								id="lastName"
 								name="lastName"
@@ -82,15 +81,22 @@ export const Settings = ({
 					</div>
 					<Input
 						type="email"
-						value={email as string}
+						value={user?.email as string}
 						id="contactEmail"
 						name="contactEmail"
 						disabled
 					/>
 				</Card>
 			</div>
-			<Button className="mt-6" type="submit" size="sm" variant="dark">
-				Save
+			<Button
+				disabled={!firstName || updateNamePending}
+				className="mt-6"
+				type="submit"
+				size="sm"
+				variant="dark"
+				spinner={updateNamePending}
+			>
+				{updateNamePending ? "Saving..." : "Save"}
 			</Button>
 		</form>
 	);
