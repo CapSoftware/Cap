@@ -292,7 +292,13 @@ function Page() {
 	return (
 		<div class="flex relative justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
-				<div class="flex items-center mx-2 w-full" data-tauri-drag-region>
+				<div
+					class={cx(
+						"flex items-center mx-2 w-full",
+						ostype() === "macos" && "flex-row-reverse",
+					)}
+					data-tauri-drag-region
+				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
 						<Tooltip content={<span>Settings</span>}>
 							<button
