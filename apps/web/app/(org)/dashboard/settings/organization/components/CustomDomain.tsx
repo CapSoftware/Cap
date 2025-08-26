@@ -149,16 +149,19 @@ export function CustomDomain() {
 							<div className="flex items-center">
 								<Tooltip content="Setup not complete">
 									<div className="flex gap-2 items-center p-2 h-full text-xs rounded-full w-fit text-gray-10">
-										{isVerified ? (
+										{orgCustomDomain && isVerified ? (
 											<FontAwesomeIcon
 												className="text-green-500 size-5"
 												icon={faCheckCircle}
 											/>
 										) : (
-											<FontAwesomeIcon
-												className="text-red-500 size-5"
-												icon={faExclamationCircle}
-											/>
+											orgCustomDomain &&
+											!isVerified && (
+												<FontAwesomeIcon
+													className="text-red-500 size-5"
+													icon={faExclamationCircle}
+												/>
+											)
 										)}
 									</div>
 								</Tooltip>
