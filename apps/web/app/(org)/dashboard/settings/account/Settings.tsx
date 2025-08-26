@@ -27,7 +27,7 @@ export const Settings = ({
 				}),
 			});
 			if (!res.ok) {
-				throw new Error("Failed to update name");
+				toast.error("Failed to update name");
 			}
 		},
 		onSuccess: () => {
