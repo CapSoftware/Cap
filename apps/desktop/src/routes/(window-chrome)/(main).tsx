@@ -147,10 +147,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = _screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = _screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			}
 
 			return screen;
@@ -160,7 +162,8 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
-				win = _windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
+				win =
+					_windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
 			}
 
 			return win;
