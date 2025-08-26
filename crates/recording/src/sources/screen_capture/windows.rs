@@ -197,7 +197,9 @@ enum SourceError {
     #[error("CreateAudioCapture/{0}")]
     CreateAudioCapture(scap_cpal::CapturerError),
     #[error("StartCapturingAudio/{0}")]
-    StartCapturingAudio(SendError<audio::StartCapturing, cpal::PlayStreamError>),
+    StartCapturingAudio(
+        String, /* SendError<audio::StartCapturing, cpal::PlayStreamError> */
+    ),
     #[error("Closed")]
     Closed,
 }
@@ -289,7 +291,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                     audio_capture
                         .ask(audio::StartCapturing)
                         .await
-                        .map_err(SourceError::StartCapturingAudio)?;
+                        .map_err(|v| SourceError::StartCapturingAudio(v.to_string()))?;
 
                     Some(audio_capture)
                 } else {
@@ -466,6 +468,8 @@ pub mod audio {
     pub struct WindowsAudioCapture {
         capturer: scap_cpal::Capturer,
     }
+
+    unsafe impl Send for WindowsAudioCapture {}
 
     impl WindowsAudioCapture {
         pub fn new(
