@@ -7,7 +7,6 @@ use std::{
 
 use cap_export::ExporterBase;
 use cap_project::XY;
-use cap_recording::feeds::CameraFeed;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
 use serde_json::json;
@@ -111,7 +110,7 @@ window {}:
                 }
             }
             Some(RecordCommands::Cameras) => {
-                let cameras = CameraFeed::list_cameras();
+                let cameras = cap_camera::list_cameras().collect::<Vec<_>>();
 
                 let mut info = vec![];
                 for camera_info in cameras {

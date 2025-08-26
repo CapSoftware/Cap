@@ -1,4 +1,2 @@
-mod camera;
+pub mod camera;
 pub mod microphone;
-
-pub use camera::*;

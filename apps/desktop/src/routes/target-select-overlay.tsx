@@ -692,6 +692,13 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 			text: "Recording Countdown",
 			items: [
 				await CheckMenuItem.new({
+					text: "Off",
+					action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
+					checked:
+						!generalSetings.data?.recordingCountdown ||
+						generalSetings.data?.recordingCountdown === 0,
+				}),
+				await CheckMenuItem.new({
 					text: "3 seconds",
 					action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
 					checked: generalSetings.data?.recordingCountdown === 3,
