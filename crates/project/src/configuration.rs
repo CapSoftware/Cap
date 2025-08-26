@@ -197,9 +197,9 @@ pub struct ShadowConfiguration {
 #[serde(rename_all = "camelCase")]
 pub struct BorderConfiguration {
     pub enabled: bool,
-    pub width: f32,     // Border width in pixels
-    pub color: Color,   // Border color (RGB)
-    pub opacity: f32,   // Border opacity (0-100)
+    pub width: f32,   // Border width in pixels
+    pub color: Color, // Border color (RGB)
+    pub opacity: f32, // Border opacity (0-100)
 }
 
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
