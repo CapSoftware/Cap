@@ -16,7 +16,9 @@ use windows::{
                 MONITORINFOEXW, MonitorFromPoint, MonitorFromWindow, ReleaseDC, SelectObject,
             },
         },
-        Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW},
+        Storage::FileSystem::{
+            FILE_FLAGS_AND_ATTRIBUTES, GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+        },
         System::{
             Threading::{
                 GetCurrentProcessId, OpenProcess, PROCESS_NAME_FORMAT,
@@ -29,7 +31,10 @@ use windows::{
                 GetDpiForMonitor, GetDpiForWindow, GetProcessDpiAwareness, MDT_EFFECTIVE_DPI,
                 PROCESS_PER_MONITOR_DPI_AWARE,
             },
-            Shell::ExtractIconExW,
+            Shell::{
+                ExtractIconExW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_SMALLICON,
+                SHGetFileInfoW,
+            },
             WindowsAndMessaging::{
                 DI_FLAGS, DestroyIcon, DrawIconEx, EnumChildWindows, EnumWindows, GCLP_HICON,
                 GW_HWNDNEXT, GWL_EXSTYLE, GWL_STYLE, GetClassLongPtrW, GetClassNameW,
@@ -525,9 +530,23 @@ impl WindowImpl {
     pub fn app_icon(&self) -> Option<Vec<u8>> {
         unsafe {
             // Target size for acceptable icon quality - early termination threshold
-            const GOOD_SIZE_THRESHOLD: i32 = 64;
+            const GOOD_SIZE_THRESHOLD: i32 = 256;
 
-            // Method 1: Try to get the window's large icon first
+            // Method 1: Try shell icon extraction for highest quality
+            if let Some(exe_path) = self.get_executable_path() {
+                if let Some(icon_data) = self.extract_shell_icon_high_res(&exe_path, 512) {
+                    return Some(icon_data);
+                }
+            }
+
+            // Method 2: Try executable file extraction with multiple icon sizes
+            if let Some(exe_path) = self.get_executable_path() {
+                if let Some(icon_data) = self.extract_executable_icons_high_res(&exe_path) {
+                    return Some(icon_data);
+                }
+            }
+
+            // Method 3: Try to get the window's large icon
             let large_icon = SendMessageW(
                 self.0,
                 WM_GETICON,
@@ -544,7 +563,7 @@ impl WindowImpl {
                 }
             }
 
-            // Method 2: Try executable file extraction (only first icon, most likely to be main app icon)
+            // Method 4: Try executable file extraction (fallback to original method)
             if let Some(exe_path) = self.get_executable_path() {
                 let wide_path: Vec<u16> =
                     exe_path.encode_utf16().chain(std::iter::once(0)).collect();
@@ -587,7 +606,7 @@ impl WindowImpl {
                 }
             }
 
-            // Method 3: Try small window icon as fallback
+            // Method 5: Try small window icon as fallback
             let small_icon = SendMessageW(
                 self.0,
                 WM_GETICON,
@@ -601,7 +620,7 @@ impl WindowImpl {
                 }
             }
 
-            // Method 4: Try class icon as last resort
+            // Method 6: Try class icon as last resort
             let class_icon = GetClassLongPtrW(self.0, GCLP_HICON) as isize;
             if class_icon != 0 {
                 if let Some(result) = self.hicon_to_png_bytes_optimized(HICON(class_icon as _)) {
@@ -610,6 +629,113 @@ impl WindowImpl {
             }
 
             None
+        }
+    }
+
+    fn extract_shell_icon_high_res(&self, exe_path: &str, target_size: i32) -> Option<Vec<u8>> {
+        unsafe {
+            let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+            // Try different shell icon sizes
+            let icon_flags = [
+                SHGFI_ICON | SHGFI_LARGEICON, // Large system icon
+                SHGFI_ICON | SHGFI_SMALLICON, // Small system icon as fallback
+            ];
+
+            for flags in icon_flags {
+                let mut file_info = SHFILEINFOW::default();
+                let result = SHGetFileInfoW(
+                    windows::core::PCWSTR(wide_path.as_ptr()),
+                    FILE_FLAGS_AND_ATTRIBUTES(0),
+                    Some(&mut file_info),
+                    std::mem::size_of::<SHFILEINFOW>() as u32,
+                    flags,
+                );
+
+                if result != 0 && !file_info.hIcon.is_invalid() {
+                    if let Some(result) = self.hicon_to_png_bytes_optimized(file_info.hIcon) {
+                        let _ = DestroyIcon(file_info.hIcon);
+                        if result.1 >= target_size / 2 {
+                            // Accept if at least half target size
+                            return Some(result.0);
+                        }
+                    }
+                    let _ = DestroyIcon(file_info.hIcon);
+                }
+            }
+
+            None
+        }
+    }
+
+    fn extract_executable_icons_high_res(&self, exe_path: &str) -> Option<Vec<u8>> {
+        unsafe {
+            let wide_path: Vec<u16> = exe_path.encode_utf16().chain(std::iter::once(0)).collect();
+
+            // First, get the total number of icons in the file
+            let icon_count = ExtractIconExW(
+                PCWSTR(wide_path.as_ptr()),
+                -1, // Get count
+                None,
+                None,
+                0,
+            );
+
+            if icon_count == 0 {
+                return None;
+            }
+
+            // Try to extract multiple icons to find the best quality one
+            let max_icons_to_try = std::cmp::min(icon_count as usize, 5); // Don't try too many to keep it fast
+            let mut best_icon: Option<Vec<u8>> = None;
+            let mut best_size: i32 = 0;
+
+            for i in 0..max_icons_to_try {
+                let mut large_icon: HICON = HICON::default();
+                let mut small_icon: HICON = HICON::default();
+
+                let extracted = ExtractIconExW(
+                    PCWSTR(wide_path.as_ptr()),
+                    i as i32,
+                    Some(&mut large_icon),
+                    Some(&mut small_icon),
+                    1,
+                );
+
+                if extracted > 0 {
+                    // Try large icon first
+                    if !large_icon.is_invalid() {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(large_icon) {
+                            // If we found a really good icon, stop searching
+                            if result.1 >= 256 {
+                                let _ = DestroyIcon(large_icon);
+                                if !small_icon.is_invalid() {
+                                    let _ = DestroyIcon(small_icon);
+                                }
+                                return Some(result.0);
+                            }
+                            if result.1 > best_size {
+                                best_icon = Some(result.0);
+                                best_size = result.1;
+                            }
+                        }
+                        let _ = DestroyIcon(large_icon);
+                    }
+
+                    // Try small icon if we don't have a good one yet
+                    if !small_icon.is_invalid() && best_size < 128 {
+                        if let Some(result) = self.hicon_to_png_bytes_optimized(small_icon) {
+                            if result.1 > best_size {
+                                best_icon = Some(result.0);
+                                best_size = result.1;
+                            }
+                        }
+                        let _ = DestroyIcon(small_icon);
+                    }
+                }
+            }
+
+            best_icon
         }
     }
 
@@ -687,21 +813,25 @@ impl WindowImpl {
             // Get the native icon size to prioritize it
             let native_size = self.get_icon_size(icon);
 
-            // Determine the best size to try based on native size
+            // Determine the best size to try based on native size, prioritizing high-res
             let target_sizes = if let Some((width, height)) = native_size {
                 let native_dim = width.max(height);
-                if native_dim >= 256 {
-                    vec![native_dim, 256, 128] // High-res icon
+                if native_dim >= 512 {
+                    vec![native_dim, 512, 256, 128] // Ultra high-res icon
+                } else if native_dim >= 256 {
+                    vec![512, native_dim, 256, 128] // Try upscaling first, then native
+                } else if native_dim >= 128 {
+                    vec![512, 256, native_dim, 128] // Try higher res first
                 } else if native_dim >= 64 {
-                    vec![native_dim, 64, 32] // Medium-res icon
+                    vec![256, 128, native_dim, 64] // Medium-res icon
                 } else if native_dim >= 32 {
-                    vec![native_dim, 32, 16] // Standard icon
+                    vec![128, 64, native_dim, 32] // Standard icon
                 } else {
-                    vec![32, 16] // Small icon, try standard sizes
+                    vec![64, 32, 16] // Small icon, try reasonable sizes
                 }
             } else {
-                // No native size info, try reasonable defaults
-                vec![128, 64, 32, 16]
+                // No native size info, try high-res defaults first
+                vec![512, 256, 128, 64, 32, 16]
             };
 
             // Try each target size, return the first successful one
