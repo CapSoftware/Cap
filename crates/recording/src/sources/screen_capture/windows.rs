@@ -467,6 +467,8 @@ pub mod audio {
         capturer: scap_cpal::Capturer,
     }
 
+    unsafe impl Send for WindowsAudioCapture {}
+
     impl WindowsAudioCapture {
         pub fn new(
             audio_tx: Sender<(ffmpeg::frame::Audio, f64)>,
