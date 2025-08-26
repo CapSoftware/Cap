@@ -164,6 +164,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	type SettingsGroup = {
 		title: string;
+		os?: "macos" | "windows" | "linux";
 		titleStyling?: string;
 		items: SettingItem[];
 	};
@@ -190,6 +191,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		},
 		{
 			title: "App",
+			os: "macos",
 			items: [
 				{
 					label: "Hide dock icon",
@@ -383,11 +385,12 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 					<For each={settingsGroups}>
 						{(group) => (
-							<div>
-								<h3
-									class={cx(
-										"mb-3 text-sm text-gray-12 w-fit",
-										group.titleStyling,
+							<Show when={group.os === ostype || !group.os}>
+								<div>
+									<h3
+										class={cx(
+											"mb-3 text-sm text-gray-12 w-fit",
+											group.titleStyling,
 									)}
 								>
 									{group.title}
@@ -477,6 +480,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									</For>
 								</div>
 							</div>
+							</Show>
 						)}
 					</For>
 
