@@ -26,7 +26,7 @@ export default async function DashboardLayout({
 		redirect("/login");
 	}
 
-	if (!user.name || user.name.length <= 1) {
+	if (!user.name || user.name.length === 0) {
 		redirect("/onboarding");
 	}
 
