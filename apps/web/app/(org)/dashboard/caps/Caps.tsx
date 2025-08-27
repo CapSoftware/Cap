@@ -16,6 +16,7 @@ import { useDashboardContext } from "../Contexts";
 import {
 	NewFolderDialog,
 	SelectedCapsBar,
+	StartRecordingButton,
 	UploadCapButton,
 	UploadPlaceholderCard,
 } from "./components";
@@ -274,15 +275,7 @@ export const Caps = ({
 				onOpenChange={setOpenNewFolderDialog}
 			/>
 			<div className="flex gap-3 items-center mb-10 w-full">
-				<Button
-					onClick={() => setOpenNewFolderDialog(true)}
-					size="sm"
-					variant="dark"
-					className="flex gap-2 items-center w-fit"
-				>
-					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
-					New Folder
-				</Button>
+				<StartRecordingButton size="sm" />
 				<UploadCapButton
 					onStart={(id, thumbnailUrl) => {
 						setIsUploading(true);
@@ -298,6 +291,15 @@ export const Caps = ({
 						setUploadProgress(0);
 					}}
 				/>
+				<Button
+					onClick={() => setOpenNewFolderDialog(true)}
+					size="sm"
+					variant="gray"
+					className="flex gap-2 items-center w-fit"
+				>
+					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
+					New Folder
+				</Button>
 			</div>
 			{folders.length > 0 && (
 				<>

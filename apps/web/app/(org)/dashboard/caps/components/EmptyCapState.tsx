@@ -3,6 +3,7 @@ import { faDownload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRive } from "@rive-app/react-canvas";
 import { useTheme } from "../../Contexts";
+import { StartRecordingButton } from "./StartRecordingButton";
 import { UploadCapButton } from "./UploadCapButton";
 
 interface EmptyCapStateProps {
@@ -31,10 +32,12 @@ export const EmptyCapState: React.FC<EmptyCapStateProps> = ({ userName }) => {
 					</p>
 				</div>
 				<div className="flex gap-3 justify-center items-center mt-4">
+					<StartRecordingButton />
+					<p className="text-sm text-gray-10">or</p>
 					<Button
 						href="/download"
 						className="flex relative gap-2 justify-center items-center"
-						variant="primary"
+						variant="dark"
 					>
 						<FontAwesomeIcon className="size-3.5" icon={faDownload} />
 						Download Cap
