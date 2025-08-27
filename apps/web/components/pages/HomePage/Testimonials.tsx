@@ -140,7 +140,7 @@ const Testimonials = () => {
 			<Button
 				href="/testimonials"
 				className="mx-auto mt-10 md:mt-0 w-fit"
-				variant="primary"
+				variant="dark"
 				size="lg"
 			>
 				{homepageCopy.testimonials.cta}
