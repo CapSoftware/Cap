@@ -1,10 +1,10 @@
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { CACHE_CONTROL_HEADERS, getHeaders } from "@/utils/helpers";
+import { createBucketProvider } from "@/utils/s3";
 
 export const revalidate = 0;
 
@@ -60,7 +60,15 @@ export async function GET(request: NextRequest) {
 	}
 
 	if (video.jobStatus === "COMPLETE") {
-		const playlistUrl = `${S3_BUCKET_URL}/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+		const [customBucket] = await db()
+			.select()
+			.from(s3Buckets)
+			.where(eq(s3Buckets.ownerId, video.ownerId));
+
+		const bucketProvider = await createBucketProvider(customBucket);
+		const playlistKey = `${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+		const playlistUrl = await bucketProvider.getSignedObjectUrl(playlistKey);
+
 		return new Response(
 			JSON.stringify({ playlistOne: playlistUrl, playlistTwo: null }),
 			{
