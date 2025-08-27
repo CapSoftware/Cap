@@ -123,6 +123,8 @@ pub enum NewCapturerError {
     CursorNotSupported,
     #[error("UpdateIntervalNotSupported")]
     UpdateIntervalNotSupported,
+    #[error("D3DDevice: {0}")]
+    D3DDevice(windows::core::Error),
     #[error("CreateRunner/{0}")]
     CreateRunner(#[from] StartRunnerError),
     #[error("RecvTimeout")]
@@ -136,6 +138,8 @@ pub struct Capturer {
     item: GraphicsCaptureItem,
     settings: Settings,
     thread_handle: Option<JoinHandle<()>>,
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
 }
 
 impl Capturer {
@@ -161,14 +165,40 @@ impl Capturer {
             return Err(NewCapturerError::UpdateIntervalNotSupported);
         }
 
-        let stop_flag = Arc::new(AtomicBool::new(false));
+        let mut d3d_device = None;
+        let mut d3d_context = None;
+
+        unsafe {
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                Default::default(),
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut d3d_device),
+                None,
+                Some(&mut d3d_context),
+            )
+        }
+        .map_err(StartRunnerError::D3DDevice)?;
 
         Ok(Capturer {
-            stop_flag,
+            stop_flag: Arc::new(AtomicBool::new(false)),
             item,
             settings,
             thread_handle: None,
+            d3d_device: d3d_device.unwrap(),
+            d3d_context: d3d_context.unwrap(),
         })
+    }
+
+    pub fn d3d_device(&self) -> &ID3D11Device {
+        &self.d3d_device
+    }
+
+    pub fn d3d_context(&self) -> &ID3D11DeviceContext {
+        &self.d3d_context
     }
 }
 
@@ -197,6 +227,9 @@ impl Capturer {
         let settings = self.settings.clone();
         let stop_flag = self.stop_flag.clone();
 
+        let d3d_device = self.d3d_device.clone();
+        let d3d_context = self.d3d_context.clone();
+
         let thread_handle = std::thread::spawn({
             move || {
                 if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
@@ -206,7 +239,15 @@ impl Capturer {
                     // return Err(CreateRunnerError::FailedToInitializeWinRT);
                 }
 
-                match Runner::start(item, settings, callback, closed_callback, stop_flag) {
+                match Runner::start(
+                    item,
+                    settings,
+                    callback,
+                    closed_callback,
+                    stop_flag,
+                    d3d_device,
+                    d3d_context,
+                ) {
                     Ok(runner) => {
                         let _ = started_tx.send(Ok(()));
 
@@ -307,6 +348,14 @@ impl<'a> Frame<'a> {
 
     pub fn texture(&self) -> &ID3D11Texture2D {
         &self.texture
+    }
+
+    pub fn d3d_device(&self) -> &ID3D11Device {
+        self.d3d_device
+    }
+
+    pub fn d3d_context(&self) -> &ID3D11DeviceContext {
+        self.d3d_context
     }
 
     pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'a>> {
@@ -442,6 +491,8 @@ impl Runner {
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
         stop_flag: Arc<AtomicBool>,
+        d3d_device: ID3D11Device,
+        d3d_context: ID3D11DeviceContext,
     ) -> Result<Self, StartRunnerError> {
         let queue_options = DispatcherQueueOptions {
             dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
@@ -451,27 +502,6 @@ impl Runner {
 
         let _controller = unsafe { CreateDispatcherQueueController(queue_options) }
             .map_err(StartRunnerError::DispatchQueue)?;
-
-        let mut d3d_device = None;
-        let mut d3d_context = None;
-
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                Default::default(),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut d3d_device),
-                None,
-                Some(&mut d3d_context),
-            )
-        }
-        .map_err(StartRunnerError::D3DDevice)?;
-
-        let d3d_device = d3d_device.unwrap();
-        let d3d_context = d3d_context.unwrap();
 
         let direct3d_device = (|| {
             let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
