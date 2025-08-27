@@ -2171,7 +2171,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                                 #[cfg(windows)]
                                 {
-                                    ShowCapWindow::Main.show(&app).ok();
+                                    tokio::spawn(ShowCapWindow::Main.show(&app));
                                 }
                             }
                             CapWindowId::Settings
