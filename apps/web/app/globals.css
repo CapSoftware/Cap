@@ -69,19 +69,19 @@ html {
 }
 
 .dark .dark-button-shadow {
-	box-shadow: 0 1.50px 0 0 rgba(0, 0, 0, 0.20) inset;
+	box-shadow: 0 1.5px 0 0 rgba(0, 0, 0, 0.20) inset;
 }
 
 .dark .gray-button-shadow {
-	box-shadow: 0 1.50px 0 0 rgba(255, 255, 255, 0.05) inset;
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.05) inset;
 }
 
 .gray-button-shadow {
-	box-shadow: 0 1.50px 0 0 rgba(255, 255, 255, 0.40) inset;
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.40) inset;
 }
 
 .dark-button-shadow {
-	box-shadow: 0 1.50px 0 0 rgba(255, 255, 255, 0.20) inset;
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.20) inset;
 }
 
 .dark ::selection {
