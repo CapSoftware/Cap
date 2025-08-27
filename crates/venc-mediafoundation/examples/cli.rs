@@ -1,26 +1,28 @@
 fn main() {
-    #[cfg(windows)]
+    // #[cfg(windows)]
     windows::main();
 }
 
-#[cfg(windows)]
+// #[cfg(windows)]
 mod windows {
-    use ::windows::Graphics::SizeInt32;
-    use ::windows::Storage::FileAccessMode;
-    use ::windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFStartup};
-    use ::windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
-    use ::windows::Win32::UI::WindowsAndMessaging::{
-        DispatchMessageW, GetMessageW, MSG, WM_HOTKEY,
+    use cap_displays::*;
+    use cap_venc_mediafoundation::*;
+    use scap_direct3d::{Capturer, PixelFormat, Settings};
+    use std::{
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
     };
-    use ::windows::{
+    use windows::Graphics::SizeInt32;
+    use windows::Storage::FileAccessMode;
+    use windows::Win32::Media::MediaFoundation::{MFStartup, MFSTARTUP_FULL};
+    use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+    use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, WM_HOTKEY};
+    use windows::{
+        core::HSTRING,
         Storage::{CreationCollisionOption, StorageFolder},
         Win32::{Foundation::MAX_PATH, Storage::FileSystem::GetFullPathNameW},
-        core::HSTRING,
     };
-    use cap_displays::*;
-    use scap_direct3d::{Capturer, PixelFormat, Settings};
-    use std::time::Instant;
-    use std::{path::Path, sync::Arc, time::Duration};
 
     use super::*;
 
