@@ -33,8 +33,6 @@ import {
 	type ExportSettings,
 	events,
 	type FramesRendered,
-	type GifExportSettings,
-	type Mp4ExportSettings,
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
@@ -158,8 +156,7 @@ export function ExportDialog() {
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
 
-	const selectedStyle =
-		"ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-5 ring-gray-500";
+	const selectedStyle = "bg-gray-7";
 
 	const projectPath = editorInstance.path;
 
@@ -492,10 +489,8 @@ export function ExportDialog() {
 										{(option) => (
 											<Button
 												onClick={() => setSettings("exportTo", option.value)}
-												class={cx(
-													"flex flex-1 gap-2 items-center text-nowrap",
-													settings.exportTo === option.value && selectedStyle,
-												)}
+												data-selected={settings.exportTo === option.value}
+												class="flex flex-1 gap-2 items-center text-nowrap"
 												variant="secondary"
 											>
 												{option.icon}
@@ -550,9 +545,7 @@ export function ExportDialog() {
 													);
 												}}
 												autofocus={false}
-												class={cx(
-													settings.format === option.value && selectedStyle,
-												)}
+												data-selected={settings.format === option.value}
 											>
 												{option.label}
 											</Button>
@@ -639,10 +632,7 @@ export function ExportDialog() {
 													);
 												}}
 												variant="secondary"
-												class={cx(
-													settings.compression === option.value &&
-														selectedStyle,
-												)}
+												data-selected={settings.compression === option.value}
 											>
 												{option.label}
 											</Button>
@@ -669,12 +659,10 @@ export function ExportDialog() {
 									>
 										{(option) => (
 											<Button
-												class={cx(
-													"flex-1",
+												data-selected={
 													settings.resolution.value === option.value
-														? selectedStyle
-														: "",
-												)}
+												}
+												class="flex-1"
 												variant="secondary"
 												onClick={() => setSettings("resolution", option)}
 											>
