@@ -1,11 +1,11 @@
 [package]
-name = "venc-mediafoundation"
+name = "cap-venc-mediafoundation"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 
-# [target.'cfg(windows)'.dependencies]
+[target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
 	"System",
 	"Graphics_Capture",
@@ -31,10 +31,11 @@ windows = { workspace = true, features = [
 	"Storage_Search",
 	"Storage_Streams",
 ] }
+windows-numerics = "0.2.0"
 
 [dev-dependencies]
 scap-targets = { path = "../scap-targets" }
-windows-numerics = "0.2.0"
+scap-direct3d = { path = "../scap-direct3d" }
 
 [lints]
 workspace = true

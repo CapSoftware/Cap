@@ -5,7 +5,6 @@ use std::{
     },
     thread::JoinHandle,
 };
-
 use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
@@ -32,9 +31,7 @@ use windows::{
     core::{Error, Interface, Result},
 };
 
-// use crate::media::{MF_VERSION, MFSetAttributeRatio, MFSetAttributeSize};
-
-// use super::encoder_device::VideoEncoderDevice;
+use crate::{media::*, encoder_device::*};
 
 pub struct VideoEncoderInputSample {
     timestamp: TimeSpan,
@@ -345,6 +342,7 @@ impl VideoEncoderInner {
                     .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
+                dbg!(&event_type);
                 match event_type {
                     MEDIA_ENGINE_TRANFORM_NEED_INPUT => {
                         should_exit = self.on_transform_input_requested()?;
@@ -383,6 +381,7 @@ impl VideoEncoderInner {
                         .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
                 };
                 should_exit = false;
+                dbg!(should_exit);
             }
         }
         Ok(should_exit)
