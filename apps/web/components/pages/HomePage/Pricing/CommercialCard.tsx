@@ -75,7 +75,7 @@ export const CommercialCard = () => {
 					<div className="text-center">
 						<a
 							href="/docs/commercial-license"
-							className="text-sm text-gray-10 hover:text-gray-12 underline"
+							className="text-sm underline text-gray-10 hover:text-gray-12"
 						>
 							Learn more about the commercial license here
 						</a>
@@ -184,7 +184,7 @@ export const CommercialCard = () => {
 			<Button
 				disabled={commercialLoading}
 				onClick={openCommercialCheckout}
-				variant="primary"
+				variant="dark"
 				size="lg"
 				className="w-full font-medium"
 				aria-label="Purchase Commercial License"
