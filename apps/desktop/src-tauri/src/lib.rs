@@ -2168,6 +2168,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                                 window_ids.ids.lock().unwrap().retain(|(_, _id)| *_id != id);
 
                                 tokio::spawn(EditorInstances::remove(window.clone()));
+
+                                #[cfg(windows)]
+                                {
+                                    ShowCapWindow::Main.show(&app).ok();
+                                }
                             }
                             CapWindowId::Settings
                             | CapWindowId::Upgrade
