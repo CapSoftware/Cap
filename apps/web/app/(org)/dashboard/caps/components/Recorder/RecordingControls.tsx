@@ -19,12 +19,12 @@ export function RecordingControls({
 }: RecordingControlsProps) {
   if (recordingState === "idle") {
     return (
-      <div className="flex justify-center px-3">
+      <div className="flex items-center space-x-1 w-full px-3">
         <Button
-          variant="primary"
+          variant="blue"
           onClick={onStartRecording}
           disabled={isStartingRecording}
-          className="px-6"
+          className="flex flex-grow justify-center items-center"
         >
           {isStartingRecording ? "Starting..." : "Start Recording"}
         </Button>
@@ -34,11 +34,11 @@ export function RecordingControls({
 
   if (recordingState === "recording") {
     return (
-      <div className="flex justify-center px-3">
+      <div className="flex items-center space-x-1 w-full px-3">
         <Button
           variant="destructive"
           onClick={onStopRecording}
-          className="bg-red-500 hover:bg-red-600 px-6"
+          className="flex flex-grow justify-center items-center bg-red-500 hover:bg-red-600"
         >
           Stop Recording
         </Button>
@@ -48,11 +48,11 @@ export function RecordingControls({
 
   if (recordingState === "uploading") {
     return (
-      <div className="flex justify-center px-3">
+      <div className="flex items-center space-x-1 w-full px-3">
         <Button
           variant="outline"
           disabled
-          className="px-6"
+          className="flex flex-grow justify-center items-center"
         >
           Uploading...
         </Button>

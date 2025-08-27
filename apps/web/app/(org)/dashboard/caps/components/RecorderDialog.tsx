@@ -12,7 +12,7 @@ import {
 import { useMediaDevices } from "./Recorder/useMediaDevices";
 import { useRecording } from "./Recorder/useRecording";
 
-type RecordingSource = "screen" | "window" | "area";
+type RecordingSource = "screen" | "window";
 type RecordingState =
   | "idle"
   | "countdown"
@@ -98,11 +98,11 @@ export function RecorderDialog({
     <>
       <Dialog open={open}>
         <DialogContent
-          className="relative p-0 w-full max-w-[270px] rounded-xl border shadow-lg bg-gray-1 border-gray-3"
+          className="relative p-0 w-full max-w-[300px] rounded-xl border shadow-lg bg-gray-1 border-gray-3"
           onPointerDownOutside={(e: Event) => e.preventDefault()}
           onInteractOutside={(e: Event) => e.preventDefault()}
         >
-          <div className="flex relative justify-center flex-col h-[256px] text-[--text-primary]">
+          <div className="flex relative justify-center flex-col gap-[0.75rem] p-[1rem] min-h-[280px] text-[0.875rem] font-[400] text-[--text-primary]">
             {recordingState === "idle" && (
               <>
                 <RecordingSourceSelector
@@ -131,7 +131,7 @@ export function RecorderDialog({
 
             {(recordingState === "recording" ||
               recordingState === "uploading") && (
-              <div className="flex flex-col items-center justify-center gap-4 px-3">
+              <div className="flex flex-col items-center justify-center gap-4">
                 <RecordingStateDisplay
                   recordingState={recordingState}
                   recordingTime={recordingTime}

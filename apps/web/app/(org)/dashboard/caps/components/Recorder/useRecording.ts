@@ -337,9 +337,9 @@ export function useRecording({
   const startActualRecording = useCallback(async () => {
     try {
       const baseVideoConstraints = {
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 30 },
+        width: { ideal: 2560, min: 1920 },
+        height: { ideal: 1440, min: 1080 },
+        frameRate: { ideal: 30, min: 24 },
       };
 
       const displayMediaOptions: DisplayMediaStreamOptions = {
@@ -427,14 +427,52 @@ export function useRecording({
         }
       }
 
-      const options = {
-        mimeType: "video/webm;codecs=vp8,opus" as string,
-        videoBitsPerSecond: 2500000,
-      } as MediaRecorderOptions & { mimeType: string };
-
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options.mimeType = "video/webm";
+      const videoTrackSettings = displayStream.getVideoTracks()[0]?.getSettings();
+      const resolution = videoTrackSettings ? 
+        videoTrackSettings.width! * videoTrackSettings.height! : 
+        1920 * 1080;
+      
+      let videoBitrate: number;
+      if (resolution >= 2560 * 1440) {
+        videoBitrate = 8000000;
+      } else if (resolution >= 1920 * 1080) {
+        videoBitrate = 5000000;
+      } else if (resolution >= 1280 * 720) {
+        videoBitrate = 3500000;
+      } else {
+        videoBitrate = 2500000;
       }
+
+      const codecs = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm;codecs=h264,opus",
+        "video/webm"
+      ];
+      
+      let selectedMimeType = "video/webm";
+      for (const codec of codecs) {
+        if (MediaRecorder.isTypeSupported(codec)) {
+          selectedMimeType = codec;
+          break;
+        }
+      }
+
+      const options = {
+        mimeType: selectedMimeType,
+        videoBitsPerSecond: videoBitrate,
+        audioBitsPerSecond: 128000,
+      } as MediaRecorderOptions & { mimeType: string; audioBitsPerSecond?: number };
+
+      console.log('Recording with settings:', {
+        codec: selectedMimeType,
+        videoBitrate: `${videoBitrate / 1000000}Mbps`,
+        audioBitrate: '128kbps',
+        resolution: videoTrackSettings ? 
+          `${videoTrackSettings.width}x${videoTrackSettings.height}` : 
+          'unknown',
+        frameRate: videoTrackSettings?.frameRate || 'unknown'
+      });
 
       const mediaRecorder = new MediaRecorder(displayStream, options);
       mediaRecorderRef.current = mediaRecorder;

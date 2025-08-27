@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, Mic, Volume2 } from "lucide-react";
+import { Camera, Mic } from "lucide-react";
 
 type MediaDevice = {
   deviceId: string;
@@ -38,8 +38,8 @@ function InfoPill({ variant, children, onClick }: InfoPillProps) {
       type="button"
       onClick={onClick}
       className={`
-        px-2 py-0.5 rounded-full text-white text-[11px] whitespace-nowrap
-        ${variant === "blue" ? "bg-blue-9" : "bg-red-9"}
+        px-[0.375rem] rounded-full text-[0.75rem] whitespace-nowrap
+        ${variant === "blue" ? "bg-blue-3 text-blue-9" : "bg-red-3 text-red-9"}
         ${onClick ? "cursor-pointer hover:opacity-90" : "cursor-default"}
       `}
     >
@@ -71,34 +71,34 @@ function DeviceSelectButton({
 }: DeviceSelectButtonProps) {
   const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceId = e.target.value;
-    if (deviceId === '') {
+    if (deviceId === "") {
       onSelect(null);
     } else {
-      const device = devices.find(d => d.deviceId === deviceId);
+      const device = devices.find((d) => d.deviceId === deviceId);
       onSelect(device || null);
     }
   };
 
   if (!permissionGranted) {
     return (
-      <div className="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg bg-gray-3">
-        <Icon className="text-gray-10 size-4" />
-        <span className="flex-1 text-sm text-left text-gray-11">{label}</span>
+      <div className="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full">
+        <Icon className="text-gray-11 size-[1.25rem]" />
+        <span className="flex-1 text-left truncate">{label}</span>
         <InfoPill variant="red" onClick={onRequestPermission}>
-          Grant Permission
+          Request Permission
         </InfoPill>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg bg-gray-3">
-      <Icon className="text-gray-10 size-4" />
+    <div className="flex flex-row items-center h-[2rem] px-[0.375rem] gap-[0.375rem] border rounded-lg border-gray-3 w-full disabled:text-gray-11 transition-colors">
+      <Icon className="text-gray-11 size-[1.25rem]" />
       <select
-        value={selectedDevice?.deviceId || ''}
+        value={selectedDevice?.deviceId || ""}
         onChange={handleSelectChange}
         disabled={disabled}
-        className="flex-1 text-sm bg-transparent border-none outline-none text-gray-12 cursor-pointer"
+        className="flex-1 text-left truncate bg-transparent border-none outline-none text-[--text-primary] cursor-pointer"
       >
         <option value="">No {label}</option>
         {devices.map((device) => (
@@ -107,9 +107,7 @@ function DeviceSelectButton({
           </option>
         ))}
       </select>
-      <InfoPill variant={selectedDevice ? "blue" : "red"}>
-        {selectedDevice ? "On" : "Off"}
-      </InfoPill>
+      {selectedDevice && <InfoPill variant="blue">On</InfoPill>}
     </div>
   );
 }
@@ -130,7 +128,7 @@ export function DeviceSelection({
   disabled,
 }: DeviceSelectionProps) {
   return (
-    <div className="space-y-2 px-3">
+    <div className="flex flex-col gap-[0.25rem] items-stretch px-3">
       <DeviceSelectButton
         icon={Camera}
         label="Camera"
@@ -152,23 +150,6 @@ export function DeviceSelection({
         permissionGranted={micPermission === "granted"}
         disabled={disabled}
       />
-
-      <button
-        type="button"
-        onClick={() => onSystemAudioToggle(!isSystemAudioEnabled)}
-        className="flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors bg-gray-3 disabled:text-gray-11 hover:bg-gray-4"
-        disabled={disabled}
-      >
-        <Volume2 className="text-gray-10 size-4" />
-        <p className="flex-1 text-sm text-left truncate">
-          {isSystemAudioEnabled
-            ? "Record System Audio"
-            : "No System Audio"}
-        </p>
-        <InfoPill variant={isSystemAudioEnabled ? "blue" : "red"}>
-          {isSystemAudioEnabled ? "On" : "Off"}
-        </InfoPill>
-      </button>
     </div>
   );
 }
