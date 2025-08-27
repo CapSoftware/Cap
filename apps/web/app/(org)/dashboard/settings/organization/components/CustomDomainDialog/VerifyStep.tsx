@@ -3,6 +3,7 @@ import clsx from "clsx";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { parse } from "tldts";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { DomainConfig, DomainVerification } from "./types";
 
@@ -15,6 +16,16 @@ interface VerifyStepProps {
 }
 
 const POLL_INTERVAL = 5000;
+
+const TXTDomainValueHandler = (record: DomainVerification, domain: string) => {
+	if (!record.domain) return "@";
+	if (record.domain === domain) return "@";
+	const suffix = `.${domain}`;
+	if (record.domain.endsWith(suffix)) {
+		return record.domain.replace(suffix, "") || "@";
+	}
+	return record.domain;
+};
 
 const VerifyStep = ({
 	domain,
@@ -54,6 +65,25 @@ const VerifyStep = ({
 		return [];
 	};
 
+	const isSubdomain = (raw: string): boolean => {
+		// Normalize and extract host (no scheme, path, port, or trailing dot)
+		const input =
+			raw
+				.trim()
+				.replace(/^https?:\/\//i, "")
+				.split("/")[0] ?? "";
+		if (!input) return false;
+		const host = (input.replace(/\.$/, "").split(":")[0] || "").toLowerCase();
+		try {
+			// Prefer PSL-backed parsing for correctness (e.g., co.uk, com.au)
+			const { subdomain } = parse(host);
+			return Boolean(subdomain);
+		} catch {
+			// Fallback: conservative heuristic
+			const parts = host.split(".");
+			return parts.length > 2;
+		}
+	};
 	const recommendedAValues = getRecommendedAValues();
 
 	// Check if DNS records are already correctly configured
@@ -63,8 +93,8 @@ const VerifyStep = ({
 	const cnameConfigured =
 		recommendedCnames.length > 0 &&
 		recommendedCnames.some((rec) => currentCnames.includes(rec.value));
-
-	const showARecord = recommendedARecord && !aRecordConfigured;
+	const showARecord =
+		recommendedAValues.length > 0 && !aRecordConfigured && !isSubdomain(domain);
 	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
@@ -94,16 +124,6 @@ const VerifyStep = ({
 		};
 	}, [activeOrganization?.organization.customDomain, isVerified]);
 
-	const TXTDomainValueHandler = (record: DomainVerification) => {
-		if (!record.domain) return "@";
-		if (record.domain === domain) return "@";
-		const suffix = `.${domain}`;
-		if (record.domain.endsWith(suffix)) {
-			return record.domain.replace(suffix, "") || "@";
-		}
-		return record.domain;
-	};
-
 	return (
 		<div className="space-y-6">
 			<div className="text-center">
@@ -124,7 +144,7 @@ const VerifyStep = ({
 			) : (
 				!isVerified &&
 				domainConfig && (
-					<div className="space-y-4">
+					<div className="custom-scroll px-1 h-full max-h-[300px] space-y-4">
 						{/* TXT Record Configuration for Verification */}
 						{showTXTRecord && (
 							<div className="overflow-hidden rounded-lg border border-gray-4">
@@ -154,7 +174,7 @@ const VerifyStep = ({
 													</dt>
 													<dd className="text-sm text-gray-10">
 														<code className="px-2 py-1 text-xs rounded bg-gray-4">
-															{TXTDomainValueHandler(record)}
+															{TXTDomainValueHandler(record, domain)}
 														</code>
 													</dd>
 												</div>

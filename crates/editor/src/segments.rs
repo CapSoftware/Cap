@@ -1,6 +1,7 @@
-use cap_media::feeds::{AudioSegment, AudioSegmentTrack};
-
-use crate::Segment;
+use crate::{
+    Segment,
+    audio::{AudioSegment, AudioSegmentTrack},
+};
 
 pub fn get_audio_segments(segments: &[Segment]) -> Vec<AudioSegment> {
     segments

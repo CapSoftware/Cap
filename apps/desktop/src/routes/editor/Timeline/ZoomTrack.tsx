@@ -6,6 +6,7 @@ import { Menu } from "@tauri-apps/api/menu";
 import { cx } from "cva";
 import {
 	batch,
+	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
@@ -38,6 +39,19 @@ export function ZoomTrack(props: {
 
 	const [hoveringSegment, setHoveringSegment] = createSignal(false);
 	const [hoveredTime, setHoveredTime] = createSignal<number>();
+
+	// When we delete a segment that's being hovered, the onMouseLeave never fires
+	// because the element gets removed from the DOM. This leaves hoveringSegment stuck
+	// as true, which blocks the onMouseMove from setting hoveredTime, preventing
+	// users from creating new segments. This effect ensures we reset the hover state
+	// when all segments are deleted.
+	createEffect(() => {
+		const segments = project.timeline?.zoomSegments;
+		if (!segments || segments.length === 0) {
+			setHoveringSegment(false);
+			setHoveredTime(undefined);
+		}
+	});
 
 	const handleGenerateZoomSegments = async () => {
 		try {
@@ -72,7 +86,7 @@ export function ZoomTrack(props: {
 					return;
 				}
 
-				const bounds = e.target.getBoundingClientRect()!;
+				const bounds = e.currentTarget.getBoundingClientRect()!;
 
 				let time =
 					(e.clientX - bounds.left) * secsPerPixel() +
@@ -156,8 +170,11 @@ export function ZoomTrack(props: {
 			<For
 				each={project.timeline?.zoomSegments}
 				fallback={
-					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-black-transparent-5 hover:opacity-30 transition-opacity rounded-xl">
-						Click to add zoom segment
+					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
+						<div>Click to add zoom segment</div>
+						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
+							(Smoothly zoom in on important areas)
+						</div>
 					</div>
 				}
 			>
@@ -193,10 +210,45 @@ export function ZoomTrack(props: {
 								resumeHistory();
 								if (!moved) {
 									e.stopPropagation();
-									setEditorState("timeline", "selection", {
-										type: "zoom",
-										index: i(),
-									});
+
+									const currentSelection = editorState.timeline.selection;
+									const segmentIndex = i();
+
+									// Handle multi-selection with Ctrl/Cmd+click
+									if (e.ctrlKey || e.metaKey) {
+										if (currentSelection?.type === "zoom") {
+											// Normalize to indices[] from either indices[] or legacy index
+											const baseIndices =
+												"indices" in currentSelection &&
+												Array.isArray(currentSelection.indices)
+													? currentSelection.indices
+													: "index" in currentSelection &&
+															typeof currentSelection.index === "number"
+														? [currentSelection.index]
+														: [];
+
+											const exists = baseIndices.includes(segmentIndex);
+											const newIndices = exists
+												? baseIndices.filter((idx) => idx !== segmentIndex)
+												: [...baseIndices, segmentIndex];
+
+											setEditorState("timeline", "selection", {
+												type: "zoom",
+												indices: newIndices,
+											});
+										} else {
+											// Start new multi-selection
+											setEditorState("timeline", "selection", {
+												type: "zoom",
+												indices: [segmentIndex],
+											});
+										}
+									} else {
+										setEditorState("timeline", "selection", {
+											type: "zoom",
+											indices: [segmentIndex],
+										});
+									}
 									props.handleUpdatePlayhead(e);
 								}
 								props.onDragStateChanged({ type: "idle" });
@@ -242,7 +294,21 @@ export function ZoomTrack(props: {
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
-						return segmentIndex === selection.index;
+						// Support both single selection (index) and multi-selection (indices)
+						if (
+							"indices" in selection &&
+							Array.isArray(selection.indices) &&
+							segmentIndex !== undefined
+						) {
+							return selection.indices.includes(segmentIndex);
+						} else if (
+							"index" in selection &&
+							typeof selection.index === "number"
+						) {
+							return segmentIndex === selection.index;
+						}
+
+						return false;
 					});
 
 					return (
@@ -350,18 +416,35 @@ export function ZoomTrack(props: {
 							>
 								{(() => {
 									const ctx = useSegmentContext();
+									const width = ctx.width();
 
-									return (
-										<Show when={ctx.width() > 100}>
+									if (width < 40) {
+										// Very small - just show icon
+										return (
+											<div class="flex justify-center items-center">
+												<IconLucideSearch class="size-3.5 text-gray-1 dark:text-gray-12" />
+											</div>
+										);
+									} else if (width < 100) {
+										// Small - show icon and zoom amount
+										return (
+											<div class="flex gap-1 items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12">
+												<IconLucideSearch class="size-3" />
+												<span>{zoomPercentage()}</span>
+											</div>
+										);
+									} else {
+										// Large - show full content
+										return (
 											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
 												<span class="opacity-70">Zoom</span>
 												<div class="flex gap-1 items-center text-md">
-													<IconLucideSearch class="size-3.5" />{" "}
-													{zoomPercentage()}{" "}
+													<IconLucideSearch class="size-3.5" />
+													{zoomPercentage()}
 												</div>
 											</div>
-										</Show>
-									);
+										);
+									}
 								})()}
 							</SegmentContent>
 							<SegmentHandle

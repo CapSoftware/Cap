@@ -1,4 +1,4 @@
-use cap_media::feeds::{AudioInputSamples, AudioInputSamplesReceiver};
+use cap_recording::feeds::microphone::MicrophoneSamples;
 use cpal::{SampleFormat, StreamInstant};
 use keyed_priority_queue::KeyedPriorityQueue;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,10 @@ const MIN_DB: f64 = -96.0;
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct AudioInputLevelChange(f64);
 
-pub fn spawn_event_emitter(app_handle: AppHandle, audio_input_rx: AudioInputSamplesReceiver) {
+pub fn spawn_event_emitter(
+    app_handle: AppHandle,
+    audio_input_rx: flume::Receiver<MicrophoneSamples>,
+) {
     let mut time_window = VolumeMeter::new(0.2);
     tokio::spawn(async move {
         while let Ok(samples) = audio_input_rx.recv_async().await {
@@ -106,7 +109,7 @@ fn db_fs(data: impl Iterator<Item = f64>) -> f64 {
     (20.0 * (max as f64 / MAX_AMPLITUDE_F32).log10()).clamp(MIN_DB, 0.0)
 }
 
-fn samples_to_f64(samples: &AudioInputSamples) -> impl Iterator<Item = f64> + use<'_> {
+fn samples_to_f64(samples: &MicrophoneSamples) -> impl Iterator<Item = f64> + use<'_> {
     samples
         .data
         .chunks(samples.format.sample_size())

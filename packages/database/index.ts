@@ -1,5 +1,7 @@
 import { serverEnv } from "@cap/env";
 import { Client, type Config } from "@planetscale/database";
+import { sql } from "drizzle-orm";
+import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/planetscale-serverless";
 
 function createDrizzle() {
@@ -31,3 +33,7 @@ export const db = () => {
 	}
 	return _cached;
 };
+
+// Use the incoming value if one exists, else fallback to the DBs existing value.
+export const updateIfDefined = <T>(v: T | undefined, col: AnyMySqlColumn) =>
+	sql`COALESCE(${v === undefined ? sql`NULL` : v}, ${col})`;

@@ -1,15 +1,9 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
-use crate::{
-    App, ArcLock, fake_window,
-    general_settings::{AppTheme, GeneralSettingsStore},
-    permissions,
-    target_select_overlay::WindowFocusManager,
-};
-use cap_displays::DisplayId;
-use cap_media::{platform::logical_monitor_bounds, sources::CaptureScreen};
+use anyhow::anyhow;
 use futures::pin_mut;
+use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
 use specta::Type;
 use std::{
@@ -23,7 +17,14 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, error};
+
+use crate::{
+    App, ArcLock, fake_window,
+    general_settings::{AppTheme, GeneralSettingsStore},
+    permissions,
+    target_select_overlay::WindowFocusManager,
+};
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -36,7 +37,7 @@ pub enum CapWindowId {
     Settings,
     Editor { id: u32 },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
     CaptureArea,
     Camera,
@@ -70,7 +71,7 @@ impl FromStr for CapWindowId {
             s if s.starts_with("window-capture-occluder-") => Self::WindowCaptureOccluder {
                 screen_id: s
                     .replace("window-capture-occluder-", "")
-                    .parse::<u32>()
+                    .parse::<DisplayId>()
                     .map_err(|e| e.to_string())?,
             },
             s if s.starts_with("target-select-overlay-") => Self::TargetSelectOverlay {
@@ -180,9 +181,9 @@ pub enum ShowCapWindow {
     Settings { page: Option<String> },
     Editor { project_path: PathBuf },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: u32 },
+    WindowCaptureOccluder { screen_id: DisplayId },
     TargetSelectOverlay { display_id: DisplayId },
-    CaptureArea { screen_id: u32 },
+    CaptureArea { screen_id: DisplayId },
     Camera,
     InProgressRecording { countdown: Option<u32> },
     Upgrade,
@@ -224,7 +225,7 @@ impl ShowCapWindow {
                 .build()?,
             Self::Main => {
                 if permissions::do_permissions_check(false).necessary_granted() {
-                    let new_recording_flow = GeneralSettingsStore::get(&app)
+                    let new_recording_flow = GeneralSettingsStore::get(app)
                         .ok()
                         .flatten()
                         .map(|s| s.enable_new_recording_flow)
@@ -235,8 +236,10 @@ impl ShowCapWindow {
                         .resizable(false)
                         .maximized(false)
                         .maximizable(false)
+                        .minimizable(false)
                         .always_on_top(true)
                         .visible_on_all_workspaces(true)
+                        .content_protected(true)
                         .center()
                         .build()?;
 
@@ -251,12 +254,9 @@ impl ShowCapWindow {
                 }
             }
             Self::TargetSelectOverlay { display_id } => {
-                let Some(display) = cap_displays::Display::from_id(display_id.clone()) else {
+                let Some(display) = scap_targets::Display::from_id(display_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
-
-                let size = display.raw_handle().logical_size();
-                let position = display.raw_handle().logical_position();
 
                 let mut window_builder = self
                     .window_builder(
@@ -267,14 +267,51 @@ impl ShowCapWindow {
                     .resizable(false)
                     .fullscreen(false)
                     .shadow(false)
-                    .always_on_top(cfg!(target_os = "macos"))
+                    .content_protected(true)
+                    .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
-                    .inner_size(size.width(), size.height())
-                    .position(position.x(), position.y())
                     .transparent(true);
 
+                #[cfg(target_os = "macos")]
+                {
+                    let position = display.raw_handle().logical_position();
+                    let size = display.logical_size().unwrap();
+
+                    window_builder = window_builder
+                        .inner_size(size.width(), size.height())
+                        .position(position.x(), position.y());
+                }
+
+                #[cfg(windows)]
+                {
+                    window_builder = window_builder.inner_size(100.0, 100.0).position(0.0, 0.0);
+                }
+
                 let window = window_builder.build()?;
+
+                #[cfg(windows)]
+                {
+                    let position = display.raw_handle().physical_position().unwrap();
+                    let logical_size = display.logical_size().unwrap();
+                    let physical_size = display.physical_size().unwrap();
+                    use tauri::{LogicalSize, PhysicalPosition, PhysicalSize};
+                    let _ = window.set_size(LogicalSize::new(
+                        logical_size.width(),
+                        logical_size.height(),
+                    ));
+                    let _ = window.set_position(PhysicalPosition::new(position.x(), position.y()));
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+
+                    let actual_physical_size = window.inner_size().unwrap();
+                    // this third time makes it work when the resulting size is wrong, god knows why
+                    if physical_size.width() != actual_physical_size.width as f64 {
+                        let _ = window.set_size(LogicalSize::new(
+                            logical_size.width(),
+                            logical_size.height(),
+                        ));
+                    }
+                }
 
                 app.state::<WindowFocusManager>()
                     .spawn(display_id, window.clone());
@@ -287,9 +324,18 @@ impl ShowCapWindow {
                 window
             }
             Self::Settings { page } => {
-                // Hide main window when settings window opens
-                if let Some(main) = CapWindowId::Main.get(app) {
-                    let _ = main.hide();
+                // Hide main window and target select overlays when settings window opens
+                for (label, window) in app.webview_windows() {
+                    if let Ok(id) = CapWindowId::from_str(&label)
+                        && matches!(
+                            id,
+                            CapWindowId::TargetSelectOverlay { .. }
+                                | CapWindowId::Main
+                                | CapWindowId::Camera
+                        )
+                    {
+                        let _ = window.hide();
+                    }
                 }
 
                 self.window_builder(
@@ -351,52 +397,93 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-                let mut window_builder = self
-                    .window_builder(app, "/camera")
-                    .maximized(false)
-                    .resizable(false)
-                    .shadow(false)
-                    .fullscreen(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .skip_taskbar(true)
-                    .position(
-                        100.0,
-                        (monitor.size().height as f64) / monitor.scale_factor()
-                            - WINDOW_SIZE
-                            - 100.0,
-                    )
-                    .initialization_script(format!(
-                        "
-			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {port};
-		                ",
-                    ))
-                    .transparent(true)
-                    .visible(false); // We set this true in `CameraWindowState::init_window`
+                let enable_native_camera_preview = GeneralSettingsStore::get(app)
+                    .ok()
+                    .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                    .unwrap_or_default();
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
                 {
-                    _ = window.run_on_main_thread({
-                        let window = window.as_ref().window();
-                        move || unsafe {
-                            let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
-                            (*win).setCollectionBehavior(
-                            		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                            );
-                        }
-                    });
-                }
+                    let state = app.state::<ArcLock<App>>();
+                    let mut state = state.write().await;
 
-                window
+                    if enable_native_camera_preview && state.camera_preview.is_initialized() {
+                        error!("Unable to initialize camera preview as one already exists!");
+                        if let Some(window) = CapWindowId::Camera.get(app) {
+                            window.show().ok();
+                        }
+                        return Err(anyhow!(
+                            "Unable to initialize camera preview as one already exists!"
+                        )
+                        .into());
+                    }
+
+                    let mut window_builder = self
+                        .window_builder(app, "/camera")
+                        .maximized(false)
+                        .resizable(false)
+                        .shadow(false)
+                        .fullscreen(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .skip_taskbar(true)
+                        .position(
+                            100.0,
+                            (monitor.size().height as f64) / monitor.scale_factor()
+                                - WINDOW_SIZE
+                                - 100.0,
+                        )
+                        .initialization_script(format!(
+                            "
+			                window.__CAP__ = window.__CAP__ ?? {{}};
+			                window.__CAP__.cameraWsPort = {};
+		                ",
+                            state.camera_ws_port
+                        ))
+                        .transparent(true)
+                        .visible(false); // We set this true in `CameraWindowState::init_window`
+
+                    let window = window_builder.build()?;
+
+                    if enable_native_camera_preview {
+                        let camera_feed = state.camera_feed.clone();
+                        if let Err(err) = state
+                            .camera_preview
+                            .init_window(window.clone(), camera_feed)
+                            .await
+                        {
+                            error!("Error initializing camera preview: {err}");
+                            window.close().ok();
+                        }
+                    }
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        _ = window.run_on_main_thread({
+                            let window = window.as_ref().window();
+                            move || unsafe {
+                                let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                                (*win).setCollectionBehavior(
+                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                                );
+                            }
+                        });
+                    }
+
+                    window
+                }
             }
             Self::WindowCaptureOccluder { screen_id } => {
-                let Some(bounds) = logical_monitor_bounds(*screen_id) else {
+                let Some(display) = Display::from_id(screen_id) else {
                     return Err(tauri::Error::WindowNotFound);
                 };
+
+                #[cfg(target_os = "macos")]
+                let position = display.raw_handle().logical_position();
+
+                #[cfg(windows)]
+                let position = display.raw_handle().physical_position().unwrap();
+
+                let bounds = display.physical_size().unwrap();
 
                 let mut window_builder = self
                     .window_builder(app, "/window-capture-occluder")
@@ -408,8 +495,8 @@ impl ShowCapWindow {
                     .visible_on_all_workspaces(true)
                     .content_protected(true)
                     .skip_taskbar(true)
-                    .inner_size(bounds.size.width, bounds.size.height)
-                    .position(bounds.position.x, bounds.position.y)
+                    .inner_size(bounds.width(), bounds.height())
+                    .position(position.x(), position.y())
                     .transparent(true);
 
                 let window = window_builder.build()?;
@@ -436,22 +523,23 @@ impl ShowCapWindow {
                     .decorations(false)
                     .transparent(true);
 
-                let screen_bounds = cap_media::platform::monitor_bounds(*screen_id);
-                let target_monitor = app
-                    .monitor_from_point(screen_bounds.x, screen_bounds.y)
-                    .ok()
-                    .flatten()
-                    .unwrap_or(monitor);
+                let Some(display) = Display::from_id(screen_id) else {
+                    return Err(tauri::Error::WindowNotFound);
+                };
 
-                let size = target_monitor.size();
-                let scale_factor = target_monitor.scale_factor();
-                let pos = target_monitor.position();
-                window_builder = window_builder
-                    .inner_size(
-                        (size.width as f64) / scale_factor,
-                        (size.height as f64) / scale_factor,
-                    )
-                    .position(pos.x as f64, pos.y as f64);
+                #[cfg(target_os = "macos")]
+                if let Some(bounds) = display.raw_handle().logical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
+
+                #[cfg(windows)]
+                if let Some(bounds) = display.raw_handle().physical_bounds() {
+                    window_builder = window_builder
+                        .inner_size(bounds.size().width(), bounds.size().height())
+                        .position(bounds.position().x(), bounds.position().y());
+                }
 
                 let window = window_builder.build()?;
 
@@ -465,7 +553,8 @@ impl ShowCapWindow {
                 if let Some(main_window) = CapWindowId::Main.get(app)
                     && let (Ok(outer_pos), Ok(outer_size)) =
                         (main_window.outer_position(), main_window.outer_size())
-                    && target_monitor.intersects(outer_pos, outer_size)
+                    && let Ok(scale_factor) = main_window.scale_factor()
+                    && display.intersects(outer_pos, outer_size, scale_factor)
                 {
                     let _ = main_window.minimize();
                 };
@@ -473,8 +562,7 @@ impl ShowCapWindow {
                 window
             }
             Self::InProgressRecording { countdown } => {
-                let mut width = 180.0 + 32.0;
-
+                let width = 250.0;
                 let height = 40.0;
 
                 let window = self
@@ -626,7 +714,7 @@ impl ShowCapWindow {
             },
             ShowCapWindow::WindowCaptureOccluder { screen_id } => {
                 CapWindowId::WindowCaptureOccluder {
-                    screen_id: *screen_id,
+                    screen_id: screen_id.clone(),
                 }
             }
             ShowCapWindow::CaptureArea { .. } => CapWindowId::CaptureArea,
@@ -715,30 +803,68 @@ fn position_traffic_lights_impl(
 
 // Credits: tauri-plugin-window-state
 trait MonitorExt {
-    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool;
+    fn intersects(
+        &self,
+        position: PhysicalPosition<i32>,
+        size: PhysicalSize<u32>,
+        scale: f64,
+    ) -> bool;
 }
 
-impl MonitorExt for Monitor {
-    fn intersects(&self, position: PhysicalPosition<i32>, size: PhysicalSize<u32>) -> bool {
-        let PhysicalPosition { x, y } = *self.position();
-        let PhysicalSize { width, height } = *self.size();
+impl MonitorExt for Display {
+    fn intersects(
+        &self,
+        position: PhysicalPosition<i32>,
+        size: PhysicalSize<u32>,
+        _scale: f64,
+    ) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            let Some(bounds) = self.raw_handle().logical_bounds() else {
+                return false;
+            };
 
-        let left = x;
-        let right = x + width as i32;
-        let top = y;
-        let bottom = y + height as i32;
+            let left = (bounds.position().x() * _scale) as i32;
+            let right = left + (bounds.size().width() * _scale) as i32;
+            let top = (bounds.position().y() * _scale) as i32;
+            let bottom = top + (bounds.size().height() * _scale) as i32;
 
-        [
-            (position.x, position.y),
-            (position.x + size.width as i32, position.y),
-            (position.x, position.y + size.height as i32),
-            (
-                position.x + size.width as i32,
-                position.y + size.height as i32,
-            ),
-        ]
-        .into_iter()
-        .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
+
+        #[cfg(windows)]
+        {
+            let Some(bounds) = self.raw_handle().physical_bounds() else {
+                return false;
+            };
+
+            let left = bounds.position().x() as i32;
+            let right = left + bounds.size().width() as i32;
+            let top = bounds.position().y() as i32;
+            let bottom = top + bounds.size().height() as i32;
+
+            [
+                (position.x, position.y),
+                (position.x + size.width as i32, position.y),
+                (position.x, position.y + size.height as i32),
+                (
+                    position.x + size.width as i32,
+                    position.y + size.height as i32,
+                ),
+            ]
+            .into_iter()
+            .any(|(x, y)| x >= left && x < right && y >= top && y < bottom)
+        }
     }
 }
 

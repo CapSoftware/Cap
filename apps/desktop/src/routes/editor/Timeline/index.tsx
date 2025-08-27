@@ -11,6 +11,7 @@ import { useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
+import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
@@ -25,6 +26,7 @@ export function Timeline() {
 		totalDuration,
 		editorState,
 		projectActions,
+		meta,
 	} = useEditorContext();
 
 	const duration = () => editorInstance.recordingDuration;
@@ -72,10 +74,14 @@ export function Timeline() {
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
+	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
-		if (zoomSegmentDragState.type !== "moving") {
+		if (
+			zoomSegmentDragState.type !== "moving" &&
+			sceneSegmentDragState.type !== "moving"
+		) {
 			setEditorState(
 				"playbackTime",
 				Math.min(
@@ -93,14 +99,20 @@ export function Timeline() {
 			const selection = editorState.timeline.selection;
 			if (!selection) return;
 
-			if (selection.type === "zoom")
-				projectActions.deleteZoomSegment(selection.index);
-			else if (selection.type === "clip")
+			if (selection.type === "zoom") {
+				projectActions.deleteZoomSegments(selection.indices);
+			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
+			} else if (selection.type === "scene") {
+				projectActions.deleteSceneSegment(selection.index);
+			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
 			if (!editorState.previewTime) return;
 
 			projectActions.splitClipSegment(editorState.previewTime);
+		} else if (e.code === "Escape" && hasNoModifiers) {
+			// Deselect all selected segments
+			setEditorState("timeline", "selection", null);
 		}
 	});
 
@@ -229,6 +241,14 @@ export function Timeline() {
 					}}
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>
+				<Show when={meta().hasCamera && !project.camera.hide}>
+					<SceneTrack
+						onDragStateChanged={(v) => {
+							sceneSegmentDragState = v;
+						}}
+						handleUpdatePlayhead={handleUpdatePlayhead}
+					/>
+				</Show>
 			</div>
 		</TimelineContextProvider>
 	);
@@ -254,7 +274,7 @@ function TimelineMarkings() {
 				{(second) => (
 					<Show when={second > 0}>
 						<div
-							class="absolute bottom-1 left-0 text-center rounded-full w-1 h-1 bg-current"
+							class="absolute left-0 bottom-1 w-1 h-1 text-center bg-current rounded-full"
 							style={{
 								transform: `translateX(${
 									(second - transform().position) / secsPerPixel() - 1

@@ -3,9 +3,9 @@ import * as Db from "@cap/database/schema";
 import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
 import { HttpApiError, type HttpApp } from "@effect/platform";
 import * as Dz from "drizzle-orm";
-import { Effect, Layer, Option } from "effect";
+import { type Cause, Effect, Layer, Option } from "effect";
 
-import { Database } from "./Database";
+import { Database, type DatabaseError } from "./Database";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -45,7 +45,11 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 					),
 				);
 
-				return { id: user.id, email: user.email };
+				return {
+					id: user.id,
+					email: user.email,
+					activeOrgId: user.activeOrganizationId,
+				};
 			}).pipe(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
@@ -57,19 +61,21 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 	}),
 );
 
-export const provideOptionalAuth = <E, R>(
-	app: HttpApp.Default<E, R>,
-): HttpApp.Default<
-	E | HttpApiError.Unauthorized | HttpApiError.InternalServerError,
-	R | Database
-> =>
+export const provideOptionalAuth = <A, E, R>(
+	app: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | DatabaseError | Cause.UnknownException, R | Database> =>
 	Effect.gen(function* () {
 		const user = yield* getCurrentUser;
+
+		if (Option.isSome(user))
+			yield* Effect.log(`Providing auth for user ${user.value.id}`);
+
 		return yield* user.pipe(
 			Option.map((user) =>
 				CurrentUser.context({
 					id: user.id,
 					email: user.email,
+					activeOrgId: user.activeOrganizationId,
 				}),
 			),
 			Option.match({
@@ -77,13 +83,4 @@ export const provideOptionalAuth = <E, R>(
 				onSome: (ctx) => app.pipe(Effect.provide(ctx)),
 			}),
 		);
-	}).pipe(
-		Effect.catchTag(
-			"DatabaseError",
-			() => new HttpApiError.InternalServerError(),
-		),
-		Effect.catchTag(
-			"UnknownException",
-			() => new HttpApiError.InternalServerError(),
-		),
-	);
+	});

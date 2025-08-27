@@ -5,7 +5,7 @@ import { Button } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
 import { faFolderPlus, faInfoCircle } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { useDashboardContext } from "../../Contexts";
@@ -91,7 +91,7 @@ export const SharedCaps = ({
 
 	const organizationMemberCount = organizationMembers?.length || 0;
 
-	const { data: analyticsData } = useSuspenseQuery({
+	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
 		queryKey: ["analytics", data.map((video) => video.id)],
 		queryFn: async () => {
 			if (!dubApiKeyEnabled || data.length === 0) {
@@ -289,6 +289,7 @@ export const SharedCaps = ({
 							key={cap.id}
 							cap={cap}
 							hideSharedStatus
+							isLoadingAnalytics={isLoadingAnalytics}
 							analytics={analytics[cap.id] || 0}
 							organizationName={activeOrganization?.organization.name || ""}
 							spaceName={spaceData?.name || ""}

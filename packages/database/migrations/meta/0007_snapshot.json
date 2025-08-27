@@ -1,7 +1,7 @@
 {
 	"version": "5",
 	"dialect": "mysql",
-	"id": "ccef8ed8-2472-41a3-bf54-900db6ce8b08",
+	"id": "308bd25e-8d1d-4bc6-ba35-880bf4d18a6d",
 	"prevId": "140a5aa9-5b37-4435-baeb-5fd016ef5c6e",
 	"tables": {
 		"accounts": {
@@ -395,76 +395,6 @@
 			},
 			"checkConstraint": {}
 		},
-		"notifications": {
-			"name": "notifications",
-			"columns": {
-				"id": {
-					"name": "id",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"orgId": {
-					"name": "orgId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"recipientId": {
-					"name": "recipientId",
-					"type": "varchar(15)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"type": {
-					"name": "type",
-					"type": "varchar(10)",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"data": {
-					"name": "data",
-					"type": "json",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false
-				},
-				"readAt": {
-					"name": "readAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false
-				},
-				"createdAt": {
-					"name": "createdAt",
-					"type": "timestamp",
-					"primaryKey": false,
-					"notNull": true,
-					"autoincrement": false,
-					"default": "(now())"
-				}
-			},
-			"indexes": {},
-			"foreignKeys": {},
-			"compositePrimaryKeys": {
-				"notifications_id": {
-					"name": "notifications_id",
-					"columns": ["id"]
-				}
-			},
-			"uniqueConstraints": {
-				"notifications_id_unique": {
-					"name": "notifications_id_unique",
-					"columns": ["id"]
-				}
-			},
-			"checkConstraint": {}
-		},
 		"organization_invites": {
 			"name": "organization_invites",
 			"columns": {
@@ -767,6 +697,95 @@
 			"uniqueConstraints": {
 				"organizations_id_unique": {
 					"name": "organizations_id_unique",
+					"columns": ["id"]
+				}
+			},
+			"checkConstraint": {}
+		},
+		"otp_codes": {
+			"name": "otp_codes",
+			"columns": {
+				"id": {
+					"name": "id",
+					"type": "varchar(15)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"identifier": {
+					"name": "identifier",
+					"type": "varchar(255)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"code": {
+					"name": "code",
+					"type": "varchar(6)",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"expires": {
+					"name": "expires",
+					"type": "datetime",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false
+				},
+				"attempts": {
+					"name": "attempts",
+					"type": "int",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": 0
+				},
+				"createdAt": {
+					"name": "createdAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"default": "(now())"
+				},
+				"updatedAt": {
+					"name": "updatedAt",
+					"type": "timestamp",
+					"primaryKey": false,
+					"notNull": true,
+					"autoincrement": false,
+					"onUpdate": true,
+					"default": "(now())"
+				}
+			},
+			"indexes": {
+				"identifier_idx": {
+					"name": "identifier_idx",
+					"columns": ["identifier"],
+					"isUnique": false
+				},
+				"code_idx": {
+					"name": "code_idx",
+					"columns": ["code"],
+					"isUnique": false
+				},
+				"expires_idx": {
+					"name": "expires_idx",
+					"columns": ["expires"],
+					"isUnique": false
+				}
+			},
+			"foreignKeys": {},
+			"compositePrimaryKeys": {
+				"otp_codes_id": {
+					"name": "otp_codes_id",
+					"columns": ["id"]
+				}
+			},
+			"uniqueConstraints": {
+				"otp_codes_id_unique": {
+					"name": "otp_codes_id_unique",
 					"columns": ["id"]
 				}
 			},
@@ -1362,14 +1381,6 @@
 					"primaryKey": false,
 					"notNull": false,
 					"autoincrement": false
-				},
-				"preferences": {
-					"name": "preferences",
-					"type": "json",
-					"primaryKey": false,
-					"notNull": false,
-					"autoincrement": false,
-					"default": "('null')"
 				},
 				"activeOrganizationId": {
 					"name": "activeOrganizationId",

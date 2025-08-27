@@ -6,7 +6,6 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
-	HttpServerResponse,
 } from "@effect/platform";
 import { Effect, Layer, Schema } from "effect";
 import { apiToHandler } from "@/lib/server";
@@ -37,6 +36,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 									Effect.andThen(() => new HttpApiError.InternalServerError()),
 								),
 							S3Error: (e) =>
+								Effect.logError(e).pipe(
+									Effect.andThen(() => new HttpApiError.InternalServerError()),
+								),
+							UnknownException: (e) =>
 								Effect.logError(e).pipe(
 									Effect.andThen(() => new HttpApiError.InternalServerError()),
 								),

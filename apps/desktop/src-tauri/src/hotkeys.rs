@@ -1,4 +1,4 @@
-use crate::{RequestStartRecording, recording};
+use crate::{RequestStartRecording, recording, windows::ShowCapWindow};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -81,6 +81,13 @@ pub fn init(app: &AppHandle) {
                     OnEscapePress.emit(app).ok();
                 }
 
+                if shortcut.key == Code::Comma && shortcut.mods == Modifiers::META {
+                    let app = app.clone();
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Settings { page: None }.show(&app).await;
+                    });
+                }
+
                 let state = app.state::<HotkeysState>();
                 let store = state.lock().unwrap();
 
@@ -94,7 +101,14 @@ pub fn init(app: &AppHandle) {
     )
     .unwrap();
 
-    let store = HotkeysStore::get(app).unwrap().unwrap_or_default();
+    let store = match HotkeysStore::get(app) {
+        Ok(Some(s)) => s,
+        Ok(None) => HotkeysStore::default(),
+        Err(e) => {
+            eprintln!("Failed to load hotkeys store: {e}");
+            HotkeysStore::default()
+        }
+    };
 
     let global_shortcut = app.global_shortcut();
     for hotkey in store.hotkeys.values() {

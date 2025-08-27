@@ -246,7 +246,7 @@ export function makeUseEffectMutation<R>(
 		const runtime = useEffectRuntime();
 
 		const baseResults = useMutation({
-			...options,
+			...(options as any),
 			mutationFn:
 				typeof mutationFn === "function"
 					? async (variables: TVariables) => {

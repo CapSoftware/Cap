@@ -1,6 +1,7 @@
 import { LogoSpinner } from "@cap/ui";
 import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
+import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef, useState } from "react";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
@@ -12,7 +13,26 @@ interface VideoThumbnailProps {
 	imageClass?: string;
 	objectFit?: string;
 	containerClass?: string;
+	videoDuration?: number;
 }
+
+const formatDuration = (durationSecs: number) => {
+	const momentDuration = moment.duration(durationSecs, "seconds");
+
+	const totalHours = Math.floor(momentDuration.asHours());
+	const totalMinutes = Math.floor(momentDuration.asMinutes());
+	const remainingSeconds = Math.ceil(momentDuration.asSeconds() % 60); // Use ceil to avoid 0 secs
+
+	if (totalHours > 0) {
+		return `${totalHours} hr${totalHours > 1 ? "s" : ""}`;
+	} else if (totalMinutes > 0) {
+		return `${totalMinutes} min${totalMinutes > 1 ? "s" : ""}`;
+	} else if (remainingSeconds > 0) {
+		return `${remainingSeconds} sec${remainingSeconds !== 1 ? "s" : ""}`;
+	} else {
+		return "< 1 sec"; // For very short durations
+	}
+};
 
 function generateRandomGrayScaleColor() {
 	const minGrayScaleValue = 190;
@@ -31,6 +51,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		imageClass,
 		objectFit = "cover",
 		containerClass,
+		videoDuration,
 	}) => {
 		const imageUrl = useQuery({
 			queryKey: ["thumbnail", userId, videoId],
@@ -86,6 +107,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						)
 					)}
 				</div>
+				{videoDuration && (
+					<p className="text-white leading-0 px-2 left-3 rounded-full backdrop-blur-sm absolute z-10 bottom-3 bg-black/50 text-[11px]">
+						{formatDuration(videoDuration)}
+					</p>
+				)}
 				{imageUrl.data && (
 					<Image
 						ref={imageRef}

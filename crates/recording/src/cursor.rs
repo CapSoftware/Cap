@@ -1,8 +1,7 @@
-use std::{collections::HashMap, path::PathBuf, time::SystemTime};
-
+use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_media::platform::Bounds;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -37,23 +36,21 @@ impl CursorActor {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    #[allow(unused)] screen_bounds: Bounds,
-    #[cfg(target_os = "macos")] display: cap_displays::Display,
-    #[cfg(target_os = "macos")] crop_ratio: cap_media::sources::CropRatio,
+    crop_bounds: CursorCropBounds,
+    display: scap_targets::Display,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
+    use cap_utils::spawn_actor;
+    use device_query::{DeviceQuery, DeviceState};
+    use futures::future::Either;
     use std::{
         hash::{DefaultHasher, Hash, Hasher},
         pin::pin,
         time::Duration,
     };
-
-    use cap_utils::spawn_actor;
-    use device_query::{DeviceQuery, DeviceState};
-    use futures::future::Either;
     use tracing::{error, info};
 
     let stop_token = CancellationToken::new();
@@ -64,7 +61,6 @@ pub fn spawn_cursor_recorder(
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
 
-        #[cfg(target_os = "macos")]
         let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
         // Create cursors directory if it doesn't exist
@@ -133,67 +129,20 @@ pub fn spawn_cursor_recorder(
                 "default".to_string()
             };
 
-            // TODO: use this on windows too
-            #[cfg(target_os = "macos")]
-            let position = {
-                let position = cap_cursor_capture::RawCursorPosition::get();
+            let position = cap_cursor_capture::RawCursorPosition::get();
 
-                if position != last_position {
-                    last_position = position;
+            let position = (position != last_position).then(|| {
+                last_position = position;
 
-                    let cropped_position = position
-                        .relative_to_display(display)
-                        .normalize()
-                        .with_crop(crop_ratio.position, crop_ratio.size);
+                let cropped_norm_pos = position
+                    .relative_to_display(display)?
+                    .normalize()?
+                    .with_crop(crop_bounds);
 
-                    Some((cropped_position.x() as f64, cropped_position.y() as f64))
-                } else {
-                    None
-                }
-            };
+                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
+            });
 
-            #[cfg(windows)]
-            let position = if mouse_state.coords != last_mouse_state.coords {
-                let (mouse_x, mouse_y) = {
-                    (
-                        mouse_state.coords.0 - screen_bounds.x as i32,
-                        mouse_state.coords.1 - screen_bounds.y as i32,
-                    )
-                };
-
-                // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
-                // Check if screen_bounds dimensions are valid to avoid division by zero
-                let x = if screen_bounds.width > 0.0 {
-                    mouse_x as f64 / screen_bounds.width
-                } else {
-                    0.5 // Fallback if width is invalid
-                };
-
-                let y = if screen_bounds.height > 0.0 {
-                    mouse_y as f64 / screen_bounds.height
-                } else {
-                    0.5 // Fallback if height is invalid
-                };
-
-                // Clamp values to ensure they're within valid range
-                let x = if x.is_nan() || x.is_infinite() {
-                    0.5
-                } else {
-                    x
-                };
-
-                let y = if y.is_nan() || y.is_infinite() {
-                    0.5
-                } else {
-                    y
-                };
-
-                Some((x, y))
-            } else {
-                None
-            };
-
-            if let Some((x, y)) = position {
+            if let Some((x, y)) = position.flatten() {
                 let mouse_event = CursorMoveEvent {
                     active_modifiers: vec![],
                     cursor_id: cursor_id.clone(),

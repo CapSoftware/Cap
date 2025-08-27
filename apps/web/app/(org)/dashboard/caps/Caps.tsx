@@ -13,15 +13,17 @@ import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { Rpc, withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../Contexts";
+import {
+	NewFolderDialog,
+	SelectedCapsBar,
+	UploadCapButton,
+	UploadPlaceholderCard,
+} from "./components";
 import { CapCard } from "./components/CapCard/CapCard";
 import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
-import { NewFolderDialog } from "./components/NewFolderDialog";
-import { SelectedCapsBar } from "./components/SelectedCapsBar";
-import { UploadCapButton } from "./components/UploadCapButton";
-import { UploadPlaceholderCard } from "./components/UploadPlaceholderCard";
 import { useUploadingContext } from "./UploadingContext";
 
 export type VideoData = {
@@ -81,8 +83,10 @@ export const Caps = ({
 
 	const anyCapSelected = selectedCaps.length > 0;
 
-	const { data: analyticsData } = useQuery({
-		queryKey: ["analytics", data.map((video) => video.id)],
+	const videoIds = data.map((video) => video.id).sort();
+
+	const { data: analyticsData, isLoading: isLoadingAnalytics } = useQuery({
+		queryKey: ["analytics", videoIds],
 		queryFn: async () => {
 			if (!dubApiKeyEnabled || data.length === 0) {
 				return {};
@@ -122,8 +126,8 @@ export const Caps = ({
 
 			return analyticsData;
 		},
-		staleTime: 30000, // 30 seconds
 		refetchOnWindowFocus: false,
+		refetchOnMount: true,
 	});
 
 	const analytics = analyticsData || {};
@@ -147,7 +151,7 @@ export const Caps = ({
 						document.activeElement?.tagName || "",
 					)
 				) {
-					deleteCaps.mutate(selectedCaps);
+					deleteCaps(selectedCaps);
 				}
 			}
 
@@ -195,7 +199,7 @@ export const Caps = ({
 		});
 	};
 
-	const deleteCaps = useEffectMutation({
+	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
 
@@ -250,7 +254,7 @@ export const Caps = ({
 		},
 	});
 
-	const deleteCap = useEffectMutation({
+	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
 		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
 		onSuccess: () => {
 			toast.success("Cap deleted successfully");
@@ -322,15 +326,16 @@ export const Caps = ({
 								key={cap.id}
 								cap={cap}
 								analytics={analytics[cap.id] || 0}
-								onDelete={async () => {
+								onDelete={() => {
 									if (selectedCaps.length > 0) {
-										await deleteCaps.mutateAsync(selectedCaps);
+										deleteCaps(selectedCaps);
 									} else {
-										deleteCap.mutateAsync(cap.id);
+										deleteCap(cap.id);
 									}
 								}}
 								userId={user?.id}
 								customDomain={customDomain}
+								isLoadingAnalytics={isLoadingAnalytics}
 								domainVerified={domainVerified}
 								isSelected={selectedCaps.includes(cap.id)}
 								anyCapSelected={anyCapSelected}
@@ -348,8 +353,8 @@ export const Caps = ({
 			<SelectedCapsBar
 				selectedCaps={selectedCaps}
 				setSelectedCaps={setSelectedCaps}
-				deleteSelectedCaps={() => deleteCaps.mutate(selectedCaps)}
-				isDeleting={deleteCaps.isPending}
+				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
+				isDeleting={isDeletingCaps || isDeletingCap}
 			/>
 			{isDraggingCap && (
 				<div className="fixed inset-0 z-50 pointer-events-none">

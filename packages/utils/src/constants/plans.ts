@@ -21,13 +21,21 @@ export const getProPlanId = (billingCycle: "yearly" | "monthly") => {
 export const userIsPro = (
 	user?: {
 		stripeSubscriptionStatus?: string | null;
+		thirdPartyStripeSubscriptionId?: string | null;
 	} | null,
 ) => {
 	if (!buildEnv.NEXT_PUBLIC_IS_CAP) return true;
 
 	if (!user) return false;
 
-	const { stripeSubscriptionStatus } = user;
+	const { stripeSubscriptionStatus, thirdPartyStripeSubscriptionId } = user;
+
+	// Check for third-party subscription first
+	if (thirdPartyStripeSubscriptionId) {
+		return true;
+	}
+
+	// Then check regular subscription status
 	return (
 		stripeSubscriptionStatus === "active" ||
 		stripeSubscriptionStatus === "trialing" ||

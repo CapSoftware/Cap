@@ -1,0 +1,12 @@
+[package]
+name = "scap-cpal"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+cpal.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -74,7 +74,8 @@ pub struct GeneralSettingsStore {
     pub post_studio_recording_behaviour: PostStudioRecordingBehaviour,
     #[serde(default)]
     pub main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour,
-    #[serde(default)]
+    // Renamed from `custom_cursor_capture` to `custom_cursor_capture2` so we can change the default.
+    #[serde(default = "default_true", rename = "custom_cursor_capture2")]
     pub custom_cursor_capture: bool,
     #[serde(default = "default_server_url")]
     pub server_url: String,
@@ -99,18 +100,20 @@ pub struct GeneralSettingsStore {
 }
 
 fn default_enable_native_camera_preview() -> bool {
-    // TODO:
-    // cfg!(target_os = "macos")
-    false
+    // This will help us with testing it
+    cfg!(all(debug_assertions, target_os = "macos"))
 }
 
 fn default_enable_new_recording_flow() -> bool {
-    false
-    // cfg!(debug_assertions)
+    cfg!(debug_assertions)
 }
 
 fn no(_: &bool) -> bool {
     false
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_server_url() -> String {
@@ -145,7 +148,7 @@ impl Default for GeneralSettingsStore {
             window_transparency: false,
             post_studio_recording_behaviour: PostStudioRecordingBehaviour::OpenEditor,
             main_window_recording_start_behaviour: MainWindowRecordingStartBehaviour::Close,
-            custom_cursor_capture: false,
+            custom_cursor_capture: true,
             server_url: default_server_url(),
             recording_countdown: Some(3),
             enable_native_camera_preview: default_enable_native_camera_preview(),

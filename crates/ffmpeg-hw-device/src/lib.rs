@@ -6,11 +6,11 @@ use std::{
 use ffmpeg::{
     codec,
     frame::{self, Video},
-};
-use ffmpeg_sys_next::{
-    AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX, AVBufferRef, AVCodecContext, AVCodecHWConfig,
-    AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create,
-    av_hwframe_transfer_data, avcodec_get_hw_config,
+    sys::{
+        AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX, AVBufferRef, AVCodecContext, AVCodecHWConfig,
+        AVHWDeviceType, AVPixelFormat, av_buffer_ref, av_buffer_unref, av_hwdevice_ctx_create,
+        av_hwframe_transfer_data, avcodec_get_hw_config,
+    },
 };
 
 thread_local! {

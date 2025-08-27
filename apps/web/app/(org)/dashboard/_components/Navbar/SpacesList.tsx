@@ -342,7 +342,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 						? `Are you sure you want to delete the space "${pendingDeleteSpace.name}"? This action cannot be undone.`
 						: ""
 				}
-				confirmLabel="Delete"
+				confirmLabel={removing ? "Deleting..." : "Delete"}
 				cancelLabel="Cancel"
 				loading={removing}
 				onConfirm={confirmRemoveSpace}

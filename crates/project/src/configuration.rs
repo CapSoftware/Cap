@@ -435,7 +435,8 @@ impl TimelineSegment {
         }
     }
 
-    fn duration(&self) -> f64 {
+    /// in seconds
+    pub fn duration(&self) -> f64 {
         (self.end - self.start) / self.timescale
     }
 }
@@ -456,11 +457,31 @@ pub enum ZoomMode {
     Manual { x: f32, y: f32 },
 }
 
+#[derive(Type, Serialize, Deserialize, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SceneMode {
+    #[default]
+    Default,
+    CameraOnly,
+    HideCamera,
+}
+
+#[derive(Type, Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneSegment {
+    pub start: f64,
+    pub end: f64,
+    #[serde(default)]
+    pub mode: SceneMode,
+}
+
 #[derive(Type, Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineConfiguration {
     pub segments: Vec<TimelineSegment>,
     pub zoom_segments: Vec<ZoomSegment>,
+    #[serde(default)]
+    pub scene_segments: Vec<SceneSegment>,
 }
 
 impl TimelineConfiguration {

@@ -120,18 +120,18 @@ function createStore(
 ): Store {
 	const store: Store = {
 		subscribe: (cb) => {
-			listenersRef.current.add(cb);
-			return () => listenersRef.current.delete(cb);
+			listenersRef.current?.add(cb);
+			return () => listenersRef.current?.delete(cb);
 		},
-		getState: () => stateRef.current,
+		getState: () => stateRef.current!,
 		setState: (key, value) => {
-			if (Object.is(stateRef.current[key], value)) return;
-			stateRef.current[key] = value;
+			if (Object.is(stateRef.current?.[key], value)) return;
+			stateRef.current![key] = value;
 			onValueChange?.[key]?.(value, store);
 			store.notify();
 		},
 		notify: () => {
-			for (const cb of listenersRef.current) {
+			for (const cb of listenersRef.current ?? []) {
 				cb();
 			}
 		},

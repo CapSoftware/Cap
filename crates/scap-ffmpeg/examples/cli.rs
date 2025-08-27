@@ -1,7 +1,9 @@
 use scap_ffmpeg::*;
+use scap_targets::*;
 use std::time::Duration;
 
-pub fn main() {
+#[tokio::main]
+pub async fn main() {
     #[cfg(windows)]
     {
         use scap_direct3d::*;
@@ -17,15 +19,17 @@ pub fn main() {
             },
         );
 
-        let capture_handle = capturer.start(|frame| {
-            use scap_ffmpeg::AsFFmpeg;
+        let capture_handle = capturer
+            .start(|frame| {
+                use scap_ffmpeg::AsFFmpeg;
 
-            let ff_frame = frame.as_ffmpeg()?;
+                let ff_frame = frame.as_ffmpeg()?;
 
-            dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
+                dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
 
-            Ok(())
-        });
+                Ok(())
+            })
+            .unwrap();
 
         std::thread::sleep(Duration::from_secs(3));
 
@@ -39,29 +43,32 @@ pub fn main() {
         use futures::executor::block_on;
         use scap_screencapturekit::*;
 
-        let display = block_on(Display::primary()).expect("Primary display not found");
+        let display = Display::primary();
 
         let config = StreamCfgBuilder::default()
             .with_fps(60.0)
-            .with_width(display.width())
-            .with_height(display.height())
+            .with_width(display.physical_size().width() as usize)
+            .with_height(display.physical_size().height() as usize)
             .build();
 
-        let capturer = Capturer::builder(display.as_content_filter(), config)
-            .with_output_sample_buf_cb(|frame| {
-                let Frame::Screen(video_frame) = frame else {
-                    return;
-                };
+        let capturer = Capturer::builder(
+            display.raw_handle().as_content_filter().await.unwrap(),
+            config,
+        )
+        .with_output_sample_buf_cb(|frame| {
+            let Frame::Screen(video_frame) = frame else {
+                return;
+            };
 
-                let ff_frame = video_frame.as_ffmpeg().unwrap();
+            let ff_frame = video_frame.as_ffmpeg().unwrap();
 
-                dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
-            })
-            .with_stop_with_err_cb(|stream, error| {
-                dbg!(stream, error);
-            })
-            .build()
-            .expect("Failed to build capturer");
+            dbg!(ff_frame.width(), ff_frame.height(), ff_frame.format());
+        })
+        .with_stop_with_err_cb(|stream, error| {
+            dbg!(stream, error);
+        })
+        .build()
+        .expect("Failed to build capturer");
 
         block_on(capturer.start()).expect("Failed to start capturing");
 

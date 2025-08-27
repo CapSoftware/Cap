@@ -122,20 +122,38 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 						"segments",
 						produce((s) => {
 							if (!s) return;
-							return s.splice(segmentIndex, 1);
+							s.splice(segmentIndex, 1);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
 				});
 			},
-			deleteZoomSegment: (segmentIndex: number) => {
+			deleteZoomSegments: (segmentIndices: number[]) => {
 				batch(() => {
 					setProject(
 						"timeline",
 						"zoomSegments",
 						produce((s) => {
 							if (!s) return;
-							return s.splice(segmentIndex, 1);
+							// Normalize: numbers only, in-bounds, deduped, then descending
+							const sorted = [...new Set(segmentIndices)]
+								.filter((i) => Number.isInteger(i) && i >= 0 && i < s.length)
+								.sort((a, b) => b - a);
+							if (sorted.length === 0) return;
+							for (const i of sorted) s.splice(i, 1);
+						}),
+					);
+					setEditorState("timeline", "selection", null);
+				});
+			},
+			deleteSceneSegment: (segmentIndex: number) => {
+				batch(() => {
+					setProject(
+						"timeline",
+						"sceneSegments",
+						produce((s) => {
+							if (!s) return;
+							s.splice(segmentIndex, 1);
 						}),
 					);
 					setEditorState("timeline", "selection", null);
@@ -237,8 +255,9 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				interactMode: "seek" as "seek" | "split",
 				selection: null as
 					| null
-					| { type: "zoom"; index: number }
-					| { type: "clip"; index: number },
+					| { type: "zoom"; indices: number[] }
+					| { type: "clip"; index: number }
+					| { type: "scene"; index: number },
 				transform: {
 					// visible seconds
 					zoom: zoomOutLimit(),

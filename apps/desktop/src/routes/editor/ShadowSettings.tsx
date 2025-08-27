@@ -38,7 +38,7 @@ const ShadowSettings = (props: Props) => {
 			<button
 				type="button"
 				onClick={handleToggle}
-				class="flex gap-1 items-center w-full font-medium text-left text-gray-12 hover:text-gray-700"
+				class="flex gap-1 items-center w-full font-medium text-left transition duration-200 text-gray-12 hover:text-gray-10"
 			>
 				<span>Advanced shadow settings</span>
 				<IconCapChevronDown
