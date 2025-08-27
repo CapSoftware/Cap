@@ -2,7 +2,7 @@
 
 import { Button } from "@cap/ui";
 
-type RecordingState = "idle" | "recording" | "stopped";
+type RecordingState = "idle" | "recording" | "stopped" | "uploading";
 
 interface RecordingControlsProps {
   recordingState: RecordingState;
@@ -41,6 +41,20 @@ export function RecordingControls({
           className="bg-red-500 hover:bg-red-600 px-6"
         >
           Stop Recording
+        </Button>
+      </div>
+    );
+  }
+
+  if (recordingState === "uploading") {
+    return (
+      <div className="flex justify-center px-3">
+        <Button
+          variant="outline"
+          disabled
+          className="px-6"
+        >
+          Uploading...
         </Button>
       </div>
     );

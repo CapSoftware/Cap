@@ -10,7 +10,7 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { RecorderDialog } from "./RecorderDialog";
 
-type RecordingState = "idle" | "countdown" | "recording" | "uploading" | "stopping";
+type RecordingState = "idle" | "countdown" | "recording" | "uploading" | "stopping" | "stopped";
 
 export function StartRecordingButton({
   size = "md",

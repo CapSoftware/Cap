@@ -7,14 +7,19 @@ import {
   DeviceSelection,
   RecordingStateDisplay,
   RecordingControls,
-  VideoPreview,
   CameraPreview,
 } from "./Recorder";
 import { useMediaDevices } from "./Recorder/useMediaDevices";
 import { useRecording } from "./Recorder/useRecording";
 
 type RecordingSource = "screen" | "window" | "area";
-type RecordingState = "idle" | "countdown" | "recording" | "uploading" | "stopping";
+type RecordingState =
+  | "idle"
+  | "countdown"
+  | "recording"
+  | "uploading"
+  | "stopping"
+  | "stopped";
 
 type MediaDevice = {
   deviceId: string;
@@ -29,10 +34,11 @@ interface RecorderDialogProps {
   onStateChange?: (state: RecordingState) => void;
 }
 
-export function RecorderDialog({ open, onOpenChange, onComplete, onStateChange }: RecorderDialogProps) {
-  const handleClose = () => {
-    onOpenChange(false);
-  };
+export function RecorderDialog({
+  open,
+  onOpenChange,
+  onComplete,
+}: RecorderDialogProps) {
   const [selectedSource, setSelectedSource] =
     useState<RecordingSource>("screen");
   const [selectedCamera, setSelectedCamera] = useState<MediaDevice | null>(
@@ -58,6 +64,7 @@ export function RecorderDialog({ open, onOpenChange, onComplete, onStateChange }
     recordedBlob,
     isStartingRecording,
     cameraPreviewStream,
+    uploadProgress,
     startRecording,
     stopRecording,
     resetRecording,
@@ -72,12 +79,10 @@ export function RecorderDialog({ open, onOpenChange, onComplete, onStateChange }
     if (open) {
       checkPermissions();
     } else {
-      // Clean up camera selection when dialog is closed
       setSelectedCamera(null);
     }
   }, [open, checkPermissions]);
 
-  // Close dialog when recording stops and we have a recorded blob
   useEffect(() => {
     if (recordingState === "stopped" && recordedBlob) {
       onOpenChange(false);
@@ -97,68 +102,59 @@ export function RecorderDialog({ open, onOpenChange, onComplete, onStateChange }
           onPointerDownOutside={(e: Event) => e.preventDefault()}
           onInteractOutside={(e: Event) => e.preventDefault()}
         >
-              <div className="flex relative justify-center flex-col h-[256px] text-[--text-primary]">
+          <div className="flex relative justify-center flex-col h-[256px] text-[--text-primary]">
+            {recordingState === "idle" && (
+              <>
+                <RecordingSourceSelector
+                  selectedSource={selectedSource}
+                  onSourceSelect={setSelectedSource}
+                  disabled={recordingState !== "idle"}
+                />
+
+                <DeviceSelection
+                  selectedCamera={selectedCamera}
+                  selectedMicrophone={selectedMicrophone}
+                  availableCameras={availableCameras}
+                  availableMicrophones={availableMicrophones}
+                  isSystemAudioEnabled={isSystemAudioEnabled}
+                  cameraPermission={cameraPermission}
+                  micPermission={micPermission}
+                  onCameraSelect={setSelectedCamera}
+                  onMicrophoneSelect={setSelectedMicrophone}
+                  onSystemAudioToggle={setIsSystemAudioEnabled}
+                  onRequestCameraPermission={requestCameraPermission}
+                  onRequestMicPermission={requestMicPermission}
+                  disabled={recordingState !== "idle"}
+                />
+              </>
+            )}
+
+            {(recordingState === "recording" ||
+              recordingState === "uploading") && (
+              <div className="flex flex-col items-center justify-center gap-4 px-3">
                 <RecordingStateDisplay
                   recordingState={recordingState}
                   recordingTime={recordingTime}
-                />
-
-                {recordingState === "idle" && (
-                  <>
-                    <RecordingSourceSelector
-                      selectedSource={selectedSource}
-                      onSourceSelect={setSelectedSource}
-                      disabled={recordingState !== "idle"}
-                    />
-
-                    <DeviceSelection
-                      selectedCamera={selectedCamera}
-                      selectedMicrophone={selectedMicrophone}
-                      availableCameras={availableCameras}
-                      availableMicrophones={availableMicrophones}
-                      isSystemAudioEnabled={isSystemAudioEnabled}
-                      cameraPermission={cameraPermission}
-                      micPermission={micPermission}
-                      onCameraSelect={setSelectedCamera}
-                      onMicrophoneSelect={setSelectedMicrophone}
-                      onSystemAudioToggle={setIsSystemAudioEnabled}
-                      onRequestCameraPermission={requestCameraPermission}
-                      onRequestMicPermission={requestMicPermission}
-                      disabled={recordingState !== "idle"}
-                    />
-                  </>
-                )}
-
-                {recordingState === "recording" && (
-                  <div className="flex flex-col items-center justify-center gap-4 px-3">
-                    <RecordingStateDisplay
-                      recordingState={recordingState}
-                      recordingTime={recordingTime}
-                    />
-                  </div>
-                )}
-
-                <RecordingControls
-                  recordingState={recordingState}
-                  isStartingRecording={isStartingRecording}
-                  onStartRecording={startRecording}
-                  onStopRecording={stopRecording}
+                  uploadProgress={uploadProgress}
                 />
               </div>
+            )}
+
+            <RecordingControls
+              recordingState={recordingState}
+              isStartingRecording={isStartingRecording}
+              onStartRecording={startRecording}
+              onStopRecording={stopRecording}
+            />
+          </div>
         </DialogContent>
-        
       </Dialog>
 
-      {/* Camera preview outside Dialog to avoid event interference */}
       {cameraPreviewStream && (
         <CameraPreview
           stream={cameraPreviewStream}
           onClose={() => setSelectedCamera(null)}
         />
-      )}
-
-      {recordedBlob && (
-        <VideoPreview videoBlob={recordedBlob} onRetry={handleRetry} />
       )}
     </>
   );
