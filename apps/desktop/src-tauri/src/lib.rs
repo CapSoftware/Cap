@@ -2171,7 +2171,10 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
                                 #[cfg(windows)]
                                 {
-                                    tokio::spawn(ShowCapWindow::Main.show(&app));
+                                    let app = app.clone();
+                                    tokio::spawn(async move {
+                                        ShowCapWindow::Main.show(&app).await.ok();
+                                    });
                                 }
                             }
                             CapWindowId::Settings
