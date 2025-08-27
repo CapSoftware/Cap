@@ -137,7 +137,8 @@ pub struct Capturer {
     stop_flag: Arc<AtomicBool>,
     item: GraphicsCaptureItem,
     settings: Settings,
-    thread_handle: Option<JoinHandle<()>>,
+    // thread_handle: Option<JoinHandle<()>>,
+    runner: Option<Runner>,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
 }
@@ -187,9 +188,10 @@ impl Capturer {
             stop_flag: Arc::new(AtomicBool::new(false)),
             item,
             settings,
-            thread_handle: None,
+            // thread_handle: None,
             d3d_device: d3d_device.unwrap(),
             d3d_context: d3d_context.unwrap(),
+            runner: None,
         })
     }
 
@@ -217,11 +219,11 @@ impl Capturer {
         callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
     ) -> Result<(), StartCapturerError> {
-        if self.thread_handle.is_some() {
-            return Err(StartCapturerError::AlreadyStarted);
-        }
+        // if self.thread_handle.is_some() {
+        //     return Err(StartCapturerError::AlreadyStarted);
+        // }
 
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        // let (started_tx, started_rx) = std::sync::mpsc::channel();
 
         let item = self.item.clone();
         let settings = self.settings.clone();
@@ -230,42 +232,48 @@ impl Capturer {
         let d3d_device = self.d3d_device.clone();
         let d3d_context = self.d3d_context.clone();
 
-        let thread_handle = std::thread::spawn({
-            move || {
-                if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
-                    && e.code() != S_FALSE
-                {
-                    return;
-                    // return Err(CreateRunnerError::FailedToInitializeWinRT);
-                }
+        // let thread_handle = std::thread::spawn({
+        //     move || {
+        //         if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
+        //             && e.code() != S_FALSE
+        //         {
+        //             return;
+        //             // return Err(CreateRunnerError::FailedToInitializeWinRT);
+        //         }
 
-                match Runner::start(
-                    item,
-                    settings,
-                    callback,
-                    closed_callback,
-                    stop_flag,
-                    d3d_device,
-                    d3d_context,
-                ) {
-                    Ok(runner) => {
-                        let _ = started_tx.send(Ok(()));
+        //         match Runner::start(
+        //             item,
+        //             settings,
+        //             callback,
+        //             closed_callback,
+        //             stop_flag,
+        //             d3d_device,
+        //             d3d_context,
+        //         ) {
+        //             Ok(runner) => {
+        //                 let _ = started_tx.send(Ok(()));
 
-                        runner.run();
-                    }
-                    Err(e) => {
-                        let _ = started_tx.send(Err(e));
-                    }
-                };
-            }
-        });
+        //                 runner.run();
+        //             }
+        //             Err(e) => {
+        //                 let _ = started_tx.send(Err(e));
+        //             }
+        //         };
+        //     }
+        // });
 
-        started_rx
-            .recv()
-            .map_err(StartCapturerError::RecvFailed)?
-            .map_err(StartCapturerError::StartFailed)?;
-
-        self.thread_handle = Some(thread_handle);
+        self.runner = Some(
+            Runner::start(
+                item,
+                settings,
+                callback,
+                closed_callback,
+                stop_flag,
+                d3d_device,
+                d3d_context,
+            )
+            .map_err(StartCapturerError::StartFailed)?,
+        );
 
         Ok(())
     }
@@ -283,30 +291,38 @@ pub enum StopCapturerError {
 
 impl Capturer {
     pub fn stop(&mut self) -> Result<(), StopCapturerError> {
-        let Some(thread_handle) = self.thread_handle.take() else {
+        // let Some(thread_handle) = self.thread_handle.take() else {
+        //     return Err(StopCapturerError::NotStarted);
+        // };
+
+        let Some(runner) = self.runner.take() else {
             return Err(StopCapturerError::NotStarted);
         };
 
-        self.stop_flag.store(true, Ordering::Relaxed);
+        runner._session.Close().unwrap();
 
-        let handle = HANDLE(thread_handle.as_raw_handle());
-        let thread_id = unsafe { GetThreadId(handle) };
+        // self.runner.self.stop_flag.store(true, Ordering::Relaxed);
 
-        while let Err(e) =
-            unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
-        {
-            if thread_handle.is_finished() {
-                break;
-            }
+        // let handle = HANDLE(thread_handle.as_raw_handle());
+        // let thread_id = unsafe { GetThreadId(handle) };
 
-            if e.code().0 != -2147023452 {
-                return Err(StopCapturerError::PostMessageFailed);
-            }
-        }
+        // while let Err(e) =
+        //     unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
+        // {
+        //     if thread_handle.is_finished() {
+        //         break;
+        //     }
 
-        thread_handle
-            .join()
-            .map_err(|_| StopCapturerError::ThreadJoinFailed)
+        //     if e.code().0 != -2147023452 {
+        //         return Err(StopCapturerError::PostMessageFailed);
+        //     }
+        // }
+
+        // thread_handle
+        //     .join()
+        //     .map_err(|_| StopCapturerError::ThreadJoinFailed)
+
+        Ok(())
     }
 }
 
@@ -638,11 +654,11 @@ impl Runner {
         })
     }
 
-    fn run(self) {
-        let mut message = MSG::default();
-        while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
-            let _ = unsafe { TranslateMessage(&message) };
-            unsafe { DispatchMessageW(&message) };
-        }
-    }
+    // fn run(self) {
+    // let mut message = MSG::default();
+    // while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
+    //     let _ = unsafe { TranslateMessage(&message) };
+    //     unsafe { DispatchMessageW(&message) };
+    // }
+    // }
 }

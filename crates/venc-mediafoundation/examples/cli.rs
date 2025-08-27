@@ -5,30 +5,32 @@ fn main() {
 
 #[cfg(windows)]
 mod windows {
-    use scap_targets::*;
+    use ::windows::Graphics::SizeInt32;
+    use ::windows::Storage::FileAccessMode;
+    use ::windows::Win32::Media::MediaFoundation::{MFSTARTUP_FULL, MFStartup};
+    use ::windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+    use ::windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
+    use ::windows::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, GetMessageW, MSG, WM_HOTKEY,
+    };
+    use ::windows::{
+        Storage::{CreationCollisionOption, StorageFolder},
+        Win32::{Foundation::MAX_PATH, Storage::FileSystem::GetFullPathNameW},
+        core::HSTRING,
+    };
     use cap_venc_mediafoundation::*;
     use scap_direct3d::{Capturer, PixelFormat, Settings};
+    use scap_targets::*;
     use std::{
         path::Path,
         sync::Arc,
         time::{Duration, Instant},
     };
-    use ::windows::Graphics::SizeInt32;
-    use ::windows::Storage::FileAccessMode;
-    use ::windows::Win32::Media::MediaFoundation::{MFStartup, MFSTARTUP_FULL};
-    use ::windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
-    use ::windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, MSG, WM_HOTKEY};
-    use ::windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
-    use ::windows::{
-        core::HSTRING,
-        Storage::{CreationCollisionOption, StorageFolder},
-        Win32::{Foundation::MAX_PATH, Storage::FileSystem::GetFullPathNameW},
-    };
 
     use super::*;
 
     pub fn main() {
-	    // unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
+        // unsafe { SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE).unwrap() };
         unsafe {
             RoInitialize(RO_INIT_MULTITHREADED).unwrap();
         }
@@ -71,8 +73,8 @@ mod windows {
                 Height: display_size.height() as i32,
             },
             SizeInt32 {
-	            Width: display_size.width() as i32,
-	            Height: display_size.height() as i32,
+                Width: display_size.width() as i32,
+                Height: display_size.height() as i32,
             },
             12_000_000,
             60,
@@ -113,18 +115,16 @@ mod windows {
             .unwrap();
 
         video_encoder.set_sample_requested_callback(move || {
-	        println!("bruh");
-	        let frame = frame_rx.recv().ok();
-	        dbg!(frame.is_some());
-	        Ok(frame)
+            println!("bruh");
+            let frame = frame_rx.recv().ok();
+            dbg!(frame.is_some());
+            Ok(frame)
         });
 
         let sample_writer = Arc::new(SampleWriter::new(stream, &output_type).unwrap());
         video_encoder.set_sample_rendered_callback({
             let sample_writer = sample_writer.clone();
-            move |sample| {
-                sample_writer.write(sample.sample())
-            }
+            move |sample| sample_writer.write(sample.sample())
         });
 
         println!("starting");
@@ -161,15 +161,15 @@ mod windows {
 
         println!("started");
 
-        // unsafe {
-        //     let mut message = MSG::default();
-        //     while GetMessageW(&mut message, None, 0, 0).into() {
+        unsafe {
+            let mut message = MSG::default();
+            while GetMessageW(&mut message, None, 0, 0).into() {
                 // if message.message == WM_HOTKEY && hot_key_callback()? {
                 //     break;
                 // }
-        //         DispatchMessageW(&message);
-        //     }
-        // }
+                DispatchMessageW(&message);
+            }
+        }
         std::thread::sleep(Duration::from_secs(10));
 
         println!("stopping");
