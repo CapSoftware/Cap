@@ -24,7 +24,7 @@ use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
@@ -234,10 +234,10 @@ impl UploadProgressUpdater {
     async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
         let updated_at = chrono::Utc::now().to_rfc3339();
 
-        println!(
-            "📡 Sending batched progress update - Video: {}, Progress: {}/{}",
-            video_id, uploaded, total
-        );
+        // println!(
+        //     "📡 Sending batched progress update - Video: {}, Progress: {}/{}",
+        //     video_id, uploaded, total
+        // );
 
         let response = app
             .authed_api_request("/api/desktop/video/progress", |client, url| {
@@ -252,14 +252,10 @@ impl UploadProgressUpdater {
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                println!("✅ Progress update sent successfully");
+                trace!("Progress update sent successfully");
             }
-            Ok(resp) => {
-                error!("❌ Failed to send progress update: {}", resp.status());
-            }
-            Err(e) => {
-                error!("❌ Failed to send progress update: {}", e);
-            }
+            Ok(resp) => error!("Failed to send progress update: {}", resp.status()),
+            Err(err) => error!("Failed to send progress update: {err}"),
         }
     }
 }
