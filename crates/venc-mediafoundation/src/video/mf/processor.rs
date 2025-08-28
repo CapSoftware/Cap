@@ -8,7 +8,8 @@ use windows::{
                 D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
                 D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_COLOR_SPACE,
                 D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+                D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255,
+                D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
                 D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0, D3D11_VIDEO_PROCESSOR_STREAM,
                 D3D11_VIDEO_USAGE_OPTIMAL_QUALITY, D3D11_VPIV_DIMENSION_TEXTURE2D,
                 D3D11_VPOV_DIMENSION_TEXTURE2D, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
@@ -43,6 +44,7 @@ impl VideoProcessor {
         input_size: SizeInt32,
         output_format: DXGI_FORMAT,
         output_size: SizeInt32,
+        frame_rate: u32,
     ) -> Result<Self> {
         let d3d_context = unsafe { d3d_device.GetImmediateContext()? };
 
@@ -53,17 +55,17 @@ impl VideoProcessor {
         let video_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
             InputFrameRate: DXGI_RATIONAL {
-                Numerator: 60,
+                Numerator: frame_rate,
                 Denominator: 1,
             },
             InputWidth: input_size.Width as u32,
             InputHeight: input_size.Height as u32,
             OutputFrameRate: DXGI_RATIONAL {
-                Numerator: 60,
+                Numerator: frame_rate,
                 Denominator: 1,
             },
-            OutputWidth: input_size.Width as u32,
-            OutputHeight: input_size.Height as u32,
+            OutputWidth: output_size.Width as u32,
+            OutputHeight: output_size.Height as u32,
             Usage: D3D11_VIDEO_USAGE_OPTIMAL_QUALITY,
         };
         let video_enum = unsafe { video_device.CreateVideoProcessorEnumerator(&video_desc)? };
@@ -71,10 +73,10 @@ impl VideoProcessor {
         let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0)? };
 
         let mut color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
-            _bitfield: 17, // Usage: 1 (Video processing), Nominal_Range: D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235
+            _bitfield: 1 | D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255.0 as u32,
         };
         unsafe { video_context.VideoProcessorSetOutputColorSpace(&video_processor, &color_space) };
-        color_space._bitfield = 33; // Usage: 1 (Video processing), Nominal_Range: D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255
+        color_space._bitfield = 1 | D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235.0 as u32;
         unsafe {
             video_context.VideoProcessorSetStreamColorSpace(&video_processor, 0, &color_space)
         };

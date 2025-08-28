@@ -238,8 +238,24 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
         Self: Sized,
     {
         use cap_media_encoders::{H264Encoder, MP4File};
+        use windows::Graphics::SizeInt32;
 
         let screen_config = source.0.info();
+        let _screen_encoder = cap_venc_mediafoundation::VideoEncoder::new(
+            source.0.d3d_device(),
+            screen_capture::AVFrameCapture::PIXEL_FORMAT.as_dxgi(),
+            SizeInt32 {
+                Width: screen_config.width as i32,
+                Height: screen_config.height as i32,
+            },
+            SizeInt32 {
+                Width: screen_config.width as i32,
+                Height: screen_config.height as i32,
+            },
+            10_000_000,
+            screen_config.frame_rate.0 as u32,
+        )
+        .unwrap();
         let mut screen_encoder = MP4File::init(
             "screen",
             output_path,

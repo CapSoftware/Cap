@@ -140,15 +140,11 @@ pub enum NewCapturerError {
 }
 
 pub struct Capturer {
-    stop_flag: Arc<AtomicBool>,
-    item: GraphicsCaptureItem,
     settings: Settings,
-    // thread_handle: Option<JoinHandle<()>>,
-    // runner: Option<Runner>,
     d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,
     session: GraphicsCaptureSession,
-    frame_pool: Direct3D11CaptureFramePool,
+    _frame_pool: Direct3D11CaptureFramePool,
 }
 
 impl Capturer {
@@ -157,7 +153,7 @@ impl Capturer {
         settings: Settings,
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-        mut d3d: Option<ID3D11Device>,
+        mut d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
         if !is_supported()? {
             return Err(NewCapturerError::NotSupported);
@@ -177,10 +173,7 @@ impl Capturer {
             return Err(NewCapturerError::UpdateIntervalNotSupported);
         }
 
-        if d3d.is_none() {
-            let mut d3d_device = None;
-            let mut d3d_context = None;
-
+        if d3d_device.is_none() {
             unsafe {
                 D3D11CreateDevice(
                     None,
@@ -191,15 +184,13 @@ impl Capturer {
                     D3D11_SDK_VERSION,
                     Some(&mut d3d_device),
                     None,
-                    Some(&mut d3d_context),
+                    None,
                 )
             }
             .map_err(StartRunnerError::D3DDevice)?;
-
-            d3d = Some(d3d_device.unwrap());
         }
 
-        let (d3d_device, d3d_context) = d3d
+        let (d3d_device, d3d_context) = d3d_device
             .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
             .transpose()
             .unwrap()
@@ -208,15 +199,6 @@ impl Capturer {
         let item = item.clone();
         let settings = settings.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
-
-        // let queue_options = DispatcherQueueOptions {
-        //     dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
-        //     threadType: DQTYPE_THREAD_CURRENT,
-        //     apartmentType: DQTAT_COM_NONE,
-        // };
-
-        // let _controller = unsafe { CreateDispatcherQueueController(queue_options) }.unwrap();
-        // .map_err(StartRunnerError::DispatchQueue)?;
 
         let direct3d_device = (|| {
             let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
@@ -354,14 +336,12 @@ impl Capturer {
         .unwrap();
 
         Ok(Capturer {
-            stop_flag: Arc::new(AtomicBool::new(false)),
-            item,
             settings,
             // thread_handle: None,
             d3d_device,
             d3d_context,
             session,
-            frame_pool,
+            _frame_pool: frame_pool,
         })
     }
 

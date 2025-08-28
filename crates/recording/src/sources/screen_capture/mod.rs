@@ -198,6 +198,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     start_time: SystemTime,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
+    #[cfg(windows)]
+    d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
@@ -236,6 +238,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             tokio_handle: self.tokio_handle.clone(),
             start_time: self.start_time,
             _phantom: std::marker::PhantomData,
+            #[cfg(windows)]
+            d3d_device: self.d3d_device.clone(),
         }
     }
 }
@@ -271,6 +275,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         start_time: SystemTime,
         tokio_handle: tokio::runtime::Handle,
+        #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -395,7 +400,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             tokio_handle,
             start_time,
             _phantom: std::marker::PhantomData,
+            d3d_device,
         })
+    }
+
+    #[cfg(windows)]
+    pub fn d3d_device(&self) -> &::windows::Win32::Graphics::Direct3D11::ID3D11Device {
+        &self.d3d_device
     }
 
     pub fn info(&self) -> VideoInfo {

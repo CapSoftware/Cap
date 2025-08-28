@@ -4,4 +4,4 @@ pub mod media;
 pub mod resolution;
 pub mod video;
 
-// mod mp4;
+pub use video::VideoEncoder;

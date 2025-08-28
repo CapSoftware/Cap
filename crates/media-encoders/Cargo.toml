@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cap-project = { path = "../project" }
 cap-flags = { path = "../flags" }
 cap-audio = { path = "../audio" }
 cap-fail = { path = "../fail" }

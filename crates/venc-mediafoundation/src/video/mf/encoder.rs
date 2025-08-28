@@ -79,8 +79,6 @@ pub struct VideoEncoderInner {
     _device_manager_reset_token: u32,
 
     video_processor: VideoProcessor,
-    compose_texture: ID3D11Texture2D,
-    render_target_view: ID3D11RenderTargetView,
 
     transform: IMFTransform,
     event_generator: IMFMediaEventGenerator,
@@ -90,20 +88,22 @@ pub struct VideoEncoderInner {
 
 impl VideoEncoder {
     pub fn new(
-        encoder_device: &VideoEncoderDevice,
-        d3d_device: ID3D11Device,
+        d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
         input_resolution: SizeInt32,
         output_resolution: SizeInt32,
         bit_rate: u32,
         frame_rate: u32,
     ) -> Result<Self> {
+        let encoder_device = VideoEncoderDevice::enumerate()?.swap_remove(0);
+
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
             format,
             input_resolution,
             DXGI_FORMAT_NV12,
             output_resolution,
+            frame_rate,
         )?;
 
         let texture_desc = D3D11_TEXTURE2D_DESC {
@@ -120,16 +120,6 @@ impl VideoEncoder {
             BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
             ..Default::default()
         };
-        let compose_texture = unsafe {
-            let mut texture = None;
-            d3d_device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
-            texture.unwrap()
-        };
-        let render_target_view = unsafe {
-            let mut rtv = None;
-            d3d_device.CreateRenderTargetView(&compose_texture, None, Some(&mut rtv))?;
-            rtv.unwrap()
-        };
 
         let transform = encoder_device.create_transform()?;
 
@@ -145,7 +135,7 @@ impl VideoEncoder {
             };
             media_device_manager.unwrap()
         };
-        unsafe { media_device_manager.ResetDevice(&d3d_device, device_manager_reset_token)? };
+        unsafe { media_device_manager.ResetDevice(d3d_device, device_manager_reset_token)? };
 
         // Setup MFTransform
         let event_generator: IMFMediaEventGenerator = transform.cast()?;
@@ -234,8 +224,8 @@ impl VideoEncoder {
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
-                    input_resolution.Width as u32,
-                    input_resolution.Height as u32,
+                    output_resolution.Width as u32,
+                    output_resolution.Height as u32,
                 )?;
                 MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, 60, 1)?;
                 let result = transform.SetInputType(
@@ -262,15 +252,12 @@ impl VideoEncoder {
             ));
         }
 
-        let should_stop = Arc::new(AtomicBool::new(false));
         let inner = VideoEncoderInner {
-            _d3d_device: d3d_device,
+            _d3d_device: d3d_device.clone(),
             _media_device_manager: media_device_manager,
             _device_manager_reset_token: device_manager_reset_token,
 
             video_processor,
-            compose_texture,
-            render_target_view,
 
             transform,
             event_generator,
