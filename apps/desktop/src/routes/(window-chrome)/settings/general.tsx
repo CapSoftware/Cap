@@ -535,6 +535,7 @@ function ServerURLSetting(props: {
 						<Button
 							size="sm"
 							class="mt-2"
+							variant="dark"
 							disabled={props.value === value()}
 							onClick={() => props.onChange(value())}
 						>

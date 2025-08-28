@@ -28,7 +28,7 @@ export function CapErrorBoundary(props: ParentProps) {
 								onClick={() => {
 									location.reload();
 								}}
-								variant="secondary"
+								variant="gray"
 							>
 								Reload
 							</Button>
