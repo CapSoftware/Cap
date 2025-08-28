@@ -29,7 +29,7 @@ export function ReadyToGetStarted() {
 						{homepageCopy.readyToGetStarted.buttons.secondary}
 					</Button>
 					<Button
-						variant="primary"
+						variant="blue"
 						href="/download"
 						size="lg"
 						className="w-full font-medium sm:w-auto"
