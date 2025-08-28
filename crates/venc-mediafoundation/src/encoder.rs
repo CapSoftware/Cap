@@ -31,7 +31,7 @@ use windows::{
     core::{Error, Interface, Result},
 };
 
-use crate::{media::*, encoder_device::*};
+use crate::{encoder_device::*, media::*};
 
 pub struct VideoEncoderInputSample {
     timestamp: TimeSpan,

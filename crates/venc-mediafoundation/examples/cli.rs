@@ -161,15 +161,18 @@ mod windows {
 
         println!("started");
 
-        unsafe {
-            let mut message = MSG::default();
-            while GetMessageW(&mut message, None, 0, 0).into() {
-                // if message.message == WM_HOTKEY && hot_key_callback()? {
-                //     break;
-                // }
-                DispatchMessageW(&message);
+        std::thread::spawn(move || {
+            unsafe {
+                let mut message = MSG::default();
+                while GetMessageW(&mut message, None, 0, 0).into() {
+                    // if message.message == WM_HOTKEY && hot_key_callback()? {
+                    //     break;
+                    // }
+                    DispatchMessageW(&message);
+                }
             }
-        }
+        });
+
         std::thread::sleep(Duration::from_secs(10));
 
         println!("stopping");
