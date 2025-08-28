@@ -9,12 +9,10 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
-	onCleanup,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import createPresence from "solid-presence";
-import { a } from "vitest/dist/chunks/suite.B2jumIFP.js";
 import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -35,7 +33,7 @@ declare global {
 	}
 }
 
-const MAX_RECORDING_FOR_FREE = 10 * 60 * 1000;
+const MAX_RECORDING_FOR_FREE = 7000; // TODO: 5 * 60 * 1000;
 
 export default function () {
 	const [state, setState] = createSignal<State>(
@@ -161,17 +159,27 @@ export default function () {
 		return t;
 	};
 
+	const isMaxRecordingLimitEnabled = () => {
+		// If the data is loaded and the user is not upgraded
+		return auth.data?.plan?.upgraded === false;
+	};
+
 	let aborted = false;
 	createEffect(() => {
-		// If the data is loading or the plan is upgraded don't continue
-		if (auth.data?.plan?.upgraded !== false) return;
-
-		// TODO: Using MAX_RECORDING_FOR_FREE
-		if (!aborted && adjustedTime() > 5 * 1000) {
+		if (
+			isMaxRecordingLimitEnabled() &&
+			adjustedTime() > MAX_RECORDING_FOR_FREE &&
+			!aborted
+		) {
 			aborted = true;
-			commands.stopRecording();
+			stopRecording.mutate();
 		}
 	});
+
+	const remainingRecordingTime = () => {
+		if (MAX_RECORDING_FOR_FREE < adjustedTime()) return 0;
+		return MAX_RECORDING_FOR_FREE - adjustedTime();
+	};
 
 	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
 		null,
@@ -213,7 +221,12 @@ export default function () {
 				>
 					<IconCapStopCircle />
 					<span class="font-[500] text-[0.875rem] tabular-nums">
-						{formatTime(adjustedTime() / 1000)}
+						<Show
+							when={isMaxRecordingLimitEnabled()}
+							fallback={formatTime(adjustedTime() / 1000)}
+						>
+							{formatTime(remainingRecordingTime() / 1000)}
+						</Show>
 					</span>
 				</button>
 
