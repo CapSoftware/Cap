@@ -190,7 +190,7 @@ function ShareButton() {
 								<Button
 									disabled={upload.isPending}
 									onClick={() => upload.mutate()}
-									variant="primary"
+									variant="dark"
 									class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1"
 								>
 									{upload.isPending ? (
@@ -311,7 +311,7 @@ function ShareButton() {
 						</div>
 
 						<p class="relative z-10 mt-3 text-xs text-white">
-							{uploadState.type == "idle" || uploadState.type === "starting"
+							{uploadState.type === "idle" || uploadState.type === "starting"
 								? "Preparing to render..."
 								: uploadState.type === "rendering"
 									? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`

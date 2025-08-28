@@ -384,27 +384,25 @@ export function ExportDialog() {
 				<DialogContent
 					title="Export Cap"
 					confirm={
-						<>
-							{settings.exportTo === "link" && !auth.data ? (
-								<SignInButton>
-									{exportButtonIcon[settings.exportTo]}
-									<span class="ml-1.5">Sign in to share</span>
-								</SignInButton>
-							) : (
-								<Button
-									class="flex gap-1.5 items-center"
-									variant="primary"
-									onClick={() => {
-										if (settings.exportTo === "file") save.mutate();
-										else if (settings.exportTo === "link") upload.mutate();
-										else copy.mutate();
-									}}
-								>
-									Export to
-									{exportButtonIcon[settings.exportTo]}
-								</Button>
-							)}
-						</>
+						settings.exportTo === "link" && !auth.data ? (
+							<SignInButton>
+								{exportButtonIcon[settings.exportTo]}
+								<span class="ml-1.5">Sign in to share</span>
+							</SignInButton>
+						) : (
+							<Button
+								class="flex gap-1.5 items-center"
+								variant="dark"
+								onClick={() => {
+									if (settings.exportTo === "file") save.mutate();
+									else if (settings.exportTo === "link") upload.mutate();
+									else copy.mutate();
+								}}
+							>
+								Export to
+								{exportButtonIcon[settings.exportTo]}
+							</Button>
+						)
 					}
 					leftFooterContent={
 						<div>
@@ -491,7 +489,7 @@ export function ExportDialog() {
 												onClick={() => setSettings("exportTo", option.value)}
 												data-selected={settings.exportTo === option.value}
 												class="flex flex-1 gap-2 items-center text-nowrap"
-												variant="secondary"
+												variant="gray"
 											>
 												{option.icon}
 												{option.label}
@@ -509,7 +507,7 @@ export function ExportDialog() {
 									<For each={FORMAT_OPTIONS}>
 										{(option) => (
 											<Button
-												variant="secondary"
+												variant="gray"
 												onClick={() => {
 													setSettings(
 														produce((newSettings) => {
@@ -631,7 +629,7 @@ export function ExportDialog() {
 														option.value as ExportCompression,
 													);
 												}}
-												variant="secondary"
+												variant="gray"
 												data-selected={settings.compression === option.value}
 											>
 												{option.label}
@@ -663,7 +661,7 @@ export function ExportDialog() {
 													settings.resolution.value === option.value
 												}
 												class="flex-1"
-												variant="secondary"
+												variant="gray"
 												onClick={() => setSettings("resolution", option)}
 											>
 												{option.label}
@@ -897,7 +895,7 @@ export function ExportDialog() {
 													}, 2000);
 													navigator.clipboard.writeText(meta().sharing!.link!);
 												}}
-												variant="lightdark"
+												variant="dark"
 												class="flex gap-2 justify-center items-center"
 											>
 												{!copyPressed() ? (
@@ -918,7 +916,7 @@ export function ExportDialog() {
 								>
 									<div class="flex gap-4 w-full">
 										<Button
-											variant="secondary"
+											variant="dark"
 											class="flex gap-2 items-center"
 											onClick={() => {
 												const path = outputPath();
@@ -931,7 +929,7 @@ export function ExportDialog() {
 											Open File
 										</Button>
 										<Button
-											variant="secondary"
+											variant="dark"
 											class="flex gap-2 items-center"
 											onClick={async () => {
 												const path = outputPath();

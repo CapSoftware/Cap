@@ -142,7 +142,7 @@ export function Header() {
 					<ShareButton />
 				</Show>
 				<Button
-					variant="lightdark"
+					variant="dark"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
 						trackEvent("export_button_clicked");
