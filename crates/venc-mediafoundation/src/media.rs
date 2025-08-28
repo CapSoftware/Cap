@@ -6,8 +6,6 @@ use windows::{
     core::{Array, GUID, Result},
 };
 
-use super::*;
-
 pub fn enumerate_mfts(
     category: &GUID,
     flags: MFT_ENUM_FLAG,

@@ -7,7 +7,7 @@ use windows::{
     core::{Interface, Result},
 };
 
-use super::*;
+use crate::media::{enumerate_mfts, get_string_attribute};
 
 #[derive(Clone)]
 pub struct VideoEncoderDevice {
