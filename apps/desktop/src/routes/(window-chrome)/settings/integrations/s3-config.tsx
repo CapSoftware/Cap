@@ -264,7 +264,7 @@ export default function S3ConfigPage() {
 								{deleteConfig.isPending ? "Removing..." : "Remove Config"}
 							</Button>
 						)}
-						<Button variant="secondary" onClick={() => events.emit("test")}>
+						<Button variant="gray" onClick={() => events.emit("test")}>
 							{testConfig.isPending ? "Testing..." : "Test Connection"}
 						</Button>
 					</div>
