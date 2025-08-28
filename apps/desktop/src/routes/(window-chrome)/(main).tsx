@@ -518,6 +518,25 @@ function Page() {
 					</Button>
 				)}
 			</div>
+
+			<Suspense>
+				<Show
+					when={
+						rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false
+					}
+				>
+					<p class="text-xs text-center">
+						Instant Mode recordings are limited
+						<br /> to 5 mins,{" "}
+						<button
+							class="underline"
+							onClick={() => commands.showWindow("Upgrade")}
+						>
+							Upgrade to Pro
+						</button>
+					</p>
+				</Show>
+			</Suspense>
 		</div>
 	);
 }

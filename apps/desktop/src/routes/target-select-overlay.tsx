@@ -16,7 +16,6 @@ import {
 	type JSX,
 	Match,
 	onCleanup,
-	ParentProps,
 	Show,
 	Suspense,
 	Switch,
