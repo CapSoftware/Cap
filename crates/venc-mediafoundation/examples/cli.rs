@@ -1,23 +1,20 @@
-mod args;
-mod capture;
-mod d3d;
-mod displays;
-mod hotkey;
-mod media;
-mod resolution;
-mod video;
-
-use std::{path::Path, time::Duration};
-
-use args::Args;
-use clap::Parser;
-use hotkey::HotKey;
-use video::{
-    backend::EncoderBackend,
-    encoding_session::{VideoEncoderSessionFactory, VideoEncodingSession},
-    mf::encoding_session::MFVideoEncodingSessionFactory,
-    wmt::encoding_session::WMTVideoEncodingSessionFactory,
+use crate::{args::Args, hotkey::HotKey};
+use cap_venc_mediafoundation::{
+    capture::create_capture_item_for_monitor,
+    d3d::create_d3d_device,
+    displays::get_display_handle_from_index,
+    media::MF_VERSION,
+    resolution::Resolution,
+    video::{
+        backend::EncoderBackend,
+        encoding_session::{VideoEncoderSessionFactory, VideoEncodingSession},
+        mf::{encoder_device::VideoEncoderDevice, encoding_session::MFVideoEncodingSessionFactory},
+        wmt::encoding_session::WMTVideoEncodingSessionFactory,
+    },
 };
+use clap::Parser;
+use scap_targets::Display;
+use std::{path::Path, time::Duration};
 use windows::{
     Foundation::Metadata::ApiInformation,
     Graphics::{
@@ -46,12 +43,6 @@ use windows::{
         },
     },
     core::{HSTRING, Result, RuntimeName, h},
-};
-
-use crate::{
-    capture::create_capture_item_for_monitor, d3d::create_d3d_device,
-    displays::get_display_handle_from_index, media::MF_VERSION, resolution::Resolution,
-    video::mf::encoder_device::VideoEncoderDevice,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -101,10 +92,14 @@ fn run(
         );
     }
 
-    // Get the display handle using the provided index
     let display_handle = get_display_handle_from_index(display_index)?
         .expect("The provided display index was out of bounds!");
     let item = create_capture_item_for_monitor(display_handle)?;
+
+    // Get the display handle using the provided index
+    // let display_handle = get_display_handle_from_index(display_index)?
+    //     .expect("The provided display index was out of bounds!");
+    // let item = create_capture_item_for_monitor(display_handle)?;
 
     // Resolve encoding settings
     let resolution = if let Some(resolution) = resolution.get_size() {
@@ -361,6 +356,101 @@ fn pump_messages<F: FnMut() -> Result<bool>>(mut hot_key_callback: F) -> Result<
         }
     }
     Ok(())
+}
+
+mod args {
+    use clap::{Parser, Subcommand};
+
+    use cap_venc_mediafoundation::{resolution::Resolution, video::backend::EncoderBackend};
+
+    #[derive(Parser, Debug)]
+    #[clap(author, version, about, long_about = None)]
+    pub struct Args {
+        /// The index of the display you'd like to record.
+        #[clap(short, long, default_value_t = 0)]
+        pub display: usize,
+
+        /// The bit rate you would like to encode at (in Mbps).
+        #[clap(short, long, default_value_t = 18)]
+        pub bit_rate: u32,
+
+        /// The frame rate you would like to encode at.
+        #[clap(short, long, default_value_t = 60)]
+        pub frame_rate: u32,
+
+        /// The resolution you would like to encode at: native, 720p, 1080p, 2160p, or 4320p.
+        #[clap(short, long, default_value_t = Resolution::Native)]
+        pub resolution: Resolution,
+
+        /// The index of the encoder you'd like to use to record (use enum-encoders command for a list of encoders and their indices).
+        #[clap(short, long, default_value_t = 0)]
+        pub encoder: usize,
+
+        /// Disables the yellow capture border (only available on Windows 11).
+        #[clap(long)]
+        pub borderless: bool,
+
+        /// Enables verbose (debug) output.
+        #[clap(short, long)]
+        pub verbose: bool,
+
+        /// The program will wait for a debugger to attach before starting.
+        #[clap(long)]
+        pub wait_for_debugger: bool,
+
+        /// Recording immediately starts. End the recording through console input.
+        #[clap(long)]
+        pub console_mode: bool,
+
+        /// The backend to use for the video encoder.
+        #[clap(long, default_value_t = EncoderBackend::MediaFoundation)]
+        pub backend: EncoderBackend,
+
+        /// The output file that will contain the recording.
+        #[clap(default_value = "recording.mp4")]
+        pub output_file: String,
+
+        /// Subcommands to execute.
+        #[clap(subcommand)]
+        pub command: Option<Commands>,
+    }
+
+    #[derive(Subcommand, Debug)]
+    #[clap(args_conflicts_with_subcommands = true)]
+    pub enum Commands {
+        /// Lists the available hardware H264 encoders.
+        EnumEncoders,
+    }
+}
+
+mod hotkey {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use windows::{
+        Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey},
+        core::Result,
+    };
+
+    static HOT_KEY_ID: AtomicI32 = AtomicI32::new(0);
+
+    pub struct HotKey {
+        id: i32,
+    }
+
+    impl HotKey {
+        pub fn new(modifiers: HOT_KEY_MODIFIERS, key: u32) -> Result<Self> {
+            let id = HOT_KEY_ID.fetch_add(1, Ordering::SeqCst) + 1;
+            unsafe {
+                RegisterHotKey(None, id, modifiers, key)?;
+            }
+            Ok(Self { id })
+        }
+    }
+
+    impl Drop for HotKey {
+        fn drop(&mut self) {
+            unsafe { UnregisterHotKey(None, self.id).ok().unwrap() }
+        }
+    }
 }
 
 #[cfg(test)]

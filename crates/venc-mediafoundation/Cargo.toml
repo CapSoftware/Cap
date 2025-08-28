@@ -3,9 +3,6 @@ name = "cap-venc-mediafoundation"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-clap = { version = "4.5.46", features = ["derive"] }
-
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "System",
@@ -41,10 +38,11 @@ windows = { workspace = true, features = [
     "Security_Authorization_AppCapabilityAccess",
 ] }
 windows-numerics = "0.2.0"
+scap-direct3d = { path = "../scap-direct3d" }
 
 [dev-dependencies]
 scap-targets = { path = "../scap-targets" }
-scap-direct3d = { path = "../scap-direct3d" }
+clap = { version = "4.5.46", features = ["derive"] }
 
 [lints]
 workspace = true

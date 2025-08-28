@@ -71,7 +71,8 @@ impl SampleGenerator {
             rtv.unwrap()
         };
 
-        let frame_generator = CaptureFrameGenerator::new(d3d_device.clone(), item, input_size)?;
+        let frame_generator =
+            CaptureFrameGenerator::new(d3d_device.clone(), d3d_context.clone(), item)?;
 
         Ok(Self {
             d3d_device,
@@ -171,6 +172,8 @@ impl SampleGenerator {
                 0,
                 Some(&region),
             );
+
+            dbg!(region);
 
             // Make a copy for the sample
             let desc = {

@@ -22,6 +22,7 @@ use windows::{
 };
 use windows_numerics::Vector2;
 
+#[derive(Clone)]
 pub struct VideoProcessor {
     _d3d_device: ID3D11Device,
     d3d_context: ID3D11DeviceContext,

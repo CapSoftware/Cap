@@ -97,13 +97,19 @@ impl MFVideoEncodingSession {
             capture_session.SetIsBorderRequired(false)?;
         }
         video_encoder.set_sample_requested_callback(
-            move || -> Result<Option<VideoEncoderInputSample>> { sample_generator.generate() },
+            move || -> Result<Option<VideoEncoderInputSample>> {
+                println!("requested");
+                sample_generator.generate()
+            },
         );
 
         let sample_writer = Arc::new(SampleWriter::new(stream, &output_type)?);
         video_encoder.set_sample_rendered_callback({
             let sample_writer = sample_writer.clone();
-            move |sample| -> Result<()> { sample_writer.write(sample.sample()) }
+            move |sample| -> Result<()> {
+                println!("rendered");
+                sample_writer.write(sample.sample())
+            }
         });
 
         Ok(Self {
@@ -207,7 +213,8 @@ impl SampleGenerator {
             rtv.unwrap()
         };
 
-        let frame_generator = CaptureFrameGenerator::new(d3d_device.clone(), item, input_size)?;
+        let frame_generator =
+            CaptureFrameGenerator::new(d3d_device.clone(), d3d_context.clone(), item)?;
 
         Ok(Self {
             d3d_device,

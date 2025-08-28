@@ -1,5 +1,6 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use scap_direct3d::Capturer;
 use windows::{
     Foundation::TypedEventHandler,
     Graphics::{
@@ -11,7 +12,10 @@ use windows::{
         SizeInt32,
     },
     Win32::{
-        Graphics::{Direct3D11::ID3D11Device, Gdi::HMONITOR},
+        Graphics::{
+            Direct3D11::{ID3D11Device, ID3D11DeviceContext},
+            Gdi::HMONITOR,
+        },
         System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop,
     },
     core::{IInspectable, Result},
@@ -27,56 +31,44 @@ pub fn create_capture_item_for_monitor(monitor_handle: HMONITOR) -> Result<Graph
 pub struct CaptureFrameGenerator {
     _d3d_device: ID3D11Device,
     _item: GraphicsCaptureItem,
-    frame_pool: Direct3D11CaptureFramePool,
-    session: GraphicsCaptureSession,
     sender: Sender<Option<Direct3D11CaptureFrame>>,
     receiver: Receiver<Option<Direct3D11CaptureFrame>>,
+    capturer: scap_direct3d::Capturer,
 }
 
 impl CaptureFrameGenerator {
     pub fn new(
         d3d_device: ID3D11Device,
+        d3d_context: ID3D11DeviceContext,
         item: GraphicsCaptureItem,
-        size: SizeInt32,
     ) -> Result<Self> {
-        let device = create_direct3d_device(&d3d_device)?;
-        let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
-            &device,
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            2,
-            size,
-        )?;
-        let session = frame_pool.CreateCaptureSession(&item)?;
-
         let (sender, receiver) = channel();
-        frame_pool.FrameArrived(
-            &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new({
-                let session = session.clone();
-                let sender = sender.clone();
-                move |frame_pool, _| {
-                    let frame_pool = frame_pool.as_ref().unwrap();
-                    let frame = frame_pool.TryGetNextFrame()?;
-                    if sender.send(Some(frame)).is_err() {
-                        frame_pool.Close()?;
-                        session.Close()?;
-                    }
-                    Ok(())
-                }
-            }),
-        )?;
 
         Ok(Self {
-            _d3d_device: d3d_device,
-            _item: item,
-            frame_pool,
-            session,
-            sender,
+            _d3d_device: d3d_device.clone(),
+            _item: item.clone(),
+            sender: sender.clone(),
             receiver,
+            capturer: Capturer::new(
+                item,
+                scap_direct3d::Settings {
+                    pixel_format: scap_direct3d::PixelFormat::B8G8R8A8Unorm,
+                    ..Default::default()
+                },
+                move |frame| {
+                    dbg!(frame.width(), frame.height());
+                    let _ = sender.send(Some(frame.inner().clone()));
+                    Ok(())
+                },
+                || Ok(()),
+                Some((d3d_device, d3d_context)),
+            )
+            .unwrap(),
         })
     }
 
     pub fn session(&self) -> &GraphicsCaptureSession {
-        &self.session
+        self.capturer.session()
     }
 
     pub fn try_get_next_frame(&mut self) -> Result<Option<Direct3D11CaptureFrame>> {
@@ -99,8 +91,7 @@ impl CaptureFrameGenerator {
 
 impl Drop for CaptureFrameGenerator {
     fn drop(&mut self) {
-        self.session.Close().unwrap();
-        self.frame_pool.Close().unwrap();
+        self.capturer.session().Close().unwrap();
     }
 }
 
