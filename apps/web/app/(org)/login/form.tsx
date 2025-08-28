@@ -419,7 +419,7 @@ const NormalLogin = ({
 					}}
 				/>
 				<MotionButton
-					variant="primary"
+					variant="dark"
 					type="submit"
 					disabled={loading || emailSent}
 					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}

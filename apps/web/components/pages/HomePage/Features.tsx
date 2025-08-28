@@ -202,7 +202,7 @@ const Features = () => {
 				{/* View all features button */}
 				<Button
 					href="/features"
-					variant="primary"
+					variant="dark"
 					size="lg"
 					className="inline-flex"
 				>
