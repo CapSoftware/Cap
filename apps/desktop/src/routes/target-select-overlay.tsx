@@ -145,6 +145,7 @@ export default function () {
 						<RecordingControls
 							target={{ variant: "display", id: params.displayId! }}
 						/>
+						<ShowCapFreeWarning />
 					</div>
 				)}
 			</Match>
@@ -209,6 +210,7 @@ export default function () {
 								>
 									Adjust recording area
 								</Button>
+								<ShowCapFreeWarning />
 							</div>
 						</div>
 					)}
@@ -641,6 +643,7 @@ export default function () {
 													bounds,
 												}}
 											/>
+											<ShowCapFreeWarning />
 										</div>
 									</div>
 
@@ -781,6 +784,26 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 				<IconCapGear class="will-change-transform size-5" />
 			</div>
 		</div>
+	);
+}
+
+function ShowCapFreeWarning() {
+	const auth = authStore.createQuery();
+
+	return (
+		<Suspense>
+			<Show when={auth.data?.plan?.upgraded === false}>
+				<p class="text-sm max-w-64 text-center">
+					Instant Mode recordings are limited to 5 mins,{" "}
+					<button
+						class="underline"
+						onClick={() => commands.showWindow("Upgrade")}
+					>
+						Upgrade to Pro
+					</button>
+				</p>
+			</Show>
+		</Suspense>
 	);
 }
 
