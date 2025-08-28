@@ -25,7 +25,6 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { addEventListener } from "solid-js/web";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
@@ -378,7 +377,7 @@ function Page() {
 								signIn.variables?.abort();
 								signIn.reset();
 							}}
-							variant="secondary"
+							variant="gray"
 							class="w-full"
 						>
 							Cancel Sign In

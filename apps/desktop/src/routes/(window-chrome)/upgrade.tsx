@@ -1,22 +1,9 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
-import { action, useAction } from "@solidjs/router";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import * as shell from "@tauri-apps/plugin-shell";
-import {
-	type Accessor,
-	createSignal,
-	onCleanup,
-	onMount,
-	Show,
-} from "solid-js";
+import { type Accessor, createSignal, Show } from "solid-js";
 import { generalSettingsStore } from "~/store";
-import { identifyUser, trackEvent } from "~/utils/analytics";
-import { clientEnv } from "~/utils/env";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
@@ -437,7 +424,7 @@ export default function Page() {
 										<Button
 											onClick={() => openCommercialCheckout.mutate()}
 											disabled={openCommercialCheckout.isPending}
-											variant="lightdark"
+											variant="dark"
 											class="w-full !rounded-full !h-[48px] text-lg font-medium"
 											size="lg"
 										>

@@ -26,7 +26,7 @@ export const _Button: Story = {
 						{(size) => <option value={size}>{size}</option>}
 					</For>
 				</select>
-				<table class="border-spacing-2 border-separate text-sm text-left">
+				<table class="text-sm text-left border-separate border-spacing-2">
 					<thead>
 						<tr>
 							<th />
@@ -44,7 +44,7 @@ export const _Button: Story = {
 								</Button>
 							</td>
 							<td>
-								<Button variant="secondary" size={size()}>
+								<Button variant="gray" size={size()}>
 									Button
 								</Button>
 							</td>
@@ -92,7 +92,7 @@ export const _Button: Story = {
 								</Button>
 							</td>
 							<td>
-								<Button variant="secondary" size={size()} disabled>
+								<Button variant="gray" size={size()} disabled>
 									Button
 								</Button>
 							</td>
