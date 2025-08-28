@@ -33,7 +33,7 @@ declare global {
 	}
 }
 
-const MAX_RECORDING_FOR_FREE = 7000; // TODO: 5 * 60 * 1000;
+const MAX_RECORDING_FOR_FREE = 5 * 60 * 1000;
 
 export default function () {
 	const [state, setState] = createSignal<State>(
@@ -160,8 +160,13 @@ export default function () {
 	};
 
 	const isMaxRecordingLimitEnabled = () => {
-		// If the data is loaded and the user is not upgraded
-		return auth.data?.plan?.upgraded === false;
+		// Only enforce the limit on instant mode.
+		// We enforce it on studio mode when exporting.
+		return (
+			optionsQuery.rawOptions.mode === "instant" &&
+			// If the data is loaded and the user is not upgraded
+			auth.data?.plan?.upgraded === false
+		);
 	};
 
 	let aborted = false;
