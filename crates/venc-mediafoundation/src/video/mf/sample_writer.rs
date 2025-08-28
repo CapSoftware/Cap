@@ -1,39 +1,23 @@
-use std::sync::{Arc, mpsc::Receiver};
-
+use std::path::{Path, PathBuf};
 use windows::{
-    Foundation::TimeSpan,
-    Graphics::{
-        Capture::{
-            Direct3D11CaptureFrame, GraphicsCaptureItem, GraphicsCaptureSession,
-            IDirect3D11CaptureFrame,
-        },
-        SizeInt32,
+    Storage::{
+        CreationCollisionOption, FileAccessMode, IStorageFile, StorageFile, StorageFolder,
+        Streams::IRandomAccessStream,
     },
-    Storage::Streams::IRandomAccessStream,
     Win32::{
-        Graphics::{
-            Direct3D11::{
-                D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_BOX,
-                D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11DeviceContext,
-                ID3D11RenderTargetView, ID3D11Texture2D,
-            },
-            Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC},
-        },
+        Foundation::MAX_PATH,
         Media::MediaFoundation::{
             IMFMediaType, IMFSample, IMFSinkWriter, MFCreateAttributes,
             MFCreateMFByteStreamOnStreamEx, MFCreateSinkWriterFromURL,
         },
+        Storage::FileSystem::GetFullPathNameW,
     },
     core::{HSTRING, Result},
 };
 
-use crate::{
-    d3d::get_d3d_interface_from_object,
-    video::{CLEAR_COLOR, util::ensure_even_size},
-};
-
 pub struct SampleWriter {
     _stream: IRandomAccessStream,
+    _file: StorageFile,
     sink_writer: IMFSinkWriter,
     sink_writer_stream_index: u32,
 }
@@ -41,7 +25,22 @@ pub struct SampleWriter {
 unsafe impl Send for SampleWriter {}
 unsafe impl Sync for SampleWriter {}
 impl SampleWriter {
-    pub fn new(stream: IRandomAccessStream, output_type: &IMFMediaType) -> Result<Self> {
+    pub fn new(path: &Path, output_type: &IMFMediaType) -> Result<Self> {
+        let parent_folder_path = path.parent().unwrap();
+        let parent_folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(
+            parent_folder_path.as_os_str().to_str().unwrap(),
+        ))?
+        .get()?;
+        let file_name = path.file_name().unwrap();
+        let file = parent_folder
+            .CreateFileAsync(
+                &HSTRING::from(file_name.to_str().unwrap()),
+                CreationCollisionOption::ReplaceExisting,
+            )?
+            .get()?;
+
+        let stream = file.OpenAsync(FileAccessMode::ReadWrite)?.get()?;
+
         let empty_attributes = unsafe {
             let mut attributes = None;
             MFCreateAttributes(&mut attributes, 0)?;
@@ -62,6 +61,7 @@ impl SampleWriter {
 
         Ok(Self {
             _stream: stream,
+            _file: file,
             sink_writer,
             sink_writer_stream_index,
         })

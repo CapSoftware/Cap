@@ -99,30 +99,8 @@ fn run(
 
     let encoder_device = VideoEncoderDevice::enumerate().unwrap().swap_remove(0);
 
-    // Create our file
-    let path = unsafe {
-        let mut new_path = vec![0u16; MAX_PATH as usize];
-        let length = GetFullPathNameW(&HSTRING::from(output_path), Some(&mut new_path), None);
-        new_path.resize(length as usize, 0);
-        String::from_utf16(&new_path).unwrap()
-    };
-    let path = Path::new(&path);
-    let parent_folder_path = path.parent().unwrap();
-    let parent_folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(
-        parent_folder_path.as_os_str().to_str().unwrap(),
-    ))?
-    .get()?;
-    let file_name = path.file_name().unwrap();
-    let file = parent_folder
-        .CreateFileAsync(
-            &HSTRING::from(file_name.to_str().unwrap()),
-            CreationCollisionOption::ReplaceExisting,
-        )?
-        .get()?;
-
     // Start the recording
     {
-        let stream = file.OpenAsync(FileAccessMode::ReadWrite)?.get()?;
         let d3d_device = create_d3d_device()?;
 
         let (frame_tx, frame_rx) = std::sync::mpsc::channel();
@@ -168,9 +146,14 @@ fn run(
             resolution,
             bit_rate,
             frame_rate,
-        )?;
+        )
+        .unwrap();
 
-        let sample_writer = Arc::new(SampleWriter::new(stream, &video_encoder.output_type())?);
+        let output_path = std::env::current_dir().unwrap().join(output_path);
+
+        let sample_writer = Arc::new(
+            SampleWriter::new(output_path.as_path(), &video_encoder.output_type()).unwrap(),
+        );
 
         capturer.start()?;
         sample_writer.start()?;
@@ -237,34 +220,9 @@ fn main() {
     let output_path = args.output_file.as_str();
     let verbose = args.verbose;
     let wait_for_debugger = args.wait_for_debugger;
-    let console_mode = args.console_mode;
     let bit_rate: u32 = args.bit_rate;
     let frame_rate: u32 = args.frame_rate;
     let resolution: Resolution = args.resolution;
-    let encoder_index: usize = args.encoder;
-
-    let borderless = if args.borderless {
-        // Make sure the machine we're running on supports borderless capture
-        let borderless = ApiInformation::IsPropertyPresent(
-            &HSTRING::from(GraphicsCaptureSession::NAME),
-            h!("IsBorderRequired"),
-        )
-        .unwrap_or(false);
-        if borderless {
-            let _ =
-                GraphicsCaptureAccess::RequestAccessAsync(GraphicsCaptureAccessKind::Borderless)
-                    .unwrap()
-                    .get()
-                    .unwrap();
-        } else {
-            println!(
-                "WARNING: Borderless capture is not supported on this build of Windows, ignoring..."
-            );
-        }
-        borderless
-    } else {
-        false
-    };
 
     // Validate some of the params
     if !validate_path(output_path) {

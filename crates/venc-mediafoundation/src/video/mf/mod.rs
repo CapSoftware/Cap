@@ -1,9 +1,9 @@
 mod encoder;
 pub mod encoder_device;
-pub mod encoding_session;
 mod processor;
+mod sample_writer;
 
 pub use encoder::*;
 pub use encoder_device::*;
-pub use encoding_session::*;
 pub use processor::*;
+pub use sample_writer::*;
