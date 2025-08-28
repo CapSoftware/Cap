@@ -142,6 +142,7 @@ fn run(
         let mut video_encoder = VideoEncoder::new(
             &encoder_device,
             d3d_device.clone(),
+            capturer.settings().pixel_format.as_dxgi(),
             resolution,
             resolution,
             bit_rate,

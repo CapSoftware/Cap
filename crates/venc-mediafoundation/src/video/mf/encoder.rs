@@ -11,7 +11,15 @@ use windows::{
     Graphics::SizeInt32,
     Win32::{
         Foundation::E_NOTIMPL,
-        Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
+        Graphics::{
+            Direct3D11::{
+                D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+                D3D11_USAGE_DEFAULT, ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D,
+            },
+            Dxgi::Common::{
+                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
+            },
+        },
         Media::MediaFoundation::{
             self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
             IMFSample, IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, METransformHaveOutput,
@@ -32,7 +40,10 @@ use windows::{
     core::{Error, Interface, Result},
 };
 
-use crate::media::{MF_VERSION, MFSetAttributeRatio, MFSetAttributeSize};
+use crate::{
+    media::{MF_VERSION, MFSetAttributeRatio, MFSetAttributeSize},
+    video::VideoProcessor,
+};
 
 use super::encoder_device::VideoEncoderDevice;
 
@@ -60,9 +71,6 @@ impl VideoEncoderOutputSample {
 pub struct VideoEncoder {
     pub inner: Option<VideoEncoderInner>,
     output_type: IMFMediaType,
-    started: AtomicBool,
-    should_stop: Arc<AtomicBool>,
-    encoder_thread_handle: Option<JoinHandle<Result<()>>>,
 }
 
 pub struct VideoEncoderInner {
@@ -70,23 +78,59 @@ pub struct VideoEncoderInner {
     _media_device_manager: IMFDXGIDeviceManager,
     _device_manager_reset_token: u32,
 
+    video_processor: VideoProcessor,
+    compose_texture: ID3D11Texture2D,
+    render_target_view: ID3D11RenderTargetView,
+
     transform: IMFTransform,
     event_generator: IMFMediaEventGenerator,
     input_stream_id: u32,
     output_stream_id: u32,
-
-    should_stop: Arc<AtomicBool>,
 }
 
 impl VideoEncoder {
     pub fn new(
         encoder_device: &VideoEncoderDevice,
         d3d_device: ID3D11Device,
+        format: DXGI_FORMAT,
         input_resolution: SizeInt32,
         output_resolution: SizeInt32,
         bit_rate: u32,
         frame_rate: u32,
     ) -> Result<Self> {
+        let video_processor = VideoProcessor::new(
+            d3d_device.clone(),
+            format,
+            input_resolution,
+            DXGI_FORMAT_NV12,
+            output_resolution,
+        )?;
+
+        let texture_desc = D3D11_TEXTURE2D_DESC {
+            Width: input_resolution.Width as u32,
+            Height: input_resolution.Height as u32,
+            ArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                ..Default::default()
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            ..Default::default()
+        };
+        let compose_texture = unsafe {
+            let mut texture = None;
+            d3d_device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+            texture.unwrap()
+        };
+        let render_target_view = unsafe {
+            let mut rtv = None;
+            d3d_device.CreateRenderTargetView(&compose_texture, None, Some(&mut rtv))?;
+            rtv.unwrap()
+        };
+
         let transform = encoder_device.create_transform()?;
 
         // Create MF device manager
@@ -224,38 +268,20 @@ impl VideoEncoder {
             _media_device_manager: media_device_manager,
             _device_manager_reset_token: device_manager_reset_token,
 
+            video_processor,
+            compose_texture,
+            render_target_view,
+
             transform,
             event_generator,
             input_stream_id,
             output_stream_id,
-
-            should_stop: should_stop.clone(),
         };
 
         Ok(Self {
             inner: Some(inner),
             output_type,
-            started: AtomicBool::new(false),
-            should_stop,
-            encoder_thread_handle: None,
         })
-    }
-
-    pub fn stop(&mut self) -> Result<()> {
-        if self.started.load(Ordering::SeqCst) {
-            assert!(
-                self.should_stop
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-            );
-            self.wait_for_completion()?;
-        }
-        Ok(())
-    }
-
-    fn wait_for_completion(&mut self) -> Result<()> {
-        let handle = self.encoder_thread_handle.take().unwrap();
-        handle.join().unwrap()
     }
 
     pub fn output_type(&self) -> &IMFMediaType {
@@ -303,8 +329,17 @@ impl VideoEncoderInner {
     }
 
     pub fn handle_needs_input(&mut self, sample: VideoEncoderInputSample) -> Result<()> {
-        let input_buffer =
-            unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &sample.texture, 0, false)? };
+        self.video_processor.process_texture(&sample.texture)?;
+        // self.video_processor.output_texture();
+
+        let input_buffer = unsafe {
+            MFCreateDXGISurfaceBuffer(
+                &ID3D11Texture2D::IID,
+                self.video_processor.output_texture(),
+                0,
+                false,
+            )?
+        };
         let mf_sample = unsafe { MFCreateSample()? };
         unsafe {
             mf_sample.AddBuffer(&input_buffer)?;

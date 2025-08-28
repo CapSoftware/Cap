@@ -365,6 +365,10 @@ impl Capturer {
         })
     }
 
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
     pub fn session(&self) -> &GraphicsCaptureSession {
         &self.session
     }
