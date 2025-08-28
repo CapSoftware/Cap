@@ -111,7 +111,7 @@ impl VideoEncoder {
             Height: input_resolution.Height as u32,
             ArraySize: 1,
             MipLevels: 1,
-            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format: format,
             SampleDesc: DXGI_SAMPLE_DESC {
                 Count: 1,
                 ..Default::default()
