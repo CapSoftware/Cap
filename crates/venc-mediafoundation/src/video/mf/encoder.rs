@@ -13,8 +13,8 @@ use windows::{
         Foundation::E_NOTIMPL,
         Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
         Media::MediaFoundation::{
-            IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
-            IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, METransformHaveOutput,
+            self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
+            IMFSample, IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, METransformHaveOutput,
             METransformNeedInput, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
             MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT,
             MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
@@ -58,14 +58,14 @@ impl VideoEncoderOutputSample {
 }
 
 pub struct VideoEncoder {
-    inner: Option<VideoEncoderInner>,
+    pub inner: Option<VideoEncoderInner>,
     output_type: IMFMediaType,
     started: AtomicBool,
     should_stop: Arc<AtomicBool>,
     encoder_thread_handle: Option<JoinHandle<Result<()>>>,
 }
 
-struct VideoEncoderInner {
+pub struct VideoEncoderInner {
     _d3d_device: ID3D11Device,
     _media_device_manager: IMFDXGIDeviceManager,
     _device_manager_reset_token: u32,
@@ -74,10 +74,6 @@ struct VideoEncoderInner {
     event_generator: IMFMediaEventGenerator,
     input_stream_id: u32,
     output_stream_id: u32,
-
-    sample_requested_callback:
-        Option<Box<dyn Send + FnMut() -> Result<Option<VideoEncoderInputSample>>>>,
-    sample_rendered_callback: Option<Box<dyn Send + FnMut(VideoEncoderOutputSample) -> Result<()>>>,
 
     should_stop: Arc<AtomicBool>,
 }
@@ -233,9 +229,6 @@ impl VideoEncoder {
             input_stream_id,
             output_stream_id,
 
-            sample_requested_callback: None,
-            sample_rendered_callback: None,
-
             should_stop: should_stop.clone(),
         };
 
@@ -246,35 +239,6 @@ impl VideoEncoder {
             should_stop,
             encoder_thread_handle: None,
         })
-    }
-
-    pub fn try_start(&mut self) -> Result<bool> {
-        let mut result = false;
-        if self
-            .started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
-            let mut inner = self.inner.take().unwrap();
-
-            // Callbacks must both be set
-            if inner.sample_rendered_callback.is_none() || inner.sample_requested_callback.is_none()
-            {
-                panic!("Sample requested and rendered callbacks must be set before starting");
-            }
-
-            // Start a seperate thread to drive the transform
-            self.encoder_thread_handle = Some(std::thread::spawn(move || -> Result<()> {
-                unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL)? }
-                let result = inner.encode();
-                if result.is_err() {
-                    println!("Recording stopped unexpectedly!");
-                }
-                result
-            }));
-            result = true;
-        }
-        Ok(result)
     }
 
     pub fn stop(&mut self) -> Result<()> {
@@ -294,70 +258,18 @@ impl VideoEncoder {
         handle.join().unwrap()
     }
 
-    pub fn set_sample_requested_callback<
-        F: 'static + Send + FnMut() -> Result<Option<VideoEncoderInputSample>>,
-    >(
-        &mut self,
-        callback: F,
-    ) {
-        self.inner.as_mut().unwrap().sample_requested_callback = Some(Box::new(callback));
-    }
-
-    pub fn set_sample_rendered_callback<
-        F: 'static + Send + FnMut(VideoEncoderOutputSample) -> Result<()>,
-    >(
-        &mut self,
-        callback: F,
-    ) {
-        self.inner.as_mut().unwrap().sample_rendered_callback = Some(Box::new(callback));
-    }
-
     pub fn output_type(&self) -> &IMFMediaType {
         &self.output_type
     }
 }
 
 unsafe impl Send for VideoEncoderInner {}
-// Workaround for:
-//    warning: constant in pattern `METransformNeedInput` should have an upper case name
-//       --> src\video\encoder.rs:XXX:YY
-//        |
-//    XXX |                     METransformNeedInput => {
-//        |                     ^^^^^^^^^^^^^^^^^^^^ help: convert the identifier to upper case: `METRANSFORM_NEED_INPUT`
-//        |
-//        = note: `#[warn(non_upper_case_globals)]` on by default
-const MEDIA_ENGINE_TRANFORM_NEED_INPUT: MF_EVENT_TYPE = METransformNeedInput;
-const MEDIA_ENGINE_TRANFORM_HAVE_OUTPUT: MF_EVENT_TYPE = METransformHaveOutput;
+
 impl VideoEncoderInner {
-    fn encode(&mut self) -> Result<()> {
+    pub fn finish(&self) -> Result<()> {
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-            self.transform
-                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-
-            let mut should_exit = false;
-            while !should_exit {
-                let event = self
-                    .event_generator
-                    .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
-
-                let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
-                match event_type {
-                    MEDIA_ENGINE_TRANFORM_NEED_INPUT => {
-                        should_exit = self.on_transform_input_requested()?;
-                    }
-                    MEDIA_ENGINE_TRANFORM_HAVE_OUTPUT => {
-                        self.on_transform_output_ready()?;
-                    }
-                    _ => {
-                        panic!("Unknown media event type: {}", event_type.0);
-                    }
-                }
-            }
-
             self.transform
                 .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
             self.transform
@@ -368,27 +280,42 @@ impl VideoEncoderInner {
         Ok(())
     }
 
-    fn on_transform_input_requested(&mut self) -> Result<bool> {
-        let mut should_exit = true;
-        if !self.should_stop.load(Ordering::SeqCst) {
-            if let Some(sample) = self.sample_requested_callback.as_mut().unwrap()()? {
-                let input_buffer = unsafe {
-                    MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &sample.texture, 0, false)?
-                };
-                let mf_sample = unsafe { MFCreateSample()? };
-                unsafe {
-                    mf_sample.AddBuffer(&input_buffer)?;
-                    mf_sample.SetSampleTime(sample.timestamp.Duration)?;
-                    self.transform
-                        .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
-                };
-                should_exit = false;
-            }
+    pub fn start(&self) -> Result<()> {
+        unsafe {
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+            self.transform
+                .ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
         }
-        Ok(should_exit)
+
+        Ok(())
     }
 
-    fn on_transform_output_ready(&mut self) -> Result<()> {
+    pub fn get_event(&self) -> windows::core::Result<MF_EVENT_TYPE> {
+        let event = unsafe {
+            self.event_generator
+                .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?
+        };
+
+        Ok(MF_EVENT_TYPE(unsafe { event.GetType()? } as i32))
+    }
+
+    pub fn handle_needs_input(&mut self, sample: VideoEncoderInputSample) -> Result<()> {
+        let input_buffer =
+            unsafe { MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &sample.texture, 0, false)? };
+        let mf_sample = unsafe { MFCreateSample()? };
+        unsafe {
+            mf_sample.AddBuffer(&input_buffer)?;
+            mf_sample.SetSampleTime(sample.timestamp.Duration)?;
+            self.transform
+                .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
+        };
+        Ok(())
+    }
+
+    pub fn handle_has_output(&mut self) -> Result<IMFSample> {
         let mut status = 0;
         let output_buffer = MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: self.output_stream_id,
@@ -402,8 +329,6 @@ impl VideoEncoderInner {
             output_buffers[0].pSample.as_ref().unwrap().clone()
         };
 
-        let output_sample = VideoEncoderOutputSample { sample };
-        self.sample_rendered_callback.as_mut().unwrap()(output_sample)?;
-        Ok(())
+        Ok(sample)
     }
 }

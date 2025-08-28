@@ -961,6 +961,7 @@ dependencies = [
 name = "cap-venc-mediafoundation"
 version = "0.1.0"
 dependencies = [
+ "cap-media-info",
  "clap",
  "scap-direct3d",
  "scap-targets",

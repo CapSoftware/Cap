@@ -3,6 +3,9 @@ name = "cap-venc-mediafoundation"
 version = "0.1.0"
 edition = "2024"
 
+[dependencies]
+cap-media-info = { path = "../media-info" }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "System",

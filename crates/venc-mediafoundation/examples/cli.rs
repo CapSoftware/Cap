@@ -1,22 +1,18 @@
 use crate::{args::Args, hotkey::HotKey};
 use cap_venc_mediafoundation::{
-    capture::create_capture_item_for_monitor,
     d3d::create_d3d_device,
     displays::get_display_handle_from_index,
     media::MF_VERSION,
     resolution::Resolution,
     video::{
-        backend::EncoderBackend,
-        encoding_session::{VideoEncoderSessionFactory, VideoEncodingSession},
-        mf::{encoder_device::VideoEncoderDevice, encoding_session::MFVideoEncodingSessionFactory},
-        wmt::encoding_session::WMTVideoEncodingSessionFactory,
+        SampleWriter, VideoEncoder, VideoEncoderInputSample, mf::encoder_device::VideoEncoderDevice,
     },
 };
 use clap::Parser;
 use scap_targets::Display;
-use std::{path::Path, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 use windows::{
-    Foundation::Metadata::ApiInformation,
+    Foundation::{Metadata::ApiInformation, TimeSpan},
     Graphics::{
         Capture::{
             GraphicsCaptureAccess, GraphicsCaptureAccessKind, GraphicsCaptureItem,
@@ -30,7 +26,7 @@ use windows::{
     Win32::{
         Foundation::MAX_PATH,
         Graphics::Direct3D11::ID3D11Device,
-        Media::MediaFoundation::{MFSTARTUP_FULL, MFStartup},
+        Media::MediaFoundation::{self, MFSTARTUP_FULL, MFStartup},
         Storage::FileSystem::GetFullPathNameW,
         System::{
             Diagnostics::Debug::{DebugBreak, IsDebuggerPresent},
@@ -52,12 +48,8 @@ fn run(
     bit_rate: u32,
     frame_rate: u32,
     resolution: Resolution,
-    encoder_index: usize,
-    borderless: bool,
     verbose: bool,
     wait_for_debugger: bool,
-    console_mode: bool,
-    backend: EncoderBackend,
 ) -> Result<()> {
     unsafe {
         RoInitialize(RO_INIT_MULTITHREADED)?;
@@ -92,14 +84,10 @@ fn run(
         );
     }
 
-    let display_handle = get_display_handle_from_index(display_index)?
-        .expect("The provided display index was out of bounds!");
-    let item = create_capture_item_for_monitor(display_handle)?;
-
-    // Get the display handle using the provided index
-    // let display_handle = get_display_handle_from_index(display_index)?
-    //     .expect("The provided display index was out of bounds!");
-    // let item = create_capture_item_for_monitor(display_handle)?;
+    let item = Display::primary()
+        .raw_handle()
+        .try_as_capture_item()
+        .unwrap();
 
     // Resolve encoding settings
     let resolution = if let Some(resolution) = resolution.get_size() {
@@ -108,7 +96,8 @@ fn run(
         item.Size()?
     };
     let bit_rate = bit_rate * 1000000;
-    let session_factory = create_encoding_session_factory(backend, encoder_index, verbose)?;
+
+    let encoder_device = VideoEncoderDevice::enumerate().unwrap().swap_remove(0);
 
     // Create our file
     let path = unsafe {
@@ -135,34 +124,93 @@ fn run(
     {
         let stream = file.OpenAsync(FileAccessMode::ReadWrite)?.get()?;
         let d3d_device = create_d3d_device()?;
-        let mut session = create_encoding_session(
-            d3d_device,
+
+        let (frame_tx, frame_rx) = std::sync::mpsc::channel();
+
+        let mut first_time = None;
+        let mut capturer = scap_direct3d::Capturer::new(
             item,
-            borderless,
-            &session_factory,
+            scap_direct3d::Settings {
+                is_border_required: Some(false),
+                ..Default::default()
+            },
+            {
+                let frame_tx = frame_tx.clone();
+                move |frame| {
+                    let frame_time = frame.inner().SystemRelativeTime()?;
+
+                    let first_time = first_time.get_or_insert(frame_time);
+                    let timestamp = TimeSpan {
+                        Duration: frame_time.Duration - first_time.Duration,
+                    };
+
+                    let _ = frame_tx.send(Some(VideoEncoderInputSample::new(
+                        timestamp,
+                        frame.texture().clone(),
+                    )));
+
+                    Ok(())
+                }
+            },
+            move || {
+                let _ = frame_tx.send(None);
+
+                Ok(())
+            },
+            Some(d3d_device.clone()),
+        )
+        .unwrap();
+
+        let mut video_encoder = VideoEncoder::new(
+            &encoder_device,
+            d3d_device.clone(),
+            resolution,
             resolution,
             bit_rate,
             frame_rate,
-            stream,
         )?;
-        if !console_mode {
-            let mut is_recording = false;
-            pump_messages(|| -> Result<bool> {
-                Ok(if !is_recording {
-                    is_recording = true;
-                    println!("Starting recording...");
-                    session.start()?;
-                    false
-                } else {
-                    true
-                })
-            })?;
-            println!("Stopping recording...");
-        } else {
-            session.start()?;
-            pause();
-        }
-        session.stop()?;
+
+        let sample_writer = Arc::new(SampleWriter::new(stream, &video_encoder.output_type())?);
+
+        capturer.start()?;
+        sample_writer.start()?;
+
+        std::thread::spawn({
+            let sample_writer = sample_writer.clone();
+            move || {
+                unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.unwrap();
+
+                let mut inner = video_encoder.inner.take().unwrap();
+
+                inner.start().unwrap();
+
+                while let Ok(e) = inner.get_event() {
+                    match e {
+                        MediaFoundation::METransformNeedInput => {
+                            let Some(frame) = frame_rx.recv().unwrap() else {
+                                break;
+                            };
+
+                            if inner.handle_needs_input(frame).is_err() {
+                                break;
+                            }
+                        }
+                        MediaFoundation::METransformHaveOutput => {
+                            let output_sample = inner.handle_has_output().unwrap();
+                            sample_writer.write(&output_sample).unwrap();
+                        }
+                        _ => {}
+                    }
+                }
+
+                inner.finish().unwrap();
+            }
+        });
+
+        pause();
+
+        capturer.stop().unwrap();
+        sample_writer.stop()?;
     }
 
     Ok(())
@@ -194,7 +242,6 @@ fn main() {
     let frame_rate: u32 = args.frame_rate;
     let resolution: Resolution = args.resolution;
     let encoder_index: usize = args.encoder;
-    let backend: EncoderBackend = args.backend;
 
     let borderless = if args.borderless {
         // Make sure the machine we're running on supports borderless capture
@@ -230,12 +277,8 @@ fn main() {
         bit_rate,
         frame_rate,
         resolution,
-        encoder_index,
-        borderless,
         verbose | wait_for_debugger,
         wait_for_debugger,
-        console_mode,
-        backend,
     );
 
     // We do this for nicer HRESULT printing when errors occur.
@@ -259,56 +302,6 @@ fn enum_encoders() -> Result<()> {
         println!("  {} - {}", i, encoder_device.display_name());
     }
     Ok(())
-}
-
-fn create_encoding_session_factory(
-    backend: EncoderBackend,
-    encoder_index: usize,
-    verbose: bool,
-) -> Result<Box<dyn VideoEncoderSessionFactory>> {
-    Ok(match backend {
-        EncoderBackend::MediaFoundation => {
-            let encoder_devices = VideoEncoderDevice::enumerate()?;
-            if encoder_devices.is_empty() {
-                exit_with_error("No hardware H264 encoders found!");
-            }
-            if verbose {
-                println!("Encoders ({}):", encoder_devices.len());
-                for encoder_device in &encoder_devices {
-                    println!("  {}", encoder_device.display_name());
-                }
-            }
-            let encoder_device = if let Some(encoder_device) = encoder_devices.get(encoder_index) {
-                encoder_device
-            } else {
-                exit_with_error("Encoder index is out of bounds!");
-            };
-            if verbose {
-                println!("Using: {}", encoder_device.display_name());
-            }
-            Box::new(MFVideoEncodingSessionFactory::new(encoder_device.clone()))
-        }
-        EncoderBackend::WindowsMediaTranscoding => Box::new(WMTVideoEncodingSessionFactory::new()),
-    })
-}
-
-fn create_encoding_session(
-    d3d_device: ID3D11Device,
-    item: GraphicsCaptureItem,
-    borderless: bool,
-    factory: &Box<dyn VideoEncoderSessionFactory>,
-    resolution: SizeInt32,
-    bit_rate: u32,
-    frame_rate: u32,
-    stream: IRandomAccessStream,
-) -> Result<Box<dyn VideoEncodingSession>> {
-    let result = factory.create_session(
-        d3d_device, item, borderless, resolution, bit_rate, frame_rate, stream,
-    );
-    if result.is_err() {
-        println!("Error during encoder setup, try another set of encoding settings.");
-    }
-    result
 }
 
 fn validate_path<P: AsRef<Path>>(path: P) -> bool {
@@ -343,25 +336,10 @@ fn required_capture_features_supported() -> Result<bool> {
     Ok(result)
 }
 
-fn pump_messages<F: FnMut() -> Result<bool>>(mut hot_key_callback: F) -> Result<()> {
-    let _hot_key = HotKey::new(MOD_SHIFT | MOD_CONTROL, 0x52 /* R */)?;
-    println!("Press SHIFT+CTRL+R to start/stop the recording...");
-    unsafe {
-        let mut message = MSG::default();
-        while GetMessageW(&mut message, None, 0, 0).into() {
-            if message.message == WM_HOTKEY && hot_key_callback()? {
-                break;
-            }
-            DispatchMessageW(&message);
-        }
-    }
-    Ok(())
-}
-
 mod args {
     use clap::{Parser, Subcommand};
 
-    use cap_venc_mediafoundation::{resolution::Resolution, video::backend::EncoderBackend};
+    use cap_venc_mediafoundation::resolution::Resolution;
 
     #[derive(Parser, Debug)]
     #[clap(author, version, about, long_about = None)]
@@ -401,10 +379,6 @@ mod args {
         /// Recording immediately starts. End the recording through console input.
         #[clap(long)]
         pub console_mode: bool,
-
-        /// The backend to use for the video encoder.
-        #[clap(long, default_value_t = EncoderBackend::MediaFoundation)]
-        pub backend: EncoderBackend,
 
         /// The output file that will contain the recording.
         #[clap(default_value = "recording.mp4")]

@@ -157,7 +157,7 @@ impl Capturer {
         settings: Settings,
         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-        mut d3d: Option<(ID3D11Device, ID3D11DeviceContext)>,
+        mut d3d: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
         if !is_supported()? {
             return Err(NewCapturerError::NotSupported);
@@ -196,10 +196,14 @@ impl Capturer {
             }
             .map_err(StartRunnerError::D3DDevice)?;
 
-            d3d = Some((d3d_device.unwrap(), d3d_context.unwrap()));
+            d3d = Some(d3d_device.unwrap());
         }
 
-        let (d3d_device, d3d_context) = d3d.unwrap();
+        let (d3d_device, d3d_context) = d3d
+            .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
+            .transpose()
+            .unwrap()
+            .unwrap();
 
         let item = item.clone();
         let settings = settings.clone();
@@ -384,11 +388,8 @@ pub enum StartCapturerError {
     RecvFailed(RecvError),
 }
 impl Capturer {
-    pub fn start(&mut self) -> Result<(), StartCapturerError> {
-        self.session.StartCapture().unwrap();
-        // .map_err(StartRunnerError::StartCapture)?;
-
-        Ok(())
+    pub fn start(&mut self) -> windows::core::Result<()> {
+        self.session.StartCapture()
     }
 }
 
