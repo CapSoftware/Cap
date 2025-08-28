@@ -16,13 +16,13 @@ import {
 	type JSX,
 	Match,
 	onCleanup,
+	ParentProps,
 	Show,
 	Suspense,
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { authStore, generalSettingsStore } from "~/store";
-import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
 	type DisplayId,
@@ -30,10 +30,22 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 export default function () {
+	return (
+		<RecordingOptionsProvider>
+			<Inner />
+		</RecordingOptionsProvider>
+	);
+}
+
+function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
-	const { rawOptions, setOptions } = createOptionsQuery();
+	const { rawOptions, setOptions } = useRecordingOptions();
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
@@ -145,7 +157,7 @@ export default function () {
 						<RecordingControls
 							target={{ variant: "display", id: params.displayId! }}
 						/>
-						<ShowCapFreeWarning />
+						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
 				)}
 			</Match>
@@ -210,7 +222,9 @@ export default function () {
 								>
 									Adjust recording area
 								</Button>
-								<ShowCapFreeWarning />
+								<ShowCapFreeWarning
+									isInstantMode={rawOptions.mode === "instant"}
+								/>
 							</div>
 						</div>
 					)}
@@ -643,7 +657,9 @@ export default function () {
 													bounds,
 												}}
 											/>
-											<ShowCapFreeWarning />
+											<ShowCapFreeWarning
+												isInstantMode={rawOptions.mode === "instant"}
+											/>
 										</div>
 									</div>
 
@@ -662,7 +678,7 @@ export default function () {
 
 function RecordingControls(props: { target: ScreenCaptureTarget }) {
 	const auth = authStore.createQuery();
-	const { rawOptions, setOptions } = createOptionsQuery();
+	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
 
@@ -787,12 +803,12 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 	);
 }
 
-function ShowCapFreeWarning() {
+function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	const auth = authStore.createQuery();
 
 	return (
 		<Suspense>
-			<Show when={auth.data?.plan?.upgraded === false}>
+			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
 				<p class="text-sm max-w-64 text-center">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
