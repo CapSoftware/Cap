@@ -87,7 +87,7 @@ export default function Settings(props: RouteSectionProps) {
 						{(v) => <p class="mb-2 text-xs text-gray-11">v{v()}</p>}
 					</Show>
 					{auth.data ? (
-						<Button onClick={handleAuth} variant="secondary" class="w-full">
+						<Button onClick={handleAuth} variant="dark" class="w-full">
 							Sign Out
 						</Button>
 					) : (
