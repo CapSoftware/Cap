@@ -14,6 +14,8 @@ import {
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import createPresence from "solid-presence";
+import { a } from "vitest/dist/chunks/suite.B2jumIFP.js";
+import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCurrentRecordingQuery,
@@ -33,6 +35,8 @@ declare global {
 	}
 }
 
+const MAX_RECORDING_FOR_FREE = 10 * 60 * 1000;
+
 export default function () {
 	const [state, setState] = createSignal<State>(
 		window.COUNTDOWN === 0
@@ -47,6 +51,7 @@ export default function () {
 	const [time, setTime] = createSignal(Date.now());
 	const currentRecording = createCurrentRecordingQuery();
 	const optionsQuery = createOptionsQuery();
+	const auth = authStore.createQuery();
 
 	const audioLevel = createAudioInputLevel();
 
@@ -155,6 +160,18 @@ export default function () {
 		}
 		return t;
 	};
+
+	let aborted = false;
+	createEffect(() => {
+		// If the data is loading or the plan is upgraded don't continue
+		if (auth.data?.plan?.upgraded !== false) return;
+
+		// TODO: Using MAX_RECORDING_FOR_FREE
+		if (!aborted && adjustedTime() > 5 * 1000) {
+			aborted = true;
+			commands.stopRecording();
+		}
+	});
 
 	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
 		null,
