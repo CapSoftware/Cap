@@ -17,7 +17,7 @@ export const _Button: Story = {
 
 		return (
 			<>
-				<label>Size</label>
+				<label for="size">Size</label>
 				<select
 					value={size()}
 					onChange={(e) => setSize(e.target.value as ButtonSize)}
@@ -66,11 +66,7 @@ export const _Button: Story = {
 								</Button>
 							</td>
 							<td>
-								<Button
-									variant="secondary"
-									size={size()}
-									class="sb-pseudo--hover"
-								>
+								<Button variant="gray" size={size()} class="sb-pseudo--hover">
 									Button
 								</Button>
 							</td>
