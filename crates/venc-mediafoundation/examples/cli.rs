@@ -308,7 +308,7 @@ mod args {
         pub display: usize,
 
         /// The bit rate you would like to encode at (in Mbps).
-        #[clap(short, long, default_value_t = 18)]
+        #[clap(short, long, default_value_t = 10)]
         pub bit_rate: u32,
 
         /// The frame rate you would like to encode at.
