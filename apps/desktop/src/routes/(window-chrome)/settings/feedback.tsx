@@ -66,7 +66,7 @@ export default function FeedbackTab() {
 								type="submit"
 								size="md"
 								variant="dark"
-								disabled={!feedback().trim() || feedback().trim().length < 0}
+								disabled={feedback().trim().length < 4}
 								class="mt-2"
 							>
 								{submission.pending ? "Submitting..." : "Submit Feedback"}
