@@ -306,8 +306,8 @@ impl Capturer {
                                 pixel_format: settings.pixel_format,
                                 inner: frame,
                                 texture: cropped_texture,
-                                d3d_context: &d3d_context,
-                                d3d_device: &d3d_device,
+                                d3d_context: d3d_context.clone(),
+                                d3d_device: d3d_device.clone(),
                             }
                         } else {
                             Frame {
@@ -316,8 +316,8 @@ impl Capturer {
                                 pixel_format: settings.pixel_format,
                                 inner: frame,
                                 texture,
-                                d3d_context: &d3d_context,
-                                d3d_device: &d3d_device,
+                                d3d_context: d3d_context.clone(),
+                                d3d_device: d3d_device.clone(),
                             }
                         };
 
@@ -426,17 +426,17 @@ impl Capturer {
     }
 }
 
-pub struct Frame<'a> {
+pub struct Frame {
     width: u32,
     height: u32,
     pixel_format: PixelFormat,
     inner: Direct3D11CaptureFrame,
     texture: ID3D11Texture2D,
-    d3d_device: &'a ID3D11Device,
-    d3d_context: &'a ID3D11DeviceContext,
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
 }
 
-impl<'a> std::fmt::Debug for Frame<'a> {
+impl std::fmt::Debug for Frame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame")
             .field("width", &self.width)
@@ -445,7 +445,7 @@ impl<'a> std::fmt::Debug for Frame<'a> {
     }
 }
 
-impl<'a> Frame<'a> {
+impl Frame {
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -467,14 +467,14 @@ impl<'a> Frame<'a> {
     }
 
     pub fn d3d_device(&self) -> &ID3D11Device {
-        self.d3d_device
+        &self.d3d_device
     }
 
     pub fn d3d_context(&self) -> &ID3D11DeviceContext {
-        self.d3d_context
+        &self.d3d_context
     }
 
-    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'a>> {
+    pub fn as_buffer<'a>(&'a self) -> windows::core::Result<FrameBuffer<'a>> {
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: self.width,
             Height: self.height,

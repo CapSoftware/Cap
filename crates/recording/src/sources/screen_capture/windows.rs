@@ -5,7 +5,6 @@ use ::windows::{
     Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device},
 };
 use cap_fail::fail_err;
-use cap_venc_mediafoundation::video::VideoEncoderInputSample;
 use cpal::traits::{DeviceTrait, HostTrait};
 use kameo::prelude::*;
 use scap_ffmpeg::*;
@@ -27,7 +26,7 @@ impl AVFrameCapture {
 }
 
 impl ScreenCaptureFormat for AVFrameCapture {
-    type VideoFormat = VideoEncoderInputSample;
+    type VideoFormat = scap_direct3d::Frame;
 
     fn pixel_format() -> ffmpeg::format::Pixel {
         scap_direct3d::PixelFormat::R8G8B8A8Unorm.as_ffmpeg()
@@ -53,7 +52,7 @@ struct FrameHandler {
     last_cleanup: Instant,
     last_log: Instant,
     frame_events: VecDeque<(Instant, bool)>,
-    video_tx: Sender<(VideoEncoderInputSample, f64)>,
+    video_tx: Sender<(scap_direct3d::Frame, f64)>,
 }
 
 impl Actor for FrameHandler {
@@ -133,7 +132,7 @@ impl Message<NewFrame> for FrameHandler {
         };
 
         let now = Instant::now();
-        let frame_dropped = match self.video_tx.try_send((msg.sample, elapsed.as_secs_f64())) {
+        let frame_dropped = match self.video_tx.try_send((msg.frame, elapsed.as_secs_f64())) {
             Err(flume::TrySendError::Disconnected(_)) => {
                 warn!("Pipeline disconnected");
                 let _ = ctx.actor_ref().stop_gracefully().await;
@@ -249,6 +248,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                             back: 1,
                         }
                     }),
+                    min_update_interval: Some(Duration::from_millis(16)),
                     ..Default::default()
                 };
 
@@ -348,11 +348,11 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
 struct ScreenCaptureActor {
     capture_handle: Option<scap_direct3d::Capturer>,
     error_tx: Sender<()>,
-    d3d_device: Option<ID3D11Device>,
+    d3d_device: ID3D11Device,
 }
 
 impl ScreenCaptureActor {
-    pub fn new(error_tx: Sender<()>, d3d_device: Option<ID3D11Device>) -> Self {
+    pub fn new(error_tx: Sender<()>, d3d_device: ID3D11Device) -> Self {
         Self {
             capture_handle: None,
             error_tx,
@@ -380,7 +380,7 @@ pub enum StartCapturingError {
 }
 
 pub struct NewFrame {
-    pub sample: VideoEncoderInputSample,
+    pub frame: scap_direct3d::Frame,
     pub display_time: SystemTime,
 }
 
@@ -423,7 +423,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
                 let _ = msg
                     .frame_handler
                     .tell(NewFrame {
-                        sample: VideoEncoderInputSample::new(timestamp, frame.texture().clone()),
+                        frame,
                         display_time,
                     })
                     .try_send();
@@ -435,7 +435,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 
                 Ok(())
             },
-            None,
+            Some(self.d3d_device.clone()),
         )
         .map_err(StartCapturingError::CreateCapturer)?;
 

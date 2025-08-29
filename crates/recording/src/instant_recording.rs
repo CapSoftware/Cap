@@ -186,8 +186,19 @@ pub async fn spawn_instant_recording_actor(
         (None, None)
     };
 
-    let (screen_source, screen_rx) =
-        create_screen_capture(&inputs.capture_target, true, 30, system_audio.0, start_time).await?;
+    #[cfg(windows)]
+    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
+
+    let (screen_source, screen_rx) = create_screen_capture(
+        &inputs.capture_target,
+        true,
+        30,
+        system_audio.0,
+        start_time,
+        #[cfg(windows)]
+        d3d_device,
+    )
+    .await?;
 
     debug!("screen capture: {screen_source:#?}");
 

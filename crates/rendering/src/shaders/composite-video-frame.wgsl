@@ -160,7 +160,43 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         }
 
         let cropped_uv = sample_uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
-        return vec4(textureSample(frame_texture, frame_sampler, cropped_uv).rgb, 1.0);
+
+        // Calculate downscaling ratio
+        let source_size = uniforms.frame_size * (crop_bounds_uv.zw - crop_bounds_uv.xy);
+        let target_size = uniforms.target_size;
+        let scale_ratio = source_size / target_size;
+        let is_downscaling = max(scale_ratio.x, scale_ratio.y) > 1.1;
+
+        // Sample the center pixel
+        let center_color = textureSample(frame_texture, frame_sampler, cropped_uv).rgb;
+
+        // Apply sharpening when downscaling to preserve text clarity
+        if is_downscaling {
+            let texel_size = 1.0 / uniforms.frame_size;
+
+            // Sample neighboring pixels for unsharp mask
+            let offset_x = vec2<f32>(texel_size.x, 0.0);
+            let offset_y = vec2<f32>(0.0, texel_size.y);
+
+            // 4-tap sampling for edge detection
+            let left = textureSample(frame_texture, frame_sampler, cropped_uv - offset_x).rgb;
+            let right = textureSample(frame_texture, frame_sampler, cropped_uv + offset_x).rgb;
+            let top = textureSample(frame_texture, frame_sampler, cropped_uv - offset_y).rgb;
+            let bottom = textureSample(frame_texture, frame_sampler, cropped_uv + offset_y).rgb;
+
+            // Calculate the blurred version (average of neighbors)
+            let blurred = (left + right + top + bottom) * 0.25;
+
+            // Unsharp mask: enhance the difference between center and blur
+            // Strength is adaptive based on downscale ratio
+            let sharpness = min(scale_ratio.x * 0.3, 0.7); // Cap at 0.7 to avoid over-sharpening
+            let sharpened = center_color + (center_color - blurred) * sharpness;
+
+            // Clamp to avoid color artifacts
+            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+        }
+
+        return vec4(center_color, 1.0);
     }
 
     return vec4(0.0);

@@ -1,5 +1,4 @@
 use cap_media::MediaError;
-
 use cap_media_info::AudioInfo;
 use flume::{Receiver, Sender};
 use std::{
@@ -237,11 +236,22 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
-        use cap_media_encoders::{H264Encoder, MP4File};
-        use windows::Graphics::SizeInt32;
+        use cap_enc_mediafoundation::{media::MF_VERSION, video::SampleWriter};
+        use windows::{
+            Graphics::SizeInt32,
+            Win32::{
+                Media::MediaFoundation::{MFSTARTUP_FULL, MFStartup},
+                System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+            },
+        };
+
+        unsafe {
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+            let _ = MFStartup(MF_VERSION, MFSTARTUP_FULL);
+        }
 
         let screen_config = source.0.info();
-        let _screen_encoder = cap_venc_mediafoundation::VideoEncoder::new(
+        let mut _screen_encoder = cap_enc_mediafoundation::VideoEncoder::new(
             source.0.d3d_device(),
             screen_capture::AVFrameCapture::PIXEL_FORMAT.as_dxgi(),
             SizeInt32 {
@@ -252,34 +262,76 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
                 Width: screen_config.width as i32,
                 Height: screen_config.height as i32,
             },
-            10_000_000,
-            screen_config.frame_rate.0 as u32,
+            18_000_000,
+            source.0.config().fps(),
         )
         .unwrap();
-        let mut screen_encoder = MP4File::init(
-            "screen",
-            output_path,
-            |o| H264Encoder::builder("screen", dbg!(screen_config)).build(o),
-            |_| None,
-        )
-        .map_err(|e| MediaError::Any(e.to_string().into()))?;
+        let _sample_writer = Arc::new(
+            SampleWriter::new(output_path.as_path(), &_screen_encoder.output_type()).unwrap(),
+        );
 
         builder.spawn_source("screen_capture", source.0);
 
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
         builder.spawn_task("screen_capture_encoder", move |ready| {
-            let mut timestamp_tx = Some(timestamp_tx);
+            use cap_enc_mediafoundation::media::MF_VERSION;
+            use windows::Win32::Media::MediaFoundation::{self, MFSTARTUP_FULL, MFStartup};
+
+            unsafe {
+                RoInitialize(RO_INIT_MULTITHREADED).unwrap();
+            }
+            unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL).unwrap() }
+
             let _ = ready.send(Ok(()));
 
-            while let Ok(frame) = source.1.recv() {
-                if let Some(timestamp_tx) = timestamp_tx.take() {
-                    timestamp_tx.send(frame.1).unwrap();
+            let mut timestamp_tx = Some(timestamp_tx);
+            let mut first_time = None;
+
+            let mut inner = _screen_encoder.inner.take().unwrap();
+
+            _sample_writer.start().unwrap();
+            inner.start().unwrap();
+
+            while let Ok(e) = inner.get_event() {
+                match e {
+                    MediaFoundation::METransformNeedInput => {
+                        use cap_enc_mediafoundation::video::VideoEncoderInputSample;
+                        use windows::Foundation::TimeSpan;
+
+                        let Ok(frame) = source.1.recv() else {
+                            break;
+                        };
+
+                        if let Some(timestamp_tx) = timestamp_tx.take() {
+                            timestamp_tx.send(frame.1).unwrap();
+                        }
+
+                        let frame_time = frame.0.inner().SystemRelativeTime().unwrap();
+                        let first_time = first_time.get_or_insert(frame_time);
+
+                        let sample = VideoEncoderInputSample::new(
+                            TimeSpan {
+                                Duration: frame_time.Duration - first_time.Duration,
+                            },
+                            frame.0.texture().clone(),
+                        );
+
+                        if inner.handle_needs_input(sample).is_err() {
+                            break;
+                        }
+                    }
+                    MediaFoundation::METransformHaveOutput => {
+                        let output_sample = inner.handle_has_output().unwrap();
+                        _sample_writer.write(&output_sample).unwrap();
+                    }
+                    _ => {}
                 }
-                // dbg!(frame.1);
-                screen_encoder.queue_video_frame(frame.0);
             }
-            screen_encoder.finish();
+
+            inner.finish().unwrap();
+            _sample_writer.stop().unwrap();
+
             Ok(())
         });
 
@@ -300,7 +352,7 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
     where
         Self: Sized,
     {
-        use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
+        use cap_enc_ffmpeg::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
 
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
@@ -362,7 +414,9 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
                     //     mp4.resume();
                     // }
 
-                    mp4.queue_video_frame(frame);
+                    use scap_ffmpeg::AsFFmpeg;
+
+                    mp4.queue_video_frame(frame.as_ffmpeg().unwrap());
                 }
             }
             if let Ok(mut mp4) = mp4.lock() {
@@ -392,6 +446,7 @@ pub async fn create_screen_capture(
     max_fps: u32,
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     start_time: SystemTime,
+    #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 
@@ -403,8 +458,70 @@ pub async fn create_screen_capture(
         audio_tx,
         start_time,
         tokio::runtime::Handle::current(),
+        #[cfg(windows)]
+        d3d_device,
     )
     .await
     .map(|v| (v, video_rx))
     .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e.to_string())))
+}
+
+#[cfg(windows)]
+pub fn create_d3d_device()
+-> windows::core::Result<windows::Win32::Graphics::Direct3D11::ID3D11Device> {
+    use windows::Win32::Graphics::{
+        Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE},
+        Direct3D11::{D3D11_CREATE_DEVICE_FLAG, ID3D11Device},
+    };
+
+    let mut device = None;
+    let flags = {
+        use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+
+        let mut flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        if cfg!(feature = "d3ddebug") {
+            use windows::Win32::Graphics::Direct3D11::D3D11_CREATE_DEVICE_DEBUG;
+
+            flags |= D3D11_CREATE_DEVICE_DEBUG;
+        }
+        flags
+    };
+    let mut result = create_d3d_device_with_type(D3D_DRIVER_TYPE_HARDWARE, flags, &mut device);
+    if let Err(error) = &result {
+        use windows::Win32::Graphics::Dxgi::DXGI_ERROR_UNSUPPORTED;
+
+        if error.code() == DXGI_ERROR_UNSUPPORTED {
+            use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_WARP;
+
+            result = create_d3d_device_with_type(D3D_DRIVER_TYPE_WARP, flags, &mut device);
+        }
+    }
+    result?;
+
+    fn create_d3d_device_with_type(
+        driver_type: D3D_DRIVER_TYPE,
+        flags: D3D11_CREATE_DEVICE_FLAG,
+        device: *mut Option<ID3D11Device>,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            use windows::Win32::{
+                Foundation::HMODULE,
+                Graphics::Direct3D11::{D3D11_SDK_VERSION, D3D11CreateDevice},
+            };
+
+            D3D11CreateDevice(
+                None,
+                driver_type,
+                HMODULE(std::ptr::null_mut()),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(device),
+                None,
+                None,
+            )
+        }
+    }
+
+    Ok(device.unwrap())
 }

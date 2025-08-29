@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
-# members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
-members = ["crates/*"]
+members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
 anyhow = { version = "1.0.86" }
@@ -78,7 +77,7 @@ opt-level = "s"   # Optimize for binary size
 debug = true
 
 [patch.crates-io]
-screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
+# screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

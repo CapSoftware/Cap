@@ -245,7 +245,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
 }
 
 #[derive(Clone, Debug)]
-struct Config {
+pub struct Config {
     display: DisplayId,
     #[cfg(windows)]
     crop_bounds: Option<PhysicalBounds>,
@@ -253,6 +253,12 @@ struct Config {
     crop_bounds: Option<LogicalBounds>,
     fps: u32,
     show_cursor: bool,
+}
+
+impl Config {
+    pub fn fps(&self) -> u32 {
+        self.fps
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -407,6 +413,10 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     #[cfg(windows)]
     pub fn d3d_device(&self) -> &::windows::Win32::Graphics::Direct3D11::ID3D11Device {
         &self.d3d_device
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     pub fn info(&self) -> VideoInfo {

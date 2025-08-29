@@ -6,7 +6,7 @@ use crate::{
     pipeline::Pipeline,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
 };
-use cap_media_encoders::{H264Encoder, MP4File, OggFile, OpusEncoder};
+use cap_enc_ffmpeg::{H264Encoder, MP4File, OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
@@ -676,14 +676,20 @@ async fn create_segment_pipeline(
         .cursor_crop()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
+    #[cfg(windows)]
+    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
+
     let (screen_source, screen_rx) = create_screen_capture(
         &capture_target,
         !custom_cursor_capture,
-        120,
+        60,
         system_audio.0,
         start_time,
+        #[cfg(windows)]
+        d3d_device,
     )
-    .await?;
+    .await
+    .unwrap();
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
@@ -701,7 +707,8 @@ async fn create_segment_pipeline(
                 pipeline_builder,
                 (screen_source, screen_rx),
                 screen_output_path.clone(),
-            )?;
+            )
+            .unwrap();
         pipeline_builder = pipeline_builder_;
 
         info!(

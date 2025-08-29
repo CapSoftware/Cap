@@ -3,7 +3,7 @@ use scap_direct3d::PixelFormat;
 
 pub type AsFFmpegError = windows::core::Error;
 
-impl<'a> super::AsFFmpeg for scap_direct3d::Frame<'a> {
+impl super::AsFFmpeg for scap_direct3d::Frame {
     fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let buffer = self.as_buffer()?;
 
