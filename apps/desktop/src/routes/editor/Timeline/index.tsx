@@ -115,7 +115,7 @@ export function Timeline() {
 		}
 	}
 
-	createEventListener(window, "keydown", async (e) => {
+	createEventListener(window, "keydown", (e) => {
 		const hasNoModifiers = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
 
 		if (e.code === "Backspace" || (e.code === "Delete" && hasNoModifiers)) {
