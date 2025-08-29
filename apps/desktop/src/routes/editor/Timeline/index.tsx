@@ -83,35 +83,36 @@ export function Timeline() {
 			zoomSegmentDragState.type !== "moving" &&
 			sceneSegmentDragState.type !== "moving"
 		) {
-      // Guard against missing bounds and clamp computed time to [0, totalDuration()]
-      if (left == null) return;
-      const rawTime =
-        secsPerPixel() * (e.clientX - left) + transform().position;
-      const newTime = Math.min(Math.max(0, rawTime), totalDuration());
+			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
+			if (left == null) return;
+			const rawTime =
+				secsPerPixel() * (e.clientX - left) + transform().position;
+			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
 
-      // If playing, some backends require restart to seek reliably
-      if (editorState.playing) {
-        try {
-          await commands.stopPlayback();
+			// If playing, some backends require restart to seek reliably
+			if (editorState.playing) {
+				try {
+					await commands.stopPlayback();
 
-          // Round to nearest frame to prevent off-by-one drift
-          const targetFrame = Math.round(newTime * FPS);
-          await commands.seekTo(targetFrame);
+					// Round to nearest frame to prevent off-by-one drift
+					const targetFrame = Math.round(newTime * FPS);
+					await commands.seekTo(targetFrame);
 
-          // If the user paused during these async ops, bail out without restarting
-          if (!editorState.playing) {
-            setEditorState("playbackTime", newTime);
-            return;
-          }
+					// If the user paused during these async ops, bail out without restarting
+					if (!editorState.playing) {
+						setEditorState("playbackTime", newTime);
+						return;
+					}
 
-          await commands.startPlayback(FPS, OUTPUT_SIZE);
-          setEditorState("playing", true);
-        } catch (err) {
-          console.error("Failed to seek during playback:", err);
-        }
-      }
+					await commands.startPlayback(FPS, OUTPUT_SIZE);
+					setEditorState("playing", true);
+				} catch (err) {
+					console.error("Failed to seek during playback:", err);
+				}
+			}
 
-      setEditorState("playbackTime", newTime);
+			setEditorState("playbackTime", newTime);
+		}
 	}
 
 	createEventListener(window, "keydown", (e) => {
