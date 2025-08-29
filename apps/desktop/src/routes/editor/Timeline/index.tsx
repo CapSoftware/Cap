@@ -130,9 +130,11 @@ export function Timeline() {
 				projectActions.deleteSceneSegment(selection.index);
 			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
-			if (!editorState.previewTime) return;
+			// Allow cutting while playing: use playbackTime when previewTime is null
+			const time = editorState.previewTime ?? editorState.playbackTime;
+			if (time === null || time === undefined) return;
 
-			projectActions.splitClipSegment(editorState.previewTime);
+			projectActions.splitClipSegment(time);
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
