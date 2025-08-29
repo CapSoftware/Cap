@@ -9,11 +9,11 @@ import {
 	createEffect,
 	createMemo,
 	createSignal,
-	onCleanup,
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import createPresence from "solid-presence";
+import { authStore } from "~/store";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	createCurrentRecordingQuery,
@@ -33,6 +33,8 @@ declare global {
 	}
 }
 
+const MAX_RECORDING_FOR_FREE = 5 * 60 * 1000;
+
 export default function () {
 	const [state, setState] = createSignal<State>(
 		window.COUNTDOWN === 0
@@ -47,6 +49,7 @@ export default function () {
 	const [time, setTime] = createSignal(Date.now());
 	const currentRecording = createCurrentRecordingQuery();
 	const optionsQuery = createOptionsQuery();
+	const auth = authStore.createQuery();
 
 	const audioLevel = createAudioInputLevel();
 
@@ -156,6 +159,33 @@ export default function () {
 		return t;
 	};
 
+	const isMaxRecordingLimitEnabled = () => {
+		// Only enforce the limit on instant mode.
+		// We enforce it on studio mode when exporting.
+		return (
+			optionsQuery.rawOptions.mode === "instant" &&
+			// If the data is loaded and the user is not upgraded
+			auth.data?.plan?.upgraded === false
+		);
+	};
+
+	let aborted = false;
+	createEffect(() => {
+		if (
+			isMaxRecordingLimitEnabled() &&
+			adjustedTime() > MAX_RECORDING_FOR_FREE &&
+			!aborted
+		) {
+			aborted = true;
+			stopRecording.mutate();
+		}
+	});
+
+	const remainingRecordingTime = () => {
+		if (MAX_RECORDING_FOR_FREE < adjustedTime()) return 0;
+		return MAX_RECORDING_FOR_FREE - adjustedTime();
+	};
+
 	const [countdownRef, setCountdownRef] = createSignal<HTMLDivElement | null>(
 		null,
 	);
@@ -196,7 +226,12 @@ export default function () {
 				>
 					<IconCapStopCircle />
 					<span class="font-[500] text-[0.875rem] tabular-nums">
-						{formatTime(adjustedTime() / 1000)}
+						<Show
+							when={isMaxRecordingLimitEnabled()}
+							fallback={formatTime(adjustedTime() / 1000)}
+						>
+							{formatTime(remainingRecordingTime() / 1000)}
+						</Show>
 					</span>
 				</button>
 
