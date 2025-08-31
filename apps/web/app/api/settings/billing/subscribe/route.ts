@@ -6,15 +6,12 @@ import { stripe, userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { PostHog } from "posthog-node";
+import type Stripe from "stripe";
 
 export async function POST(request: NextRequest) {
-	console.log("Starting subscription process");
 	const user = await getCurrentUser();
 	let customerId = user?.stripeCustomerId;
 	const { priceId, quantity } = await request.json();
-
-	console.log("Received request with priceId:", priceId);
-	console.log("Current user:", user?.id);
 
 	if (!priceId) {
 		console.error("Price ID not found");
@@ -33,15 +30,29 @@ export async function POST(request: NextRequest) {
 
 	try {
 		if (!user.stripeCustomerId) {
-			console.log("Creating new Stripe customer for user:", user.id);
-			const customer = await stripe().customers.create({
+			const existingCustomers = await stripe().customers.list({
 				email: user.email,
-				metadata: {
-					userId: user.id,
-				},
+				limit: 1,
 			});
 
-			console.log("Created Stripe customer:", customer.id);
+			let customer: Stripe.Customer;
+			if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
+				customer = existingCustomers.data[0];
+
+				customer = await stripe().customers.update(customer.id, {
+					metadata: {
+						...customer.metadata,
+						userId: user.id,
+					},
+				});
+			} else {
+				customer = await stripe().customers.create({
+					email: user.email,
+					metadata: {
+						userId: user.id,
+					},
+				});
+			}
 
 			await db()
 				.update(users)
@@ -49,12 +60,8 @@ export async function POST(request: NextRequest) {
 					stripeCustomerId: customer.id,
 				})
 				.where(eq(users.id, user.id));
-
-			console.log("Updated user with Stripe customer ID");
 			customerId = customer.id;
 		}
-
-		console.log("Creating checkout session for customer:", customerId);
 		const checkoutSession = await stripe().checkout.sessions.create({
 			customer: customerId as string,
 			line_items: [{ price: priceId, quantity: quantity }],
@@ -66,8 +73,6 @@ export async function POST(request: NextRequest) {
 		});
 
 		if (checkoutSession.url) {
-			console.log("Successfully created checkout session");
-
 			try {
 				const ph = new PostHog(buildEnv.NEXT_PUBLIC_POSTHOG_KEY || "", {
 					host: buildEnv.NEXT_PUBLIC_POSTHOG_HOST || "",
