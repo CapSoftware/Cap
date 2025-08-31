@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { CACHE_CONTROL_HEADERS, getHeaders } from "@/utils/helpers";
 import { createBucketProvider } from "@/utils/s3";
+import { getCurrentUser } from "@cap/database/auth/session";
 
 export const revalidate = 0;
 
@@ -60,6 +61,17 @@ export async function GET(request: NextRequest) {
 	}
 
 	if (video.jobStatus === "COMPLETE") {
+		// Enforce access control for non-public videos
+		if (video.public === false) {
+			const user = await getCurrentUser();
+			if (!user || user.id !== video.ownerId) {
+				return new Response(
+					JSON.stringify({ error: true, message: "Video is not public" }),
+					{ status: 401, headers: getHeaders(origin) },
+				);
+			}
+		}
+
 		const [customBucket] = await db()
 			.select()
 			.from(s3Buckets)

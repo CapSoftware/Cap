@@ -49,7 +49,6 @@ jobs:
           echo "CAP_AWS_ENDPOINT=https://build.placeholder.com" >> .env
           echo "S3_PUBLIC_ENDPOINT=https://build.placeholder.com" >> .env
           echo "S3_INTERNAL_ENDPOINT=https://build.placeholder.com" >> .env
-          cat .env
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
