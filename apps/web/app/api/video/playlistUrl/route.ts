@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
+import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { CACHE_CONTROL_HEADERS, getHeaders } from "@/utils/helpers";
 import { createBucketProvider } from "@/utils/s3";
-import { getCurrentUser } from "@cap/database/auth/session";
 
 export const revalidate = 0;
 
@@ -37,7 +37,11 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
-	const query = await db().select().from(videos).where(eq(videos.id, videoId));
+	const query = await db()
+		.select({ video: videos, bucket: s3Buckets })
+		.from(videos)
+		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
 		return new Response(
@@ -49,8 +53,8 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
-	const video = query[0];
-	if (!video) {
+	const result = query[0];
+	if (!result?.video) {
 		return new Response(
 			JSON.stringify({ error: true, message: "Video not found" }),
 			{
@@ -59,6 +63,8 @@ export async function GET(request: NextRequest) {
 			},
 		);
 	}
+
+	const { video, bucket } = result;
 
 	if (video.jobStatus === "COMPLETE") {
 		// Enforce access control for non-public videos
@@ -72,12 +78,7 @@ export async function GET(request: NextRequest) {
 			}
 		}
 
-		const [customBucket] = await db()
-			.select()
-			.from(s3Buckets)
-			.where(eq(s3Buckets.ownerId, video.ownerId));
-
-		const bucketProvider = await createBucketProvider(customBucket);
+		const bucketProvider = await createBucketProvider(bucket);
 		const playlistKey = `${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
 		const playlistUrl = await bucketProvider.getSignedObjectUrl(playlistKey);
 
