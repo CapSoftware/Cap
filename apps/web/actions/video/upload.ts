@@ -8,11 +8,10 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 
 async function getVideoUploadPresignedUrl({
@@ -242,18 +241,18 @@ export async function createVideoAndGetUploadUrl({
 			audioCodec,
 		});
 
-		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-			// Fire-and-forget to avoid blocking the response needed to start client upload progress
-			dub()
-				.links.create({
-					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
-					domain: "cap.link",
-					key: idToUse,
-				})
-				.catch((err) => {
-					console.error("Dub link create failed", err);
-				});
-		}
+		// if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
+		// 	// Fire-and-forget to avoid blocking the response needed to start client upload progress
+		// 	dub()
+		// 		.links.create({
+		// 			url: `${serverEnv().WEB_URL}/s/${idToUse}`,
+		// 			domain: "cap.link",
+		// 			key: idToUse,
+		// 		})
+		// 		.catch((err) => {
+		// 			console.error("Dub link create failed", err);
+		// 		});
+		// }
 
 		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");
