@@ -78,7 +78,7 @@ Provide visual answers to support tickets. Create help videos and documentation.
 
 - **Personal Use**: Free forever (5-minute recording limit)
 - **Desktop License**: $29/year or $58 lifetime (unlimited recording)
-- **Cap Pro**: $9/month ($6/month when billed annually) - includes cloud storage and AI features
+- **Cap Pro**: $12/month ($8.16/month when billed annually) - includes cloud storage and AI features
 - **Teams**: Custom pricing for organizations
 
 ## Privacy & Security
