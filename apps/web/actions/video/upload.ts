@@ -11,6 +11,7 @@ import { s3Buckets, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 
@@ -253,6 +254,10 @@ export async function createVideoAndGetUploadUrl({
 					console.error("Dub link create failed", err);
 				});
 		}
+
+		revalidatePath("/dashboard/caps");
+		revalidatePath("/dashboard/folder");
+		revalidatePath("/dashboard/spaces");
 
 		return {
 			id: idToUse,
