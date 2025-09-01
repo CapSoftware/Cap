@@ -928,6 +928,7 @@ dependencies = [
 name = "cap-camera-mediafoundation"
 version = "0.1.0"
 dependencies = [
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "tracing",
@@ -941,6 +942,7 @@ version = "0.1.0"
 dependencies = [
  "cap-camera-directshow",
  "cap-camera-mediafoundation",
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "windows 0.60.0",
@@ -951,6 +953,7 @@ dependencies = [
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
 ]
@@ -1179,6 +1182,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-ffmpeg-utils"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
+]
+
+[[package]]
 name = "cap-flags"
 version = "0.1.0"
 dependencies = [
@@ -1209,9 +1219,32 @@ dependencies = [
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cap-mediafoundation-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "cap-mediafoundation-utils",
+ "ffmpeg-next",
+ "flume",
+ "thiserror 1.0.69",
+ "tracing",
+ "windows 0.60.0",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
+name = "cap-mediafoundation-utils"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+ "windows-core 0.60.1",
 ]
 
 [[package]]
@@ -1241,9 +1274,11 @@ dependencies = [
  "cap-enc-ffmpeg",
  "cap-enc-mediafoundation",
  "cap-fail",
+ "cap-ffmpeg-utils",
  "cap-flags",
  "cap-media",
  "cap-media-info",
+ "cap-mediafoundation-ffmpeg",
  "cap-project",
  "cap-utils",
  "chrono",
@@ -6951,6 +6986,7 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cidre 0.11.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",

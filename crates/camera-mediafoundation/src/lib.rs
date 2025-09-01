@@ -1,13 +1,13 @@
 #![cfg(windows)]
 #![allow(non_snake_case)]
 
+use cap_mediafoundation_utils::*;
 use std::{
     ffi::OsString,
     fmt::Display,
     mem::MaybeUninit,
     ops::{Deref, DerefMut},
     os::windows::ffi::OsStringExt,
-    ptr::null_mut,
     slice::from_raw_parts,
     sync::{
         Mutex,
@@ -15,7 +15,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-
 use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
@@ -539,51 +538,6 @@ fn get_device_model_id(device_id: &str) -> Option<String> {
     let id_product = &device_id[pid_location + 4..pid_location + 8];
 
     Some(format!("{id_vendor}:{id_product}"))
-}
-
-pub trait IMFMediaBufferExt {
-    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock<'_>>;
-}
-
-impl IMFMediaBufferExt for IMFMediaBuffer {
-    fn lock(&self) -> windows_core::Result<IMFMediaBufferLock<'_>> {
-        let mut bytes_ptr = null_mut();
-        let mut size = 0;
-
-        unsafe {
-            self.Lock(&mut bytes_ptr, None, Some(&mut size))?;
-        }
-
-        Ok(IMFMediaBufferLock {
-            source: self,
-            bytes: unsafe { std::slice::from_raw_parts_mut(bytes_ptr, size as usize) },
-        })
-    }
-}
-
-pub struct IMFMediaBufferLock<'a> {
-    source: &'a IMFMediaBuffer,
-    bytes: &'a mut [u8],
-}
-
-impl<'a> Drop for IMFMediaBufferLock<'a> {
-    fn drop(&mut self) {
-        let _ = unsafe { self.source.Unlock() };
-    }
-}
-
-impl<'a> Deref for IMFMediaBufferLock<'a> {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        self.bytes
-    }
-}
-
-impl<'a> DerefMut for IMFMediaBufferLock<'a> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.bytes
-    }
 }
 
 pub struct CallbackData {

@@ -1,3 +1,4 @@
+use cap_ffmpeg_utils::*;
 use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 use ffmpeg::frame;
 pub use ffmpeg::{
@@ -262,45 +263,5 @@ pub fn ffmpeg_sample_format_for(sample_format: SampleFormat) -> Option<Sample> {
         SampleFormat::F32 => Some(Sample::F32(Type::Planar)),
         SampleFormat::F64 => Some(Sample::F64(Type::Planar)),
         _ => None,
-    }
-}
-
-pub trait PlanarData {
-    fn plane_data(&self, index: usize) -> &[u8];
-
-    fn plane_data_mut(&mut self, index: usize) -> &mut [u8];
-}
-
-// The ffmpeg crate's implementation of the `data_mut` function is wrong for audio;
-// per [the FFmpeg docs](https://www.ffmpeg.org/doxygen/7.0/structAVFrame.html]) only
-// the linesize of the first plane may be set for planar audio, and so we need to use
-// that linesize for the rest of the planes (else they will appear to be empty slices).
-impl PlanarData for frame::Audio {
-    #[inline]
-    fn plane_data(&self, index: usize) -> &[u8] {
-        if index >= self.planes() {
-            panic!("out of bounds");
-        }
-
-        unsafe {
-            std::slice::from_raw_parts(
-                (*self.as_ptr()).data[index],
-                (*self.as_ptr()).linesize[0] as usize,
-            )
-        }
-    }
-
-    #[inline]
-    fn plane_data_mut(&mut self, index: usize) -> &mut [u8] {
-        if index >= self.planes() {
-            panic!("out of bounds");
-        }
-
-        unsafe {
-            std::slice::from_raw_parts_mut(
-                (*self.as_mut_ptr()).data[index],
-                (*self.as_ptr()).linesize[0] as usize,
-            )
-        }
     }
 }

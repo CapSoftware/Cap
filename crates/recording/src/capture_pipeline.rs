@@ -290,21 +290,36 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         match screen_encoder {
             either::Left(mut encoder) => {
-                let sample_writer = Arc::new(
-                    SampleWriter::new(output_path.as_path())
-                        .map_err(|e| MediaError::Any(format!("NewSampleWriter: {e}").into()))?,
-                );
+                // let sample_writer = Arc::new(
+                //     SampleWriter::new(output_path.as_path())
+                //         .map_err(|e| MediaError::Any(format!("NewSampleWriter: {e}").into()))?,
+                // );
 
-                let screen_writer_stream = sample_writer
-                    .add_stream(&encoder.output_type())
-                    .map_err(|e| MediaError::Any(format!("AddSampleWriterStream: {e}").into()))?;
+                // let screen_writer_stream = sample_writer
+                //     .add_stream(&encoder.output_type())
+                //     .map_err(|e| MediaError::Any(format!("AddSampleWriterStream: {e}").into()))?;
 
-                sample_writer
-                    .start()
-                    .map_err(|e| MediaError::Any(format!("SampleWriterStart: {e}").into()))?;
+                // sample_writer
+                //     .start()
+                //     .map_err(|e| MediaError::Any(format!("SampleWriterStart: {e}").into()))?;
                 encoder
                     .start()
                     .map_err(|e| MediaError::Any(format!("ScreenEncoderStart: {e}").into()))?;
+
+                let mut output = ffmpeg::format::output(&output_path).unwrap();
+
+                let mut mf_ffmpeg_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
+                    &mut output,
+                    cap_mediafoundation_ffmpeg::MuxerConfig {
+                        width: screen_config.width,
+                        height: screen_config.height,
+                        fps: screen_config.fps(),
+                        bitrate: 5_000_000,
+                    },
+                )
+                .unwrap();
+
+                output.write_header().unwrap();
 
                 builder.spawn_task("screen_capture_encoder", move |ready| {
                     use cap_enc_mediafoundation::media::MF_VERSION;
@@ -353,17 +368,30 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                                     .handle_has_output()
                                     .map_err(|e| format!("HasOutput: {e}"))?
                                 {
-                                    sample_writer
-                                        .write(screen_writer_stream, &output_sample)
-                                        .map_err(|e| format!("SampleWriterWrite: {e}"))?;
+                                    mf_ffmpeg_muxer
+                                        .write_sample(&output_sample, &mut output)
+                                        .unwrap();
+                                    // if let Ok((v, pts, dts, duration, keyframe)) =
+                                    //     cap_mediafoundation_ffmpeg::extract_sample_data(
+                                    //         &output_sample,
+                                    //     )
+                                    // {
+                                    //     dbg!(v.len(), pts, dts, duration, keyframe);
+                                    // }
+
+                                    // sample_writer
+                                    //     .write(screen_writer_stream, &output_sample)
+                                    //     .map_err(|e| format!("SampleWriterWrite: {e}"))?;
                                 }
                             }
                             _ => {}
                         }
                     }
 
+                    output.write_trailer().unwrap();
+
                     let _ = encoder.finish();
-                    let _ = sample_writer.stop();
+                    // let _ = sample_writer.stop();
 
                     Ok(())
                 });

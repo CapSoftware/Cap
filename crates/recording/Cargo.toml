@@ -20,6 +20,7 @@ cap-cursor-info = { path = "../cursor-info" }
 cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -58,6 +59,7 @@ cap-enc-avfoundation = { path = "../enc-avfoundation" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
+cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
 windows = { workspace = true, features = [
 	"Win32_Foundation",
 	"Win32_Graphics_Gdi",

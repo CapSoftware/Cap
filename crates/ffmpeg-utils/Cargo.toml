@@ -1,12 +1,10 @@
 [package]
-name = "cap-cpal-ffmpeg"
+name = "cap-ffmpeg-utils"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cpal.workspace = true
 ffmpeg.workspace = true
-cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 [lints]
 workspace = true
