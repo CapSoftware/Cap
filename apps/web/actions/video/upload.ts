@@ -250,7 +250,9 @@ export async function createVideoAndGetUploadUrl({
 			});
 		}
 
+		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");
+		revalidatePath("/dashboard/spaces");
 
 		return {
 			id: idToUse,
