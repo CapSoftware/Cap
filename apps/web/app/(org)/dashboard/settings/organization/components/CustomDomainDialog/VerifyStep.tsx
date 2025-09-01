@@ -95,7 +95,8 @@ const VerifyStep = ({
 		recommendedCnames.some((rec) => currentCnames.includes(rec.value));
 	const showARecord =
 		recommendedAValues.length > 0 && !aRecordConfigured && !isSubdomain(domain);
-	const showCNAMERecord = hasRecommendedCNAME && !cnameConfigured;
+	const showCNAMERecord =
+		hasRecommendedCNAME && !cnameConfigured && !isSubdomain(domain);
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
 	const handleCopy = async (text: string, fieldId: string) => {
