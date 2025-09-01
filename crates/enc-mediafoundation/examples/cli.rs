@@ -125,8 +125,8 @@ fn run(
             dbg!(capturer.settings().pixel_format).as_dxgi(),
             resolution,
             resolution,
-            bit_rate,
             frame_rate,
+            0.07,
         )
         .unwrap();
 

@@ -92,11 +92,13 @@ pub enum NewVideoEncoderError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
+    /// Recommended bitrate multipler: 0.05-0.1
     pub fn new(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
         resolution: SizeInt32,
         frame_rate: u32,
+        bitrate_multipler: f32,
     ) -> Result<Self, NewVideoEncoderError> {
         let bit_rate = calculate_bitrate(
             resolution.Width as u32,
@@ -401,6 +403,6 @@ impl H264Encoder {
     }
 }
 
-fn calculate_bitrate(width: u32, height: u32, fps: u32) -> u32 {
-    ((width * height * ((fps - 30) / 2 + 30)) as f32 * 0.08) as u32
+fn calculate_bitrate(width: u32, height: u32, fps: u32, multiplier: f32) -> u32 {
+    ((width * height * ((fps - 30) / 2 + 30)) as f32 * multiplier) as u32
 }

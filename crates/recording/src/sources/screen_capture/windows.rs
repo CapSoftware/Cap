@@ -19,13 +19,13 @@ const LOG_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_DROP_RATE_THRESHOLD: f64 = 0.25;
 
 #[derive(Debug)]
-pub struct AVFrameCapture;
+pub struct Direct3DCapture;
 
-impl AVFrameCapture {
+impl Direct3DCapture {
     pub const PIXEL_FORMAT: scap_direct3d::PixelFormat = scap_direct3d::PixelFormat::R8G8B8A8Unorm;
 }
 
-impl ScreenCaptureFormat for AVFrameCapture {
+impl ScreenCaptureFormat for Direct3DCapture {
     type VideoFormat = scap_direct3d::Frame;
 
     fn pixel_format() -> ffmpeg::format::Pixel {
@@ -201,7 +201,7 @@ enum SourceError {
     Closed,
 }
 
-impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
+impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
     // #[instrument(skip_all)]
     fn run(
         &mut self,
@@ -234,7 +234,7 @@ impl PipelineSourceTask for ScreenCaptureSource<AVFrameCapture> {
                 });
 
                 let mut settings = scap_direct3d::Settings {
-                    pixel_format: AVFrameCapture::PIXEL_FORMAT,
+                    pixel_format: Direct3DCapture::PIXEL_FORMAT,
                     crop: config.crop_bounds.map(|b| {
                         let position = b.position();
                         let size = b.size().map(|v| (v / 2.0).floor() * 2.0);

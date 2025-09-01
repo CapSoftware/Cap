@@ -224,7 +224,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
 }
 
 #[cfg(windows)]
-impl MakeCapturePipeline for screen_capture::AVFrameCapture {
+impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     fn make_studio_mode_pipeline(
         mut builder: PipelineBuilder,
         source: (
@@ -255,12 +255,13 @@ impl MakeCapturePipeline for screen_capture::AVFrameCapture {
         let screen_encoder = {
             let native_encoder = cap_enc_mediafoundation::H264Encoder::new(
                 source.0.d3d_device(),
-                screen_capture::AVFrameCapture::PIXEL_FORMAT.as_dxgi(),
+                screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
                 SizeInt32 {
                     Width: screen_config.width as i32,
                     Height: screen_config.height as i32,
                 },
                 source.0.config().fps(),
+                0.07,
             );
 
             match native_encoder {
@@ -493,7 +494,7 @@ type ScreenCaptureReturn<T> = (
 pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
 #[cfg(windows)]
-pub type ScreenCaptureMethod = screen_capture::AVFrameCapture;
+pub type ScreenCaptureMethod = screen_capture::Direct3DCapture;
 
 pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
