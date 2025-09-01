@@ -243,11 +243,16 @@ export async function createVideoAndGetUploadUrl({
 		});
 
 		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
-			await dub().links.create({
-				url: `${serverEnv().WEB_URL}/s/${idToUse}`,
-				domain: "cap.link",
-				key: idToUse,
-			});
+			// Fire-and-forget to avoid blocking the response needed to start client upload progress
+			dub()
+				.links.create({
+					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
+					domain: "cap.link",
+					key: idToUse,
+				})
+				.catch((err) => {
+					console.error("Dub link create failed", err);
+				});
 		}
 
 		revalidatePath("/dashboard/caps");
