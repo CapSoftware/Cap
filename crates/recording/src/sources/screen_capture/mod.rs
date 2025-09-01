@@ -406,6 +406,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             tokio_handle,
             start_time,
             _phantom: std::marker::PhantomData,
+            #[cfg(windows)]
             d3d_device,
         })
     }

@@ -133,7 +133,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         let has_audio_sources = audio_mixer.has_sources();
 
         let mp4 = Arc::new(std::sync::Mutex::new(
-            cap_media_encoders::MP4AVAssetWriterEncoder::init(
+            cap_enc_avfoundation::MP4Encoder::init(
                 "mp4",
                 source.0.info(),
                 has_audio_sources.then_some(AudioMixer::info()),
