@@ -18,9 +18,14 @@ pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
     ];
 
     if api::macos_available("14.0") {
-        device_types.push(unsafe { av::CaptureDeviceType::external().unwrap() })
+        if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+            device_types.push(typ);
+        }
+        if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
+            device_types.push(typ);
+        }
     } else {
-        device_types.push(av::CaptureDeviceType::external_unknown())
+        device_types.push(av::CaptureDeviceType::external_unknown());
     }
 
     let device_types = ns::Array::from_slice(&device_types);
