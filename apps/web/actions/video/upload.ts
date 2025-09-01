@@ -8,10 +8,11 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { serverEnv, buildEnv, NODE_ENV } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 
 async function getVideoUploadPresignedUrl({
@@ -229,6 +230,14 @@ export async function createVideoAndGetUploadUrl({
 		};
 
 		await db().insert(videos).values(videoData);
+
+		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
+			await dub().links.create({
+				url: `${serverEnv().WEB_URL}/s/${idToUse}`,
+				domain: "cap.link",
+				key: idToUse,
+			});
+		}
 
 		const fileKey = `${user.id}/${idToUse}/${
 			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
