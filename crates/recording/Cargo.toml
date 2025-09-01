@@ -17,7 +17,7 @@ scap-targets = { path = "../scap-targets" }
 cap-cursor-capture = { path = "../cursor-capture" }
 cap-media-info = { path = "../media-info" }
 cap-cursor-info = { path = "../cursor-info" }
-cap-camera = { path = "../camera" }
+cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 
@@ -54,13 +54,14 @@ objc = "0.2.7"
 cidre = { workspace = true }
 objc2-app-kit = "0.3.1"
 scap-screencapturekit = { path = "../scap-screencapturekit" }
+cap-enc-avfoundation = { path = "../enc-avfoundation" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
 windows = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Gdi",
-    "Win32_UI_WindowsAndMessaging",
+	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
+	"Win32_UI_WindowsAndMessaging",
 ] }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
