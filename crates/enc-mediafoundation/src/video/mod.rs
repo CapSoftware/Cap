@@ -1,6 +1,7 @@
-pub mod mf;
-mod util;
+mod h264;
+mod sample_writer;
+mod video_processor;
 
-const CLEAR_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-
-pub use mf::*;
+pub use h264::*;
+pub use sample_writer::*;
+pub use video_processor::*;

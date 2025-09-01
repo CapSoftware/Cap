@@ -503,9 +503,9 @@ pub mod audio {
                         return;
                     };
 
-                    ff_frame.set_pts(Some(
-                        (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
-                    ));
+                    let rate = ff_frame.rate();
+
+                    ff_frame.set_pts(Some((elapsed.as_secs_f64() * rate as f64) as i64));
 
                     let _ = audio_tx.send((ff_frame, elapsed.as_secs_f64()));
                     i += 1;

@@ -15,14 +15,13 @@ pub struct SampleWriter {
     _stream: IRandomAccessStream,
     _file: StorageFile,
     sink_writer: IMFSinkWriter,
-    sink_writer_stream_index: u32,
 }
 
 unsafe impl Send for SampleWriter {}
 unsafe impl Sync for SampleWriter {}
 
 impl SampleWriter {
-    pub fn new(path: &Path, output_type: &IMFMediaType) -> Result<Self> {
+    pub fn new(path: &Path) -> Result<Self> {
         let parent_folder_path = path.parent().unwrap();
         let parent_folder = StorageFolder::GetFolderFromPathAsync(&HSTRING::from(
             parent_folder_path.as_os_str().to_str().unwrap(),
@@ -56,18 +55,31 @@ impl SampleWriter {
             MFCreateSinkWriterFromURL(&HSTRING::from(".mp4"), &byte_stream, &empty_attributes)
                 .unwrap()
         };
-        let sink_writer_stream_index = unsafe { sink_writer.AddStream(output_type) }.unwrap();
-        unsafe {
-            sink_writer.SetInputMediaType(sink_writer_stream_index, output_type, &empty_attributes)
-        }
-        .unwrap();
 
         Ok(Self {
             _stream: stream,
             _file: file,
             sink_writer,
-            sink_writer_stream_index,
         })
+    }
+
+    pub fn add_stream(&self, output_type: &IMFMediaType) -> Result<StreamIndex> {
+        let empty_attributes = unsafe {
+            let mut attributes = None;
+            MFCreateAttributes(&mut attributes, 0)?;
+            attributes.unwrap()
+        };
+
+        let sink_writer_stream_index = unsafe { self.sink_writer.AddStream(output_type) }?;
+        unsafe {
+            self.sink_writer.SetInputMediaType(
+                sink_writer_stream_index,
+                output_type,
+                &empty_attributes,
+            )
+        }?;
+
+        Ok(StreamIndex(sink_writer_stream_index))
     }
 
     pub fn start(&self) -> Result<()> {
@@ -78,10 +90,10 @@ impl SampleWriter {
         unsafe { self.sink_writer.Finalize() }
     }
 
-    pub fn write(&self, sample: &IMFSample) -> Result<()> {
-        unsafe {
-            self.sink_writer
-                .WriteSample(self.sink_writer_stream_index, sample)
-        }
+    pub fn write(&self, stream: StreamIndex, sample: &IMFSample) -> Result<()> {
+        unsafe { self.sink_writer.WriteSample(stream.0, sample) }
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct StreamIndex(u32);

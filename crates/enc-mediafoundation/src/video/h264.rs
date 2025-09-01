@@ -8,11 +8,12 @@ use windows::{
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
         },
         Media::MediaFoundation::{
-            IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
-            IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE,
-            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE,
-            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+            IMFAsyncCallback, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEvent,
+            IMFMediaEventGenerator, IMFMediaType, IMFSample, IMFTransform,
+            MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
+            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT,
+            MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
+            MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
             MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
             MFCreateSample, MFMediaType_Video, MFT_MESSAGE_COMMAND_FLUSH,
@@ -22,12 +23,15 @@ use windows::{
             MFVideoFormat_H264, MFVideoFormat_NV12, MFVideoInterlace_Progressive,
         },
     },
-    core::{Error, Interface, Result},
+    core::{Error, Interface},
 };
 
 use crate::{
+    async_callback::AsyncCallback,
     media::{MFSetAttributeRatio, MFSetAttributeSize},
-    video::{VideoEncoderDevice, VideoProcessor},
+    mft::EncoderDevice,
+    unsafe_send::UnsafeSend,
+    video::{NewVideoProcessorError, VideoProcessor},
 };
 
 pub struct VideoEncoderInputSample {
@@ -51,12 +55,7 @@ impl VideoEncoderOutputSample {
     }
 }
 
-pub struct VideoEncoder {
-    pub inner: Option<VideoEncoderInner>,
-    output_type: IMFMediaType,
-}
-
-pub struct VideoEncoderInner {
+pub struct H264Encoder {
     _d3d_device: ID3D11Device,
     _media_device_manager: IMFDXGIDeviceManager,
     _device_manager_reset_token: u32,
@@ -67,29 +66,61 @@ pub struct VideoEncoderInner {
     event_generator: IMFMediaEventGenerator,
     input_stream_id: u32,
     output_stream_id: u32,
+    output_type: IMFMediaType,
 }
 
-impl VideoEncoder {
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum NewVideoEncoderError {
+    #[error("NoVideoEncoderDevice")]
+    NoVideoEncoderDevice,
+    #[error("EncoderTransform: {0}")]
+    EncoderTransform(windows::core::Error),
+    #[error("VideoProcessor: {0}")]
+    VideoProcessor(NewVideoProcessorError),
+    #[error("DeviceManager: {0}")]
+    DeviceManager(windows::core::Error),
+    #[error("EventGenerator: {0}")]
+    EventGenerator(windows::core::Error),
+    #[error("ConfigureStreams: {0}")]
+    ConfigureStreams(windows::core::Error),
+    #[error("OutputType: {0}")]
+    OutputType(windows::core::Error),
+    #[error("InputType: {0}")]
+    InputType(windows::core::Error),
+}
+
+unsafe impl Send for H264Encoder {}
+
+impl H264Encoder {
     pub fn new(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
-        input_resolution: SizeInt32,
-        output_resolution: SizeInt32,
-        bit_rate: u32,
+        resolution: SizeInt32,
         frame_rate: u32,
-    ) -> Result<Self> {
-        let encoder_device = VideoEncoderDevice::enumerate()?.swap_remove(0);
+    ) -> Result<Self, NewVideoEncoderError> {
+        let bit_rate = calculate_bitrate(
+            resolution.Width as u32,
+            resolution.Height as u32,
+            frame_rate,
+        );
+
+        let transform = EncoderDevice::enumerate(MFMediaType_Video, MFVideoFormat_H264)
+            .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
+            .first()
+            .cloned()
+            .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
+            .create_transform()
+            .map_err(NewVideoEncoderError::EncoderTransform)?;
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
             format,
-            input_resolution,
+            resolution,
             DXGI_FORMAT_NV12,
-            output_resolution,
+            resolution,
             frame_rate,
-        )?;
-
-        let transform = encoder_device.create_transform()?;
+        )
+        .map_err(NewVideoEncoderError::VideoProcessor)?;
 
         // Create MF device manager
         let mut device_manager_reset_token: u32 = 0;
@@ -99,24 +130,41 @@ impl VideoEncoder {
                 MFCreateDXGIDeviceManager(
                     &mut device_manager_reset_token,
                     &mut media_device_manager,
-                )?
+                )
+                .map_err(NewVideoEncoderError::DeviceManager)?
             };
             media_device_manager.unwrap()
         };
-        unsafe { media_device_manager.ResetDevice(d3d_device, device_manager_reset_token)? };
+        unsafe {
+            media_device_manager
+                .ResetDevice(d3d_device, device_manager_reset_token)
+                .map_err(NewVideoEncoderError::DeviceManager)?
+        };
 
         // Setup MFTransform
-        let event_generator: IMFMediaEventGenerator = transform.cast()?;
-        let attributes = unsafe { transform.GetAttributes()? };
+        let event_generator: IMFMediaEventGenerator = transform
+            .cast()
+            .map_err(NewVideoEncoderError::EventGenerator)?;
+        let attributes = unsafe {
+            transform
+                .GetAttributes()
+                .map_err(NewVideoEncoderError::EventGenerator)?
+        };
         unsafe {
-            attributes.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
-            attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+            attributes
+                .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
+                .map_err(NewVideoEncoderError::EventGenerator)?;
+            attributes
+                .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
+                .map_err(NewVideoEncoderError::EventGenerator)?;
         };
 
         let mut number_of_input_streams = 0;
         let mut number_of_output_streams = 0;
         unsafe {
-            transform.GetStreamCount(&mut number_of_input_streams, &mut number_of_output_streams)?
+            transform
+                .GetStreamCount(&mut number_of_input_streams, &mut number_of_output_streams)
+                .map_err(NewVideoEncoderError::EventGenerator)?
         };
         let (input_stream_ids, output_stream_ids) = {
             let mut input_stream_ids = vec![0u32; number_of_input_streams as usize];
@@ -141,7 +189,7 @@ impl VideoEncoder {
                             output_stream_ids[i as usize] = i;
                         }
                     } else {
-                        return Err(error);
+                        return Err(NewVideoEncoderError::ConfigureStreams(error));
                     }
                 }
             }
@@ -153,10 +201,12 @@ impl VideoEncoder {
         // TOOD: Avoid this AddRef?
         unsafe {
             let temp = media_device_manager.clone();
-            transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, std::mem::transmute(temp))?;
+            transform
+                .ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, std::mem::transmute(temp))
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
         };
 
-        let output_type = unsafe {
+        let output_type = (|| unsafe {
             let output_type = MFCreateMediaType()?;
             let attributes: IMFAttributes = output_type.cast()?;
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -165,23 +215,25 @@ impl VideoEncoder {
             MFSetAttributeSize(
                 &attributes,
                 &MF_MT_FRAME_SIZE,
-                output_resolution.Width as u32,
-                output_resolution.Height as u32,
+                resolution.Width as u32,
+                resolution.Height as u32,
             )?;
             MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, 60, 1)?;
             MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
             transform.SetOutputType(output_stream_id, &output_type, 0)?;
-            output_type
-        };
-        let input_type: Option<IMFMediaType> = unsafe {
+            Ok(output_type)
+        })()
+        .map_err(NewVideoEncoderError::OutputType)?;
+
+        let input_type: Option<IMFMediaType> = (|| unsafe {
             let mut count = 0;
             loop {
                 let result = transform.GetInputAvailableType(input_stream_id, count);
                 if let Err(error) = &result {
                     if error.code() == MF_E_NO_MORE_TYPES {
-                        break None;
+                        break Ok(None);
                     }
                 }
 
@@ -192,8 +244,8 @@ impl VideoEncoder {
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
-                    output_resolution.Width as u32,
-                    output_resolution.Height as u32,
+                    resolution.Width as u32,
+                    resolution.Height as u32,
                 )?;
                 MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, 60, 1)?;
                 let result = transform.SetInputType(
@@ -208,19 +260,21 @@ impl VideoEncoder {
                     }
                 }
                 result?;
-                break Some(input_type);
+                break Ok(Some(input_type));
             }
-        };
+        })()
+        .map_err(NewVideoEncoderError::InputType)?;
         if let Some(input_type) = input_type {
-            unsafe { transform.SetInputType(input_stream_id, &input_type, 0)? };
+            unsafe { transform.SetInputType(input_stream_id, &input_type, 0) }
+                .map_err(NewVideoEncoderError::InputType)?;
         } else {
-            return Err(Error::new(
+            return Err(NewVideoEncoderError::InputType(Error::new(
                 MF_E_TRANSFORM_TYPE_NOT_SET,
                 "No suitable input type found! Try a different set of encoding settings.",
-            ));
+            )));
         }
 
-        let inner = VideoEncoderInner {
+        Ok(Self {
             _d3d_device: d3d_device.clone(),
             _media_device_manager: media_device_manager,
             _device_manager_reset_token: device_manager_reset_token,
@@ -231,10 +285,7 @@ impl VideoEncoder {
             event_generator,
             input_stream_id,
             output_stream_id,
-        };
 
-        Ok(Self {
-            inner: Some(inner),
             output_type,
         })
     }
@@ -242,12 +293,8 @@ impl VideoEncoder {
     pub fn output_type(&self) -> &IMFMediaType {
         &self.output_type
     }
-}
 
-unsafe impl Send for VideoEncoderInner {}
-
-impl VideoEncoderInner {
-    pub fn finish(&self) -> Result<()> {
+    pub fn finish(&self) -> windows::core::Result<()> {
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -261,7 +308,7 @@ impl VideoEncoderInner {
         Ok(())
     }
 
-    pub fn start(&self) -> Result<()> {
+    pub fn start(&self) -> windows::core::Result<()> {
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
@@ -274,6 +321,35 @@ impl VideoEncoderInner {
         Ok(())
     }
 
+    pub fn get_event_stream(
+        &self,
+    ) -> impl futures::Stream<Item = windows::core::Result<UnsafeSend<IMFMediaEvent>>> {
+        let generator = UnsafeSend(self.event_generator.clone());
+
+        futures::stream::unfold((), move |()| {
+            let generator = generator.clone();
+            async move {
+                let (tx, rx) = futures::channel::oneshot::channel();
+
+                let callback: IMFAsyncCallback = {
+                    let generator = generator.clone();
+                    AsyncCallback::new(move |result| {
+                        let _ = tx.send(
+                            unsafe { generator.EndGetEvent(result.unwrap()) }.map(UnsafeSend),
+                        );
+                    })
+                    .into()
+                };
+
+                let _ = unsafe { generator.BeginGetEvent(&callback, None) };
+
+                let val = rx.await.ok()?;
+
+                Some((val, ()))
+            }
+        })
+    }
+
     pub fn get_event(&self) -> windows::core::Result<MF_EVENT_TYPE> {
         let event = unsafe {
             self.event_generator
@@ -283,7 +359,10 @@ impl VideoEncoderInner {
         Ok(MF_EVENT_TYPE(unsafe { event.GetType()? } as i32))
     }
 
-    pub fn handle_needs_input(&mut self, sample: VideoEncoderInputSample) -> Result<()> {
+    pub fn handle_needs_input(
+        &mut self,
+        sample: VideoEncoderInputSample,
+    ) -> windows::core::Result<()> {
         self.video_processor.process_texture(&sample.texture)?;
 
         let input_buffer = unsafe {
@@ -304,7 +383,7 @@ impl VideoEncoderInner {
         Ok(())
     }
 
-    pub fn handle_has_output(&mut self) -> Result<IMFSample> {
+    pub fn handle_has_output(&mut self) -> windows::core::Result<Option<IMFSample>> {
         let mut status = 0;
         let output_buffer = MFT_OUTPUT_DATA_BUFFER {
             dwStreamID: self.output_stream_id,
@@ -315,9 +394,13 @@ impl VideoEncoderInner {
             let mut output_buffers = [output_buffer];
             self.transform
                 .ProcessOutput(0, &mut output_buffers, &mut status)?;
-            output_buffers[0].pSample.as_ref().unwrap().clone()
+            output_buffers[0].pSample.as_ref().cloned()
         };
 
         Ok(sample)
     }
+}
+
+fn calculate_bitrate(width: u32, height: u32, fps: u32) -> u32 {
+    ((width * height * ((fps - 30) / 2 + 30)) as f32 * 0.08) as u32
 }

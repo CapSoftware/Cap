@@ -4,7 +4,7 @@ use cap_enc_mediafoundation::{
     media::MF_VERSION,
     resolution::Resolution,
     video::{
-        SampleWriter, VideoEncoder, VideoEncoderInputSample, mf::encoder_device::VideoEncoderDevice,
+        H264Encoder, SampleWriter, VideoEncoderInputSample, mf::encoder_device::VideoEncoderDevice,
     },
 };
 use clap::Parser;
@@ -120,7 +120,7 @@ fn run(
         )
         .unwrap();
 
-        let mut video_encoder = VideoEncoder::new(
+        let mut video_encoder = H264Encoder::new(
             &d3d_device,
             dbg!(capturer.settings().pixel_format).as_dxgi(),
             resolution,

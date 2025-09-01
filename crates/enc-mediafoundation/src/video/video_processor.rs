@@ -19,7 +19,7 @@ use windows::{
             Dxgi::Common::{DXGI_FORMAT, DXGI_RATIONAL, DXGI_SAMPLE_DESC},
         },
     },
-    core::{Interface, Result},
+    core::Interface,
 };
 use windows_numerics::Vector2;
 
@@ -37,6 +37,20 @@ pub struct VideoProcessor {
     video_input: ID3D11VideoProcessorInputView,
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum NewVideoProcessorError {
+    #[error("GetDevice: {0}")]
+    GetDevice(windows::core::Error),
+    #[error("GetContext: {0}")]
+    GetContext(windows::core::Error),
+    #[error("CreateVideoProcessor: {0}")]
+    CreateVideoProcessor(windows::core::Error),
+    #[error("CreateInput: {0}")]
+    CreateInput(windows::core::Error),
+    #[error("CreateOutput: {0}")]
+    CreateOutput(windows::core::Error),
+}
+
 impl VideoProcessor {
     pub fn new(
         d3d_device: ID3D11Device,
@@ -45,12 +59,17 @@ impl VideoProcessor {
         output_format: DXGI_FORMAT,
         output_size: SizeInt32,
         frame_rate: u32,
-    ) -> Result<Self> {
-        let d3d_context = unsafe { d3d_device.GetImmediateContext()? };
+    ) -> Result<Self, NewVideoProcessorError> {
+        let d3d_context = unsafe { d3d_device.GetImmediateContext() }
+            .map_err(NewVideoProcessorError::GetDevice)?;
 
         // Setup video conversion
-        let video_device: ID3D11VideoDevice = d3d_device.cast()?;
-        let video_context: ID3D11VideoContext = d3d_context.cast()?;
+        let video_device: ID3D11VideoDevice = d3d_device
+            .cast()
+            .map_err(NewVideoProcessorError::GetDevice)?;
+        let video_context: ID3D11VideoContext = d3d_context
+            .cast()
+            .map_err(NewVideoProcessorError::GetDevice)?;
 
         let video_desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
             InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
@@ -68,9 +87,11 @@ impl VideoProcessor {
             OutputHeight: output_size.Height as u32,
             Usage: D3D11_VIDEO_USAGE_OPTIMAL_QUALITY,
         };
-        let video_enum = unsafe { video_device.CreateVideoProcessorEnumerator(&video_desc)? };
+        let video_enum = unsafe { video_device.CreateVideoProcessorEnumerator(&video_desc) }
+            .map_err(NewVideoProcessorError::CreateVideoProcessor)?;
 
-        let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0)? };
+        let video_processor = unsafe { video_device.CreateVideoProcessor(&video_enum, 0) }
+            .map_err(NewVideoProcessorError::CreateVideoProcessor)?;
 
         let mut color_space = D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
             _bitfield: 1 | D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255.0 as u32,
@@ -117,7 +138,9 @@ impl VideoProcessor {
         };
         let video_output_texture = unsafe {
             let mut texture = None;
-            d3d_device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+            d3d_device
+                .CreateTexture2D(&texture_desc, None, Some(&mut texture))
+                .map_err(NewVideoProcessorError::CreateOutput)?;
             texture.unwrap()
         };
 
@@ -129,12 +152,14 @@ impl VideoProcessor {
         };
         let video_output = unsafe {
             let mut output = None;
-            video_device.CreateVideoProcessorOutputView(
-                &video_output_texture,
-                &video_enum,
-                &output_view_desc,
-                Some(&mut output),
-            )?;
+            video_device
+                .CreateVideoProcessorOutputView(
+                    &video_output_texture,
+                    &video_enum,
+                    &output_view_desc,
+                    Some(&mut output),
+                )
+                .map_err(NewVideoProcessorError::CreateOutput)?;
             output.unwrap()
         };
 
@@ -144,7 +169,9 @@ impl VideoProcessor {
         texture_desc.BindFlags = (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32;
         let video_input_texture = unsafe {
             let mut texture = None;
-            d3d_device.CreateTexture2D(&texture_desc, None, Some(&mut texture))?;
+            d3d_device
+                .CreateTexture2D(&texture_desc, None, Some(&mut texture))
+                .map_err(NewVideoProcessorError::CreateInput)?;
             texture.unwrap()
         };
 
@@ -160,12 +187,14 @@ impl VideoProcessor {
         };
         let video_input = unsafe {
             let mut input = None;
-            video_device.CreateVideoProcessorInputView(
-                &video_input_texture,
-                &video_enum,
-                &input_view_desc,
-                Some(&mut input),
-            )?;
+            video_device
+                .CreateVideoProcessorInputView(
+                    &video_input_texture,
+                    &video_enum,
+                    &input_view_desc,
+                    Some(&mut input),
+                )
+                .map_err(NewVideoProcessorError::CreateInput)?;
             input.unwrap()
         };
 
@@ -187,7 +216,10 @@ impl VideoProcessor {
         &self.video_output_texture
     }
 
-    pub fn process_texture(&mut self, input_texture: &ID3D11Texture2D) -> Result<()> {
+    pub fn process_texture(
+        &mut self,
+        input_texture: &ID3D11Texture2D,
+    ) -> windows::core::Result<()> {
         // The caller is responsible for making sure they give us a
         // texture that matches the input size we were initialized with.
 

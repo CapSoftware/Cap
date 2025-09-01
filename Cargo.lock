@@ -1120,9 +1120,12 @@ version = "0.1.0"
 dependencies = [
  "cap-media-info",
  "clap",
+ "futures",
  "scap-direct3d",
  "scap-targets",
+ "thiserror 1.0.69",
  "windows 0.60.0",
+ "windows-core 0.60.1",
  "windows-numerics 0.2.0",
 ]
 
@@ -1254,6 +1257,19 @@ dependencies = [
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cap-mediafoundation-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "ffmpeg-next",
+ "flume",
+ "thiserror 1.0.69",
+ "tracing",
+ "windows 0.60.0",
+ "windows-numerics 0.2.0",
 ]
 
 [[package]]

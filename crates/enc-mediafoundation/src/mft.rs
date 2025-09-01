@@ -1,30 +1,29 @@
-use cap_media_info::{AudioInfo, PlanarData, VideoInfo};
 use windows::{
-    Win32::Media::MediaFoundation::*,
-    core::{Array, GUID, Interface},
+    Win32::Media::MediaFoundation::{
+        IMFActivate, IMFAttributes, MF_E_ATTRIBUTENOTFOUND, MFT_ENUM_FLAG, MFT_REGISTER_TYPE_INFO,
+        MFTEnumEx,
+    },
+    core::{Array, GUID, Result},
+};
+use windows::{
+    Win32::Media::MediaFoundation::{
+        IMFTransform, MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE,
+        MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_FRIENDLY_NAME_Attribute,
+    },
+    core::Interface,
 };
 
-pub struct MP4Encoder {}
-
-impl MP4Encoder {
-    pub fn new(video_config: VideoInfo) -> Self {
-        let encoder_device = VideoEncoderDevice::enumerate().unwrap().swap_remove(0);
-
-        MP4Encoder {}
-    }
-}
-
 #[derive(Clone)]
-struct VideoEncoderDevice {
+pub struct EncoderDevice {
     source: IMFActivate,
     display_name: String,
 }
 
-impl VideoEncoderDevice {
-    pub fn enumerate() -> windows::core::Result<Vec<VideoEncoderDevice>> {
+impl EncoderDevice {
+    pub fn enumerate(major_type: GUID, subtype: GUID) -> Result<Vec<EncoderDevice>> {
         let output_info = MFT_REGISTER_TYPE_INFO {
-            guidMajorType: MFMediaType_Video,
-            guidSubtype: MFVideoFormat_H264,
+            guidMajorType: major_type,
+            guidSubtype: subtype,
         };
         let encoders = enumerate_mfts(
             &MFT_CATEGORY_VIDEO_ENCODER,
@@ -41,7 +40,7 @@ impl VideoEncoderDevice {
             } else {
                 "Unknown".to_owned()
             };
-            let encoder_device = VideoEncoderDevice {
+            let encoder_device = EncoderDevice {
                 source: encoder,
                 display_name,
             };
@@ -54,17 +53,17 @@ impl VideoEncoderDevice {
         &self.display_name
     }
 
-    pub fn create_transform(&self) -> windows::core::Result<IMFTransform> {
+    pub fn create_transform(&self) -> Result<IMFTransform> {
         unsafe { self.source.ActivateObject() }
     }
 }
 
-pub fn enumerate_mfts(
+fn enumerate_mfts(
     category: &GUID,
     flags: MFT_ENUM_FLAG,
     input_type: Option<&MFT_REGISTER_TYPE_INFO>,
     output_type: Option<&MFT_REGISTER_TYPE_INFO>,
-) -> windows::core::Result<Vec<IMFActivate>> {
+) -> Result<Vec<IMFActivate>> {
     let mut transform_sources = Vec::new();
     let mfactivate_list = unsafe {
         let mut data = std::ptr::null_mut();
@@ -88,10 +87,10 @@ pub fn enumerate_mfts(
     Ok(transform_sources)
 }
 
-pub fn get_string_attribute(
+fn get_string_attribute(
     attributes: &IMFAttributes,
     attribute_guid: &GUID,
-) -> windows::core::Result<Option<String>> {
+) -> Result<Option<String>> {
     unsafe {
         match attributes.GetStringLength(attribute_guid) {
             Ok(mut length) => {

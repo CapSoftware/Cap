@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 cap-media-info = { path = "../media-info" }
+futures.workspace = true
+thiserror.workspace = true
+windows-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
