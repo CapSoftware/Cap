@@ -1,12 +1,11 @@
 mod record;
 
 use std::{
-    io::{stdout, Write},
+    io::{Write, stdout},
     path::PathBuf,
 };
 
 use cap_export::ExporterBase;
-use cap_media::{feeds::CameraFeed, sources::get_target_fps};
 use cap_project::XY;
 use clap::{Args, Parser, Subcommand};
 use record::RecordStart;
@@ -77,7 +76,7 @@ async fn main() -> Result<(), String> {
         }
         Commands::Record(RecordArgs { command, args }) => match command {
             Some(RecordCommands::Screens) => {
-                let screens = cap_media::sources::list_screens();
+                let screens = cap_recording::screen_capture::list_displays();
 
                 for (i, (screen, target)) in screens.iter().enumerate() {
                     println!(
@@ -89,12 +88,12 @@ screen {}:
                         i,
                         screen.id,
                         screen.name,
-                        get_target_fps(target).unwrap()
+                        target.refresh_rate()
                     );
                 }
             }
             Some(RecordCommands::Windows) => {
-                let windows = cap_media::sources::list_windows();
+                let windows = cap_recording::screen_capture::list_windows();
 
                 for (i, (window, target)) in windows.iter().enumerate() {
                     println!(
@@ -106,12 +105,12 @@ window {}:
                         i,
                         window.id,
                         window.name,
-                        get_target_fps(target).unwrap()
+                        target.display().unwrap().refresh_rate()
                     );
                 }
             }
             Some(RecordCommands::Cameras) => {
-                let cameras = CameraFeed::list_cameras();
+                let cameras = cap_camera::list_cameras().collect::<Vec<_>>();
 
                 let mut info = vec![];
                 for camera_info in cameras {
@@ -143,7 +142,6 @@ window {}:
             None => {
                 args.run().await?;
             }
-            _ => {}
         },
     }
 
@@ -161,7 +159,7 @@ impl Export {
         let exporter_base = ExporterBase::builder(self.project_path)
             .build()
             .await
-            .map_err(|v| format!("Exporter build error: {}", v.to_string()))?;
+            .map_err(|v| format!("Exporter build error: {v}"))?;
 
         let mut stdout = stdout();
 
@@ -170,13 +168,13 @@ impl Export {
             resolution_base: XY::new(1920, 1080),
             compression: cap_export::mp4::ExportCompression::Minimal,
         }
-        .export(exporter_base, move |f| {
+        .export(exporter_base, move |_f| {
             // print!("\rrendered frame {f}");
 
             stdout.flush().unwrap();
         })
         .await
-        .map_err(|v| format!("Exporter error: {}", v.to_string()))?;
+        .map_err(|v| format!("Exporter error: {v}"))?;
 
         let output_path = if let Some(output_path) = self.output_path {
             std::fs::copy(&exporter_output_path, &output_path).unwrap();

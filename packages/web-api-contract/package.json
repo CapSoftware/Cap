@@ -1,11 +1,11 @@
 {
-  "name": "@cap/web-api-contract",
-  "private": true,
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
-  "type": "module",
-  "dependencies": {
-    "@ts-rest/core": "^3.52.1",
-    "zod": "^3.24.2"
-  }
+	"name": "@cap/web-api-contract",
+	"private": true,
+	"main": "./src/index.ts",
+	"types": "./src/index.ts",
+	"type": "module",
+	"dependencies": {
+		"@ts-rest/core": "^3.52.1",
+		"zod": "^3.25.76"
+	}
 }

@@ -18,9 +18,14 @@ pub fn list_video_devices() -> arc::R<ns::Array<av::CaptureDevice>> {
     ];
 
     if api::macos_available("14.0") {
-        device_types.push(unsafe { av::CaptureDeviceType::external().unwrap() })
+        if let Some(typ) = unsafe { av::CaptureDeviceType::external() } {
+            device_types.push(typ);
+        }
+        if let Some(typ) = unsafe { av::CaptureDeviceType::continuity_camera() } {
+            device_types.push(typ);
+        }
     } else {
-        device_types.push(av::CaptureDeviceType::external_unknown())
+        device_types.push(av::CaptureDeviceType::external_unknown());
     }
 
     let device_types = ns::Array::from_slice(&device_types);
@@ -60,7 +65,7 @@ impl TryFrom<&cf::String> for YCbCrMatrix {
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_601_4() => Self::Rec601,
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_709_2() => Self::Rec709,
             s if s == cv::image_buf_attachment::ycbcr_matrix::itu_r_2020() => Self::Rec2020,
-            s => return Err(()),
+            _ => return Err(()),
         })
     }
 }

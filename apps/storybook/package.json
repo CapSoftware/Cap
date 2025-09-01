@@ -1,29 +1,30 @@
 {
-  "name": "@cap/storybook",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev:storybook": "storybook dev -p 6006",
-    "build:storybook": "storybook build"
-  },
-  "dependencies": {
-    "@cap/ui-solid": "workspace:*",
-    "postcss-pseudo-companion-classes": "^0.1.1",
-    "solid-js": "^1.9.3"
-  },
-  "devDependencies": {
-    "@chromatic-com/storybook": "^1.6.1",
-    "@storybook/addon-essentials": "^8.2.7",
-    "@storybook/addon-interactions": "^8.2.7",
-    "@storybook/addon-links": "^8.2.7",
-    "@storybook/blocks": "^8.2.7",
-    "@storybook/docs-tools": "^8.2.7",
-    "@storybook/testing-library": "^0.2.2",
-    "storybook": "^8.2.7",
-    "storybook-solidjs": "^1.0.0-beta.2",
-    "storybook-solidjs-vite": "^1.0.0-beta.2",
-    "typescript": "^5.8.3",
-    "vite": "^6.3.5",
-    "vite-plugin-solid": "^2.10.2"
-  }
+	"name": "@cap/storybook",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev:storybook": "storybook dev -p 6006",
+		"build:storybook": "storybook build"
+	},
+	"dependencies": {
+		"@cap/ui-solid": "workspace:*",
+		"postcss-pseudo-companion-classes": "^0.1.1",
+		"solid-js": "^1.9.3",
+		"zod": "^3"
+	},
+	"devDependencies": {
+		"@chromatic-com/storybook": "^1.6.1",
+		"@storybook/addon-essentials": "^8.2.7",
+		"@storybook/addon-interactions": "^8.2.7",
+		"@storybook/addon-links": "^8.2.7",
+		"@storybook/blocks": "^8.2.7",
+		"@storybook/docs-tools": "^8.2.7",
+		"@storybook/testing-library": "^0.2.2",
+		"storybook": "^8.2.7",
+		"storybook-solidjs": "^1.0.0-beta.2",
+		"storybook-solidjs-vite": "^1.0.0-beta.2",
+		"typescript": "^5.8.3",
+		"vite": "^6.3.5",
+		"vite-plugin-solid": "^2.10.2"
+	}
 }

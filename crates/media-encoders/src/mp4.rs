@@ -11,6 +11,7 @@ use crate::H264EncoderError;
 use super::{AudioEncoder, H264Encoder};
 
 pub struct MP4File {
+    #[allow(unused)]
     tag: &'static str,
     output: format::context::Output,
     video: H264Encoder,
@@ -20,11 +21,11 @@ pub struct MP4File {
 
 #[derive(thiserror::Error, Debug)]
 pub enum InitError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     Ffmpeg(ffmpeg::Error),
     #[error("Video/{0}")]
     VideoInit(H264EncoderError),
-    #[error("Video/{0}")]
+    #[error("Audio/{0}")]
     AudioInit(Box<dyn std::error::Error>),
 }
 

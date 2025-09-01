@@ -27,6 +27,7 @@ pub mod decoder;
 mod frame_pipeline;
 mod layers;
 mod project_recordings;
+mod scene;
 mod spring_mass_damper;
 mod zoom;
 
@@ -35,6 +36,7 @@ pub use decoder::DecodedFrame;
 pub use frame_pipeline::RenderedFrame;
 pub use project_recordings::{ProjectRecordingsMeta, SegmentRecordings};
 
+use scene::*;
 use zoom::*;
 
 const STANDARD_CURSOR_HEIGHT: f32 = 75.0;
@@ -167,6 +169,8 @@ pub enum RenderingError {
     ChannelSendFrameFailed(#[from] mpsc::error::SendError<(RenderedFrame, u32)>),
     #[error("Failed to load image: {0}")]
     ImageLoadError(String),
+    #[error("Error polling wgpu: {0}")]
+    PollError(#[from] wgpu::PollError),
 }
 
 pub struct RenderSegment {
@@ -174,6 +178,7 @@ pub struct RenderSegment {
     pub decoders: RecordingSegmentDecoders,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
     constants: &RenderVideoConstants,
     project: &ProjectConfiguration,
@@ -189,14 +194,13 @@ pub async fn render_video_to_channel(
 
     let start_time = Instant::now();
 
-    // Get the duration from the timeline if it exists, otherwise use the longest source duration
-    let duration = get_duration(recordings, recording_meta, meta, &project);
+    let duration = get_duration(recordings, recording_meta, meta, project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
     let mut frame_number = 0;
 
-    let mut frame_renderer = FrameRenderer::new(&constants);
+    let mut frame_renderer = FrameRenderer::new(constants);
 
     let mut layers = RendererLayers::new(&constants.device, &constants.queue);
 
@@ -213,7 +217,6 @@ pub async fn render_video_to_channel(
 
         let segment = &segments[segment_i as usize];
 
-        // do this after all usages but before any 'continue' to handle frame skip
         let frame_number = {
             let prev = frame_number;
             std::mem::replace(&mut frame_number, prev + 1)
@@ -225,8 +228,8 @@ pub async fn render_video_to_channel(
             .await
         {
             let uniforms = ProjectUniforms::new(
-                &constants,
-                &project,
+                constants,
+                project,
                 frame_number,
                 fps,
                 resolution_base,
@@ -263,32 +266,19 @@ pub fn get_duration(
 ) -> f64 {
     let mut max_duration = recordings.duration();
 
-    // Check camera duration if it exists
-    if let Some(camera_path) = meta.camera_path() {
-        if let Ok(camera_duration) =
+    if let Some(camera_path) = meta.camera_path()
+        && let Ok(camera_duration) =
             recordings.get_source_duration(&recording_meta.path(&camera_path))
-        {
-            println!("Camera recording duration: {}", camera_duration);
-            max_duration = max_duration.max(camera_duration);
-            println!("New max duration after camera check: {}", max_duration);
-        }
+    {
+        println!("Camera recording duration: {camera_duration}");
+        max_duration = max_duration.max(camera_duration);
+        println!("New max duration after camera check: {max_duration}");
     }
 
-    // If there's a timeline, ensure all segments extend to the max duration
     if let Some(timeline) = &project.timeline {
-        // for (i, segment) in timeline.segments.iter().enumerate() {
-        //     println!(
-        //         "Segment {} - current end: {}, max_duration: {}",
-        //         i, segment.end, max_duration
-        //     );
-        //     if segment.end < max_duration {
-        //         segment.end = max_duration;
-        //         println!("Extended segment {} to new end: {}", i, segment.end);
-        //     }
-        // }
         timeline.duration()
     } else {
-        println!("No timeline found, using max_duration: {}", max_duration);
+        println!("No timeline found, using max_duration: {max_duration}");
         max_duration
     }
 }
@@ -351,9 +341,11 @@ pub struct ProjectUniforms {
     pub cursor_size: f32,
     display: CompositeVideoFrameUniforms,
     camera: Option<CompositeVideoFrameUniforms>,
+    camera_only: Option<CompositeVideoFrameUniforms>,
     interpolated_cursor: Option<InterpolatedCursorPosition>,
     pub project: ProjectConfiguration,
     pub zoom: InterpolatedZoom,
+    pub scene: InterpolatedScene,
     pub resolution_base: XY<u32>,
 }
 
@@ -384,6 +376,7 @@ impl ProjectUniforms {
         })
     }
 
+    #[allow(unused)]
     fn get_padding(options: &RenderOptions, project: &ProjectConfiguration) -> f64 {
         let crop = Self::get_crop(options, project);
 
@@ -454,9 +447,7 @@ impl ProjectUniforms {
 
         let scaled_width = ((base_width as f32 * scale) as u32 + 1) & !1;
         let scaled_height = ((base_height as f32 * scale) as u32 + 1) & !1;
-        return (scaled_width, scaled_height);
-
-        // ((base_width + 1) & !1, (base_height + 1) & !1)
+        (scaled_width, scaled_height)
     }
 
     pub fn display_offset(
@@ -488,7 +479,6 @@ impl ProjectUniforms {
             f64::max(output_size.x, output_size.y) * padding_factor
         };
 
-        // let padding = Self::get_padding(options, project);
         let is_height_constrained = cropped_aspect <= output_aspect;
 
         let available_size = output_size - 2.0 * padding;
@@ -545,7 +535,7 @@ impl ProjectUniforms {
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
             segment_frames.recording_time,
-            (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+            (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                 tension: project.cursor.tension,
                 mass: project.cursor.mass,
                 friction: project.cursor.friction,
@@ -564,7 +554,7 @@ impl ProjectUniforms {
             interpolate_cursor(
                 cursor_events,
                 (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then(|| SpringMassDamperSimulationConfig {
+                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
                     tension: project.cursor.tension,
                     mass: project.cursor.mass,
                     friction: project.cursor.friction,
@@ -574,6 +564,15 @@ impl ProjectUniforms {
             .map(|i| i.position)
             .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
         );
+
+        let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
+            frame_time as f64,
+            project
+                .timeline
+                .as_ref()
+                .map(|t| t.scene_segments.as_slice())
+                .unwrap_or(&[]),
+        ));
 
         let display = {
             let output_size = XY::new(output_size.0 as f64, output_size.1 as f64);
@@ -618,7 +617,7 @@ impl ProjectUniforms {
                 rounding_px: (project.background.rounding / 100.0 * 0.5 * min_target_axis) as f32,
                 mirror_x: 0.0,
                 velocity_uv: velocity,
-                motion_blur_amount,
+                motion_blur_amount: (motion_blur_amount + scene.screen_blur as f32 * 0.8).min(1.0),
                 camera_motion_blur_amount: 0.0,
                 shadow: project.background.shadow,
                 shadow_size: project
@@ -636,19 +635,19 @@ impl ProjectUniforms {
                     .advanced_shadow
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
+                opacity: scene.screen_opacity as f32,
                 _padding: [0.0; 3],
             }
         };
 
         let camera = options
             .camera_size
-            .filter(|_| !project.camera.hide)
+            .filter(|_| !project.camera.hide && scene.should_render_camera())
             .map(|camera_size| {
                 let output_size = [output_size.0 as f32, output_size.1 as f32];
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let min_axis = output_size[0].min(output_size[1]);
 
-                // Calculate camera size based on zoom
                 let base_size = project.camera.size / 100.0;
                 let zoom_size = project
                     .camera
@@ -658,6 +657,8 @@ impl ProjectUniforms {
 
                 let zoomed_size =
                     (zoom.t as f32) * zoom_size * base_size + (1.0 - zoom.t as f32) * base_size;
+
+                let zoomed_size = zoomed_size * scene.camera_scale as f32;
 
                 let aspect = frame_size[0] / frame_size[1];
                 let size = match project.camera.shape {
@@ -701,21 +702,22 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                // Calculate camera motion blur based on zoom transition
                 let camera_motion_blur = 0.0;
+
+                let crop_bounds = match project.camera.shape {
+                    CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
+                    CameraShape::Square => [
+                        (frame_size[0] - frame_size[1]) / 2.0,
+                        0.0,
+                        frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
+                        frame_size[1],
+                    ],
+                };
 
                 CompositeVideoFrameUniforms {
                     output_size,
                     frame_size,
-                    crop_bounds: match project.camera.shape {
-                        CameraShape::Source => [0.0, 0.0, frame_size[0], frame_size[1]],
-                        CameraShape::Square => [
-                            (frame_size[0] - frame_size[1]) / 2.0,
-                            0.0,
-                            frame_size[0] - (frame_size[0] - frame_size[1]) / 2.0,
-                            frame_size[1],
-                        ],
-                    },
+                    crop_bounds,
                     target_bounds,
                     target_size: [
                         target_bounds[2] - target_bounds[0],
@@ -742,6 +744,70 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
+                    opacity: scene.regular_camera_transition_opacity() as f32,
+                    _padding: [0.0; 3],
+                }
+            });
+
+        let camera_only = options
+            .camera_size
+            .filter(|_| !project.camera.hide && scene.is_transitioning_camera_only())
+            .map(|camera_size| {
+                let output_size = [output_size.0 as f32, output_size.1 as f32];
+                let frame_size = [camera_size.x as f32, camera_size.y as f32];
+
+                let aspect = frame_size[0] / frame_size[1];
+                let output_aspect = output_size[0] / output_size[1];
+
+                let zoom_factor = scene.camera_only_zoom as f32;
+                let size = [output_size[0] * zoom_factor, output_size[1] * zoom_factor];
+
+                let position = [
+                    (output_size[0] - size[0]) / 2.0,
+                    (output_size[1] - size[1]) / 2.0,
+                ];
+
+                let target_bounds = [
+                    position[0],
+                    position[1],
+                    position[0] + size[0],
+                    position[1] + size[1],
+                ];
+
+                // In camera-only mode, we ignore the camera shape setting (Square/Source)
+                // and just apply the minimum crop needed to fill the output aspect ratio.
+                // This prevents excessive zooming when shape is set to Square.
+                let crop_bounds = if aspect > output_aspect {
+                    // Camera is wider than output - crop left and right
+                    let visible_width = frame_size[1] * output_aspect;
+                    let crop_x = (frame_size[0] - visible_width) / 2.0;
+                    [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
+                } else {
+                    // Camera is taller than output - crop top and bottom
+                    let visible_height = frame_size[0] / output_aspect;
+                    let crop_y = (frame_size[1] - visible_height) / 2.0;
+                    [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
+                };
+
+                CompositeVideoFrameUniforms {
+                    output_size,
+                    frame_size,
+                    crop_bounds,
+                    target_bounds,
+                    target_size: [
+                        target_bounds[2] - target_bounds[0],
+                        target_bounds[3] - target_bounds[1],
+                    ],
+                    rounding_px: 0.0,
+                    mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
+                    velocity_uv: [0.0, 0.0],
+                    motion_blur_amount: 0.0,
+                    camera_motion_blur_amount: scene.camera_only_blur as f32 * 0.5,
+                    shadow: 0.0,
+                    shadow_size: 0.0,
+                    shadow_opacity: 0.0,
+                    shadow_blur: 0.0,
+                    opacity: scene.camera_only_transition_opacity() as f32,
                     _padding: [0.0; 3],
                 }
             });
@@ -752,8 +818,10 @@ impl ProjectUniforms {
             resolution_base,
             display,
             camera,
+            camera_only,
             project: project.clone(),
             zoom,
+            scene,
             interpolated_cursor,
         }
     }
@@ -818,6 +886,8 @@ pub struct RendererLayers {
     display: DisplayLayer,
     cursor: CursorLayer,
     camera: CameraLayer,
+    camera_only: CameraLayer,
+    #[allow(unused)]
     captions: CaptionsLayer,
 }
 
@@ -829,6 +899,7 @@ impl RendererLayers {
             display: DisplayLayer::new(device),
             cursor: CursorLayer::new(device),
             camera: CameraLayer::new(device),
+            camera_only: CameraLayer::new(device),
             captions: CaptionsLayer::new(device, queue),
         }
     }
@@ -842,7 +913,7 @@ impl RendererLayers {
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
-                &constants,
+                constants,
                 uniforms,
                 Background::from(uniforms.project.background.source.clone()),
             )
@@ -869,17 +940,17 @@ impl RendererLayers {
             constants,
         );
 
-        if let (Some(camera_size), Some(camera_frame)) =
-            (constants.options.camera_size, &segment_frames.camera_frame)
-        {
-            self.camera.prepare(
-                &constants.device,
-                &constants.queue,
-                uniforms.camera,
-                camera_size,
-                camera_frame,
-            );
-        }
+        self.camera.prepare(
+            &constants.device,
+            &constants.queue,
+            (|| {
+                Some((
+                    uniforms.camera?,
+                    constants.options.camera_size?,
+                    segment_frames.camera_frame.as_ref()?,
+                ))
+            })(),
+        );
 
         if let Some(_captions) = &uniforms.project.captions {
             self.captions.prepare(
@@ -898,6 +969,7 @@ impl RendererLayers {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         session: &mut RenderSession,
+        uniforms: &ProjectUniforms,
     ) {
         macro_rules! render_pass {
             ($view:expr, $load:expr) => {
@@ -905,7 +977,6 @@ impl RendererLayers {
                     label: Some("Render Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: $view,
-                        // depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: $load,
@@ -935,16 +1006,25 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        {
+        if uniforms.scene.should_render_screen() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
 
+        // Render camera-only layer when transitioning with CameraOnly mode
+        if uniforms.scene.is_transitioning_camera_only() {
+            let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
+            self.camera_only.render(&mut pass);
+        }
+
+        // Also render regular camera overlay during transitions when its opacity > 0
+        if uniforms.scene.should_render_camera()
+            && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera.render(&mut pass);
@@ -955,7 +1035,7 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.captions.render_background(&mut pass);
         }
-        
+
         // Render caption text on top
         {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
@@ -1059,8 +1139,6 @@ impl RenderSession {
     }
 }
 
-// TODO: reuse as many resources as possible
-// https://github.com/gfx-rs/wgpu/wiki/Encapsulating-Graphics-Work
 async fn produce_frame(
     constants: &RenderVideoConstants,
     segment_frames: DecodedSegmentFrames,
@@ -1079,38 +1157,33 @@ async fn produce_frame(
         }),
     );
 
-    layers.render(&constants.device, &mut encoder, session);
+    layers.render(&constants.device, &mut encoder, session, &uniforms);
 
-    Ok(finish_encoder(
+    finish_encoder(
         session,
         &constants.device,
         &constants.queue,
         &uniforms,
         encoder,
     )
-    .await?)
+    .await
 }
 
-// Helper function to parse color components from hex strings
 fn parse_color_component(hex_color: &str, index: usize) -> f32 {
-    // Remove # prefix if present
     let color = hex_color.trim_start_matches('#');
 
-    // Parse the color component
     if color.len() == 6 {
-        // Standard hex color #RRGGBB
         let start = index * 2;
         if let Ok(value) = u8::from_str_radix(&color[start..start + 2], 16) {
             return value as f32 / 255.0;
         }
     }
 
-    // Default fallback values
     match index {
-        0 => 1.0, // Red default
-        1 => 1.0, // Green default
-        2 => 1.0, // Blue default
-        _ => 1.0, // Alpha default
+        0 => 1.0,
+        1 => 1.0,
+        2 => 1.0,
+        _ => 1.0,
     }
 }
 
@@ -1179,8 +1252,4 @@ fn srgb_to_linear(c: u16) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
-}
-
-fn get_either<T>((a, b): (T, T), left: bool) -> T {
-    if left { a } else { b }
 }

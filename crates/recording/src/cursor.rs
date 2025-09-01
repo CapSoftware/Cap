@@ -1,23 +1,9 @@
-use std::{
-    collections::HashMap,
-    hash::{DefaultHasher, Hash, Hasher},
-    path::PathBuf,
-    pin::pin,
-    time::{Duration, SystemTime},
-};
-
-use cap_cursor_capture::RawCursorPosition;
+use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
-use cap_displays::Display;
-use cap_media::{platform::Bounds, sources::CropRatio};
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
-use cap_utils::spawn_actor;
-use device_query::{DeviceQuery, DeviceState};
-use futures::future::Either;
-use sha2::{Digest, Sha256};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
 
 pub struct Cursor {
     pub file_name: String,
@@ -50,14 +36,23 @@ impl CursorActor {
 
 #[tracing::instrument(name = "cursor", skip_all)]
 pub fn spawn_cursor_recorder(
-    #[allow(unused)] screen_bounds: Bounds,
-    #[cfg(target_os = "macos")] display: Display,
-    #[cfg(target_os = "macos")] crop_ratio: CropRatio,
+    crop_bounds: CursorCropBounds,
+    display: scap_targets::Display,
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
     start_time: SystemTime,
 ) -> CursorActor {
+    use cap_utils::spawn_actor;
+    use device_query::{DeviceQuery, DeviceState};
+    use futures::future::Either;
+    use std::{
+        hash::{DefaultHasher, Hash, Hasher},
+        pin::pin,
+        time::Duration,
+    };
+    use tracing::{error, info};
+
     let stop_token = CancellationToken::new();
     let (tx, rx) = oneshot::channel();
 
@@ -66,8 +61,7 @@ pub fn spawn_cursor_recorder(
         let device_state = DeviceState::new();
         let mut last_mouse_state = device_state.get_mouse();
 
-        #[cfg(target_os = "macos")]
-        let mut last_position = RawCursorPosition::get();
+        let mut last_position = cap_cursor_capture::RawCursorPosition::get();
 
         // Create cursors directory if it doesn't exist
         std::fs::create_dir_all(&cursors_dir).unwrap();
@@ -105,7 +99,7 @@ pub fn spawn_cursor_recorder(
                 } else {
                     // New cursor data - save it
                     let cursor_id = response.next_cursor_id.to_string();
-                    let file_name = format!("cursor_{}.png", cursor_id);
+                    let file_name = format!("cursor_{cursor_id}.png");
                     let cursor_path = cursors_dir.join(&file_name);
 
                     if let Ok(image) = image::load_from_memory(&data.image) {
@@ -135,67 +129,20 @@ pub fn spawn_cursor_recorder(
                 "default".to_string()
             };
 
-            // TODO: use this on windows too
-            #[cfg(target_os = "macos")]
-            let position = {
-                let position = RawCursorPosition::get();
+            let position = cap_cursor_capture::RawCursorPosition::get();
 
-                if position != last_position {
-                    last_position = position;
+            let position = (position != last_position).then(|| {
+                last_position = position;
 
-                    let cropped_position = position
-                        .relative_to_display(display)
-                        .normalize()
-                        .with_crop(crop_ratio.position, crop_ratio.size);
+                let cropped_norm_pos = position
+                    .relative_to_display(display)?
+                    .normalize()?
+                    .with_crop(crop_bounds);
 
-                    Some((cropped_position.x() as f64, cropped_position.y() as f64))
-                } else {
-                    None
-                }
-            };
+                Some((cropped_norm_pos.x(), cropped_norm_pos.y()))
+            });
 
-            #[cfg(windows)]
-            let position = if mouse_state.coords != last_mouse_state.coords {
-                let (mouse_x, mouse_y) = {
-                    (
-                        mouse_state.coords.0 - screen_bounds.x as i32,
-                        mouse_state.coords.1 - screen_bounds.y as i32,
-                    )
-                };
-
-                // Calculate normalized coordinates (0.0 to 1.0) within the screen bounds
-                // Check if screen_bounds dimensions are valid to avoid division by zero
-                let x = if screen_bounds.width > 0.0 {
-                    mouse_x as f64 / screen_bounds.width
-                } else {
-                    0.5 // Fallback if width is invalid
-                };
-
-                let y = if screen_bounds.height > 0.0 {
-                    mouse_y as f64 / screen_bounds.height
-                } else {
-                    0.5 // Fallback if height is invalid
-                };
-
-                // Clamp values to ensure they're within valid range
-                let x = if x.is_nan() || x.is_infinite() {
-                    0.5
-                } else {
-                    x
-                };
-
-                let y = if y.is_nan() || y.is_infinite() {
-                    0.5
-                } else {
-                    y
-                };
-
-                Some((x, y))
-            } else {
-                None
-            };
-
-            if let Some((x, y)) = position {
+            if let Some((x, y)) = position.flatten() {
                 let mouse_event = CursorMoveEvent {
                     active_modifiers: vec![],
                     cursor_id: cursor_id.clone(),
@@ -251,6 +198,7 @@ struct CursorData {
 fn get_cursor_data() -> Option<CursorData> {
     use objc::rc::autoreleasepool;
     use objc2_app_kit::NSCursor;
+    use sha2::{Digest, Sha256};
 
     autoreleasepool(|| unsafe {
         #[allow(deprecated)]
@@ -259,9 +207,7 @@ fn get_cursor_data() -> Option<CursorData> {
         let image = cursor.image();
         let size = image.size();
         let hotspot = cursor.hotSpot();
-        let Some(image_data) = image.TIFFRepresentation() else {
-            return None;
-        };
+        let image_data = image.TIFFRepresentation()?;
 
         let image = image_data.as_bytes_unchecked().to_vec();
 
@@ -280,11 +226,11 @@ fn get_cursor_data() -> Option<CursorData> {
 fn get_cursor_data() -> Option<CursorData> {
     use windows::Win32::Foundation::{HWND, POINT};
     use windows::Win32::Graphics::Gdi::{
-        CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC,
-        SelectObject, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+        DeleteDC, DeleteObject, GetDC, GetObjectA, ReleaseDC, SelectObject,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{DrawIconEx, GetIconInfo, DI_NORMAL, ICONINFO};
-    use windows::Win32::UI::WindowsAndMessaging::{GetCursorInfo, CURSORINFO, CURSORINFO_FLAGS};
+    use windows::Win32::UI::WindowsAndMessaging::{CURSORINFO, CURSORINFO_FLAGS, GetCursorInfo};
+    use windows::Win32::UI::WindowsAndMessaging::{DI_NORMAL, DrawIconEx, GetIconInfo, ICONINFO};
 
     unsafe {
         // Get cursor info
@@ -325,10 +271,10 @@ fn get_cursor_data() -> Option<CursorData> {
         {
             // Clean up handles
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -379,13 +325,13 @@ fn get_cursor_data() -> Option<CursorData> {
 
         if dib.is_err() {
             // Clean up
-            DeleteDC(mem_dc);
+            let _ = DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -411,14 +357,14 @@ fn get_cursor_data() -> Option<CursorData> {
         {
             // Clean up
             SelectObject(mem_dc, old_bitmap);
-            DeleteObject(dib.into());
-            DeleteDC(mem_dc);
+            let _ = DeleteObject(dib.into());
+            let _ = DeleteDC(mem_dc);
             ReleaseDC(Some(HWND::default()), screen_dc);
             if !icon_info.hbmColor.is_invalid() {
-                DeleteObject(icon_info.hbmColor.into());
+                let _ = DeleteObject(icon_info.hbmColor.into());
             }
             if !icon_info.hbmMask.is_invalid() {
-                DeleteObject(icon_info.hbmMask.into());
+                let _ = DeleteObject(icon_info.hbmMask.into());
             }
             return None;
         }
@@ -429,13 +375,13 @@ fn get_cursor_data() -> Option<CursorData> {
         std::ptr::copy_nonoverlapping(bits, image_data.as_mut_ptr() as *mut _, size);
 
         // Calculate hotspot
-        let mut hotspot_x = if icon_info.fIcon.as_bool() == false {
+        let mut hotspot_x = if !icon_info.fIcon.as_bool() {
             icon_info.xHotspot as f64 / width as f64
         } else {
             0.5
         };
 
-        let mut hotspot_y = if icon_info.fIcon.as_bool() == false {
+        let mut hotspot_y = if !icon_info.fIcon.as_bool() {
             icon_info.yHotspot as f64 / height as f64
         } else {
             0.5
@@ -443,23 +389,21 @@ fn get_cursor_data() -> Option<CursorData> {
 
         // Cleanup
         SelectObject(mem_dc, old_bitmap);
-        DeleteObject(dib.into());
-        DeleteDC(mem_dc);
+        let _ = DeleteObject(dib.into());
+        let _ = DeleteDC(mem_dc);
         ReleaseDC(Some(HWND::default()), screen_dc);
         if !icon_info.hbmColor.is_invalid() {
-            DeleteObject(icon_info.hbmColor.into());
+            let _ = DeleteObject(icon_info.hbmColor.into());
         }
         if !icon_info.hbmMask.is_invalid() {
-            DeleteObject(icon_info.hbmMask.into());
+            let _ = DeleteObject(icon_info.hbmMask.into());
         }
 
         // Process the image data to ensure proper alpha channel
         for i in (0..size).step_by(4) {
             // Windows DIB format is BGRA, we need to:
             // 1. Swap B and R channels
-            let b = image_data[i];
-            image_data[i] = image_data[i + 2]; // B <- R
-            image_data[i + 2] = b; // R <- B
+            image_data.swap(i, i + 2); // R <- B
 
             // 2. Pre-multiply alpha if needed
             // This is already handled by DrawIconEx
@@ -489,8 +433,8 @@ fn get_cursor_data() -> Option<CursorData> {
                                 // Skip if out of bounds or same pixel
                                 if nx < 0
                                     || ny < 0
-                                    || nx >= width as i32
-                                    || ny >= height as i32
+                                    || nx >= width
+                                    || ny >= height
                                     || (*dx == 0 && *dy == 0)
                                 {
                                     continue;

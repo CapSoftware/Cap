@@ -2,17 +2,15 @@
 
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
-use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use cap_utils::spawn_actor;
+use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{StreamExt, stream};
+use futures::StreamExt;
 use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
-use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use specta::Type;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -29,102 +27,70 @@ pub struct S3UploadMeta {
     id: String,
 }
 
-fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct StringOrObject;
+// fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+// where
+//     D: Deserializer<'de>,
+// {
+//     struct StringOrObject;
 
-    impl<'de> de::Visitor<'de> for StringOrObject {
-        type Value = String;
+//     impl<'de> de::Visitor<'de> for StringOrObject {
+//         type Value = String;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("string or empty object")
-        }
+//         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+//             formatter.write_str("string or empty object")
+//         }
 
-        fn visit_str<E>(self, value: &str) -> Result<String, E>
-        where
-            E: de::Error,
-        {
-            Ok(value.to_string())
-        }
+//         fn visit_str<E>(self, value: &str) -> Result<String, E>
+//         where
+//             E: de::Error,
+//         {
+//             Ok(value.to_string())
+//         }
 
-        fn visit_string<E>(self, value: String) -> Result<String, E>
-        where
-            E: de::Error,
-        {
-            Ok(value)
-        }
+//         fn visit_string<E>(self, value: String) -> Result<String, E>
+//         where
+//             E: de::Error,
+//         {
+//             Ok(value)
+//         }
 
-        fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
-        where
-            M: de::MapAccess<'de>,
-        {
-            // Return empty string for empty objects
-            Ok(String::new())
-        }
-    }
+//         fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
+//         where
+//             M: de::MapAccess<'de>,
+//         {
+//             // Return empty string for empty objects
+//             Ok(String::new())
+//         }
+//     }
 
-    deserializer.deserialize_any(StringOrObject)
-}
+//     deserializer.deserialize_any(StringOrObject)
+// }
 
 impl S3UploadMeta {
     pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub fn new(id: String) -> Self {
-        Self { id }
-    }
+    // pub fn new(id: String) -> Self {
+    //     Self { id }
+    // }
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3UploadBody {
-    video_id: String,
-    subpath: String,
-}
-
-#[derive(serde::Serialize)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct S3VideoMeta {
-    pub duration: String,
-    pub bandwidth: String,
-    pub resolution: String,
-    pub video_codec: String,
-    pub audio_codec: String,
-    pub framerate: String,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3VideoUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-    #[serde(flatten)]
-    meta: S3VideoMeta,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3ImageUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-}
-
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct S3AudioUploadBody {
-    #[serde(flatten)]
-    base: S3UploadBody,
-    duration: String,
-    audio_codec: String,
-    is_mp3: bool,
+    #[serde(rename = "durationInSecs")]
+    pub duration_in_secs: f64,
+    pub width: u32,
+    pub height: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f32>,
 }
 
 pub struct UploadedVideo {
     pub link: String,
     pub id: String,
+    #[allow(unused)]
     pub config: S3UploadMeta,
 }
 
@@ -133,11 +99,11 @@ pub struct UploadedImage {
     pub id: String,
 }
 
-pub struct UploadedAudio {
-    pub link: String,
-    pub id: String,
-    pub config: S3UploadMeta,
-}
+// pub struct UploadedAudio {
+//     pub link: String,
+//     pub id: String,
+//     pub config: S3UploadMeta,
+// }
 
 pub async fn upload_video(
     app: &AppHandle,
@@ -145,34 +111,35 @@ pub async fn upload_video(
     file_path: PathBuf,
     existing_config: Option<S3UploadMeta>,
     screenshot_path: Option<PathBuf>,
-    duration: Option<String>,
+    meta: Option<S3VideoMeta>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
     let client = reqwest::Client::new();
     let s3_config = match existing_config {
         Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id.clone()), None, duration).await?,
+        None => create_or_get_video(app, false, Some(video_id.clone()), None, meta).await?,
     };
 
-    let body = S3VideoUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: video_id.clone(),
             subpath: "result.mp4".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: Some(build_video_meta(&file_path)?),
         },
-        meta: build_video_meta(&file_path)?,
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let file = tokio::fs::File::open(&file_path)
         .await
-        .map_err(|e| format!("Failed to open file: {}", e))?;
+        .map_err(|e| format!("Failed to open file: {e}"))?;
 
     let metadata = file
         .metadata()
         .await
-        .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+        .map_err(|e| format!("Failed to get file metadata: {e}"))?;
 
     let total_size = metadata.len();
 
@@ -218,8 +185,7 @@ pub async fn upload_video(
         }
     });
 
-    let response =
-        video_upload.map_err(|e| format!("Failed to send upload file request: {}", e))?;
+    let response = video_upload.map_err(|e| format!("Failed to send upload file request: {e}"))?;
 
     if response.status().is_success() {
         println!("Video uploaded successfully");
@@ -253,8 +219,7 @@ pub async fn upload_video(
         error_body
     );
     Err(format!(
-        "Failed to upload file. Status: {}. Body: {}",
-        status, error_body
+        "Failed to upload file. Status: {status}. Body: {error_body}"
     ))
 }
 
@@ -268,18 +233,20 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     let client = reqwest::Client::new();
     let s3_config = create_or_get_video(app, true, None, None, None).await?;
 
-    let body = S3ImageUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: file_name,
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
         },
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let file_content = tokio::fs::read(&file_path)
         .await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        .map_err(|e| format!("Failed to read file: {e}"))?;
 
     let response = client
         .put(presigned_put)
@@ -287,7 +254,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .body(file_content)
         .send()
         .await
-        .map_err(|e| format!("Failed to send upload file request: {}", e))?;
+        .map_err(|e| format!("Failed to send upload file request: {e}"))?;
 
     if response.status().is_success() {
         println!("File uploaded successfully");
@@ -308,8 +275,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         error_body
     );
     Err(format!(
-        "Failed to upload file. Status: {}. Body: {}",
-        status, error_body
+        "Failed to upload file. Status: {status}. Body: {error_body}"
     ))
 }
 
@@ -318,7 +284,7 @@ pub async fn create_or_get_video(
     is_screenshot: bool,
     video_id: Option<String>,
     name: Option<String>,
-    duration: Option<String>,
+    meta: Option<S3VideoMeta>,
 ) -> Result<S3UploadMeta, String> {
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
@@ -329,17 +295,22 @@ pub async fn create_or_get_video(
     };
 
     if let Some(name) = name {
-        s3_config_url.push_str(&format!("&name={}", name));
+        s3_config_url.push_str(&format!("&name={name}"));
     }
 
-    if let Some(duration) = duration {
-        s3_config_url.push_str(&format!("&duration={}", duration));
+    if let Some(meta) = meta {
+        s3_config_url.push_str(&format!("&durationInSecs={}", meta.duration_in_secs));
+        s3_config_url.push_str(&format!("&width={}", meta.width));
+        s3_config_url.push_str(&format!("&height={}", meta.height));
+        if let Some(fps) = meta.fps {
+            s3_config_url.push_str(&format!("&fps={}", fps));
+        }
     }
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))
         .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -348,19 +319,34 @@ pub async fn create_or_get_video(
     let response_text = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
 
-    let mut config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
-        format!(
-            "Failed to deserialize response: {}. Response body: {}",
-            e, response_text
-        )
+    let config = serde_json::from_str::<S3UploadMeta>(&response_text).map_err(|e| {
+        format!("Failed to deserialize response: {e}. Response body: {response_text}")
     })?;
 
     Ok(config)
 }
 
-async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<String, String> {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresignedS3PutRequest {
+    video_id: String,
+    subpath: String,
+    method: PresignedS3PutRequestMethod,
+    #[serde(flatten)]
+    meta: Option<S3VideoMeta>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresignedS3PutRequestMethod {
+    #[allow(unused)]
+    Post,
+    Put,
+}
+
+async fn presigned_s3_put(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
     #[derive(Deserialize, Debug)]
     struct Data {
         url: String,
@@ -374,13 +360,10 @@ async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<Strin
 
     let response = app
         .authed_api_request("/api/upload/signed", |client, url| {
-            let mut body_json = json!(body);
-            let a = body_json.as_object_mut().unwrap();
-            a.insert("method".to_string(), json!("put"));
-            client.post(url).json(&json!(body_json))
+            client.post(url).json(&body)
         })
         .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {}", e))?;
+        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
@@ -389,7 +372,7 @@ async fn presigned_s3_put(app: &AppHandle, body: impl Serialize) -> Result<Strin
     let Wrapper { presigned_put_data } = response
         .json::<Wrapper>()
         .await
-        .map_err(|e| format!("Failed to deserialize server response: {}", e))?;
+        .map_err(|e| format!("Failed to deserialize server response: {e}"))?;
 
     Ok(presigned_put_data.url)
 }
@@ -402,84 +385,65 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
         .best(ffmpeg::media::Type::Video)
         .ok_or_else(|| "Failed to find appropriate video stream in file".to_string())?;
 
-    let duration_millis = input.duration() as f64 / 1000.;
-
     let video_codec = ffmpeg::codec::context::Context::from_parameters(video_stream.parameters())
         .map_err(|e| format!("Unable to read video codec information: {e}"))?;
-    let video_codec_name = video_codec.id();
-    let video = video_codec.decoder().video().unwrap();
-    let width = video.width();
-    let height = video.height();
-    let frame_rate = video
-        .frame_rate()
-        .map(|fps| fps.to_string())
-        .unwrap_or("-".into());
-    let bit_rate = video.bit_rate();
-
-    let audio_codec_name = input
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .map(|audio_stream| {
-            ffmpeg::codec::context::Context::from_parameters(audio_stream.parameters())
-                .map(|c| c.id())
-                .map_err(|e| format!("Unable to read audio codec information: {e}"))
-        })
-        .transpose()?;
+    let video = video_codec
+        .decoder()
+        .video()
+        .map_err(|e| format!("Unable to get video decoder: {e}"))?;
 
     Ok(S3VideoMeta {
-        duration: duration_millis.to_string(),
-        resolution: format!("{}x{}", width, height),
-        framerate: frame_rate,
-        bandwidth: bit_rate.to_string(),
-        video_codec: format!("{video_codec_name:?}")
-            .replace("Id::", "")
-            .to_lowercase(),
-        audio_codec: audio_codec_name
-            .map(|name| format!("{name:?}").replace("Id::", "").to_lowercase())
-            .unwrap_or_default(),
+        duration_in_secs: input.duration() as f64 / AV_TIME_BASE as f64,
+        width: video.width(),
+        height: video.height(),
+        fps: video
+            .frame_rate()
+            .map(|v| (v.numerator() as f32 / v.denominator() as f32)),
     })
 }
 
-fn build_audio_upload_body(
-    path: &PathBuf,
-    base: S3UploadBody,
-) -> Result<S3AudioUploadBody, String> {
-    let input =
-        ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
-    let stream = input
-        .streams()
-        .best(ffmpeg::media::Type::Audio)
-        .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
+// fn build_audio_upload_body(
+//     path: &PathBuf,
+//     base: S3UploadBody,
+// ) -> Result<S3AudioUploadBody, String> {
+//     let input =
+//         ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
+//     let stream = input
+//         .streams()
+//         .best(ffmpeg::media::Type::Audio)
+//         .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
 
-    let duration_millis = input.duration() as f64 / 1000.;
+//     let duration_millis = input.duration() as f64 / 1000.;
 
-    let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-        .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
-    let codec_name = codec.id();
+//     let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+//         .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
+//     let codec_name = codec.id();
 
-    let is_mp3 = path.extension().map_or(false, |ext| ext == "mp3");
+//     let is_mp3 = path.extension().is_some_and(|ext| ext == "mp3");
 
-    Ok(S3AudioUploadBody {
-        base,
-        duration: duration_millis.to_string(),
-        audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
-        is_mp3,
-    })
-}
+//     Ok(S3AudioUploadBody {
+//         base,
+//         duration: duration_millis.to_string(),
+//         audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
+//         is_mp3,
+//     })
+// }
 
 pub async fn prepare_screenshot_upload(
     app: &AppHandle,
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
 ) -> Result<reqwest::Response, String> {
-    let body = S3ImageUploadBody {
-        base: S3UploadBody {
+    let presigned_put = presigned_s3_put(
+        app,
+        PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: "screenshot/screen-capture.jpg".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
         },
-    };
-
-    let presigned_put = presigned_s3_put(app, body).await?;
+    )
+    .await?;
 
     let compressed_image = compress_image(screenshot_path).await?;
 
@@ -489,15 +453,15 @@ pub async fn prepare_screenshot_upload(
         .body(compressed_image)
         .send()
         .await
-        .map_err(|e| format!("Error uploading screenshot: {}", e))
+        .map_err(|e| format!("Error uploading screenshot: {e}"))
 }
 
 async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
         let img = ImageReader::open(&path)
-            .map_err(|e| format!("Failed to open image: {}", e))?
+            .map_err(|e| format!("Failed to open image: {e}"))?
             .decode()
-            .map_err(|e| format!("Failed to decode image: {}", e))?;
+            .map_err(|e| format!("Failed to decode image: {e}"))?;
 
         let new_width = img.width() / 2;
         let new_height = img.height() / 2;
@@ -513,17 +477,27 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
                 new_height,
                 resized_img.color().into(),
             )
-            .map_err(|e| format!("Failed to compress image: {}", e))?;
+            .map_err(|e| format!("Failed to compress image: {e}"))?;
 
         Ok(buffer)
     })
     .await
-    .map_err(|e| format!("Failed to compress image: {}", e))?
+    .map_err(|e| format!("Failed to compress image: {e}"))?
 }
 
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
-const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
+// const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartCompleteResponse<'a> {
+    video_id: &'a str,
+    upload_id: &'a str,
+    parts: &'a [UploadedPart],
+    #[serde(flatten)]
+    meta: Option<S3VideoMeta>,
+}
 
 pub struct InstantMultipartUpload {
     pub handle: tokio::task::JoinHandle<Result<(), String>>,
@@ -558,7 +532,7 @@ impl InstantMultipartUpload {
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
         use std::time::Duration;
-        use tokio::sync::mpsc;
+
         use tokio::time::sleep;
 
         // --------------------------------------------
@@ -590,7 +564,7 @@ impl InstantMultipartUpload {
         {
             Ok(r) => r,
             Err(e) => {
-                return Err(format!("Failed to initiate multipart upload: {}", e));
+                return Err(format!("Failed to initiate multipart upload: {e}"));
             }
         };
 
@@ -601,15 +575,14 @@ impl InstantMultipartUpload {
                 .await
                 .unwrap_or_else(|_| "<no response body>".to_string());
             return Err(format!(
-                "Failed to initiate multipart upload. Status: {}. Body: {}",
-                status, error_body
+                "Failed to initiate multipart upload. Status: {status}. Body: {error_body}"
             ));
         }
 
         let initiate_data = match initiate_response.json::<serde_json::Value>().await {
             Ok(d) => d,
             Err(e) => {
-                return Err(format!("Failed to parse initiate response: {}", e));
+                return Err(format!("Failed to parse initiate response: {e}"));
             }
         };
 
@@ -624,7 +597,7 @@ impl InstantMultipartUpload {
             return Err("Empty uploadId returned from initiate endpoint".to_string());
         }
 
-        println!("Multipart upload initiated with ID: {}", upload_id);
+        println!("Multipart upload initiated with ID: {upload_id}");
 
         let mut realtime_is_done = realtime_video_done.as_ref().map(|_| false);
 
@@ -635,19 +608,17 @@ impl InstantMultipartUpload {
         //   - If recording stopped, do leftover final(s).
         // --------------------------------------------
         loop {
-            if !realtime_is_done.unwrap_or(true) {
-                if let Some(realtime_video_done) = &realtime_video_done {
-                    match realtime_video_done.try_recv() {
-                        Ok(_) => {
-                            realtime_is_done = Some(true);
-                        }
-                        Err(flume::TryRecvError::Empty) => {}
-                        _ => {
-                            warn!("cancelling upload as realtime generation failed");
-                            return Err(
-                                "cancelling upload as realtime generation failed".to_string()
-                            );
-                        }
+            if !realtime_is_done.unwrap_or(true)
+                && let Some(realtime_video_done) = &realtime_video_done
+            {
+                match realtime_video_done.try_recv() {
+                    Ok(_) => {
+                        realtime_is_done = Some(true);
+                    }
+                    Err(flume::TryRecvError::Empty) => {}
+                    _ => {
+                        warn!("cancelling upload as realtime generation failed");
+                        return Err("cancelling upload as realtime generation failed".to_string());
                     }
                 }
             }
@@ -661,7 +632,7 @@ impl InstantMultipartUpload {
             let file_size = match tokio::fs::metadata(&file_path).await {
                 Ok(md) => md.len(),
                 Err(e) => {
-                    println!("Failed to get file metadata: {}", e);
+                    println!("Failed to get file metadata: {e}");
                     sleep(Duration::from_millis(500)).await;
                     continue;
                 }
@@ -691,8 +662,7 @@ impl InstantMultipartUpload {
                     }
                     Err(e) => {
                         println!(
-                            "Error uploading chunk (part {}): {}. Retrying in 1s...",
-                            part_number, e
+                            "Error uploading chunk (part {part_number}): {e}. Retrying in 1s..."
                         );
                         sleep(Duration::from_secs(1)).await;
                     }
@@ -701,7 +671,7 @@ impl InstantMultipartUpload {
                 if realtime_is_done.unwrap_or(false) {
                     info!("realtime video done, uploading header chunk");
 
-                    match Self::upload_chunk(
+                    let part = Self::upload_chunk(
                         &app,
                         &client,
                         &file_path,
@@ -712,15 +682,10 @@ impl InstantMultipartUpload {
                         uploaded_parts[0].size as u64,
                     )
                     .await
-                    {
-                        Ok(part) => {
-                            uploaded_parts[0] = part;
-                            println!("Successfully re-uploaded first chunk",);
-                        }
-                        Err(e) => {
-                            return Err(format!("Failed to re-upload first chunk"));
-                        }
-                    }
+                    .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
+
+                    uploaded_parts[0] = part;
+                    println!("Successfully re-uploaded first chunk",);
                 }
 
                 // All leftover chunks are now uploaded. We finalize.
@@ -731,7 +696,7 @@ impl InstantMultipartUpload {
                 Self::finalize_upload(
                     &app,
                     &file_path,
-                    &s3_config.id(),
+                    s3_config.id(),
                     &upload_id,
                     &uploaded_parts,
                 )
@@ -751,6 +716,7 @@ impl InstantMultipartUpload {
 
     /// Upload a single chunk from the file at `last_uploaded_position` for `chunk_size` bytes.
     /// Advances `last_uploaded_position` accordingly. Returns JSON { PartNumber, ETag, Size }.
+    #[allow(clippy::too_many_arguments)]
     async fn upload_chunk(
         app: &AppHandle,
         client: &reqwest::Client,
@@ -763,7 +729,7 @@ impl InstantMultipartUpload {
     ) -> Result<UploadedPart, String> {
         let file_size = match tokio::fs::metadata(file_path).await {
             Ok(metadata) => metadata.len(),
-            Err(e) => return Err(format!("Failed to get file metadata: {}", e)),
+            Err(e) => return Err(format!("Failed to get file metadata: {e}")),
         };
 
         // Check if we're at the end of the file
@@ -777,7 +743,7 @@ impl InstantMultipartUpload {
 
         let mut file = tokio::fs::File::open(file_path)
             .await
-            .map_err(|e| format!("Failed to open file: {}", e))?;
+            .map_err(|e| format!("Failed to open file: {e}"))?;
 
         // Log before seeking
         println!(
@@ -790,7 +756,7 @@ impl InstantMultipartUpload {
             .seek(std::io::SeekFrom::Start(*last_uploaded_position))
             .await
         {
-            return Err(format!("Failed to seek in file: {}", e));
+            return Err(format!("Failed to seek in file: {e}"));
         }
 
         // Read exactly bytes_to_read
@@ -802,12 +768,9 @@ impl InstantMultipartUpload {
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     total_read += n;
-                    println!(
-                        "Read {} bytes, total so far: {}/{}",
-                        n, total_read, bytes_to_read
-                    );
+                    println!("Read {n} bytes, total so far: {total_read}/{bytes_to_read}");
                 }
-                Err(e) => return Err(format!("Failed to read chunk from file: {}", e)),
+                Err(e) => return Err(format!("Failed to read chunk from file: {e}")),
             }
         }
 
@@ -828,13 +791,12 @@ impl InstantMultipartUpload {
         let pos_after_read = file
             .seek(std::io::SeekFrom::Current(0))
             .await
-            .map_err(|e| format!("Failed to get current file position: {}", e))?;
+            .map_err(|e| format!("Failed to get current file position: {e}"))?;
 
         let expected_pos = *last_uploaded_position + total_read as u64;
         if pos_after_read != expected_pos {
             println!(
-                "WARNING: File position after read ({}) doesn't match expected position ({})",
-                pos_after_read, expected_pos
+                "WARNING: File position after read ({pos_after_read}) doesn't match expected position ({expected_pos})"
             );
         }
 
@@ -890,7 +852,7 @@ impl InstantMultipartUpload {
 
         let presign_data = match presign_response.json::<serde_json::Value>().await {
             Ok(d) => d,
-            Err(e) => return Err(format!("Failed to parse presigned URL response: {}", e)),
+            Err(e) => return Err(format!("Failed to parse presigned URL response: {e}")),
         };
 
         let presigned_url = presign_data
@@ -947,7 +909,7 @@ impl InstantMultipartUpload {
                             upload_response.status()
                         );
                         if let Ok(body) = upload_response.text().await {
-                            println!("Error response: {}", body);
+                            println!("Error response: {body}");
                         }
                         retry_count += 1;
                         sleep(Duration::from_secs(2)).await;
@@ -1018,7 +980,7 @@ impl InstantMultipartUpload {
             let size = part.size;
             let etag = &part.etag;
             total_bytes_in_parts += part.size;
-            println!("Part {}: {} bytes (ETag: {})", pn, size, etag);
+            println!("Part {pn}: {size} bytes (ETag: {etag})");
         }
 
         let file_final_size = tokio::fs::metadata(file_path)
@@ -1026,8 +988,8 @@ impl InstantMultipartUpload {
             .map(|md| md.len())
             .unwrap_or(0);
 
-        println!("Sum of all parts: {} bytes", total_bytes_in_parts);
-        println!("File size on disk: {} bytes", file_final_size);
+        println!("Sum of all parts: {total_bytes_in_parts} bytes");
+        println!("File size on disk: {file_final_size} bytes");
         println!("Proceeding with multipart upload completion...");
 
         let metadata = build_video_meta(file_path)
@@ -1036,25 +998,20 @@ impl InstantMultipartUpload {
 
         let complete_response = match app
             .authed_api_request("/api/upload/multipart/complete", |c, url| {
-                c.post(url)
-                    .header("Content-Type", "application/json")
-                    .json(&serde_json::json!({
-                        "videoId": video_id,
-                        "uploadId": upload_id,
-                        "parts": uploaded_parts,
-                        "duration": metadata.as_ref().map(|m| m.duration.clone()),
-                        "bandwidth": metadata.as_ref().map(|m| m.bandwidth.clone()),
-                        "resolution": metadata.as_ref().map(|m| m.resolution.clone()),
-                        "videoCodec": metadata.as_ref().map(|m| m.video_codec.clone()),
-                        "audioCodec": metadata.as_ref().map(|m| m.audio_codec.clone()),
-                        "framerate": metadata.as_ref().map(|m| m.framerate.clone()),
-                    }))
+                c.post(url).header("Content-Type", "application/json").json(
+                    &MultipartCompleteResponse {
+                        video_id,
+                        upload_id,
+                        parts: uploaded_parts,
+                        meta: metadata,
+                    },
+                )
             })
             .await
         {
             Ok(response) => response,
             Err(e) => {
-                return Err(format!("Failed to complete multipart upload: {}", e));
+                return Err(format!("Failed to complete multipart upload: {e}"));
             }
         };
 
@@ -1065,15 +1022,14 @@ impl InstantMultipartUpload {
                 .await
                 .unwrap_or_else(|_| "<no response body>".to_string());
             return Err(format!(
-                "Failed to complete multipart upload. Status: {}. Body: {}",
-                status, error_body
+                "Failed to complete multipart upload. Status: {status}. Body: {error_body}"
             ));
         }
 
         let complete_data = match complete_response.json::<serde_json::Value>().await {
             Ok(d) => d,
             Err(e) => {
-                return Err(format!("Failed to parse completion response: {}", e));
+                return Err(format!("Failed to parse completion response: {e}"));
             }
         };
 

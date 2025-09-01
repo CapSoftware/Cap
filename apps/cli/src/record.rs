@@ -1,9 +1,8 @@
-use std::{env::current_dir, path::PathBuf, sync::Arc};
-
-use cap_camera::ModelID;
-use cap_media::{feeds::CameraFeed, sources::ScreenCaptureTarget};
+use cap_recording::screen_capture::ScreenCaptureTarget;
 use clap::Args;
-use tokio::{io::AsyncBufReadExt, sync::Mutex};
+use scap_targets::{DisplayId, WindowId};
+use std::{env::current_dir, path::PathBuf};
+use tokio::io::AsyncBufReadExt;
 use uuid::Uuid;
 
 #[derive(Args)]
@@ -29,30 +28,30 @@ pub struct RecordStart {
 
 impl RecordStart {
     pub async fn run(self) -> Result<(), String> {
-        let (target_info, _) = match (self.target.screen, self.target.window) {
-            (Some(id), _) => cap_media::sources::list_screens()
+        let target_info = match (self.target.screen, self.target.window) {
+            (Some(id), _) => cap_recording::screen_capture::list_displays()
                 .into_iter()
                 .find(|s| s.0.id == id)
-                .map(|(s, t)| (ScreenCaptureTarget::Screen { id: s.id }, t))
+                .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                 .ok_or(format!("Screen with id '{id}' not found")),
-            (_, Some(id)) => cap_media::sources::list_windows()
+            (_, Some(id)) => cap_recording::screen_capture::list_windows()
                 .into_iter()
                 .find(|s| s.0.id == id)
-                .map(|(s, t)| (ScreenCaptureTarget::Window { id: s.id }, t))
+                .map(|(s, _)| ScreenCaptureTarget::Window { id: s.id })
                 .ok_or(format!("Window with id '{id}' not found")),
             _ => Err("No target specified".to_string()),
         }?;
 
-        let camera = if let Some(model_id) = self.camera {
-            let model_id: ModelID = model_id
-                .try_into()
-                .map_err(|_| "Invalid model ID".to_string())?;
+        // let camera = if let Some(model_id) = self.camera {
+        //     let _model_id: ModelID = model_id
+        //         .try_into()
+        //         .map_err(|_| "Invalid model ID".to_string())?;
 
-            todo!()
-            // Some(CameraFeed::init(model_id).await.unwrap())
-        } else {
-            None
-        };
+        //     todo!()
+        //     // Some(CameraFeed::init(model_id).await.unwrap())
+        // } else {
+        //     None
+        // };
 
         let id = Uuid::new_v4().to_string();
         let path = self
@@ -65,9 +64,9 @@ impl RecordStart {
             cap_recording::RecordingBaseInputs {
                 capture_target: target_info,
                 capture_system_audio: self.system_audio,
-                mic_feed: &None,
+                mic_feed: None,
+                camera_feed: None, // camera.map(|c| Arc::new(Mutex::new(c))),
             },
-            camera.map(|c| Arc::new(Mutex::new(c))),
             false,
         )
         .await
@@ -90,8 +89,8 @@ impl RecordStart {
 struct RecordTargets {
     /// ID of the screen to capture
     #[arg(long, group = "target")]
-    screen: Option<u32>,
+    screen: Option<DisplayId>,
     /// ID of the window to capture
     #[arg(long, group = "target")]
-    window: Option<u32>,
+    window: Option<WindowId>,
 }

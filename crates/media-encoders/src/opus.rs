@@ -41,6 +41,7 @@ impl OggFile {
 }
 
 pub struct OpusEncoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
@@ -52,7 +53,7 @@ pub struct OpusEncoder {
 
 #[derive(thiserror::Error, Debug)]
 pub enum OpusEncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Opus codec not found")]
     CodecNotFound,
@@ -101,7 +102,7 @@ impl OpusEncoder {
             rate
         };
 
-        let mut output_config = input_config.clone();
+        let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
@@ -259,7 +260,7 @@ impl OpusEncoder {
                 }
             }
 
-            while self.buffer.len() > 0 {
+            while !self.buffer.is_empty() {
                 let frame_size_bytes = frame_size_bytes.min(self.buffer.len());
                 let frame_size = frame_size_bytes
                     / self.encoder.channels() as usize

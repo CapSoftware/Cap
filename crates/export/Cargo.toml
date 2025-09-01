@@ -1,7 +1,7 @@
 [package]
 name = "cap-export"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 cap-utils = { path = "../utils" }
@@ -18,7 +18,7 @@ tempfile = "3.12.0"
 image = "0.25.2"
 mp4 = "0.14.0"
 thiserror.workspace = true
-futures = "0.3.31"
+futures = { workspace = true }
 ffmpeg = { workspace = true }
 serde = { workspace = true }
 specta.workspace = true
@@ -29,3 +29,6 @@ tracing.workspace = true
 clap = { version = "4.5.41", features = ["derive"] }
 inquire = "0.7.5"
 tokio.workspace = true
+
+[lints]
+workspace = true

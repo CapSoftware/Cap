@@ -11,7 +11,7 @@ use ffmpeg::{
 
 #[derive(thiserror::Error, Debug)]
 pub enum AACEncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("AAC codec not found")]
     CodecNotFound,
@@ -20,6 +20,7 @@ pub enum AACEncoderError {
 }
 
 pub struct AACEncoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
@@ -70,7 +71,7 @@ impl AACEncoder {
             rate
         };
 
-        let mut output_config = input_config.clone();
+        let mut output_config = input_config;
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
@@ -136,7 +137,7 @@ impl AACEncoder {
 
         for i in 0..frame.planes() {
             self.buffer[i]
-                .extend(&frame.data(i)[0..frame_size_bytes(&frame) / frame.channels() as usize]);
+                .extend(&frame.data(i)[0..frame_size_bytes(frame) / frame.channels() as usize]);
         }
 
         let channel_size_bytes = self.encoder.frame_size() as usize * self.encoder.format().bytes();
@@ -218,7 +219,7 @@ impl AACEncoder {
                 }
             }
 
-            while self.buffer[0].len() > 0 {
+            while !self.buffer[0].is_empty() {
                 let channel_size_bytes =
                     (frame_size_bytes / self.encoder.channels() as usize).min(self.buffer[0].len());
                 let frame_size = channel_size_bytes / self.encoder.format().bytes();

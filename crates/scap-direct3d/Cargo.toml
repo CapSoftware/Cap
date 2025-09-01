@@ -1,0 +1,43 @@
+[package]
+name = "scap-direct3d"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "System",
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation_Metadata",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dxgi",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_DxMediaObjects",
+    "Win32_Foundation",
+    "Foundation_Collections",
+    "Win32_System_Variant",
+    "Storage_Search",
+    "Storage_Streams",
+] }
+
+[dev-dependencies]
+scap-targets = { path = "../scap-targets" }
+scap-ffmpeg = { path = "../scap-ffmpeg" }
+windows-numerics = "0.2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true

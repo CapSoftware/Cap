@@ -1,14 +1,13 @@
 [package]
 name = "cap-video-decode"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
 
 [dependencies]
 ffmpeg.workspace = true
-ffmpeg-sys-next.workspace = true
 ffmpeg-hw-device = { path = "../ffmpeg-hw-device" }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread"] }
 tracing = "0.1.41"

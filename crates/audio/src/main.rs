@@ -1,19 +1,9 @@
-use cap_audio::AudioData;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cap_audio::{AudioData, cast_f32_slice_to_bytes};
 use ffmpeg::{
     codec as avcodec,
     format::{self as avformat},
-    software::resampling::Delay,
 };
-use std::{collections::VecDeque, path::Path};
-
-pub unsafe fn cast_f32_slice_to_bytes(slice: &[f32]) -> &[u8] {
-    std::slice::from_raw_parts(slice.as_ptr() as *const u8, slice.len() * 4)
-}
-
-pub unsafe fn cast_bytes_to_f32_slice(slice: &[u8]) -> &[f32] {
-    std::slice::from_raw_parts(slice.as_ptr() as *const f32, slice.len() / 4)
-}
+use std::path::Path;
 
 pub fn opus_encode_audio(path: impl AsRef<Path>, samples: &AudioData) {
     let mut output = avformat::output(&path).unwrap();

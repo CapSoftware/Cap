@@ -2,6 +2,7 @@
 name = "cap-camera-mediafoundation"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 tracing.workspace = true
@@ -17,8 +18,6 @@ windows = { workspace = true, features = [
 
 [dev-dependencies]
 inquire = "0.7.5"
-windows-core = { workspace = true }
-windows = { workspace = true }
 
 [lints]
 workspace = true

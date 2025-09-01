@@ -24,7 +24,7 @@ pub enum H264Preset {
 
 #[derive(thiserror::Error, Debug)]
 pub enum H264EncoderError {
-    #[error("FFmpeg/{0}")]
+    #[error("{0:?}")]
     FFmpeg(#[from] ffmpeg::Error),
     #[error("Codec not found")]
     CodecNotFound,
@@ -59,7 +59,7 @@ impl H264EncoderBuilder {
         output: &mut format::context::Output,
     ) -> Result<H264Encoder, H264EncoderError> {
         let input_config = &self.input_config;
-        let (codec, encoder_options) = get_codec_and_options(&input_config, self.preset)
+        let (codec, encoder_options) = get_codec_and_options(input_config, self.preset)
             .ok_or(H264EncoderError::CodecNotFound)?;
 
         let (format, converter) = if !codec
@@ -137,6 +137,7 @@ impl H264EncoderBuilder {
 }
 
 pub struct H264Encoder {
+    #[allow(unused)]
     tag: &'static str,
     encoder: encoder::Video,
     config: VideoInfo,
@@ -160,9 +161,10 @@ impl H264Encoder {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to convert frame: {:?} from format {:?} to YUV420P",
+                        "Failed to convert frame: {} from format {:?} to {:?}",
                         e,
-                        frame.format()
+                        frame.format(),
+                        converter.output().format
                     );
                     // Return early as we can't process this frame
                     return;
@@ -203,15 +205,20 @@ impl H264Encoder {
     }
 }
 
-fn get_codec_and_options(config: &VideoInfo, preset: H264Preset) -> Option<(Codec, Dictionary)> {
+fn get_codec_and_options(
+    config: &VideoInfo,
+    preset: H264Preset,
+) -> Option<(Codec, Dictionary<'_>)> {
     let encoder_name = {
-        if cfg!(target_os = "macos") {
-            "libx264"
-            // looks terrible rn :(
-            // "h264_videotoolbox"
-        } else {
-            "libx264"
-        }
+        // if cfg!(target_os = "macos") {
+        //     "libx264"
+        //     // looks terrible rn :(
+        //     // "h264_videotoolbox"
+        // } else {
+        //     "libx264"
+        // }
+
+        "libx264"
     };
 
     if let Some(codec) = encoder::find_by_name(encoder_name) {

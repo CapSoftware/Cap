@@ -1,10 +1,10 @@
-use cap_recording::RecordingMode;
+use cap_recording::{RecordingMode, feeds::camera::DeviceOrModelID, sources::ScreenCaptureTarget};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};
+use tracing::trace;
 
-use crate::{
-    App, ArcLock, camera::CameraPreview, recording::StartRecordingInputs, windows::ShowCapWindow,
-};
+use crate::{App, ArcLock, recording::StartRecordingInputs, windows::ShowCapWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -18,14 +18,14 @@ pub enum CaptureMode {
 pub enum DeepLinkAction {
     StartRecording {
         capture_mode: CaptureMode,
-        camera: Option<cap_media::feeds::DeviceOrModelID>,
+        camera: Option<DeviceOrModelID>,
         mic_label: Option<String>,
         capture_system_audio: bool,
         mode: RecordingMode,
     },
     StopRecording,
     OpenEditor {
-        project_path: String,
+        project_path: PathBuf,
     },
     OpenSettings {
         page: Option<String>,
@@ -33,8 +33,7 @@ pub enum DeepLinkAction {
 }
 
 pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
-    #[cfg(debug_assertions)]
-    println!("Handling deep actions for: {:?}", &urls);
+    trace!("Handling deep actions for: {:?}", &urls);
 
     let actions: Vec<_> = urls
         .into_iter()
@@ -63,7 +62,7 @@ pub fn handle(app_handle: &AppHandle, urls: Vec<Url>) {
     tauri::async_runtime::spawn(async move {
         for action in actions {
             if let Err(e) = action.execute(&app_handle).await {
-                eprintln!("Failed to handle deep link action: {}", e);
+                eprintln!("Failed to handle deep link action: {e}");
             }
         }
     });
@@ -79,6 +78,13 @@ impl TryFrom<&Url> for DeepLinkAction {
     type Error = ActionParseFromUrlError;
 
     fn try_from(url: &Url) -> Result<Self, Self::Error> {
+        #[cfg(target_os = "macos")]
+        if url.scheme() == "file" {
+            return Ok(Self::OpenEditor {
+                project_path: url.to_file_path().unwrap(),
+            });
+        }
+
         match url.domain() {
             Some(v) if v != "action" => Err(ActionParseFromUrlError::NotAction),
             _ => Err(ActionParseFromUrlError::Invalid),
@@ -107,19 +113,17 @@ impl DeepLinkAction {
                 mode,
             } => {
                 let state = app.state::<ArcLock<App>>();
-                let camera_preview = app.state::<CameraPreview>();
 
-                crate::set_camera_input(app.clone(), state.clone(), camera_preview, camera).await?;
+                crate::set_camera_input(app.clone(), state.clone(), camera).await?;
                 crate::set_mic_input(state.clone(), mic_label).await?;
 
-                use cap_media::sources::ScreenCaptureTarget;
                 let capture_target: ScreenCaptureTarget = match capture_mode {
-                    CaptureMode::Screen(name) => cap_media::sources::list_screens()
+                    CaptureMode::Screen(name) => cap_recording::screen_capture::list_displays()
                         .into_iter()
                         .find(|(s, _)| s.name == name)
-                        .map(|(s, _)| ScreenCaptureTarget::Screen { id: s.id })
+                        .map(|(s, _)| ScreenCaptureTarget::Display { id: s.id })
                         .ok_or(format!("No screen with name \"{}\"", &name))?,
-                    CaptureMode::Window(name) => cap_media::sources::list_windows()
+                    CaptureMode::Window(name) => cap_recording::screen_capture::list_windows()
                         .into_iter()
                         .find(|(w, _)| w.name == name)
                         .map(|(w, _)| ScreenCaptureTarget::Window { id: w.id })
@@ -138,7 +142,7 @@ impl DeepLinkAction {
                 crate::recording::stop_recording(app.clone(), app.state()).await
             }
             DeepLinkAction::OpenEditor { project_path } => {
-                crate::open_project_from_path(&project_path.into(), app.clone())
+                crate::open_project_from_path(Path::new(&project_path), app.clone())
             }
             DeepLinkAction::OpenSettings { page } => {
                 crate::show_window(app.clone(), ShowCapWindow::Settings { page }).await

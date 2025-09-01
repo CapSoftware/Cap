@@ -1,23 +1,54 @@
-use gif::{Encoder, Frame, Repeat};
+use gifski::{Collector, Repeat, Settings};
+use rgb::RGBA8;
 use std::fs::File;
 use std::path::Path;
+use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
+/// Errors that can occur during GIF encoding
 #[derive(Error, Debug)]
 pub enum GifEncodingError {
+    /// IO error occurred during encoding
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("GIF encoding error: {0}")]
-    Gif(#[from] gif::EncodingError),
+    /// Error from the gifski encoder
+    #[error("Gifski error: {0}")]
+    Gifski(String),
+    /// Invalid frame data provided
     #[error("Invalid frame data")]
     InvalidFrameData,
+    /// Encoder has been finished and cannot accept more frames
+    #[error("Encoder already finished")]
+    EncoderFinished,
 }
 
+/// Quality settings for GIF encoding
+#[derive(Clone, Debug)]
+pub struct GifQuality {
+    /// Encoding quality from 1-100 (default: 90)
+    pub quality: u8,
+    /// Whether to prioritize speed over quality (default: false)
+    pub fast: bool,
+}
+
+impl Default for GifQuality {
+    fn default() -> Self {
+        Self {
+            quality: 90,
+            fast: false,
+        }
+    }
+}
+
+/// Wrapper around gifski for encoding GIF animations
 pub struct GifEncoderWrapper {
-    encoder: Encoder<File>,
-    width: u16,
-    height: u16,
-    frame_delay: u16,
+    collector: Option<Collector>,
+    writer_thread: Option<JoinHandle<Result<(), GifEncodingError>>>,
+    width: u32,
+    height: u32,
+    frame_index: u32,
+    fps: u32,
+    finished: bool,
 }
 
 impl GifEncoderWrapper {
@@ -27,175 +58,165 @@ impl GifEncoderWrapper {
         height: u32,
         fps: u32,
     ) -> Result<Self, GifEncodingError> {
-        let file = File::create(path)?;
+        Self::new_with_quality(path, width, height, fps, GifQuality::default())
+    }
 
-        let global_palette = create_default_palette();
-        let mut encoder = Encoder::new(file, width as u16, height as u16, &global_palette)?;
-        encoder.set_repeat(Repeat::Infinite)?;
+    pub fn new_with_quality<P: AsRef<Path>>(
+        path: P,
+        width: u32,
+        height: u32,
+        fps: u32,
+        quality: GifQuality,
+    ) -> Result<Self, GifEncodingError> {
+        if fps == 0 || width == 0 || height == 0 {
+            return Err(GifEncodingError::InvalidFrameData);
+        }
+        let settings = Settings {
+            width: Some(width),
+            height: Some(height),
+            quality: quality.quality,
+            fast: quality.fast,
+            repeat: Repeat::Infinite,
+        };
+        let (collector, writer) =
+            gifski::new(settings).map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
-        let frame_delay = (100.0 / fps as f32) as u16;
+        let output_path = path.as_ref().to_path_buf();
+        let writer_thread = thread::spawn(move || {
+            let file = File::create(output_path).map_err(GifEncodingError::Io)?;
+            writer
+                .write(file, &mut gifski::progress::NoProgress {})
+                .map_err(|e| GifEncodingError::Gifski(e.to_string()))
+        });
 
         Ok(Self {
-            encoder,
-            width: width as u16,
-            height: height as u16,
-            frame_delay,
+            collector: Some(collector),
+            writer_thread: Some(writer_thread),
+            width,
+            height,
+            frame_index: 0,
+            fps,
+            finished: false,
         })
     }
 
+    /// Add a frame to the GIF
     pub fn add_frame(
         &mut self,
         frame_data: &[u8],
-        padded_bytes_per_row: usize,
+        bytes_per_row: usize,
     ) -> Result<(), GifEncodingError> {
-        let width = self.width as usize;
-        let height = self.height as usize;
-        let mut indexed_data = Vec::with_capacity(width * height);
+        if self.finished {
+            return Err(GifEncodingError::EncoderFinished);
+        }
 
-        let mut rgb_data = Vec::with_capacity(width * height * 3);
-        for y in 0..height {
-            let row_start = y * padded_bytes_per_row;
-            for x in 0..width {
-                let pixel_start = row_start + x * 4;
-                if pixel_start + 2 < frame_data.len() {
-                    rgb_data.push(frame_data[pixel_start] as i32);
-                    rgb_data.push(frame_data[pixel_start + 1] as i32);
-                    rgb_data.push(frame_data[pixel_start + 2] as i32);
+        let collector = self
+            .collector
+            .as_mut()
+            .ok_or(GifEncodingError::EncoderFinished)?;
+
+        // Calculate expected size
+        let expected_bytes_per_row = (self.width as usize) * 4; // RGBA
+        let expected_total_bytes = expected_bytes_per_row * (self.height as usize);
+
+        // Validate frame data size
+        if bytes_per_row < expected_bytes_per_row || frame_data.len() < expected_total_bytes {
+            return Err(GifEncodingError::InvalidFrameData);
+        }
+
+        // Convert RGBA data to gifski's expected format
+        let mut rgba_pixels = Vec::with_capacity(self.width as usize * self.height as usize);
+
+        for y in 0..self.height {
+            let src_row_start = (y as usize) * bytes_per_row;
+
+            for x in 0..self.width {
+                let pixel_start = src_row_start + (x as usize) * 4;
+
+                if pixel_start + 3 < frame_data.len() {
+                    let r = frame_data[pixel_start];
+                    let g = frame_data[pixel_start + 1];
+                    let b = frame_data[pixel_start + 2];
+                    let a = frame_data[pixel_start + 3];
+
+                    rgba_pixels.push(RGBA8::new(r, g, b, a));
                 } else {
                     return Err(GifEncodingError::InvalidFrameData);
                 }
             }
         }
 
-        for y in 0..height {
-            for x in 0..width {
-                let idx = (y * width + x) * 3;
-                let r = rgb_data[idx].clamp(0, 255) as u8;
-                let g = rgb_data[idx + 1].clamp(0, 255) as u8;
-                let b = rgb_data[idx + 2].clamp(0, 255) as u8;
+        // Create imgref for gifski
+        let img = imgref::Img::new(rgba_pixels, self.width as usize, self.height as usize);
 
-                let palette_idx = find_closest_palette_index(r, g, b);
-                indexed_data.push(palette_idx);
+        // Calculate presentation timestamp based on frame index and fps
+        let pts = (self.frame_index as f64) / (self.fps as f64);
 
-                let (pr, pg, pb) = get_palette_color(palette_idx);
+        // Add frame to collector
+        collector
+            .add_frame_rgba(self.frame_index as usize, img, pts)
+            .map_err(|e| GifEncodingError::Gifski(e.to_string()))?;
 
-                let er = r as i32 - pr as i32;
-                let eg = g as i32 - pg as i32;
-                let eb = b as i32 - pb as i32;
+        self.frame_index += 1;
+        Ok(())
+    }
 
-                if x + 1 < width {
-                    let idx_right = (y * width + x + 1) * 3;
-                    rgb_data[idx_right] += (er * 7) / 16;
-                    rgb_data[idx_right + 1] += (eg * 7) / 16;
-                    rgb_data[idx_right + 2] += (eb * 7) / 16;
-                }
-                if y + 1 < height {
-                    if x > 0 {
-                        let idx_bottom_left = ((y + 1) * width + x - 1) * 3;
-                        rgb_data[idx_bottom_left] += (er * 3) / 16;
-                        rgb_data[idx_bottom_left + 1] += (eg * 3) / 16;
-                        rgb_data[idx_bottom_left + 2] += (eb * 3) / 16;
-                    }
-                    let idx_bottom = ((y + 1) * width + x) * 3;
-                    rgb_data[idx_bottom] += (er * 5) / 16;
-                    rgb_data[idx_bottom + 1] += (eg * 5) / 16;
-                    rgb_data[idx_bottom + 2] += (eb * 5) / 16;
+    /// Finish encoding and close the GIF file
+    ///
+    /// This will wait for the encoding to complete and return any errors
+    /// that occurred during the writing process.
+    pub fn finish(mut self) -> Result<(), GifEncodingError> {
+        if self.finished {
+            return Ok(());
+        }
 
-                    if x + 1 < width {
-                        let idx_bottom_right = ((y + 1) * width + x + 1) * 3;
-                        rgb_data[idx_bottom_right] += er / 16;
-                        rgb_data[idx_bottom_right + 1] += eg / 16;
-                        rgb_data[idx_bottom_right + 2] += eb / 16;
-                    }
+        // Drop the collector to signal that we're done adding frames
+        drop(self.collector.take());
+
+        // Wait for the writer thread to complete
+        if let Some(writer_thread) = self.writer_thread.take() {
+            match writer_thread.join() {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(GifEncodingError::Gifski(
+                        "Writer thread panicked".to_string(),
+                    ));
                 }
             }
         }
 
-        let mut frame = Frame::from_indexed_pixels(self.width, self.height, indexed_data, None);
-        frame.delay = self.frame_delay;
-
-        self.encoder.write_frame(&frame)?;
+        self.finished = true;
         Ok(())
     }
 
-    pub fn finish(self) -> Result<(), GifEncodingError> {
-        drop(self.encoder);
-        Ok(())
+    /// Get the current frame count
+    pub fn frame_count(&self) -> u32 {
+        self.frame_index
+    }
+
+    /// Get the dimensions of the GIF
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// Get the target FPS
+    pub fn fps(&self) -> u32 {
+        self.fps
     }
 }
 
-fn create_default_palette() -> Vec<u8> {
-    let mut palette = Vec::with_capacity(256 * 3);
+impl Drop for GifEncoderWrapper {
+    fn drop(&mut self) {
+        if !self.finished && self.collector.is_some() {
+            // Drop the collector to signal completion
+            drop(self.collector.take());
 
-    for r in 0..6 {
-        for g in 0..7 {
-            for b in 0..6 {
-                palette.push((r * 255 / 5) as u8);
-                palette.push((g * 255 / 6) as u8);
-                palette.push((b * 255 / 5) as u8);
+            // Try to join the writer thread
+            if let Some(thread) = self.writer_thread.take() {
+                let _ = thread.join();
             }
-        }
-    }
 
-    palette.push(0);
-    palette.push(0);
-    palette.push(0);
-    palette.push(85);
-    palette.push(85);
-    palette.push(85);
-    palette.push(170);
-    palette.push(170);
-    palette.push(170);
-    palette.push(255);
-    palette.push(255);
-    palette.push(255);
-
-    assert_eq!(palette.len(), 256 * 3, "Palette must be exactly 256 colors");
-    palette
-}
-
-fn find_closest_palette_index(r: u8, g: u8, b: u8) -> u8 {
-    let r_idx = ((r as u32 * 5) / 255).min(5) as u8;
-    let g_idx = ((g as u32 * 6) / 255).min(6) as u8;
-    let b_idx = ((b as u32 * 5) / 255).min(5) as u8;
-
-    if (r as i32 - g as i32).abs() < 30
-        && (g as i32 - b as i32).abs() < 30
-        && (r as i32 - b as i32).abs() < 30
-    {
-        let gray = ((r as u32 + g as u32 + b as u32) / 3) as u8;
-        if gray < 43 {
-            return 252;
-        } else if gray < 128 {
-            return 253;
-        } else if gray < 213 {
-            return 254;
-        } else {
-            return 255;
-        }
-    }
-
-    r_idx * 42 + g_idx * 6 + b_idx
-}
-
-fn get_palette_color(index: u8) -> (u8, u8, u8) {
-    if index < 252 {
-        let r_idx = (index / 42) as u32;
-        let rem = index % 42;
-        let g_idx = (rem / 6) as u32;
-        let b_idx = (rem % 6) as u32;
-
-        let r = ((r_idx * 255) / 5) as u8;
-        let g = ((g_idx * 255) / 6) as u8;
-        let b = ((b_idx * 255) / 5) as u8;
-        (r, g, b)
-    } else {
-        match index {
-            252 => (0, 0, 0),
-            253 => (85, 85, 85),
-            254 => (170, 170, 170),
-            255 => (255, 255, 255),
-            _ => (0, 0, 0),
+            self.finished = true;
         }
     }
 }

@@ -3,8 +3,10 @@ use crate::{
     RecordingStarted, RecordingStopped, RequestNewScreenshot, RequestOpenSettings, recording,
 };
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use tauri::Manager;
 use tauri::menu::{MenuId, PredefinedMenuItem};
 use tauri::{
@@ -99,7 +101,9 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             move |app: &AppHandle, event| match TrayItem::try_from(event.id) {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
-                    tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
+                    tokio::spawn(async move {
+                        let _ = ShowCapWindow::Main.show(&app).await;
+                    });
                 }
                 Ok(TrayItem::TakeScreenshot) => {
                     let _ = RequestNewScreenshot.emit(&app_handle);

@@ -1,7 +1,7 @@
 [package]
 name = "cap-editor"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -20,7 +20,8 @@ ffmpeg.workspace = true
 specta.workspace = true
 serde = { workspace = true }
 sentry.workspace = true
-futures = "0.3.31"
+futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
 tokio-util = "0.7.15"
+ringbuf = "0.4.8"

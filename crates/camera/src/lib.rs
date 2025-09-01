@@ -98,7 +98,6 @@ impl Debug for Format {
                 }
                 #[cfg(windows)]
                 {
-                    use crate::windows::NativeFormat;
                     use cap_camera_windows::VideoFormatInner;
 
                     match &self.native {
@@ -122,6 +121,7 @@ pub struct ModelID {
 
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[cfg_attr(feature = "specta", specta(remote = ModelID))]
+#[allow(dead_code)] // It's never constructed but it's a remote impl
 struct ModelIDType(String);
 
 #[cfg(feature = "serde")]
@@ -210,28 +210,34 @@ impl CameraInfo {
         &self,
         format: Format,
         callback: impl FnMut(CapturedFrame) + 'static,
-    ) -> Result<RecordingHandle, StartCapturingError> {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
-            })
-        }
-        #[cfg(windows)]
-        {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
-            })
-        }
+    ) -> Result<CaptureHandle, StartCapturingError> {
+        Ok(CaptureHandle {
+            #[cfg(target_os = "macos")]
+            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+            #[cfg(windows)]
+            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+        })
     }
 }
 
-pub struct RecordingHandle {
-    native: NativeRecordingHandle,
+#[must_use = "must be held for the duration of the recording"]
+pub struct CaptureHandle {
+    native: Option<NativeCaptureHandle>,
 }
 
-impl RecordingHandle {
-    pub fn stop_capturing(self) {
-        let _ = self.native.stop_capturing();
+impl CaptureHandle {
+    pub fn stop_capturing(mut self) -> Result<(), String> {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CaptureHandle {
+    fn drop(&mut self) {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing().ok();
+        }
     }
 }

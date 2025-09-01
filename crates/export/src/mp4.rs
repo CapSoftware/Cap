@@ -1,8 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use crate::ExporterBase;
-use cap_editor::get_audio_segments;
-use cap_media::feeds::AudioRenderer;
+use cap_editor::{AudioRenderer, get_audio_segments};
 use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
@@ -69,7 +68,7 @@ impl Mp4ExportSettings {
         let audio_segments = get_audio_segments(&base.segments);
 
         let mut audio_renderer = audio_segments
-            .get(0)
+            .first()
             .filter(|_| !base.project_config.audio.mute)
             .map(|_| AudioRenderer::new(audio_segments.clone()));
         let has_audio = audio_renderer.is_some();
@@ -155,14 +154,17 @@ impl Mp4ExportSettings {
                             frame
                         });
 
-                    if let Err(_) = frame_tx.send(MP4Input {
-                        audio: audio_frame,
-                        video: video_info.wrap_frame(
-                            &frame.data,
-                            frame_number as i64,
-                            frame.padded_bytes_per_row as usize,
-                        ),
-                    }) {
+                    if frame_tx
+                        .send(MP4Input {
+                            audio: audio_frame,
+                            video: video_info.wrap_frame(
+                                &frame.data,
+                                frame_number as i64,
+                                frame.padded_bytes_per_row as usize,
+                            ),
+                        })
+                        .is_err()
+                    {
                         warn!("Renderer task sender dropped. Exiting");
                         return Ok(());
                     }
@@ -188,13 +190,13 @@ impl Mp4ExportSettings {
 
                     let screenshots_dir = project_path.join("screenshots");
                     std::fs::create_dir_all(&screenshots_dir).unwrap_or_else(|e| {
-                        eprintln!("Failed to create screenshots directory: {:?}", e);
+                        eprintln!("Failed to create screenshots directory: {e:?}");
                     });
 
                     // Save full-size screenshot
                     let screenshot_path = screenshots_dir.join("display.jpg");
                     rgb_img.save(&screenshot_path).unwrap_or_else(|e| {
-                        eprintln!("Failed to save screenshot: {:?}", e);
+                        eprintln!("Failed to save screenshot: {e:?}");
                     });
                 } else {
                     warn!("No frames were processed, cannot save screenshot or thumbnail");
