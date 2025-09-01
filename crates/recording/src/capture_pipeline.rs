@@ -58,7 +58,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         let screen_config = source.0.info();
         tracing::info!("screen config: {:?}", screen_config);
 
-        let mut screen_encoder = cap_media_encoders::MP4AVAssetWriterEncoder::init(
+        let mut screen_encoder = cap_enc_avfoundation::MP4Encoder::init(
             "screen",
             screen_config,
             None,

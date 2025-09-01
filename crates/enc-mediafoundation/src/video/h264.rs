@@ -104,6 +104,7 @@ impl H264Encoder {
             resolution.Width as u32,
             resolution.Height as u32,
             frame_rate,
+            bitrate_multipler,
         );
 
         let transform = EncoderDevice::enumerate(MFMediaType_Video, MFVideoFormat_H264)

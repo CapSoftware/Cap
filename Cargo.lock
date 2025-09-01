@@ -1115,6 +1115,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-enc-gif"
+version = "0.1.0"
+dependencies = [
+ "gifski",
+ "imgref",
+ "rgb",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "cap-enc-mediafoundation"
 version = "0.1.0"
 dependencies = [
@@ -1135,6 +1146,7 @@ version = "0.1.0"
 dependencies = [
  "cap-editor",
  "cap-enc-ffmpeg",
+ "cap-enc-gif",
  "cap-flags",
  "cap-media",
  "cap-media-info",
@@ -1193,7 +1205,6 @@ dependencies = [
  "cap-cpal-ffmpeg",
  "cap-fail",
  "cap-flags",
- "cap-media-encoders",
  "cap-media-info",
  "cap-project",
  "cidre 0.11.0",
@@ -1231,23 +1242,6 @@ dependencies = [
  "tracing-subscriber",
  "windows 0.60.0",
  "windows-capture",
-]
-
-[[package]]
-name = "cap-media-encoders"
-version = "0.1.0"
-dependencies = [
- "cap-audio",
- "cap-fail",
- "cap-flags",
- "cap-media-info",
- "cidre 0.11.0",
- "ffmpeg-next",
- "gifski",
- "imgref",
- "rgb",
- "thiserror 1.0.69",
- "tracing",
 ]
 
 [[package]]

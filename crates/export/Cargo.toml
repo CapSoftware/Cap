@@ -11,6 +11,7 @@ cap-editor = { path = "../editor" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-enc-gif = { path = "../enc-gif" }
 cap-media-info = { path = "../media-info" }
 
 tokio.workspace = true
