@@ -10,7 +10,7 @@ import {
 import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { RiveFile, useRiveFile } from "@rive-app/react-canvas";
+import { type RiveFile, useRiveFile } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
@@ -20,7 +20,7 @@ import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import {
 	BlueFolder,
-	FolderHandle,
+	type FolderHandle,
 	NormalFolder,
 	RedFolder,
 	YellowFolder,
@@ -94,14 +94,6 @@ export const NewFolderDialog: React.FC<Props> = ({
 		normal: React.createRef<FolderHandle>(),
 	});
 
-	useEffect(() => {
-		FolderOptions.forEach((option) => {
-			if (!folderRefs.current[option.value]) {
-				folderRefs.current[option.value] = React.createRef();
-			}
-		});
-	}, []);
-
 	const createFolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
 			withRpc((r) =>
@@ -140,59 +132,43 @@ export const NewFolderDialog: React.FC<Props> = ({
 						placeholder="Folder name"
 					/>
 					<div className="flex flex-wrap gap-2 mt-3">
-						{FolderOptions.map(
-							(
-								option: {
-									value: "blue" | "red" | "yellow" | "normal";
-									label: string;
-									component: (
-										rivefile: RiveFile | undefined,
-									) => React.JSX.Element;
-								},
-								idx: number,
-							) => {
-								return (
-									<div
-										className={clsx(
-											"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
-											selectedColor === option.value
-												? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
-												: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
-										)}
-										key={`rive-instance-${idx.toString()}`}
-										onClick={() => {
-											if (selectedColor === option.value) {
-												setSelectedColor(null);
-												return;
-											}
-											setSelectedColor(option.value);
-										}}
-										onMouseEnter={() => {
-											const folderRef =
-												folderRefs.current[option.value]?.current;
-											if (!folderRef) return;
-											folderRef.stop();
-											folderRef.play("folder-open");
-										}}
-										onMouseLeave={() => {
-											const folderRef =
-												folderRefs.current[option.value]?.current;
-											if (!folderRef) return;
-											folderRef.stop();
-											folderRef.play("folder-close");
-										}}
-									>
-										{React.cloneElement(
-											option.component(riveFile as RiveFile),
-											{
-												ref: folderRefs.current[option.value],
-											},
-										)}
-										<p className="text-xs text-gray-10">{option.label}</p>
-									</div>
-								);
-							},
-						)}
+						{FolderOptions.map((option) => {
+							return (
+								<div
+									className={clsx(
+										"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
+										selectedColor === option.value
+											? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
+											: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
+									)}
+									key={`rive-${option.value}`}
+									onClick={() => {
+										if (selectedColor === option.value) {
+											setSelectedColor(null);
+											return;
+										}
+										setSelectedColor(option.value);
+									}}
+									onMouseEnter={() => {
+										const folderRef = folderRefs.current[option.value]?.current;
+										if (!folderRef) return;
+										folderRef.stop();
+										folderRef.play("folder-open");
+									}}
+									onMouseLeave={() => {
+										const folderRef = folderRefs.current[option.value]?.current;
+										if (!folderRef) return;
+										folderRef.stop();
+										folderRef.play("folder-close");
+									}}
+								>
+									{React.cloneElement(option.component(riveFile as RiveFile), {
+										ref: folderRefs.current[option.value],
+									})}
+									<p className="text-xs text-gray-10">{option.label}</p>
+								</div>
+							);
+						})}
 					</div>
 				</div>
 				<DialogFooter>
