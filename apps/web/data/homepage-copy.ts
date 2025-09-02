@@ -244,7 +244,7 @@ export const homepageCopy: HomePageCopy = {
 			labels: {
 				users: "Per user",
 				monthly: "Monthly",
-				annually: "Annual (save 33%)",
+				annually: "Annual (save 32%)",
 			},
 		},
 	},
