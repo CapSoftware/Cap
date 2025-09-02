@@ -222,7 +222,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
     }
 }
 
-#[cfg(windows)]
+// #[cfg(windows)]
 impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     fn make_studio_mode_pipeline(
         mut builder: PipelineBuilder,

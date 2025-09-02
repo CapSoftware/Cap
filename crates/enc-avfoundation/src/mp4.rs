@@ -1,4 +1,5 @@
-use cap_media_info::{AudioInfo, PlanarData, VideoInfo};
+use cap_ffmpeg_utils::PlanarData;
+use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
 use std::path::PathBuf;
