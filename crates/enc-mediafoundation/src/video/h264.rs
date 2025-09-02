@@ -67,6 +67,7 @@ pub struct H264Encoder {
     input_stream_id: u32,
     output_stream_id: u32,
     output_type: IMFMediaType,
+    bitrate: u32,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -100,7 +101,7 @@ impl H264Encoder {
         frame_rate: u32,
         bitrate_multipler: f32,
     ) -> Result<Self, NewVideoEncoderError> {
-        let bit_rate = calculate_bitrate(
+        let bitrate = calculate_bitrate(
             resolution.Width as u32,
             resolution.Height as u32,
             frame_rate,
@@ -214,7 +215,7 @@ impl H264Encoder {
             let attributes: IMFAttributes = output_type.cast()?;
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-            output_type.SetUINT32(&MF_MT_AVG_BITRATE, bit_rate)?;
+            output_type.SetUINT32(&MF_MT_AVG_BITRATE, bitrate)?;
             MFSetAttributeSize(
                 &attributes,
                 &MF_MT_FRAME_SIZE,
@@ -288,9 +289,14 @@ impl H264Encoder {
             event_generator,
             input_stream_id,
             output_stream_id,
+            bitrate,
 
             output_type,
         })
+    }
+
+    pub fn bitrate(&self) -> u32 {
+        self.bitrate
     }
 
     pub fn output_type(&self) -> &IMFMediaType {

@@ -1,8 +1,24 @@
+#![cfg(windows)]
+
 use std::{
     ops::{Deref, DerefMut},
     ptr::null_mut,
 };
-use windows::{Win32::Media::MediaFoundation::IMFMediaBuffer, core::Result};
+use windows::{
+    Win32::{
+        Media::MediaFoundation::{IMFMediaBuffer, MFSTARTUP_FULL, MFStartup},
+        System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
+    },
+    core::Result,
+};
+
+// This is the value for Win7+
+pub const MF_VERSION: u32 = 131184;
+
+pub fn thread_init() {
+    let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+    let _ = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) };
+}
 
 pub trait IMFMediaBufferExt {
     fn lock(&self) -> Result<IMFMediaBufferLock<'_>>;

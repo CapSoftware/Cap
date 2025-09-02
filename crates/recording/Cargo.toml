@@ -60,10 +60,11 @@ cap-enc-avfoundation = { path = "../enc-avfoundation" }
 [target.'cfg(target_os = "windows")'.dependencies]
 cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
 cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 windows = { workspace = true, features = [
-	"Win32_Foundation",
-	"Win32_Graphics_Gdi",
-	"Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
