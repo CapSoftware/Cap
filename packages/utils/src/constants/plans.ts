@@ -6,8 +6,8 @@ const planIds = {
 		monthly: "price_1P9C1DFJxA1XpeSsTwwuddnq",
 	},
 	production: {
-		yearly: "price_1Q29mcFJxA1XpeSsbti0xJpZ",
-		monthly: "price_1OtBMeFJxA1XpeSsfOu2SKp1",
+		yearly: "price_1S2al7FJxA1XpeSsJCI5Z2UD",
+		monthly: "price_1S2akxFJxA1XpeSsfoAUUbpJ",
 	},
 };
 
