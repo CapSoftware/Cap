@@ -12,6 +12,7 @@ import {
 import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { RiveFile, useRiveFile } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
@@ -37,22 +38,30 @@ const FolderOptions = [
 	{
 		value: "normal",
 		label: "Normal",
-		component: <NormalFolder />,
+		component: (rivefile: RiveFile | undefined) => (
+			<NormalFolder riveFile={rivefile} />
+		),
 	},
 	{
 		value: "blue",
 		label: "Blue",
-		component: <BlueFolder />,
+		component: (rivefile: RiveFile | undefined) => (
+			<BlueFolder riveFile={rivefile} />
+		),
 	},
 	{
 		value: "red",
 		label: "Red",
-		component: <RedFolder />,
+		component: (rivefile: RiveFile | undefined) => (
+			<RedFolder riveFile={rivefile} />
+		),
 	},
 	{
 		value: "yellow",
 		label: "Yellow",
-		component: <YellowFolder />,
+		component: (rivefile: RiveFile | undefined) => (
+			<YellowFolder riveFile={rivefile} />
+		),
 	},
 ] as const;
 
@@ -65,9 +74,12 @@ export const SubfolderDialog: React.FC<Props> = ({
 		(typeof FolderOptions)[number]["value"] | null
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
-	const folderRefs = useRef<Record<string, any>>({});
 	const { activeSpace } = useDashboardContext();
 	const router = useRouter();
+
+	const { riveFile } = useRiveFile({
+		src: "/rive/dashboard.riv",
+	});
 
 	useEffect(() => {
 		if (!open) {
@@ -75,6 +87,22 @@ export const SubfolderDialog: React.FC<Props> = ({
 			setFolderName("");
 		}
 	}, [open]);
+
+	const folderRefs = useRef<
+		Record<(typeof FolderOptions)[number]["value"], any>
+	>({
+		blue: null,
+		red: null,
+		yellow: null,
+		normal: null,
+	});
+	useEffect(() => {
+		FolderOptions.forEach((option) => {
+			if (!folderRefs.current[option.value]) {
+				folderRefs.current[option.value] = React.createRef();
+			}
+		});
+	}, []);
 
 	const createSubfolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
@@ -114,44 +142,59 @@ export const SubfolderDialog: React.FC<Props> = ({
 						placeholder="Subfolder name"
 					/>
 					<div className="flex flex-wrap gap-2 mt-3">
-						{FolderOptions.map((option) => {
-							const folderRef = useRef<any>(null);
-							folderRefs.current[option.value] = folderRef;
-
-							return (
-								<div
-									className={clsx(
-										"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
-										selectedColor === option.value
-											? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
-											: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
-									)}
-									key={option.value}
-									onClick={() => {
-										if (selectedColor === option.value) {
-											setSelectedColor(null);
-											return;
-										}
-										setSelectedColor(option.value);
-									}}
-									onMouseEnter={() => {
-										const folderRef = folderRefs.current[option.value]?.current;
-										if (!folderRef) return;
-										folderRef.stop();
-										folderRef.play("folder-open");
-									}}
-									onMouseLeave={() => {
-										const folderRef = folderRefs.current[option.value]?.current;
-										if (!folderRef) return;
-										folderRef.stop();
-										folderRef.play("folder-close");
-									}}
-								>
-									{React.cloneElement(option.component, { ref: folderRef })}
-									<p className="text-xs text-gray-10">{option.label}</p>
-								</div>
-							);
-						})}
+						{FolderOptions.map(
+							(
+								option: {
+									value: "blue" | "red" | "yellow" | "normal";
+									label: string;
+									component: (
+										rivefile: RiveFile | undefined,
+									) => React.JSX.Element;
+								},
+								idx: number,
+							) => {
+								return (
+									<div
+										className={clsx(
+											"flex flex-col flex-1 gap-1 items-center p-2 rounded-xl border transition-colors duration-200 cursor-pointer",
+											selectedColor === option.value
+												? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
+												: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
+										)}
+										key={`rive-instance-${idx.toString()}`}
+										onClick={() => {
+											if (selectedColor === option.value) {
+												setSelectedColor(null);
+												return;
+											}
+											setSelectedColor(option.value);
+										}}
+										onMouseEnter={() => {
+											const folderRef =
+												folderRefs.current[option.value]?.current;
+											if (!folderRef) return;
+											folderRef.stop();
+											folderRef.play("folder-open");
+										}}
+										onMouseLeave={() => {
+											const folderRef =
+												folderRefs.current[option.value]?.current;
+											if (!folderRef) return;
+											folderRef.stop();
+											folderRef.play("folder-close");
+										}}
+									>
+										{React.cloneElement(
+											option.component(riveFile as RiveFile),
+											{
+												ref: folderRefs.current[option.value],
+											},
+										)}
+										<p className="text-xs text-gray-10">{option.label}</p>
+									</div>
+								);
+							},
+						)}
 					</div>
 				</div>
 				<DialogFooter>
