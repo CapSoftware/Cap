@@ -1,7 +1,7 @@
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
     codec::{context, encoder},
-    format::{self, Sample, sample::Type},
+    format::{self, sample::Type, Sample},
     frame,
     threading::Config,
 };

@@ -222,7 +222,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
     }
 }
 
-// #[cfg(windows)]
+#[cfg(windows)]
 impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     fn make_studio_mode_pipeline(
         mut builder: PipelineBuilder,
@@ -235,19 +235,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     where
         Self: Sized,
     {
-        use cap_enc_mediafoundation::{media::MF_VERSION, video::SampleWriter};
-        use windows::{
-            Graphics::SizeInt32,
-            Win32::{
-                Media::MediaFoundation::{MFSTARTUP_FULL, MFStartup},
-                System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize},
-            },
-        };
+        use windows::Graphics::SizeInt32;
 
-        unsafe {
-            let _ = RoInitialize(RO_INIT_MULTITHREADED);
-            let _ = MFStartup(MF_VERSION, MFSTARTUP_FULL);
-        }
+        cap_mediafoundation_utils::thread_init();
 
         let screen_config = source.0.info();
 
@@ -324,8 +314,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     use cap_enc_mediafoundation::media::MF_VERSION;
                     use windows::Win32::Media::MediaFoundation::{self, MFSTARTUP_FULL, MFStartup};
 
-                    let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
-                    let _ = unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) };
+                    cap_mediafoundation_utils::thread_init();
 
                     let _ = ready.send(Ok(()));
 
@@ -435,8 +424,10 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     where
         Self: Sized,
     {
-        use cap_enc_ffmpeg::{AACEncoder, AudioEncoder, H264Encoder, MP4File};
+        use cap_enc_ffmpeg::{AACEncoder, AudioEncoder};
         use windows::Graphics::SizeInt32;
+
+        cap_mediafoundation_utils::thread_init();
 
         let (audio_tx, audio_rx) = flume::bounded(64);
         let mut audio_mixer = AudioMixer::new(audio_tx);
@@ -469,6 +460,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         )
         .unwrap();
 
+        screen_encoder.start().unwrap();
+
         let mut screen_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
             &mut output,
             cap_mediafoundation_ffmpeg::MuxerConfig {
@@ -480,8 +473,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         )
         .unwrap();
 
-        output.write_header().unwrap();
-
         let audio_encoder = has_audio_sources
             .then(|| {
                 AACEncoder::init("mic_audio", AudioMixer::info(), &mut output)
@@ -491,11 +482,16 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             .transpose()
             .unwrap();
 
+        output.write_header().unwrap();
+
         let output = Arc::new(std::sync::Mutex::new(output));
+
+        let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         if let Some(mut audio_encoder) = audio_encoder {
             builder.spawn_source("audio_mixer", audio_mixer);
 
+            let is_done = is_done.clone();
             let output = output.clone();
             builder.spawn_task("audio_encoding", move |ready| {
                 let _ = ready.send(Ok(()));
@@ -504,7 +500,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     //     mp4.queue_audio_frame(frame);
                     // }
 
-                    if let Ok(mut output) = output.lock() {
+                    if let Ok(mut output) = output.lock()
+                        && !is_done.load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         audio_encoder.queue_frame(frame, &mut *output);
                     }
                 }
@@ -538,10 +536,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         };
                         let first_time = first_time.get_or_insert(frame_time);
 
+                        let duration = frame_time.Duration - first_time.Duration;
                         let sample = VideoEncoderInputSample::new(
-                            TimeSpan {
-                                Duration: frame_time.Duration - first_time.Duration,
-                            },
+                            TimeSpan { Duration: duration },
                             frame.0.texture().clone(),
                         );
 
@@ -566,7 +563,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             }
 
             screen_encoder.finish().unwrap();
-
+            is_done.store(true, std::sync::atomic::Ordering::Relaxed);
             output.lock().unwrap().write_trailer().unwrap();
 
             Ok(())

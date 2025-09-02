@@ -22,18 +22,18 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
+    let (handle, _ready_rx) = cap_recording::instant_recording::spawn_instant_recording_actor(
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
             capture_target: ScreenCaptureTarget::Display {
                 id: Display::primary().id(),
             },
-            capture_system_audio: false,
+            capture_system_audio: true,
             camera_feed: None,
             mic_feed: None,
         },
-        true,
+        // true,
     )
     .await
     .unwrap();

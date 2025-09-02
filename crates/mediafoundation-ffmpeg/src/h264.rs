@@ -39,8 +39,7 @@ impl H264StreamMuxer {
         let mut stream = output.add_stream(h264_codec)?;
         let stream_index = stream.index();
 
-        // Set up time base (1/fps for video)
-        let time_base = ffmpeg::Rational::new(1, config.fps as i32);
+        let time_base = ffmpeg::Rational::new(1, config.fps as i32 * 1000);
         stream.set_time_base(time_base);
 
         // Configure stream parameters

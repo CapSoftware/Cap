@@ -682,7 +682,7 @@ async fn create_segment_pipeline(
     let (screen_source, screen_rx) = create_screen_capture(
         &capture_target,
         !custom_cursor_capture,
-        60,
+        120,
         system_audio.0,
         start_time,
         #[cfg(windows)]
