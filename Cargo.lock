@@ -1279,6 +1279,7 @@ dependencies = [
  "cap-media",
  "cap-media-info",
  "cap-mediafoundation-ffmpeg",
+ "cap-mediafoundation-utils",
  "cap-project",
  "cap-utils",
  "chrono",

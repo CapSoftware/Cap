@@ -161,8 +161,11 @@ mod win {
                                 }
                             }
                             MediaFoundation::METransformHaveOutput => {
-                                let output_sample = video_encoder.handle_has_output().unwrap();
-                                sample_writer.write(stream_index, &output_sample).unwrap();
+                                if let Some(output_sample) =
+                                    video_encoder.handle_has_output().unwrap()
+                                {
+                                    sample_writer.write(stream_index, &output_sample).unwrap();
+                                }
                             }
                             _ => {}
                         }
