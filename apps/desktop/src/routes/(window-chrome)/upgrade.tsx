@@ -472,7 +472,7 @@ export default function Page() {
 										</div>
 										<div class="flex flex-col justify-center items-center">
 											<h3 class="text-4xl leading-6 text-gray-1">
-												{isProAnnual() ? "$6" : "$9"}
+												{isProAnnual() ? "$8.16" : "$12"}
 												<span class="text-gray-10 text-[16px]">.00 /</span>
 											</h3>
 											{isProAnnual() && (
@@ -494,8 +494,8 @@ export default function Page() {
 												Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
 												<span class="font-medium">
 													{isProAnnual()
-														? "$9 per user, billed monthly"
-														: "$6 per user, billed annually"}
+														? "$12 per user, billed monthly"
+														: "$8.16 per user, billed annually"}
 												</span>
 											</p>
 										</div>
