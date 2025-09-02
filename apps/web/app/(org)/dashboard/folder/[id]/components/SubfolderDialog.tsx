@@ -200,7 +200,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 							createSubfolder.isPending
 						}
 					>
-						Create
+						{createSubfolder.isPending ? "Creating..." : "Create"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
