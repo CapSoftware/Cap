@@ -18,7 +18,13 @@ import React, { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
-import { BlueFolder, NormalFolder, RedFolder, YellowFolder } from "./Folders";
+import {
+	BlueFolder,
+	FolderHandle,
+	NormalFolder,
+	RedFolder,
+	YellowFolder,
+} from "./Folders";
 
 interface Props {
 	open: boolean;
@@ -77,13 +83,17 @@ export const NewFolderDialog: React.FC<Props> = ({
 	}, [open]);
 
 	const folderRefs = useRef<
-		Record<(typeof FolderOptions)[number]["value"], any>
+		Record<
+			(typeof FolderOptions)[number]["value"],
+			React.RefObject<FolderHandle>
+		>
 	>({
-		blue: null,
-		red: null,
-		yellow: null,
-		normal: null,
+		blue: React.createRef<FolderHandle>(),
+		red: React.createRef<FolderHandle>(),
+		yellow: React.createRef<FolderHandle>(),
+		normal: React.createRef<FolderHandle>(),
 	});
+
 	useEffect(() => {
 		FolderOptions.forEach((option) => {
 			if (!folderRefs.current[option.value]) {

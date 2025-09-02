@@ -23,6 +23,7 @@ import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,
+	FolderHandle,
 	NormalFolder,
 	RedFolder,
 	YellowFolder,
@@ -89,13 +90,17 @@ export const SubfolderDialog: React.FC<Props> = ({
 	}, [open]);
 
 	const folderRefs = useRef<
-		Record<(typeof FolderOptions)[number]["value"], any>
+		Record<
+			(typeof FolderOptions)[number]["value"],
+			React.RefObject<FolderHandle>
+		>
 	>({
-		blue: null,
-		red: null,
-		yellow: null,
-		normal: null,
+		blue: React.createRef<FolderHandle>(),
+		red: React.createRef<FolderHandle>(),
+		yellow: React.createRef<FolderHandle>(),
+		normal: React.createRef<FolderHandle>(),
 	});
+
 	useEffect(() => {
 		FolderOptions.forEach((option) => {
 			if (!folderRefs.current[option.value]) {
