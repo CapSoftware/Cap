@@ -36,30 +36,34 @@ const FolderOptions = [
 	{
 		value: "normal",
 		label: "Normal",
-		component: (rivefile: RiveFile | undefined) => (
-			<NormalFolder riveFile={rivefile} />
-		),
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <NormalFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "blue",
 		label: "Blue",
-		component: (rivefile: RiveFile | undefined) => (
-			<BlueFolder riveFile={rivefile} />
-		),
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <BlueFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "red",
 		label: "Red",
-		component: (rivefile: RiveFile | undefined) => (
-			<RedFolder riveFile={rivefile} />
-		),
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <RedFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "yellow",
 		label: "Yellow",
-		component: (rivefile: RiveFile | undefined) => (
-			<YellowFolder riveFile={rivefile} />
-		),
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <YellowFolder riveFile={riveFile} ref={ref} />,
 	},
 ] as const;
 
@@ -82,17 +86,18 @@ export const NewFolderDialog: React.FC<Props> = ({
 		if (!open) setSelectedColor(null);
 	}, [open]);
 
-	const folderRefs = useRef<
-		Record<
-			(typeof FolderOptions)[number]["value"],
-			React.RefObject<FolderHandle>
-		>
-	>({
-		blue: React.createRef<FolderHandle>(),
-		red: React.createRef<FolderHandle>(),
-		yellow: React.createRef<FolderHandle>(),
-		normal: React.createRef<FolderHandle>(),
-	});
+	const folderRefs = useRef(
+		FolderOptions.reduce(
+			(acc, opt) => {
+				acc[opt.value] = React.createRef<FolderHandle>();
+				return acc;
+			},
+			{} as Record<
+				(typeof FolderOptions)[number]["value"],
+				React.RefObject<FolderHandle>
+			>,
+		),
+	);
 
 	const createFolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
@@ -162,9 +167,10 @@ export const NewFolderDialog: React.FC<Props> = ({
 										folderRef.play("folder-close");
 									}}
 								>
-									{React.cloneElement(option.component(riveFile as RiveFile), {
-										ref: folderRefs.current[option.value],
-									})}
+									{option.component(
+										riveFile as RiveFile,
+										folderRefs.current[option.value],
+									)}
 									<p className="text-xs text-gray-10">{option.label}</p>
 								</div>
 							);
