@@ -142,10 +142,10 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 				<Tooltip position="right" content="Create space">
 					<Button
 						className={clsx(
-							"p-0 bg-transparent min-w-[unset] hover:bg-gray-3",
+							"p-0 min-w-[unset] hover:bg-gray-3",
 							sidebarCollapsed ? "size-8" : "size-7",
 						)}
-						variant="gray"
+						variant="white"
 						onClick={() => {
 							setShowSpaceDialog(true);
 						}}

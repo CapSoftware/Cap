@@ -25,7 +25,6 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { addEventListener } from "solid-js/web";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
@@ -369,16 +368,16 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={signIn.isPending}>
-				<div class="bg-gray-1 absolute inset-0 flex items-center justify-center animate-in fade-in">
-					<div class="flex flex-col items-center justify-center gap-4">
-						<span>Singning In...</span>
+				<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
+					<div class="flex flex-col gap-4 justify-center items-center">
+						<span>Signing In...</span>
 
 						<Button
 							onClick={() => {
 								signIn.variables?.abort();
 								signIn.reset();
 							}}
-							variant="secondary"
+							variant="gray"
 							class="w-full"
 						>
 							Cancel Sign In

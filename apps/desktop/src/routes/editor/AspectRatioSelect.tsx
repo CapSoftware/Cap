@@ -1,5 +1,4 @@
 import { Select as KSelect } from "@kobalte/core/select";
-import { createEventListener } from "@solid-primitives/event-listener";
 import { createSignal, Show } from "solid-js";
 import Tooltip from "~/components/Tooltip";
 import type { AspectRatio } from "~/utils/tauri";
@@ -17,15 +16,9 @@ function AspectRatioSelect() {
 	const { project, setProject } = useEditorContext();
 	const [open, setOpen] = createSignal(false);
 	let triggerSelect: HTMLDivElement | undefined;
-	createEventListener(document, "keydown", (e: KeyboardEvent) => {
-		if (e.code === "KeyA" && e.target === document.body) {
-			e.preventDefault();
-			setOpen((prev) => !prev);
-		}
-	});
 
 	return (
-		<Tooltip kbd={["A"]} content="Aspect Ratio">
+		<Tooltip content="Aspect Ratio">
 			<KSelect<AspectRatio | "auto">
 				open={open()}
 				onOpenChange={setOpen}

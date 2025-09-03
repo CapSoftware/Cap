@@ -492,7 +492,7 @@ function Startup(props: { onClose: () => void }) {
 							<Match when={ostype() !== "windows"}>
 								<Button
 									class="px-12 text-lg shadow-[0_0_30px_rgba(0,0,0,0.1)]"
-									variant="secondary"
+									variant="gray"
 									size="lg"
 									onClick={handleGetStarted}
 								>
