@@ -1205,6 +1205,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-instant-recording"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+ "windows-core 0.60.1",
+]
+
+[[package]]
 name = "cap-media"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,13 @@
+[package]
+name = "cap-instant-recording"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+windows-core = { workspace = true }
+windows = { workspace = true, features = ["Win32_System_Performance"] }
+
+[lints]
+workspace = true
