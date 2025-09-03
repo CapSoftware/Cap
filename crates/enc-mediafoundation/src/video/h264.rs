@@ -8,12 +8,11 @@ use windows::{
             Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_NV12},
         },
         Media::MediaFoundation::{
-            IMFAsyncCallback, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEvent,
-            IMFMediaEventGenerator, IMFMediaType, IMFSample, IMFTransform,
-            MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
-            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE, MF_MT_ALL_SAMPLES_INDEPENDENT,
-            MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-            MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+            IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType, IMFSample,
+            IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE,
+            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE,
+            MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
             MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
             MFCreateSample, MFMediaType_Video, MFT_MESSAGE_COMMAND_FLUSH,
@@ -27,10 +26,8 @@ use windows::{
 };
 
 use crate::{
-    async_callback::AsyncCallback,
     media::{MFSetAttributeRatio, MFSetAttributeSize},
     mft::EncoderDevice,
-    unsafe_send::UnsafeSend,
     video::{NewVideoProcessorError, VideoProcessor},
 };
 
@@ -337,35 +334,6 @@ impl H264Encoder {
         }
 
         Ok(())
-    }
-
-    pub fn get_event_stream(
-        &self,
-    ) -> impl futures::Stream<Item = windows::core::Result<UnsafeSend<IMFMediaEvent>>> {
-        let generator = UnsafeSend(self.event_generator.clone());
-
-        futures::stream::unfold((), move |()| {
-            let generator = generator.clone();
-            async move {
-                let (tx, rx) = futures::channel::oneshot::channel();
-
-                let callback: IMFAsyncCallback = {
-                    let generator = generator.clone();
-                    AsyncCallback::new(move |result| {
-                        let _ = tx.send(
-                            unsafe { generator.EndGetEvent(result.unwrap()) }.map(UnsafeSend),
-                        );
-                    })
-                    .into()
-                };
-
-                let _ = unsafe { generator.BeginGetEvent(&callback, None) };
-
-                let val = rx.await.ok()?;
-
-                Some((val, ()))
-            }
-        })
     }
 
     pub fn get_event(&self) -> windows::core::Result<MF_EVENT_TYPE> {

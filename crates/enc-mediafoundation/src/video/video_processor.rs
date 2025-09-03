@@ -1,3 +1,5 @@
+use std::mem::ManuallyDrop;
+
 use windows::{
     Graphics::{RectInt32, SizeInt32},
     Win32::{
@@ -233,7 +235,7 @@ impl VideoProcessor {
                 Enable: true.into(),
                 OutputIndex: 0,
                 InputFrameOrField: 0,
-                pInputSurface: std::mem::transmute_copy(&self.video_input),
+                pInputSurface: ManuallyDrop::new(Some(self.video_input.clone())),
                 ..Default::default()
             };
             self.video_context.VideoProcessorBlt(

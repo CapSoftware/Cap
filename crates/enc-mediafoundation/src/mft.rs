@@ -80,8 +80,9 @@ fn enumerate_mfts(
     };
     if !mfactivate_list.is_empty() {
         for mfactivate in mfactivate_list.as_slice() {
-            let transform_source = mfactivate.clone().unwrap();
-            transform_sources.push(transform_source);
+            if let Some(transform_source) = mfactivate.clone() {
+                transform_sources.push(transform_source);
+            }
         }
     }
     Ok(transform_sources)
@@ -97,7 +98,7 @@ fn get_string_attribute(
                 let mut result = vec![0u16; (length + 1) as usize];
                 attributes.GetString(attribute_guid, &mut result, Some(&mut length))?;
                 result.resize(length as usize, 0);
-                Ok(Some(String::from_utf16(&result).unwrap()))
+                Ok(String::from_utf16(&result).ok())
             }
             Err(error) => {
                 if error.code() == MF_E_ATTRIBUTENOTFOUND {

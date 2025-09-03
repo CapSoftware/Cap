@@ -1,6 +1,5 @@
 #![cfg(windows)]
 
-mod async_callback;
 pub mod d3d;
 pub mod media;
 mod mft;

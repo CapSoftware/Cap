@@ -187,7 +187,8 @@ pub async fn spawn_instant_recording_actor(
     };
 
     #[cfg(windows)]
-    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
+    let d3d_device = crate::capture_pipeline::create_d3d_device()
+        .map_err(|e| MediaError::Any(format!("CreateD3DDevice: {e}").into()))?;
 
     let (screen_source, screen_rx) = create_screen_capture(
         &inputs.capture_target,
