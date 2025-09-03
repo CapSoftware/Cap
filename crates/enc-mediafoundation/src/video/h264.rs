@@ -125,7 +125,7 @@ impl H264Encoder {
                 )
                 .map_err(NewVideoEncoderError::DeviceManager)?
             };
-            media_device_manager.unwrap()
+            media_device_manager.expect("Device manager unexpectedly None")
         };
         unsafe {
             media_device_manager
