@@ -64,7 +64,7 @@ export const UpgradeModal = ({ open, onOpenChange }: UpgradeModalProps) => {
 	const [proQuantity, setProQuantity] = useState(1);
 	const { push } = useRouter();
 
-	const pricePerUser = isAnnual ? 6 : 9;
+	const pricePerUser = isAnnual ? 8.16 : 12;
 	const totalPrice = pricePerUser * proQuantity;
 	const billingText = isAnnual ? "billed annually" : "billed monthly";
 
