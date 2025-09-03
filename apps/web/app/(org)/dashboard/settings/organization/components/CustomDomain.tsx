@@ -94,14 +94,14 @@ export function CustomDomain() {
 								Custom Domain
 							</h1>
 							<p className="w-full text-sm text-gray-10">
-								Set up a custom domain for your organization's shared caps.
+								Setup a custom domain for your organization's shared caps.
 							</p>
 						</div>
 					</div>
 					<div className="flex flex-1 gap-2 justify-between items-center w-full">
 						<div className="flex gap-2 justify-between items-center px-3 flex-1 h-[44px] rounded-xl border bg-gray-2 border-gray-3">
-							<p className="text-[13px] text-gray-10">
-								{orgCustomDomain || "No custom domain"}
+							<p className="text-[13px] text-gray-8">
+								{orgCustomDomain || "No custom domain has been setup"}
 							</p>
 							<div className="flex items-center">
 								{orgCustomDomain && isVerified ? (

@@ -7,6 +7,7 @@ import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { PostHog } from "posthog-node";
+import type Stripe from "stripe";
 import { z } from "zod";
 import { withAuth } from "../../utils";
 
@@ -72,7 +73,6 @@ app.get("/org-custom-domain", async (c) => {
 			.leftJoin(organizations, eq(users.activeOrganizationId, organizations.id))
 			.where(eq(users.id, user.id));
 
-		// Ensure custom domain has https:// prefix
 		let customDomain = result?.customDomain ?? null;
 		if (
 			customDomain &&
@@ -151,11 +151,36 @@ app.post(
 		let customerId = user.stripeCustomerId;
 
 		if (user.stripeCustomerId === null) {
-			console.log("[POST] Creating new Stripe customer");
-			const customer = await stripe().customers.create({
+			console.log(
+				"[POST] Checking for existing Stripe customer for email:",
+				user.email,
+			);
+
+			const existingCustomers = await stripe().customers.list({
 				email: user.email,
-				metadata: { userId: user.id },
+				limit: 1,
 			});
+
+			let customer: Stripe.Customer;
+			if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
+				customer = existingCustomers.data[0];
+				console.log("[POST] Found existing Stripe customer:", customer.id);
+
+				customer = await stripe().customers.update(customer.id, {
+					metadata: {
+						...customer.metadata,
+						userId: user.id,
+					},
+				});
+				console.log("[POST] Updated existing customer metadata with userId");
+			} else {
+				console.log("[POST] Creating new Stripe customer");
+				customer = await stripe().customers.create({
+					email: user.email,
+					metadata: { userId: user.id },
+				});
+				console.log("[POST] Created Stripe customer:", customer.id);
+			}
 
 			await db()
 				.update(users)
@@ -163,7 +188,6 @@ app.post(
 				.where(eq(users.id, user.id));
 
 			customerId = customer.id;
-			console.log("[POST] Created Stripe customer:", customerId);
 		}
 
 		console.log("[POST] Creating checkout session");

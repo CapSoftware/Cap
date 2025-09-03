@@ -27,7 +27,7 @@ export const loomAlternativeContent = {
 		{
 			title: "Half the Price of Loom",
 			description:
-				"Cap is just $9/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
+				"Cap stars from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
 		},
 		{
 			title: "High-Quality Recordings",
@@ -106,7 +106,7 @@ export const loomAlternativeContent = {
 		{
 			question: "How does Cap compare in pricing with Loom?",
 			answer:
-				"Cap is significantly more affordable at just $9/month per user, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
+				"Cap is significantly more affordable at just $8.16/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
 		},
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
@@ -125,7 +125,7 @@ export const loomAlternativeContent = {
 		headers: ["Feature", "Cap", "Loom"],
 		rows: [
 			["Open Source", "✅ Yes", "❌ No"],
-			["Pricing", "✅ $9/month per user", "⚠️ $18/month per user"],
+			["Pricing", "✅ $from 8.16/month per user", "⚠️ $18/month per user"],
 			[
 				"Free Plan",
 				"✅ Studio mode + 5 min shareable links",
