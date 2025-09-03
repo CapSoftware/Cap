@@ -1,14 +1,12 @@
 use cap_media_info::RawVideoFormat;
-use ffmpeg::{
-    format::{self},
-    frame,
-};
+use ffmpeg::{format, frame};
 use std::path::PathBuf;
 use tracing::{info, trace};
 
-use crate::H264EncoderError;
-
-use super::{AudioEncoder, H264Encoder};
+use crate::{
+    audio::AudioEncoder,
+    video::{H264Encoder, H264EncoderError},
+};
 
 pub struct MP4File {
     #[allow(unused)]
@@ -112,6 +110,14 @@ impl MP4File {
         if let Err(e) = self.output.write_trailer() {
             tracing::error!("Failed to write MP4 trailer: {:?}", e);
         }
+    }
+
+    pub fn video(&self) -> &H264Encoder {
+        &self.video
+    }
+
+    pub fn video_mut(&mut self) -> &mut H264Encoder {
+        &mut self.video
     }
 }
 

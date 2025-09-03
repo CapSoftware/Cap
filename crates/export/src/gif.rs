@@ -1,11 +1,9 @@
-use std::path::PathBuf;
-
-use cap_media_encoders::{GifEncoderWrapper, GifQuality as EncoderGifQuality};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
 use futures::FutureExt;
 use serde::Deserialize;
 use specta::Type;
+use std::path::PathBuf;
 use tracing::trace;
 
 use crate::{ExportError, ExporterBase};
@@ -69,13 +67,13 @@ impl GifExportSettings {
         // Create GIF encoder with quality settings
         let quality = self
             .quality
-            .map(|q| EncoderGifQuality {
+            .map(|q| cap_enc_gif::GifQuality {
                 quality: q.quality.unwrap_or(90),
                 fast: q.fast.unwrap_or(false),
             })
             .unwrap_or_default();
 
-        let mut gif_encoder = GifEncoderWrapper::new_with_quality(
+        let mut gif_encoder = cap_enc_gif::GifEncoderWrapper::new_with_quality(
             &gif_output_path,
             output_size.0,
             output_size.1,

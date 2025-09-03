@@ -1,4 +1,5 @@
 use super::*;
+use cap_ffmpeg_utils::PlanarData;
 use cidre::*;
 use kameo::prelude::*;
 
@@ -93,8 +94,6 @@ impl Message<NewFrame> for FrameHandler {
                 frame.set_rate(48_000);
                 let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                 for i in 0..frame.planes() {
-                    use cap_media_info::PlanarData;
-
                     frame.plane_data_mut(i).copy_from_slice(
                         &slice[i * data_bytes_size as usize..(i + 1) * data_bytes_size as usize],
                     );

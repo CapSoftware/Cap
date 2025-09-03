@@ -2235,17 +2235,17 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         })
         .build(tauri_context)
         .expect("error while running tauri application")
-        .run(move |handle, event| match event {
+        .run(move |_handle, event| match event {
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => {
-                let has_window = handle.webview_windows().iter().any(|(label, _)| {
+                let has_window = _handle.webview_windows().iter().any(|(label, _)| {
                     label.starts_with("editor-")
                         || label.as_str() == "settings"
                         || label.as_str() == "signin"
                 });
 
                 if has_window {
-                    if let Some(window) = handle
+                    if let Some(window) = _handle
                         .webview_windows()
                         .iter()
                         .find(|(label, _)| {
@@ -2258,7 +2258,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         window.set_focus().ok();
                     }
                 } else {
-                    let handle = handle.clone();
+                    let handle = _handle.clone();
                     tokio::spawn(async move {
                         let _ = ShowCapWindow::Main.show(&handle).await;
                     });

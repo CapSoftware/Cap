@@ -1,6 +1,6 @@
 use cpal::{
-    BuildStreamError, DefaultStreamConfigError, InputCallbackInfo, PauseStreamError,
-    PlayStreamError, Stream, StreamConfig, StreamError, traits::StreamTrait,
+    InputCallbackInfo, PauseStreamError, PlayStreamError, Stream, StreamConfig, StreamError,
+    traits::StreamTrait,
 };
 use thiserror::Error;
 

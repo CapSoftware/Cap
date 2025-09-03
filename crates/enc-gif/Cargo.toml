@@ -1,0 +1,14 @@
+[package]
+name = "cap-enc-gif"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+gifski = "1.32"
+imgref = "1.10"
+rgb = "0.8"
+
+[lints]
+workspace = true

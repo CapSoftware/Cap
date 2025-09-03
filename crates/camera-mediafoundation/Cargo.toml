@@ -9,11 +9,12 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 windows-core = { workspace = true }
 windows = { workspace = true, features = [
-	"Win32_Media_MediaFoundation",
-	"Win32_Media_DirectShow",
-	"Win32_System_Com",
+    "Win32_Media_MediaFoundation",
+    "Win32_Media_DirectShow",
+    "Win32_System_Com",
 ] }
 
 [dev-dependencies]

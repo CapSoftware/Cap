@@ -1,20 +1,20 @@
-use arc::Retained;
-use cap_media_info::{AudioInfo, PlanarData, VideoInfo};
+use cap_ffmpeg_utils::PlanarData;
+use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
 use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
 use std::path::PathBuf;
 use tracing::{debug, info};
 
-pub struct MP4AVAssetWriterEncoder {
+pub struct MP4Encoder {
     #[allow(unused)]
     tag: &'static str,
     #[allow(unused)]
     last_pts: Option<i64>,
     #[allow(unused)]
     config: VideoInfo,
-    asset_writer: Retained<av::AssetWriter>,
-    video_input: Retained<av::AssetWriterInput>,
-    audio_input: Option<Retained<av::AssetWriterInput>>,
+    asset_writer: arc::R<av::AssetWriter>,
+    video_input: arc::R<av::AssetWriterInput>,
+    audio_input: Option<arc::R<av::AssetWriterInput>>,
     start_time: cm::Time,
     first_timestamp: Option<cm::Time>,
     segment_first_timestamp: Option<cm::Time>,
@@ -66,7 +66,7 @@ pub enum QueueAudioFrameError {
     Failed,
 }
 
-impl MP4AVAssetWriterEncoder {
+impl MP4Encoder {
     pub fn init(
         tag: &'static str,
         video_config: VideoInfo,
