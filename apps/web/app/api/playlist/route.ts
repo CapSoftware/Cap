@@ -12,6 +12,7 @@ import {
 	HttpApiEndpoint,
 	HttpApiError,
 	HttpApiGroup,
+	HttpServerRequest,
 	HttpServerResponse,
 } from "@effect/platform";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -30,6 +31,14 @@ const GetPlaylistParams = Schema.Struct({
 	thumbnail: Schema.OptionFromUndefinedOr(Schema.String),
 	fileType: Schema.OptionFromUndefinedOr(Schema.String),
 });
+
+// Add range request parsing utility
+const parseRange = (rangeHeader: string, fileSize: number) => {
+	const parts = rangeHeader.replace(/bytes=/, "").split("-");
+	const start = parseInt(parts[0], 10);
+	const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+	return { start, end, chunkSize: end - start + 1 };
+};
 
 class Api extends HttpApi.make("CapWebApi").add(
 	HttpApiGroup.make("root").add(
@@ -50,7 +59,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 				const s3Buckets = yield* S3Buckets;
 				const videos = yield* Videos;
 
-				return handlers.handle("getVideoSrc", ({ urlParams }) =>
+				return handlers.handle("getVideoSrc", ({ urlParams, request }) =>
 					Effect.gen(function* () {
 						const [video] = yield* videos.getById(urlParams.videoId).pipe(
 							Effect.flatten,
@@ -67,6 +76,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							video,
 							Option.isSome(customBucket),
 							urlParams,
+							request, // Pass the request to handle range headers
 						).pipe(Effect.provide(S3ProviderLayer));
 					}).pipe(
 						provideOptionalAuth,
@@ -89,6 +99,7 @@ const getPlaylistResponse = (
 	video: Video.Video,
 	isCustomBucket: boolean,
 	urlParams: (typeof GetPlaylistParams)["Type"],
+	request: HttpServerRequest.HttpServerRequest,
 ) =>
 	Effect.gen(function* () {
 		const s3 = yield* S3BucketAccess;
@@ -96,10 +107,17 @@ const getPlaylistResponse = (
 		if (!isCustomBucket) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
-			if (video.source.type === "desktopMP4" || urlParams.videoType === "mp4")
+			if (video.source.type === "desktopMP4" || urlParams.videoType === "mp4") {
 				redirect = `${video.ownerId}/${video.id}/result.mp4`;
-			else if (video.source.type === "MediaConvert")
+
+				// Handle range requests for MP4 files (Safari compatibility)
+				const rangeHeader = request.headers.range;
+				if (rangeHeader) {
+					return yield* handleRangeRequest(s3, redirect, rangeHeader, request);
+				}
+			} else if (video.source.type === "MediaConvert") {
 				redirect = `${video.ownerId}/${video.id}/output/video_recording_000.m3u8`;
+			}
 
 			return HttpServerResponse.redirect(
 				yield* s3.getSignedObjectUrl(redirect),
@@ -161,8 +179,16 @@ const getPlaylistResponse = (
 				yield* Effect.log(
 					`Returning path ${`${video.ownerId}/${video.id}/result.mp4`}`,
 				);
+
+				const s3Path = `${video.ownerId}/${video.id}/result.mp4`;
+				const rangeHeader = request.headers.range;
+
+				if (rangeHeader) {
+					return yield* handleRangeRequest(s3, s3Path, rangeHeader, request);
+				}
+
 				return yield* s3
-					.getSignedObjectUrl(`${video.ownerId}/${video.id}/result.mp4`)
+					.getSignedObjectUrl(s3Path)
 					.pipe(Effect.map(HttpServerResponse.redirect));
 			}
 
@@ -238,6 +264,28 @@ const getPlaylistResponse = (
 				headers: CACHE_CONTROL_HEADERS,
 			});
 		}).pipe(Effect.withSpan("generateUrls"));
+	});
+
+// Add range request handler for MP4 files
+const handleRangeRequest = (
+	s3: S3BucketAccess,
+	s3Path: string,
+	rangeHeader: string,
+	request: HttpServerRequest.HttpServerRequest,
+) =>
+	Effect.gen(function* () {
+		// For Safari compatibility, create a signed URL that preserves range headers
+		const signedUrl = yield* s3.getSignedObjectUrl(s3Path);
+
+		// Instead of handling ranges ourselves, redirect with proper headers
+		// This tells Safari that range requests are supported
+		return HttpServerResponse.redirect(signedUrl, {
+			status: 302,
+			headers: {
+				"Accept-Ranges": "bytes",
+				"Cache-Control": "public, max-age=3600",
+			},
+		});
 	});
 
 const { handler } = apiToHandler(ApiLive);
