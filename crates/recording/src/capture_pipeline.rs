@@ -14,8 +14,31 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
+
+pub enum SourceTimestamp {
+    Instant(Instant),
+    SystemTime(SystemTime),
+    #[cfg(windows)]
+    PerformanceCounter(u64),
+}
+
+struct StartSourceTimestamp {
+    instant: Instant,
+    system_time: SystemTime,
+    #[cfg(windows)]
+    performance_counter: u64,
+}
+
+impl StartSourceTimestamp {
+    fn new() -> Self {
+        Self {
+            instant: Instant::now(),
+            system_time: SystemTime::now(),
+        }
+    }
+}
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     fn make_studio_mode_pipeline(
