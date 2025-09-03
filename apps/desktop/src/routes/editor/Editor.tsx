@@ -11,7 +11,6 @@ import {
 	createSignal,
 	Match,
 	on,
-	onMount,
 	Show,
 	Switch,
 } from "solid-js";
@@ -386,7 +385,7 @@ function Dialogs() {
 												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
 													<Tooltip content="Rule of Thirds">
 														<Button
-															variant="secondary"
+															variant="gray"
 															size="xs"
 															class={cx(
 																"flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",

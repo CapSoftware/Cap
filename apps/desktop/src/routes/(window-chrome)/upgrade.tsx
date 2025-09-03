@@ -1,22 +1,9 @@
 import { createRive } from "@aerofoil/rive-solid-canvas";
 import { Button } from "@cap/ui-solid";
-import { action, useAction } from "@solidjs/router";
 import { createMutation, useQueryClient } from "@tanstack/solid-query";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, Window } from "@tauri-apps/api/window";
-import { onOpenUrl } from "@tauri-apps/plugin-deep-link";
-import * as shell from "@tauri-apps/plugin-shell";
-import {
-	type Accessor,
-	createSignal,
-	onCleanup,
-	onMount,
-	Show,
-} from "solid-js";
+import { type Accessor, createSignal, Show } from "solid-js";
 import { generalSettingsStore } from "~/store";
-import { identifyUser, trackEvent } from "~/utils/analytics";
-import { clientEnv } from "~/utils/env";
 import { getProPlanId } from "~/utils/plans";
 import { createLicenseQuery } from "~/utils/queries";
 import { commands } from "~/utils/tauri";
@@ -286,261 +273,255 @@ export default function Page() {
 					</div>
 				</div>
 			)}
-			{!upgradeComplete() && (
-				<>
-					{license.data?.type === "commercial" ? (
-						<div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-sm bg-gray-2 border-gray-3">
+			{!upgradeComplete() &&
+				(license.data?.type === "commercial" ? (
+					<div class="p-8 mx-auto w-full max-w-[700px] rounded-xl border shadow-sm bg-gray-2 border-gray-3">
+						<div class="space-y-6">
+							<div class="flex flex-col items-center mb-6 text-center">
+								<h3 class="text-2xl font-medium">Commercial License</h3>
+								<p class="text-sm text-gray-11">
+									Your license details for Cap commercial use
+								</p>
+							</div>
+
 							<div class="space-y-6">
-								<div class="flex flex-col items-center mb-6 text-center">
-									<h3 class="text-2xl font-medium">Commercial License</h3>
-									<p class="text-sm text-gray-11">
-										Your license details for Cap commercial use
+								<div>
+									<label class="block mb-2 text-sm text-gray-12">
+										License Key
+									</label>
+									<p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
+										{license.data.licenseKey}
 									</p>
 								</div>
 
-								<div class="space-y-6">
-									<div>
-										<label class="block mb-2 text-sm text-gray-12">
-											License Key
-										</label>
-										<p class="overflow-x-auto p-3 font-mono text-xs whitespace-pre-wrap break-all rounded-lg border border-gray-4 text-gray-9 bg-gray-3">
-											{license.data.licenseKey}
-										</p>
-									</div>
+								<Show when={license.data.expiryDate}>
+									{(expiryDate) => (
+										<div class="space-y-1">
+											<label class="text-sm text-gray-12">Expires</label>
+											<p class="text-gray-10">
+												{new Date(expiryDate()).toLocaleDateString(undefined, {
+													year: "numeric",
+													month: "long",
+													day: "numeric",
+												})}
+											</p>
+										</div>
+									)}
+								</Show>
 
-									<Show when={license.data.expiryDate}>
-										{(expiryDate) => (
-											<div class="space-y-1">
-												<label class="text-sm text-gray-12">Expires</label>
-												<p class="text-gray-10">
-													{new Date(expiryDate()).toLocaleDateString(
-														undefined,
-														{
-															year: "numeric",
-															month: "long",
-															day: "numeric",
-														},
-													)}
-												</p>
-											</div>
-										)}
-									</Show>
-
-									<div class="flex flex-col items-center pt-6 border-t border-gray-3">
-										<Button
-											variant="destructive"
-											disabled={resetLicense.isPending}
-											onClick={() => {
-												resetLicense.mutate();
-											}}
-										>
-											{resetLicense.isPending
-												? "Deactivating..."
-												: "Deactivate License"}
-										</Button>
-									</div>
+								<div class="flex flex-col items-center pt-6 border-t border-gray-3">
+									<Button
+										variant="destructive"
+										disabled={resetLicense.isPending}
+										onClick={() => {
+											resetLicense.mutate();
+										}}
+									>
+										{resetLicense.isPending
+											? "Deactivating..."
+											: "Deactivate License"}
+									</Button>
 								</div>
 							</div>
 						</div>
-					) : (
-						<>
-							<div class="text-center">
-								<h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-[--text-primary]">
-									Early Adopter Pricing
-								</h1>
-							</div>
-							<div class="flex gap-4 w-full">
-								<div
-									onMouseEnter={() => {
-										const riveInstance = CommercialRive();
-										if (riveInstance) {
-											// Stop any current animations first
-											riveInstance.stop();
-											// Play the enter animation
-											riveInstance.play("cards");
-										}
-									}}
-									onMouseLeave={() => {
-										const riveInstance = CommercialRive();
-										if (riveInstance) {
-											// Stop any current animations first
-											riveInstance.stop();
-											// Play the leave animation
-											riveInstance.play("card-stack");
-										}
-									}}
-									class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-3 shadow-sm text-card-foreground md:p-3"
-								>
-									<div class="space-y-5">
-										<div class="flex flex-col gap-6 items-center">
-											<Commercial class="w-[250px]" />
-											<div class="space-y-1 text-center">
-												<h3 class="text-2xl font-medium tracking-tight leading-5">
-													Commercial License
-												</h3>
-												<p class="mt-2 text-sm text-[--text-tertiary]">
-													For commercial use
-												</p>
-											</div>
-											<div class="flex flex-col justify-center items-center">
-												<h3 class="text-4xl leading-6">
-													{isCommercialAnnual() ? "$29" : "$58"}
-													<span class="text-gray-11 text-[16px]">.00 /</span>
-												</h3>
-												{isCommercialAnnual() && (
-													<p class="text-[16px] font-medium text-gray-11">
-														billed annually
-													</p>
-												)}
-												{!isCommercialAnnual() && (
-													<p class="text-[16px] font-medium text-gray-11">
-														one-time payment
-													</p>
-												)}
-											</div>
-											<div
-												onClick={() => setIsCommercialAnnual((v) => !v)}
-												class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
-											>
-												<p class="text-xs text-gray-12">
-													Switch to{" "}
-													{isCommercialAnnual() ? "lifetime" : "yearly"}:{" "}
-													<span class="font-medium">
-														{isCommercialAnnual() ? "$58" : "$29"}
-													</span>
-												</p>
-											</div>
-											<ul class="flex flex-col gap-2 justify-center list-none">
-												{[
-													"Commercial Use of Cap Recorder + Editor",
-													"Community Support",
-													"Local-only features",
-													"Perpetual license option",
-												].map((feature) => (
-													<li class="flex justify-start items-center">
-														<div class="flex justify-center items-center p-0 m-0 w-6 h-6">
-															<IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
-														</div>
-														<span class="ml-1 text-[0.9rem] text-[--text-primary]">
-															{feature}
-														</span>
-													</li>
-												))}
-											</ul>
+					</div>
+				) : (
+					<>
+						<div class="text-center">
+							<h1 class="text-4xl md:text-4xl mb-6 tracking-[-.05em] font-medium text-[--text-primary]">
+								Early Adopter Pricing
+							</h1>
+						</div>
+						<div class="flex gap-4 w-full">
+							<div
+								onMouseEnter={() => {
+									const riveInstance = CommercialRive();
+									if (riveInstance) {
+										// Stop any current animations first
+										riveInstance.stop();
+										// Play the enter animation
+										riveInstance.play("cards");
+									}
+								}}
+								onMouseLeave={() => {
+									const riveInstance = CommercialRive();
+									if (riveInstance) {
+										// Stop any current animations first
+										riveInstance.stop();
+										// Play the leave animation
+										riveInstance.play("card-stack");
+									}
+								}}
+								class="flex flex-col flex-1 justify-between p-3 h-[700px ] bg-gray-3 rounded-2xl border border-gray-3 shadow-sm text-card-foreground md:p-3"
+							>
+								<div class="space-y-5">
+									<div class="flex flex-col gap-6 items-center">
+										<Commercial class="w-[250px]" />
+										<div class="space-y-1 text-center">
+											<h3 class="text-2xl font-medium tracking-tight leading-5">
+												Commercial License
+											</h3>
+											<p class="mt-2 text-sm text-[--text-tertiary]">
+												For commercial use
+											</p>
 										</div>
-									</div>
-									<ActivateLicenseDialog
-										open={openLicenseDialog}
-										onOpenChange={setOpenLicenseDialog}
-									/>
-									<div class="flex flex-col gap-4 items-center">
-										<Button
-											onClick={() => openCommercialCheckout.mutate()}
-											disabled={openCommercialCheckout.isPending}
-											variant="lightdark"
-											class="w-full !rounded-full !h-[48px] text-lg font-medium"
-											size="lg"
+										<div class="flex flex-col justify-center items-center">
+											<h3 class="text-4xl leading-6">
+												{isCommercialAnnual() ? "$29" : "$58"}
+												<span class="text-gray-11 text-[16px]">.00 /</span>
+											</h3>
+											{isCommercialAnnual() && (
+												<p class="text-[16px] font-medium text-gray-11">
+													billed annually
+												</p>
+											)}
+											{!isCommercialAnnual() && (
+												<p class="text-[16px] font-medium text-gray-11">
+													one-time payment
+												</p>
+											)}
+										</div>
+										<div
+											onClick={() => setIsCommercialAnnual((v) => !v)}
+											class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-gray-5 hover:border-gray-400"
 										>
-											{openCommercialCheckout.isPending
-												? "Loading..."
-												: "Purchase License"}
-										</Button>
-										<p
-											onClick={() => setOpenLicenseDialog(true)}
-											class="mb-2 text-sm transition-colors cursor-pointer text-gray-11 hover:text-gray-12"
-										>
-											Already have a license key?
-										</p>
+											<p class="text-xs text-gray-12">
+												Switch to {isCommercialAnnual() ? "lifetime" : "yearly"}
+												:{" "}
+												<span class="font-medium">
+													{isCommercialAnnual() ? "$58" : "$29"}
+												</span>
+											</p>
+										</div>
+										<ul class="flex flex-col gap-2 justify-center list-none">
+											{[
+												"Commercial Use of Cap Recorder + Editor",
+												"Community Support",
+												"Local-only features",
+												"Perpetual license option",
+											].map((feature) => (
+												<li class="flex justify-start items-center">
+													<div class="flex justify-center items-center p-0 m-0 w-6 h-6">
+														<IconLucideCheck class="w-4 h-4 text-[--text-primary]" />
+													</div>
+													<span class="ml-1 text-[0.9rem] text-[--text-primary]">
+														{feature}
+													</span>
+												</li>
+											))}
+										</ul>
 									</div>
 								</div>
+								<ActivateLicenseDialog
+									open={openLicenseDialog}
+									onOpenChange={setOpenLicenseDialog}
+								/>
+								<div class="flex flex-col gap-4 items-center">
+									<Button
+										onClick={() => openCommercialCheckout.mutate()}
+										disabled={openCommercialCheckout.isPending}
+										variant="dark"
+										class="w-full !rounded-full !h-[48px] text-lg font-medium"
+										size="lg"
+									>
+										{openCommercialCheckout.isPending
+											? "Loading..."
+											: "Purchase License"}
+									</Button>
+									<p
+										onClick={() => setOpenLicenseDialog(true)}
+										class="mb-2 text-sm transition-colors cursor-pointer text-gray-11 hover:text-gray-12"
+									>
+										Already have a license key?
+									</p>
+								</div>
+							</div>
 
-								{/* Cap Pro */}
-								<div
-									onMouseEnter={() => {
-										const riveInstance = ProRive();
-										if (riveInstance) {
-											// Stop any current animations first
-											riveInstance.stop();
-											// Play the enter animation
-											riveInstance.play("items-coming-out");
-										}
-									}}
-									onMouseLeave={() => {
-										const riveInstance = ProRive();
-										if (riveInstance) {
-											// Stop any current animations first
-											riveInstance.stop();
-											// Play the leave animation
-											riveInstance.play("items-coming-in");
-										}
-									}}
-									class="flex-grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
-								>
-									<div class="flex flex-col justify-between space-y-5 h-full">
-										<div class="flex flex-col gap-6 items-center px-6">
-											<Pro class="w-[250px]" />
-											<div class="space-y-1 text-center">
-												<h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-1">
-													Cap Pro
-												</h3>
-												<p class="text-[0.875rem] text-gray-9">
-													For professional use and teams.
-												</p>
-											</div>
-											<div class="flex flex-col justify-center items-center">
-												<h3 class="text-4xl leading-6 text-gray-1">
-													{isProAnnual() ? "$6" : "$9"}
-													<span class="text-gray-10 text-[16px]">.00 /</span>
-												</h3>
-												{isProAnnual() && (
-													<p class="text-[16px] font-medium text-gray-9">
-														per user, billed annually
-													</p>
-												)}
-												{!isProAnnual() && (
-													<p class="text-[16px] font-medium text-gray-9">
-														per user, billed monthly
-													</p>
-												)}
-											</div>
-											<div
-												onClick={() => setIsProAnnual((v) => !v)}
-												class="px-3 py-2 text-center rounded-full border border-transparent transition-all duration-200 cursor-pointer bg-blue-9 hover:border-blue-400"
-											>
-												<p class="text-xs text-solid-white">
-													Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
-													<span class="font-medium">
-														{isProAnnual()
-															? "$9 per user, billed monthly"
-															: "$6 per user, billed annually"}
-													</span>
-												</p>
-											</div>
-											<ul class="flex flex-col gap-2 justify-center list-none">
-												{proFeatures.map((feature) => (
-													<li class="flex justify-start items-center text-gray-1">
-														<div class="flex justify-center items-center p-0 m-0 size-4">
-															<IconLucideCheck class="size-4" />
-														</div>
-														<span class="ml-2 text-[0.9rem]">{feature}</span>
-													</li>
-												))}
-											</ul>
+							{/* Cap Pro */}
+							<div
+								onMouseEnter={() => {
+									const riveInstance = ProRive();
+									if (riveInstance) {
+										// Stop any current animations first
+										riveInstance.stop();
+										// Play the enter animation
+										riveInstance.play("items-coming-out");
+									}
+								}}
+								onMouseLeave={() => {
+									const riveInstance = ProRive();
+									if (riveInstance) {
+										// Stop any current animations first
+										riveInstance.stop();
+										// Play the leave animation
+										riveInstance.play("items-coming-in");
+									}
+								}}
+								class="flex-grow p-3 h-[700px] flex-1 bg-gray-12 rounded-2xl border shadow-sm text-card-foreground md:p-3"
+							>
+								<div class="flex flex-col justify-between space-y-5 h-full">
+									<div class="flex flex-col gap-6 items-center px-6">
+										<Pro class="w-[250px]" />
+										<div class="space-y-1 text-center">
+											<h3 class="text-2xl font-medium tracking-tight leading-5 text-gray-1">
+												Cap Pro
+											</h3>
+											<p class="text-[0.875rem] text-gray-9">
+												For professional use and teams.
+											</p>
 										</div>
-										<Button
-											variant="primary"
-											class="!rounded-full !text-lg w-full mx-auto"
-											onClick={openCheckoutInExternalBrowser}
+										<div class="flex flex-col justify-center items-center">
+											<h3 class="text-4xl leading-6 text-gray-1">
+												{isProAnnual() ? "$8.16" : "$12"}
+												<span class="text-gray-10 text-[16px]">.00 /</span>
+											</h3>
+											{isProAnnual() && (
+												<p class="text-[16px] font-medium text-gray-9">
+													per user, billed annually
+												</p>
+											)}
+											{!isProAnnual() && (
+												<p class="text-[16px] font-medium text-gray-9">
+													per user, billed monthly
+												</p>
+											)}
+										</div>
+										<div
+											onClick={() => setIsProAnnual((v) => !v)}
+											class="px-3 py-2 text-center bg-blue-500 rounded-full border border-transparent transition-all duration-200 cursor-pointer hover:border-blue-400"
 										>
-											{loading() ? "Loading..." : "Upgrade to Cap Pro"}
-										</Button>
+											<p class="text-xs text-solid-white">
+												Switch to {isProAnnual() ? "monthly" : "yearly"}:{" "}
+												<span class="font-medium">
+													{isProAnnual()
+														? "$12 per user, billed monthly"
+														: "$8.16 per user, billed annually"}
+												</span>
+											</p>
+										</div>
+										<ul class="flex flex-col gap-2 justify-center list-none">
+											{proFeatures.map((feature) => (
+												<li class="flex justify-start items-center text-gray-1">
+													<div class="flex justify-center items-center p-0 m-0 size-4">
+														<IconLucideCheck class="size-4" />
+													</div>
+													<span class="ml-2 text-[0.9rem]">{feature}</span>
+												</li>
+											))}
+										</ul>
 									</div>
+									<Button
+										variant="blue"
+										class="!rounded-full !text-lg w-full mx-auto"
+										onClick={openCheckoutInExternalBrowser}
+									>
+										{loading() ? "Loading..." : "Upgrade to Cap Pro"}
+									</Button>
 								</div>
 							</div>
-						</>
-					)}
-				</>
-			)}
+						</div>
+					</>
+				))}
 		</div>
 	);
 }

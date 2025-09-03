@@ -33,8 +33,6 @@ import {
 	type ExportSettings,
 	events,
 	type FramesRendered,
-	type GifExportSettings,
-	type Mp4ExportSettings,
 } from "~/utils/tauri";
 import { type RenderState, useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
@@ -158,8 +156,7 @@ export function ExportDialog() {
 
 	const [outputPath, setOutputPath] = createSignal<string | null>(null);
 
-	const selectedStyle =
-		"ring-1 ring-offset-2 ring-offset-gray-200 bg-gray-5 ring-gray-500";
+	const selectedStyle = "bg-gray-7";
 
 	const projectPath = editorInstance.path;
 
@@ -387,27 +384,25 @@ export function ExportDialog() {
 				<DialogContent
 					title="Export Cap"
 					confirm={
-						<>
-							{settings.exportTo === "link" && !auth.data ? (
-								<SignInButton>
-									{exportButtonIcon[settings.exportTo]}
-									<span class="ml-1.5">Sign in to share</span>
-								</SignInButton>
-							) : (
-								<Button
-									class="flex gap-1.5 items-center"
-									variant="primary"
-									onClick={() => {
-										if (settings.exportTo === "file") save.mutate();
-										else if (settings.exportTo === "link") upload.mutate();
-										else copy.mutate();
-									}}
-								>
-									Export to
-									{exportButtonIcon[settings.exportTo]}
-								</Button>
-							)}
-						</>
+						settings.exportTo === "link" && !auth.data ? (
+							<SignInButton>
+								{exportButtonIcon[settings.exportTo]}
+								<span class="ml-1.5">Sign in to share</span>
+							</SignInButton>
+						) : (
+							<Button
+								class="flex gap-1.5 items-center"
+								variant="dark"
+								onClick={() => {
+									if (settings.exportTo === "file") save.mutate();
+									else if (settings.exportTo === "link") upload.mutate();
+									else copy.mutate();
+								}}
+							>
+								Export to
+								{exportButtonIcon[settings.exportTo]}
+							</Button>
+						)
 					}
 					leftFooterContent={
 						<div>
@@ -492,11 +487,9 @@ export function ExportDialog() {
 										{(option) => (
 											<Button
 												onClick={() => setSettings("exportTo", option.value)}
-												class={cx(
-													"flex flex-1 gap-2 items-center text-nowrap",
-													settings.exportTo === option.value && selectedStyle,
-												)}
-												variant="secondary"
+												data-selected={settings.exportTo === option.value}
+												class="flex flex-1 gap-2 items-center text-nowrap"
+												variant="gray"
 											>
 												{option.icon}
 												{option.label}
@@ -514,7 +507,7 @@ export function ExportDialog() {
 									<For each={FORMAT_OPTIONS}>
 										{(option) => (
 											<Button
-												variant="secondary"
+												variant="gray"
 												onClick={() => {
 													setSettings(
 														produce((newSettings) => {
@@ -550,9 +543,7 @@ export function ExportDialog() {
 													);
 												}}
 												autofocus={false}
-												class={cx(
-													settings.format === option.value && selectedStyle,
-												)}
+												data-selected={settings.format === option.value}
 											>
 												{option.label}
 											</Button>
@@ -638,11 +629,8 @@ export function ExportDialog() {
 														option.value as ExportCompression,
 													);
 												}}
-												variant="secondary"
-												class={cx(
-													settings.compression === option.value &&
-														selectedStyle,
-												)}
+												variant="gray"
+												data-selected={settings.compression === option.value}
 											>
 												{option.label}
 											</Button>
@@ -669,13 +657,11 @@ export function ExportDialog() {
 									>
 										{(option) => (
 											<Button
-												class={cx(
-													"flex-1",
+												data-selected={
 													settings.resolution.value === option.value
-														? selectedStyle
-														: "",
-												)}
-												variant="secondary"
+												}
+												class="flex-1"
+												variant="gray"
 												onClick={() => setSettings("resolution", option)}
 											>
 												{option.label}
@@ -909,7 +895,7 @@ export function ExportDialog() {
 													}, 2000);
 													navigator.clipboard.writeText(meta().sharing!.link!);
 												}}
-												variant="lightdark"
+												variant="dark"
 												class="flex gap-2 justify-center items-center"
 											>
 												{!copyPressed() ? (
@@ -930,7 +916,7 @@ export function ExportDialog() {
 								>
 									<div class="flex gap-4 w-full">
 										<Button
-											variant="secondary"
+											variant="dark"
 											class="flex gap-2 items-center"
 											onClick={() => {
 												const path = outputPath();
@@ -943,7 +929,7 @@ export function ExportDialog() {
 											Open File
 										</Button>
 										<Button
-											variant="secondary"
+											variant="dark"
 											class="flex gap-2 items-center"
 											onClick={async () => {
 												const path = outputPath();

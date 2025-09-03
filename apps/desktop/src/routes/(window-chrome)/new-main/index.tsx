@@ -25,7 +25,6 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { addEventListener } from "solid-js/web";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
@@ -293,8 +292,10 @@ function Page() {
 		<div class="flex relative justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
 				<div
-					dir={ostype() === "windows" ? "rtl" : "rtl"}
-					class="flex gap-1 items-center mx-2 w-full"
+					class={cx(
+						"flex items-center mx-2 w-full",
+						ostype() === "macos" && "flex-row-reverse",
+					)}
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
@@ -337,7 +338,9 @@ function Page() {
 							</button>
 						)}
 					</div>
-					<div class="flex-1" data-tauri-drag-region />
+					{ostype() === "macos" && (
+						<div class="flex-1" data-tauri-drag-region />
+					)}
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
@@ -351,6 +354,7 @@ function Page() {
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
+									ostype() === "windows" && "ml-2",
 								)}
 							>
 								{license.data?.type === "commercial"
@@ -364,16 +368,16 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={signIn.isPending}>
-				<div class="bg-gray-1 absolute inset-0 flex items-center justify-center animate-in fade-in">
-					<div class="flex flex-col items-center justify-center gap-4">
-						<span>Singning In...</span>
+				<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
+					<div class="flex flex-col gap-4 justify-center items-center">
+						<span>Signing In...</span>
 
 						<Button
 							onClick={() => {
 								signIn.variables?.abort();
 								signIn.reset();
 							}}
-							variant="secondary"
+							variant="gray"
 							class="w-full"
 						>
 							Cancel Sign In

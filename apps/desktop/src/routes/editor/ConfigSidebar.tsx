@@ -44,7 +44,7 @@ import {
 	type BackgroundSource,
 	type CameraShape,
 	commands,
-	type LayoutSegment,
+	type SceneSegment,
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
@@ -671,18 +671,18 @@ export function ConfigSidebar() {
 							</Show>
 							<Show
 								when={(() => {
-									const layoutSelection = selection();
-									if (layoutSelection.type !== "layout") return;
+									const sceneSelection = selection();
+									if (sceneSelection.type !== "scene") return;
 
 									const segment =
-										project.timeline?.layoutSegments?.[layoutSelection.index];
+										project.timeline?.sceneSegments?.[sceneSelection.index];
 									if (!segment) return;
 
-									return { selection: layoutSelection, segment };
+									return { selection: sceneSelection, segment };
 								})()}
 							>
 								{(value) => (
-									<LayoutSegmentConfig
+									<SceneSegmentConfig
 										segment={value().segment}
 										segmentIndex={value().selection.index}
 									/>
@@ -1839,7 +1839,9 @@ function ZoomSegmentPreview(props: {
 	const video = document.createElement("video");
 	createEffect(() => {
 		const path = convertFileSrc(
-			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${
+				editorInstance.path
+			}/content/segments/segment-${segmentIndex()}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2282,9 +2284,9 @@ function ClipSegmentConfig(props: {
 	);
 }
 
-function LayoutSegmentConfig(props: {
+function SceneSegmentConfig(props: {
 	segmentIndex: number;
-	segment: LayoutSegment;
+	segment: SceneSegment;
 }) {
 	const { setProject, setEditorState, projectActions } = useEditorContext();
 
@@ -2302,7 +2304,7 @@ function LayoutSegmentConfig(props: {
 				<EditorButton
 					variant="danger"
 					onClick={() => {
-						projectActions.deleteLayoutSegment(props.segmentIndex);
+						projectActions.deleteSceneSegment(props.segmentIndex);
 					}}
 					leftIcon={<IconCapTrash />}
 				>
@@ -2316,7 +2318,7 @@ function LayoutSegmentConfig(props: {
 					onChange={(v) => {
 						setProject(
 							"timeline",
-							"layoutSegments",
+							"sceneSegments",
 							props.segmentIndex,
 							"mode",
 							v as "default" | "cameraOnly" | "hideCamera",

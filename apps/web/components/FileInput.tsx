@@ -216,13 +216,13 @@ export const FileInput: React.FC<FileInputProps> = ({
 												width: previewIconSize,
 												height: previewIconSize,
 											}}
-											className="overflow-hidden relative flex-shrink-0 rounded-md"
+											className="flex overflow-hidden relative flex-shrink-0 justify-center items-center rounded-md"
 										>
 											{previewUrl && (
 												<Image
 													src={previewUrl}
-													width={36}
-													height={36}
+													width={32}
+													height={32}
 													alt="File preview"
 													className="object-cover rounded-full"
 												/>
@@ -236,7 +236,7 @@ export const FileInput: React.FC<FileInputProps> = ({
 							<Button
 								variant="outline"
 								size="xs"
-								className="!p-0 size-8 group mr-2"
+								className="!p-0 size-7 group mr-2"
 								disabled={isLoading || disabled}
 								onClick={handleRemove}
 							>

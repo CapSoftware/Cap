@@ -32,7 +32,7 @@ const OrgName = () => {
 	};
 
 	return (
-		<div className="space-y-4">
+		<div className="flex-1 space-y-4">
 			<div className="space-y-1">
 				<Label htmlFor="organizationName">Name</Label>
 				<p className="text-sm text-gray-10">
@@ -40,9 +40,10 @@ const OrgName = () => {
 					members.
 				</p>
 			</div>
-			<div className="flex gap-3 items-center">
+			<div className="flex flex-col gap-3 w-full md:items-center md:flex-row">
 				<Input
 					type="text"
+					className="bg-gray-2"
 					value={orgName}
 					id="organizationName"
 					name="organizationName"

@@ -23,7 +23,7 @@ const ModeSelectWindow = () => {
 		>
 			<div class="relative z-10 space-y-10 w-full max-w-3xl">
 				<h2 class="text-[24px] font-medium text-center text-gray-12">
-					Select your recording mode
+					Recording Modes
 				</h2>
 				<ModeSelect />
 			</div>

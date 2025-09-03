@@ -260,7 +260,7 @@ function CommercialLicensePurchase() {
 						<Button
 							onClick={() => openCommercialCheckout.mutate()}
 							disabled={openCommercialCheckout.isPending}
-							variant="lightdark"
+							variant="dark"
 							class="w-full !rounded-full mt-10 !h-[48px] text-lg font-medium"
 							size="lg"
 						>

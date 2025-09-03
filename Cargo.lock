@@ -866,7 +866,7 @@ name = "cap-audio"
 version = "0.1.0"
 dependencies = [
  "cidre 0.11.0",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "tokio",
 ]
@@ -951,7 +951,7 @@ dependencies = [
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
 ]
 
@@ -980,7 +980,7 @@ dependencies = [
 
 [[package]]
 name = "cap-desktop"
-version = "0.3.66"
+version = "0.3.67"
 dependencies = [
  "anyhow",
  "axum",
@@ -1003,7 +1003,7 @@ dependencies = [
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "device_query",
  "dirs",
  "dotenvy_macro",
@@ -1080,7 +1080,7 @@ dependencies = [
  "cap-media-info",
  "cap-project",
  "cap-rendering",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "flume",
  "futures",
@@ -1161,7 +1161,7 @@ dependencies = [
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "flume",
  "futures",
@@ -1216,7 +1216,7 @@ dependencies = [
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "thiserror 1.0.69",
 ]
@@ -1254,7 +1254,7 @@ dependencies = [
  "chrono",
  "cidre 0.11.0",
  "cocoa 0.26.1",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "device_query",
  "either",
  "ffmpeg-next",
@@ -1941,20 +1941,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "coreaudio-rs"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aae284fbaf7d27aa0e292f7677dfbe26503b0d555026f702940805a630eac17"
-dependencies = [
- "bitflags 1.3.2",
- "libc",
- "objc2-audio-toolbox",
- "objc2-core-audio",
- "objc2-core-audio-types",
- "objc2-core-foundation",
-]
-
-[[package]]
 name = "coreaudio-sys"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1994,7 +1980,7 @@ checksum = "873dab07c8f743075e57f524c583985fbaf745602acbe916a01539364369a779"
 dependencies = [
  "alsa",
  "core-foundation-sys",
- "coreaudio-rs 0.11.3",
+ "coreaudio-rs",
  "dasp_sample",
  "jni",
  "js-sys",
@@ -2011,24 +1997,20 @@ dependencies = [
 
 [[package]]
 name = "cpal"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbd307f43cc2a697e2d1f8bc7a1d824b5269e052209e28883e5bc04d095aaa3f"
+version = "0.15.3"
+source = "git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf#f43d36e55494993bbbde3299af0c53e5cdf4d4cf"
 dependencies = [
  "alsa",
- "coreaudio-rs 0.13.0",
+ "core-foundation-sys",
+ "coreaudio-rs",
  "dasp_sample",
  "jni",
  "js-sys",
  "libc",
  "mach2",
- "ndk 0.9.0",
+ "ndk 0.8.0",
  "ndk-context",
- "num-derive",
- "num-traits",
- "objc2-audio-toolbox",
- "objc2-core-audio",
- "objc2-core-audio-types",
+ "oboe",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -5182,21 +5164,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "objc2-audio-toolbox"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10cbe18d879e20a4aea544f8befe38bcf52255eb63d3f23eca2842f3319e4c07"
-dependencies = [
- "bitflags 2.9.1",
- "libc",
- "objc2 0.6.1",
- "objc2-core-audio",
- "objc2-core-audio-types",
- "objc2-core-foundation",
- "objc2-foundation 0.3.1",
-]
-
-[[package]]
 name = "objc2-av-foundation"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6778,7 +6745,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6006a627c1a38d37f3d3a85c6575418cfe34a5392d60a686d0071e1c8d427acb"
 dependencies = [
  "claxon",
- "cpal 0.15.3",
+ "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "hound",
  "lewton",
  "symphonia",
@@ -6954,7 +6921,7 @@ dependencies = [
  "cidre 0.10.1",
  "cocoa 0.25.0",
  "core-graphics-helmer-fork",
- "cpal 0.15.3",
+ "cpal 0.15.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "dbus",
  "futures",
  "objc",
@@ -6970,7 +6937,7 @@ dependencies = [
 name = "scap-cpal"
 version = "0.1.0"
 dependencies = [
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "thiserror 1.0.69",
 ]
 
@@ -6982,6 +6949,7 @@ dependencies = [
  "scap-targets",
  "thiserror 1.0.69",
  "windows 0.60.0",
+ "windows-numerics 0.2.0",
 ]
 
 [[package]]
@@ -6989,7 +6957,7 @@ name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
  "cidre 0.11.0",
- "cpal 0.16.0",
+ "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "futures",
  "scap-cpal",

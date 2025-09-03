@@ -13,9 +13,7 @@ import {
 	Show,
 } from "solid-js";
 import { produce } from "solid-js/store";
-import IconLucideEyeOff from "~icons/lucide/eye-off";
-import IconLucideMonitor from "~icons/lucide/monitor";
-import IconLucideVideo from "~icons/lucide/video";
+
 import { useEditorContext } from "../context";
 import {
 	useSegmentContext,
@@ -24,13 +22,13 @@ import {
 } from "./context";
 import { SegmentContent, SegmentHandle, SegmentRoot, TrackRoot } from "./Track";
 
-export type LayoutSegmentDragState =
+export type SceneSegmentDragState =
 	| { type: "idle" }
 	| { type: "movePending" }
 	| { type: "moving" };
 
-export function LayoutTrack(props: {
-	onDragStateChanged: (v: LayoutSegmentDragState) => void;
+export function SceneTrack(props: {
+	onDragStateChanged: (v: SceneSegmentDragState) => void;
 	handleUpdatePlayhead: (e: MouseEvent) => void;
 }) {
 	const { project, setProject, projectHistory, setEditorState, editorState } =
@@ -49,13 +47,13 @@ export function LayoutTrack(props: {
 	// users from creating new segments. This effect ensures we reset the hover state
 	// when all segments are deleted.
 	createEffect(() => {
-		const segments = project.timeline?.layoutSegments;
+		const segments = project.timeline?.sceneSegments;
 		if (!segments || segments.length === 0) {
 			setHoveringSegment(false);
 		}
 	});
 
-	const getLayoutIcon = (mode: string | undefined) => {
+	const getSceneIcon = (mode: string | undefined) => {
 		switch (mode) {
 			case "cameraOnly":
 				return <IconLucideVideo class="size-3.5" />;
@@ -66,7 +64,7 @@ export function LayoutTrack(props: {
 		}
 	};
 
-	const getLayoutLabel = (mode: string | undefined) => {
+	const getSceneLabel = (mode: string | undefined) => {
 		switch (mode) {
 			case "cameraOnly":
 				return "Camera Only";
@@ -91,7 +89,7 @@ export function LayoutTrack(props: {
 					(e.clientX - bounds.left) * secsPerPixel() +
 					editorState.timeline.transform.position;
 
-				const segments = project.timeline?.layoutSegments || [];
+				const segments = project.timeline?.sceneSegments || [];
 				const nextSegmentIndex = segments.findIndex((s) => time < s.start);
 
 				let maxDuration = 3; // Default duration
@@ -158,23 +156,23 @@ export function LayoutTrack(props: {
 
 						e.stopPropagation();
 						batch(() => {
-							setProject("timeline", "layoutSegments", (v) => v ?? []);
+							setProject("timeline", "sceneSegments", (v) => v ?? []);
 							setProject(
 								"timeline",
-								"layoutSegments",
-								produce((layoutSegments) => {
-									layoutSegments ??= [];
+								"sceneSegments",
+								produce((sceneSegments) => {
+									sceneSegments ??= [];
 
-									let index = layoutSegments.length;
+									let index = sceneSegments.length;
 
-									for (let i = layoutSegments.length - 1; i >= 0; i--) {
-										if (layoutSegments[i].start > time) {
+									for (let i = sceneSegments.length - 1; i >= 0; i--) {
+										if (sceneSegments[i].start > time) {
 											index = i;
 											break;
 										}
 									}
 
-									layoutSegments.splice(index, 0, {
+									sceneSegments.splice(index, 0, {
 										start: time,
 										end: time + maxDuration,
 										mode: "cameraOnly",
@@ -187,10 +185,10 @@ export function LayoutTrack(props: {
 			}}
 		>
 			<For
-				each={project.timeline?.layoutSegments}
+				each={project.timeline?.sceneSegments}
 				fallback={
 					<div class="text-center text-sm text-[--text-tertiary] flex flex-col justify-center items-center inset-0 w-full bg-gray-3/20 dark:bg-gray-3/10 hover:bg-gray-3/30 dark:hover:bg-gray-3/20 transition-colors rounded-xl pointer-events-none">
-						<div>Click to add layout segment</div>
+						<div>Click to add scene segment</div>
 						<div class="text-[10px] text-[--text-tertiary]/40 mt-0.5">
 							(Make the camera full screen, or hide it)
 						</div>
@@ -200,7 +198,7 @@ export function LayoutTrack(props: {
 				{(segment, i) => {
 					const { setTrackState } = useTrackContext();
 
-					const layoutSegments = () => project.timeline!.layoutSegments!;
+					const sceneSegments = () => project.timeline!.sceneSegments!;
 
 					function createMouseDownDrag<T>(
 						setup: () => T,
@@ -225,13 +223,13 @@ export function LayoutTrack(props: {
 								if (!moved) {
 									e.stopPropagation();
 									setEditorState("timeline", "selection", {
-										type: "layout",
+										type: "scene",
 										index: i(),
 									});
 									props.handleUpdatePlayhead(e);
 								} else {
 									setEditorState("timeline", "selection", {
-										type: "layout",
+										type: "scene",
 										index: i(),
 									});
 								}
@@ -272,9 +270,9 @@ export function LayoutTrack(props: {
 
 					const isSelected = createMemo(() => {
 						const selection = editorState.timeline.selection;
-						if (!selection || selection.type !== "layout") return false;
+						if (!selection || selection.type !== "scene") return false;
 
-						const segmentIndex = project.timeline?.layoutSegments?.findIndex(
+						const segmentIndex = project.timeline?.sceneSegments?.findIndex(
 							(s) => s.start === segment.start && s.end === segment.end,
 						);
 
@@ -309,8 +307,8 @@ export function LayoutTrack(props: {
 
 										const maxValue = segment.end - 1;
 
-										for (let i = layoutSegments().length - 1; i >= 0; i--) {
-											const segment = layoutSegments()[i]!;
+										for (let i = sceneSegments().length - 1; i >= 0; i--) {
+											const segment = sceneSegments()[i]!;
 											if (segment.end <= start) {
 												minValue = segment.end;
 												break;
@@ -326,7 +324,7 @@ export function LayoutTrack(props: {
 
 										setProject(
 											"timeline",
-											"layoutSegments",
+											"sceneSegments",
 											i(),
 											"start",
 											Math.min(
@@ -337,7 +335,7 @@ export function LayoutTrack(props: {
 
 										setProject(
 											"timeline",
-											"layoutSegments",
+											"sceneSegments",
 											produce((s) => {
 												if (s) {
 													s.sort((a, b) => a.start - b.start);
@@ -353,8 +351,8 @@ export function LayoutTrack(props: {
 									() => {
 										const original = { ...segment };
 
-										const prevSegment = layoutSegments()[i() - 1];
-										const nextSegment = layoutSegments()[i() + 1];
+										const prevSegment = sceneSegments()[i() - 1];
+										const nextSegment = sceneSegments()[i() + 1];
 
 										const minStart = prevSegment?.end ?? 0;
 										const maxEnd = nextSegment?.start ?? duration();
@@ -379,7 +377,7 @@ export function LayoutTrack(props: {
 										else if (newEnd > value.maxEnd)
 											delta = value.maxEnd - value.original.end;
 
-										setProject("timeline", "layoutSegments", i(), {
+										setProject("timeline", "sceneSegments", i(), {
 											start: value.original.start + delta,
 											end: value.original.end + delta,
 										});
@@ -392,12 +390,12 @@ export function LayoutTrack(props: {
 									return (
 										<Show when={ctx.width() > 80}>
 											<div class="flex flex-col gap-1 justify-center items-center text-xs whitespace-nowrap text-gray-1 dark:text-gray-12 animate-in fade-in">
-												<span class="opacity-70">Layout</span>
+												<span class="opacity-70">Scene</span>
 												<div class="flex gap-1 items-center text-md">
-													{getLayoutIcon(segment.mode)}
+													{getSceneIcon(segment.mode)}
 													{ctx.width() > 120 && (
 														<span class="text-xs">
-															{getLayoutLabel(segment.mode)}
+															{getSceneLabel(segment.mode)}
 														</span>
 													)}
 												</div>
@@ -416,8 +414,8 @@ export function LayoutTrack(props: {
 
 										let maxValue = duration();
 
-										for (let i = 0; i < layoutSegments().length; i++) {
-											const segment = layoutSegments()[i]!;
+										for (let i = 0; i < sceneSegments().length; i++) {
+											const segment = sceneSegments()[i]!;
 											if (segment.start > end) {
 												maxValue = segment.start;
 												break;
@@ -432,7 +430,7 @@ export function LayoutTrack(props: {
 
 										setProject(
 											"timeline",
-											"layoutSegments",
+											"sceneSegments",
 											i(),
 											"end",
 											Math.min(
@@ -443,7 +441,7 @@ export function LayoutTrack(props: {
 
 										setProject(
 											"timeline",
-											"layoutSegments",
+											"sceneSegments",
 											produce((s) => {
 												if (s) {
 													s.sort((a, b) => a.start - b.start);

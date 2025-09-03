@@ -157,7 +157,7 @@ pub struct MicrophoneFeedLock {
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
-    lock_tx: Recipient<Unlock>,
+    drop_tx: Option<oneshot::Sender<()>>,
 }
 
 impl MicrophoneFeedLock {
@@ -180,7 +180,9 @@ impl Deref for MicrophoneFeedLock {
 
 impl Drop for MicrophoneFeedLock {
     fn drop(&mut self) {
-        let _ = self.lock_tx.tell(Unlock).blocking_send();
+        if let Some(drop_tx) = self.drop_tx.take() {
+            let _ = drop_tx.send(());
+        }
     }
 }
 
@@ -442,11 +444,19 @@ impl Message<Lock> for MicrophoneFeed {
 
         self.state = State::Locked { inner: attached };
 
+        let (drop_tx, drop_rx) = oneshot::channel();
+
+        let actor_ref = ctx.actor_ref();
+        tokio::spawn(async move {
+            let _ = drop_rx.await;
+            let _ = actor_ref.tell(Unlock).await;
+        });
+
         Ok(MicrophoneFeedLock {
             audio_info: AudioInfo::from_stream_config(&config),
             actor: ctx.actor_ref(),
             config,
-            lock_tx: ctx.actor_ref().recipient(),
+            drop_tx: Some(drop_tx),
         })
     }
 }

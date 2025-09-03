@@ -189,7 +189,7 @@ export const Dialog = {
 	},
 	CloseButton() {
 		return (
-			<KDialog.CloseButton as={Button} variant="secondary">
+			<KDialog.CloseButton as={Button} variant="gray">
 				Cancel
 			</KDialog.CloseButton>
 		);

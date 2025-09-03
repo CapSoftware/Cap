@@ -32,7 +32,7 @@ const Mode = () => {
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
-								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-10"
+								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-500"
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
@@ -54,7 +54,7 @@ const Mode = () => {
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "studio"
-								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-10"
+								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-7 hover:bg-gray-7 ring-blue-500"
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>
@@ -71,7 +71,7 @@ const Mode = () => {
 						}}
 						class={`flex justify-center items-center transition-all duration-200 rounded-full size-7 hover:cursor-pointer ${
 							rawOptions.mode === "instant"
-								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-5 hover:bg-gray-7 ring-blue-10"
+								? "ring-2 ring-offset-1 ring-offset-gray-1 bg-gray-5 hover:bg-gray-7 ring-blue-500"
 								: "bg-gray-3 hover:bg-gray-7"
 						}`}
 					>

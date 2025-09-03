@@ -139,6 +139,21 @@
 	--shadow-s: 0px 8px 16px 0px rgba(0, 0, 0, 0.4);
 }
 
+.dark .dark-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(0, 0, 0, 0.1) inset;
+}
+
+.dark-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.2) inset;
+}
+
+.dark .gray-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.gray-button-shadow {
+	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.4) inset;
+}
 [data-transparent-window] {
 	background: transparent !important;
 }

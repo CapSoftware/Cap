@@ -16,8 +16,10 @@ export const SeatsInfoCards = () => {
 	return (
 		<div className="flex flex-col flex-1 gap-6 justify-center lg:flex-row">
 			<Card className="flex flex-col flex-1 gap-3 justify-center items-center">
-				<FontAwesomeIcon className="text-gray-10 size-5" icon={faChair} />
-				<p className="text-gray-12">
+				<div className="flex justify-center items-center p-3 rounded-full border bg-gray-4 border-gray-5">
+					<FontAwesomeIcon className="text-gray-12 size-3.5" icon={faChair} />
+				</div>
+				<p className="text-gray-11">
 					Seats Remaining
 					<span className="ml-2 font-medium text-gray-12">
 						{remainingSeats}
@@ -25,8 +27,13 @@ export const SeatsInfoCards = () => {
 				</p>
 			</Card>
 			<Card className="flex flex-col flex-1 gap-3 justify-center items-center">
-				<FontAwesomeIcon className="text-gray-10 size-5" icon={faUserGroup} />
-				<p className="text-gray-12">
+				<div className="flex justify-center items-center p-3 rounded-full border bg-gray-4 border-gray-5">
+					<FontAwesomeIcon
+						className="text-gray-12 size-3.5"
+						icon={faUserGroup}
+					/>
+				</div>
+				<p className="text-gray-11">
 					Seats Capacity
 					<span className="ml-2 font-medium text-gray-12">{inviteQuota}</span>
 				</p>

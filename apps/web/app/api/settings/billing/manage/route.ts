@@ -5,6 +5,7 @@ import { serverEnv } from "@cap/env";
 import { stripe } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
+import type Stripe from "stripe";
 
 export async function POST(request: NextRequest) {
 	const user = await getCurrentUser();
@@ -17,12 +18,29 @@ export async function POST(request: NextRequest) {
 	}
 
 	if (!user.stripeCustomerId) {
-		const customer = await stripe().customers.create({
+		const existingCustomers = await stripe().customers.list({
 			email: user.email,
-			metadata: {
-				userId: user.id,
-			},
+			limit: 1,
 		});
+
+		let customer: Stripe.Customer;
+		if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
+			customer = existingCustomers.data[0];
+
+			customer = await stripe().customers.update(customer.id, {
+				metadata: {
+					...customer.metadata,
+					userId: user.id,
+				},
+			});
+		} else {
+			customer = await stripe().customers.create({
+				email: user.email,
+				metadata: {
+					userId: user.id,
+				},
+			});
+		}
 
 		await db()
 			.update(users)

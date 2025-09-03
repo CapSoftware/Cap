@@ -19,19 +19,13 @@ struct Task {
     done_rx: tokio::sync::oneshot::Receiver<Result<(), String>>,
 }
 
+#[derive(Default)]
 pub struct PipelineBuilder {
     control: ControlBroadcast,
     tasks: IndexMap<String, Task>,
 }
 
 impl PipelineBuilder {
-    pub fn new() -> Self {
-        Self {
-            control: ControlBroadcast::default(),
-            tasks: IndexMap::new(),
-        }
-    }
-
     pub fn spawn_source(
         &mut self,
         name: impl Into<String>,
