@@ -74,6 +74,8 @@ export function CapVideoPlayer({
 		return () => window.removeEventListener("resize", checkMobile);
 	}, []);
 
+	const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
 	const fetchNewUrl = useCallback(async () => {
 		try {
 			const timestamp = new Date().getTime();
@@ -89,11 +91,6 @@ export function CapVideoPlayer({
 			const isS3 =
 				finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
 			const isCorsIncompatible = isCloudflareR2 || isS3;
-
-			// For Safari specifically, disable CORS for range requests to avoid 206 issues
-			const isSafari = /^((?!chrome|android).)*safari/i.test(
-				navigator.userAgent,
-			);
 
 			// Set CORS based on URL compatibility BEFORE video element is created
 			if (isCorsIncompatible || isSafari) {
@@ -241,6 +238,39 @@ export function CapVideoPlayer({
 				retryTimeout.current = null;
 			}
 		};
+
+		useEffect(() => {
+			const video = videoRef.current;
+			if (!video || !urlResolved) return;
+
+			// Safari-specific: Force preload metadata to avoid range request issues
+			const isSafari = /^((?!chrome|android).)*safari/i.test(
+				navigator.userAgent,
+			);
+			if (isSafari) {
+				video.preload = "metadata";
+
+				// Add event listener for Safari's stalled event
+				const handleStalled = () => {
+					console.log(
+						"CapVideoPlayer: Safari: Video stalled, attempting reload without CORS",
+					);
+					if (useCrossOrigin) {
+						setUseCrossOrigin(false);
+						// Force reload after CORS change
+						setTimeout(() => {
+							video.load();
+						}, 100);
+					}
+				};
+
+				video.addEventListener("stalled", handleStalled);
+
+				return () => {
+					video.removeEventListener("stalled", handleStalled);
+				};
+			}
+		}, [urlResolved, useCrossOrigin]);
 
 		const handleLoad = () => {
 			setVideoLoaded(true);
@@ -416,6 +446,11 @@ export function CapVideoPlayer({
 					<MediaPlayerVideo
 						src={resolvedVideoSrc}
 						ref={videoRef}
+						// Add these Safari-specific attributes:
+						{...(isSafari && {
+							preload: "auto", // Force full preload for Safari
+							"data-safari-fix": "true",
+						})}
 						onLoadedData={() => {
 							setVideoLoaded(true);
 						}}
