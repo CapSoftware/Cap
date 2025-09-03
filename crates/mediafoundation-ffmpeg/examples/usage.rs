@@ -29,7 +29,7 @@ mod win {
 
         // Add the H264 stream and create the muxer
         // Note: We need to add the stream before writing the header
-        let mut h264_muxer = H264StreamMuxer::add_stream(&mut output, config)?;
+        let mut h264_muxer = H264StreamMuxer::new(&mut output, config)?;
 
         // You might also have other streams (like audio) added to the same output
         // ... add audio stream here if needed ...
@@ -77,7 +77,7 @@ mod win {
             let mut output = format::output(&output_path)?;
 
             // Add H264 stream and create muxer
-            let h264_muxer = H264StreamMuxer::add_stream(&mut output, video_config)?;
+            let h264_muxer = H264StreamMuxer::new(&mut output, video_config)?;
 
             // You could add audio streams here too
             // ...

@@ -258,7 +258,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
             match native_encoder {
                 Ok(encoder) => {
-                    let mut muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
+                    let mut muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
                         &mut output,
                         cap_mediafoundation_ffmpeg::MuxerConfig {
                             width: screen_config.width,
@@ -355,7 +355,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         use scap_ffmpeg::AsFFmpeg;
 
                         if let Some(timestamp_tx) = timestamp_tx.take() {
-                            timestamp_tx.send(timestamp).unwrap();
+                            let _ = timestamp_tx.send(timestamp);
                         }
 
                         let ff_frame = frame
@@ -417,8 +417,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         let mut output = ffmpeg::format::output(&output_path)
             .map_err(|e| MediaError::Any(format!("CreateOutput: {e}").into()))?;
 
-        let scale_factor = (1080.0 / screen_config.height as f32).min(1.0);
-
         let screen_encoder = {
             let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
                 source.0.d3d_device(),
@@ -428,8 +426,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     Height: screen_config.height as i32,
                 },
                 SizeInt32 {
-                    Width: (screen_config.width as f32 * scale_factor) as i32,
-                    Height: (screen_config.height as f32 * scale_factor) as i32,
+                    Width: screen_config.width as i32,
+                    Height: screen_config.height as i32,
                 },
                 30,
                 0.15,
@@ -437,7 +435,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
             match native_encoder {
                 Ok(screen_encoder) => {
-                    let screen_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
+                    let screen_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
                         &mut output,
                         cap_mediafoundation_ffmpeg::MuxerConfig {
                             width: screen_config.width,

@@ -25,7 +25,7 @@ impl H264StreamMuxer {
     /// Add an H264 stream to an output context and create a muxer for it
     /// Returns the muxer which can be used to write packets to the stream
     /// Note: The caller must call write_header() on the output after adding all streams
-    pub fn add_stream(
+    pub fn new(
         output: &mut ffmpeg::format::context::Output,
         config: MuxerConfig,
     ) -> Result<Self, ffmpeg::Error> {
