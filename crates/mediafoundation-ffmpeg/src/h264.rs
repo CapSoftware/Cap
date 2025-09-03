@@ -80,7 +80,6 @@ impl H264StreamMuxer {
     }
 
     /// Write an H264 sample from MediaFoundation to the output
-    #[cfg(windows)]
     pub fn write_sample(
         &mut self,
         sample: &IMFSample,

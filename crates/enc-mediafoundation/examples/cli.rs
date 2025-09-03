@@ -9,7 +9,7 @@ mod win {
     use cap_enc_mediafoundation::{
         d3d::create_d3d_device,
         media::MF_VERSION,
-        video::{H264Encoder, SampleWriter, VideoEncoderInputSample},
+        video::{H264Encoder, InputSample, SampleWriter},
     };
     use clap::Parser;
     use scap_targets::Display;
@@ -107,10 +107,7 @@ mod win {
                             Duration: frame_time.Duration - first_time.Duration,
                         };
 
-                        let _ = frame_tx.send(Some(VideoEncoderInputSample::new(
-                            timestamp,
-                            frame.texture().clone(),
-                        )));
+                        let _ = frame_tx.send(Some(frame));
 
                         Ok(())
                     }
@@ -156,7 +153,13 @@ mod win {
                                     break;
                                 };
 
-                                if video_encoder.handle_needs_input(frame).is_err() {
+                                if video_encoder
+                                    .handle_needs_input(
+                                        frame.texture(),
+                                        frame.inner().SystemRelativeTime().unwrap(),
+                                    )
+                                    .is_err()
+                                {
                                     break;
                                 }
                             }

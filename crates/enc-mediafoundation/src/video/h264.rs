@@ -34,17 +34,6 @@ use crate::{
     video::{NewVideoProcessorError, VideoProcessor},
 };
 
-pub struct VideoEncoderInputSample {
-    timestamp: TimeSpan,
-    texture: ID3D11Texture2D,
-}
-
-impl VideoEncoderInputSample {
-    pub fn new(timestamp: TimeSpan, texture: ID3D11Texture2D) -> Self {
-        Self { timestamp, texture }
-    }
-}
-
 pub struct VideoEncoderOutputSample {
     sample: IMFSample,
 }
@@ -68,6 +57,8 @@ pub struct H264Encoder {
     output_stream_id: u32,
     output_type: IMFMediaType,
     bitrate: u32,
+
+    first_time: Option<TimeSpan>,
 }
 
 #[derive(Clone, Debug, thiserror::Error)]
@@ -93,17 +84,17 @@ pub enum NewVideoEncoderError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
-    /// Recommended bitrate multipler: 0.05-0.1
-    pub fn new(
+    pub fn new_with_scaled_output(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
-        resolution: SizeInt32,
+        input_resolution: SizeInt32,
+        output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
     ) -> Result<Self, NewVideoEncoderError> {
         let bitrate = calculate_bitrate(
-            resolution.Width as u32,
-            resolution.Height as u32,
+            output_resolution.Width as u32,
+            output_resolution.Height as u32,
             frame_rate,
             bitrate_multipler,
         );
@@ -119,9 +110,9 @@ impl H264Encoder {
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
             format,
-            resolution,
+            input_resolution,
             DXGI_FORMAT_NV12,
-            resolution,
+            output_resolution,
             frame_rate,
         )
         .map_err(NewVideoEncoderError::VideoProcessor)?;
@@ -219,10 +210,10 @@ impl H264Encoder {
             MFSetAttributeSize(
                 &attributes,
                 &MF_MT_FRAME_SIZE,
-                resolution.Width as u32,
-                resolution.Height as u32,
+                output_resolution.Width as u32,
+                output_resolution.Height as u32,
             )?;
-            MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, 60, 1)?;
+            MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
             MFSetAttributeRatio(&attributes, &MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
@@ -248,10 +239,10 @@ impl H264Encoder {
                 MFSetAttributeSize(
                     &attributes,
                     &MF_MT_FRAME_SIZE,
-                    resolution.Width as u32,
-                    resolution.Height as u32,
+                    output_resolution.Width as u32,
+                    output_resolution.Height as u32,
                 )?;
-                MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, 60, 1)?;
+                MFSetAttributeRatio(&attributes, &MF_MT_FRAME_RATE, frame_rate, 1)?;
                 let result = transform.SetInputType(
                     input_stream_id,
                     &input_type,
@@ -292,7 +283,25 @@ impl H264Encoder {
             bitrate,
 
             output_type,
+            first_time: None,
         })
+    }
+
+    pub fn new(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate_multipler: f32,
+    ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output(
+            d3d_device,
+            format,
+            resolution,
+            resolution,
+            frame_rate,
+            bitrate_multipler,
+        )
     }
 
     pub fn bitrate(&self) -> u32 {
@@ -370,9 +379,12 @@ impl H264Encoder {
 
     pub fn handle_needs_input(
         &mut self,
-        sample: VideoEncoderInputSample,
+        texture: &ID3D11Texture2D,
+        timestamp: TimeSpan,
     ) -> windows::core::Result<()> {
-        self.video_processor.process_texture(&sample.texture)?;
+        self.video_processor.process_texture(texture)?;
+
+        let first_time = self.first_time.get_or_insert(timestamp);
 
         let input_buffer = unsafe {
             MFCreateDXGISurfaceBuffer(
@@ -385,7 +397,7 @@ impl H264Encoder {
         let mf_sample = unsafe { MFCreateSample()? };
         unsafe {
             mf_sample.AddBuffer(&input_buffer)?;
-            mf_sample.SetSampleTime(sample.timestamp.Duration)?;
+            mf_sample.SetSampleTime(timestamp.Duration - first_time.Duration)?;
             self.transform
                 .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
         };

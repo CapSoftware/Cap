@@ -241,6 +241,9 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let screen_config = source.0.info();
 
+        let mut output = ffmpeg::format::output(&output_path)
+            .map_err(|e| MediaError::Any(format!("CreateOutput: {e}").into()))?;
+
         let screen_encoder = {
             let native_encoder = cap_enc_mediafoundation::H264Encoder::new(
                 source.0.d3d_device(),
@@ -250,162 +253,127 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     Height: screen_config.height as i32,
                 },
                 source.0.config().fps(),
-                0.07,
+                0.1,
             );
 
             match native_encoder {
-                Ok(screen_encoder) => either::Left(screen_encoder),
+                Ok(encoder) => {
+                    let mut muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
+                        &mut output,
+                        cap_mediafoundation_ffmpeg::MuxerConfig {
+                            width: screen_config.width,
+                            height: screen_config.height,
+                            fps: screen_config.fps(),
+                            bitrate: encoder.bitrate(),
+                        },
+                    )
+                    .map_err(|e| MediaError::Any(format!("NativeH264/{e}").into()))?;
+
+                    encoder
+                        .start()
+                        .map_err(|e| MediaError::Any(format!("ScreenEncoderStart: {e}").into()))?;
+
+                    either::Left((encoder, muxer))
+                }
                 Err(e) => {
                     use tracing::{error, info};
 
                     error!("Failed to create native encoder: {e}");
                     info!("Falling back to software H264 encoder");
 
-                    cap_enc_ffmpeg::MP4File::init(
-                        "screen",
-                        output_path.clone(),
-                        |o| cap_enc_ffmpeg::H264Encoder::builder("screen", screen_config).build(o),
-                        |_| None,
+                    either::Right(
+                        cap_enc_ffmpeg::H264Encoder::builder("screen", screen_config)
+                            .build(&mut output)
+                            .map_err(|e| MediaError::Any(format!("H264Encoder/{e}").into()))?,
                     )
-                    .map(either::Right)
-                    .map_err(|e| MediaError::Any(e.to_string().into()))?
                 }
             }
         };
+
+        output
+            .write_header()
+            .map_err(|e| MediaError::Any(format!("OutputHeader/{e}").into()))?;
 
         builder.spawn_source("screen_capture", source.0);
 
         let (timestamp_tx, timestamp_rx) = flume::bounded(1);
 
-        match screen_encoder {
-            either::Left(mut encoder) => {
-                // let sample_writer = Arc::new(
-                //     SampleWriter::new(output_path.as_path())
-                //         .map_err(|e| MediaError::Any(format!("NewSampleWriter: {e}").into()))?,
-                // );
-
-                // let screen_writer_stream = sample_writer
-                //     .add_stream(&encoder.output_type())
-                //     .map_err(|e| MediaError::Any(format!("AddSampleWriterStream: {e}").into()))?;
-
-                // sample_writer
-                //     .start()
-                //     .map_err(|e| MediaError::Any(format!("SampleWriterStart: {e}").into()))?;
-                encoder
-                    .start()
-                    .map_err(|e| MediaError::Any(format!("ScreenEncoderStart: {e}").into()))?;
-
-                let mut output = ffmpeg::format::output(&output_path).unwrap();
-
-                let mut mf_ffmpeg_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
-                    &mut output,
-                    cap_mediafoundation_ffmpeg::MuxerConfig {
-                        width: screen_config.width,
-                        height: screen_config.height,
-                        fps: screen_config.fps(),
-                        bitrate: 5_000_000,
-                    },
-                )
-                .unwrap();
-
-                output.write_header().unwrap();
-
-                builder.spawn_task("screen_capture_encoder", move |ready| {
-                    use cap_enc_mediafoundation::media::MF_VERSION;
-                    use windows::Win32::Media::MediaFoundation::{self, MFSTARTUP_FULL, MFStartup};
+        builder.spawn_task("screen_capture_encoder", move |ready| {
+            match screen_encoder {
+                either::Left((mut encoder, mut muxer)) => {
+                    use windows::Win32::Media::MediaFoundation;
 
                     cap_mediafoundation_utils::thread_init();
 
                     let _ = ready.send(Ok(()));
 
                     let mut timestamp_tx = Some(timestamp_tx);
-                    let mut first_time = None;
 
                     while let Ok(e) = encoder.get_event() {
                         match e {
                             MediaFoundation::METransformNeedInput => {
-                                use cap_enc_mediafoundation::video::VideoEncoderInputSample;
-                                use windows::Foundation::TimeSpan;
-
-                                let Ok(frame) = source.1.recv() else {
+                                let Ok((frame, timestamp)) = source.1.recv() else {
                                     break;
                                 };
 
                                 if let Some(timestamp_tx) = timestamp_tx.take() {
-                                    timestamp_tx.send(frame.1).unwrap();
+                                    timestamp_tx.send(timestamp).unwrap();
                                 }
 
-                                let Ok(frame_time) = frame.0.inner().SystemRelativeTime() else {
-                                    continue;
-                                };
-                                let first_time = first_time.get_or_insert(frame_time);
+                                let frame_time = frame
+                                    .inner()
+                                    .SystemRelativeTime()
+                                    .map_err(|e| format!("FrameTime: {e}"))?;
 
-                                let sample = VideoEncoderInputSample::new(
-                                    TimeSpan {
-                                        Duration: frame_time.Duration - first_time.Duration,
-                                    },
-                                    frame.0.texture().clone(),
-                                );
-
-                                if encoder.handle_needs_input(sample).is_err() {
-                                    break;
-                                }
+                                encoder
+                                    .handle_needs_input(frame.texture(), frame_time)
+                                    .map_err(|e| format!("NeedsInput: {e}"))?;
                             }
                             MediaFoundation::METransformHaveOutput => {
                                 if let Some(output_sample) = encoder
                                     .handle_has_output()
                                     .map_err(|e| format!("HasOutput: {e}"))?
                                 {
-                                    mf_ffmpeg_muxer
+                                    muxer
                                         .write_sample(&output_sample, &mut output)
-                                        .unwrap();
-                                    // if let Ok((v, pts, dts, duration, keyframe)) =
-                                    //     cap_mediafoundation_ffmpeg::extract_sample_data(
-                                    //         &output_sample,
-                                    //     )
-                                    // {
-                                    //     dbg!(v.len(), pts, dts, duration, keyframe);
-                                    // }
-
-                                    // sample_writer
-                                    //     .write(screen_writer_stream, &output_sample)
-                                    //     .map_err(|e| format!("SampleWriterWrite: {e}"))?;
+                                        .map_err(|e| format!("WriteSample: {e}"))?;
                                 }
                             }
                             _ => {}
                         }
                     }
 
-                    output.write_trailer().unwrap();
-
-                    let _ = encoder.finish();
-                    // let _ = sample_writer.stop();
-
-                    Ok(())
-                });
-            }
-            either::Right(mut encoder) => {
-                builder.spawn_task("screen_capture_encoder", move |ready| {
+                    encoder
+                        .finish()
+                        .map_err(|e| format!("EncoderFinish: {e}"))?;
+                }
+                either::Right(mut encoder) => {
                     let mut timestamp_tx = Some(timestamp_tx);
                     let _ = ready.send(Ok(()));
 
-                    while let Ok(frame) = source.1.recv() {
+                    while let Ok((frame, timestamp)) = source.1.recv() {
                         use scap_ffmpeg::AsFFmpeg;
 
                         if let Some(timestamp_tx) = timestamp_tx.take() {
-                            timestamp_tx.send(frame.1).unwrap();
+                            timestamp_tx.send(timestamp).unwrap();
                         }
+
                         let ff_frame = frame
-                            .0
                             .as_ffmpeg()
                             .map_err(|e| format!("FrameAsFfmpeg: {e}"))?;
-                        encoder.queue_video_frame(ff_frame);
+
+                        encoder.queue_frame(ff_frame, &mut output);
                     }
-                    encoder.finish();
-                    Ok(())
-                });
+                    encoder.finish(&mut output);
+                }
             }
-        }
+
+            output
+                .write_trailer()
+                .map_err(|e| format!("WriteTrailer: {e}"))?;
+
+            Ok(())
+        });
 
         Ok((builder, timestamp_rx))
     }
@@ -446,32 +414,60 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         let has_audio_sources = audio_mixer.has_sources();
         let screen_config = source.0.info();
 
-        let mut output = ffmpeg::format::output(&output_path).unwrap();
+        let mut output = ffmpeg::format::output(&output_path)
+            .map_err(|e| MediaError::Any(format!("CreateOutput: {e}").into()))?;
 
-        let mut screen_encoder = cap_enc_mediafoundation::H264Encoder::new(
-            source.0.d3d_device(),
-            screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-            SizeInt32 {
-                Width: screen_config.width as i32,
-                Height: screen_config.height as i32,
-            },
-            source.0.config().fps(),
-            0.07,
-        )
-        .unwrap();
+        let scale_factor = (1080.0 / screen_config.height as f32).min(1.0);
 
-        screen_encoder.start().unwrap();
+        let screen_encoder = {
+            let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+                source.0.d3d_device(),
+                screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
+                SizeInt32 {
+                    Width: screen_config.width as i32,
+                    Height: screen_config.height as i32,
+                },
+                SizeInt32 {
+                    Width: (screen_config.width as f32 * scale_factor) as i32,
+                    Height: (screen_config.height as f32 * scale_factor) as i32,
+                },
+                30,
+                0.15,
+            );
 
-        let mut screen_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
-            &mut output,
-            cap_mediafoundation_ffmpeg::MuxerConfig {
-                width: screen_config.width,
-                height: screen_config.height,
-                fps: screen_config.fps(),
-                bitrate: screen_encoder.bitrate(),
-            },
-        )
-        .unwrap();
+            match native_encoder {
+                Ok(screen_encoder) => {
+                    let screen_muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::add_stream(
+                        &mut output,
+                        cap_mediafoundation_ffmpeg::MuxerConfig {
+                            width: screen_config.width,
+                            height: screen_config.height,
+                            fps: 30,
+                            bitrate: screen_encoder.bitrate(),
+                        },
+                    )
+                    .map_err(|e| MediaError::Any(format!("NativeH264Muxer/{e}").into()))?;
+
+                    screen_encoder
+                        .start()
+                        .map_err(|e| MediaError::Any(format!("StartScreenEncoder/{e}").into()))?;
+
+                    either::Left((screen_encoder, screen_muxer))
+                }
+                Err(e) => {
+                    use tracing::{error, info};
+
+                    error!("Failed to create native encoder: {e}");
+                    info!("Falling back to software H264 encoder");
+
+                    either::Right(
+                        cap_enc_ffmpeg::H264Encoder::builder("screen", screen_config)
+                            .build(&mut output)
+                            .map_err(|e| MediaError::Any(format!("H264Encoder/{e}").into()))?,
+                    )
+                }
+            }
+        };
 
         let audio_encoder = has_audio_sources
             .then(|| {
@@ -480,29 +476,23 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     .map_err(|e| MediaError::Any(e.to_string().into()))
             })
             .transpose()
-            .unwrap();
+            .map_err(|e| MediaError::Any(format!("AACEncoder/{e}").into()))?;
 
-        output.write_header().unwrap();
+        output
+            .write_header()
+            .map_err(|e| MediaError::Any(format!("OutputHeader/{e}").into()))?;
 
         let output = Arc::new(std::sync::Mutex::new(output));
-
-        let is_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         if let Some(mut audio_encoder) = audio_encoder {
             builder.spawn_source("audio_mixer", audio_mixer);
 
-            let is_done = is_done.clone();
+            // let is_done = is_done.clone();
             let output = output.clone();
             builder.spawn_task("audio_encoding", move |ready| {
                 let _ = ready.send(Ok(()));
                 while let Ok(frame) = audio_rx.recv() {
-                    // if let Ok(mut mp4) = mp4.lock() {
-                    //     mp4.queue_audio_frame(frame);
-                    // }
-
-                    if let Ok(mut output) = output.lock()
-                        && !is_done.load(std::sync::atomic::Ordering::Relaxed)
-                    {
+                    if let Ok(mut output) = output.lock() {
                         audio_encoder.queue_frame(frame, &mut *output);
                     }
                 }
@@ -513,58 +503,83 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         builder.spawn_source("screen_capture", source.0);
 
         builder.spawn_task("screen_encoder", move |ready| {
-            use windows::Win32::Media::MediaFoundation;
+            match screen_encoder {
+                either::Left((mut encoder, mut muxer)) => {
+                    use windows::Win32::Media::MediaFoundation;
 
-            cap_mediafoundation_utils::thread_init();
+                    cap_mediafoundation_utils::thread_init();
 
-            let _ = ready.send(Ok(()));
+                    let _ = ready.send(Ok(()));
 
-            let mut first_time = None;
+                    while let Ok(e) = encoder.get_event() {
+                        match e {
+                            MediaFoundation::METransformNeedInput => {
+                                let Ok((frame, _)) = source.1.recv() else {
+                                    break;
+                                };
 
-            while let Ok(e) = screen_encoder.get_event() {
-                match e {
-                    MediaFoundation::METransformNeedInput => {
-                        use cap_enc_mediafoundation::video::VideoEncoderInputSample;
-                        use windows::Foundation::TimeSpan;
+                                let frame_time = frame
+                                    .inner()
+                                    .SystemRelativeTime()
+                                    .map_err(|e| format!("Frame Time: {e}"))?;
 
-                        let Ok(frame) = source.1.recv() else {
-                            break;
-                        };
+                                encoder
+                                    .handle_needs_input(frame.texture(), frame_time)
+                                    .map_err(|e| format!("NeedsInput: {e}"))?;
+                            }
+                            MediaFoundation::METransformHaveOutput => {
+                                if let Some(output_sample) = encoder
+                                    .handle_has_output()
+                                    .map_err(|e| format!("HasOutput: {e}"))?
+                                {
+                                    let mut output = output.lock().unwrap();
 
-                        let Ok(frame_time) = frame.0.inner().SystemRelativeTime() else {
+                                    muxer
+                                        .write_sample(&output_sample, &mut *output)
+                                        .map_err(|e| format!("WriteSample: {e}"))?;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    encoder
+                        .finish()
+                        .map_err(|e| format!("EncoderFinish: {e}"))?;
+                }
+                either::Right(mut encoder) => {
+                    let output = output.clone();
+
+                    let _ = ready.send(Ok(()));
+
+                    while let Ok((frame, _unix_time)) = source.1.recv() {
+                        let Ok(mut output) = output.lock() else {
                             continue;
                         };
-                        let first_time = first_time.get_or_insert(frame_time);
 
-                        let duration = frame_time.Duration - first_time.Duration;
-                        let sample = VideoEncoderInputSample::new(
-                            TimeSpan { Duration: duration },
-                            frame.0.texture().clone(),
+                        // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        //     mp4.pause();
+                        // } else {
+                        //     mp4.resume();
+                        // }
+
+                        use scap_ffmpeg::AsFFmpeg;
+
+                        encoder.queue_frame(
+                            frame
+                                .as_ffmpeg()
+                                .map_err(|e| format!("FrameAsFFmpeg: {e}"))?,
+                            &mut output,
                         );
-
-                        if screen_encoder.handle_needs_input(sample).is_err() {
-                            break;
-                        }
                     }
-                    MediaFoundation::METransformHaveOutput => {
-                        if let Some(output_sample) = screen_encoder
-                            .handle_has_output()
-                            .map_err(|e| format!("HasOutput: {e}"))?
-                        {
-                            let mut output = output.lock().unwrap();
-
-                            screen_muxer
-                                .write_sample(&output_sample, &mut *output)
-                                .unwrap();
-                        }
-                    }
-                    _ => {}
                 }
             }
 
-            screen_encoder.finish().unwrap();
-            is_done.store(true, std::sync::atomic::Ordering::Relaxed);
-            output.lock().unwrap().write_trailer().unwrap();
+            output
+                .lock()
+                .map_err(|e| format!("OutputLock: {e}"))?
+                .write_trailer()
+                .map_err(|e| format!("WriteTrailer: {e}"))?;
 
             Ok(())
         });

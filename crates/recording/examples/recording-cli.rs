@@ -22,7 +22,7 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    let (handle, _ready_rx) = cap_recording::instant_recording::spawn_instant_recording_actor(
+    let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
         dir.path().into(),
         RecordingBaseInputs {
@@ -33,6 +33,7 @@ pub async fn main() {
             camera_feed: None,
             mic_feed: None,
         },
+        false,
         // true,
     )
     .await

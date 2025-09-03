@@ -405,20 +405,11 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 
         let error_tx = self.error_tx.clone();
 
-        let mut first_time = None;
-
         let mut capture_handle = scap_direct3d::Capturer::new(
             msg.target,
             msg.settings,
             move |frame| {
                 let display_time = SystemTime::now();
-
-                let frame_time = frame.inner().SystemRelativeTime()?;
-                let first_time = first_time.get_or_insert(frame_time);
-
-                let timestamp = TimeSpan {
-                    Duration: frame_time.Duration - first_time.Duration,
-                };
 
                 let _ = msg
                     .frame_handler
