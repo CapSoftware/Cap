@@ -90,8 +90,13 @@ export function CapVideoPlayer({
 				finalUrl.includes(".s3.") || finalUrl.includes("amazonaws.com");
 			const isCorsIncompatible = isCloudflareR2 || isS3;
 
+			// For Safari specifically, disable CORS for range requests to avoid 206 issues
+			const isSafari = /^((?!chrome|android).)*safari/i.test(
+				navigator.userAgent,
+			);
+
 			// Set CORS based on URL compatibility BEFORE video element is created
-			if (isCorsIncompatible) {
+			if (isCorsIncompatible || isSafari) {
 				console.log(
 					"CapVideoPlayer: Detected CORS-incompatible URL, disabling crossOrigin:",
 					finalUrl,
@@ -398,10 +403,10 @@ export function CapVideoPlayer({
 						videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100",
 					)}
 				>
-					<div className="flex flex-col items-center gap-2">
+					<div className="flex flex-col gap-2 items-center">
 						<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
 						{retryCount.current > 0 && (
-							<p className="text-white text-sm opacity-75">
+							<p className="text-sm text-white opacity-75">
 								Preparing video... ({retryCount.current}/{maxRetries})
 							</p>
 						)}
