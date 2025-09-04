@@ -217,6 +217,7 @@ export const ComparisonSlider = ({
 						width={1000}
 						height={600}
 						quality={100}
+						loading="eager"
 						className="object-contain"
 					/>
 				</motion.div>
@@ -246,6 +247,7 @@ export const ComparisonSlider = ({
 						width={1000}
 						height={600}
 						quality={100}
+						loading="eager"
 						className="object-contain"
 					/>
 
