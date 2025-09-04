@@ -5,7 +5,7 @@ import * as React from "react";
 import { LoadingSpinner } from "./LoadingSpinner";
 
 const buttonVariants = cva(
-	"flex items-center justify-center rounded-full disabled:cursor-not-allowed cursor-pointer font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
+	"flex items-center justify-center transition-colors duration-200 rounded-full disabled:cursor-not-allowed cursor-pointer font-medium px-[1.25rem] ring-offset-transparent relative gap-1",
 	{
 		defaultVariants: {
 			variant: "primary",

@@ -1,8 +1,10 @@
+import { Clapperboard, Zap } from "lucide-react";
 import type { Metadata } from "next";
 import Script from "next/script";
 import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
+import type { SeoPageContent } from "@/components/seo/types";
 
-const dailyStandupSoftwareContent = {
+const dailyStandupSoftwareContent: SeoPageContent = {
 	title: "Daily Standup Software: Streamline Your Agile Meetings with Cap",
 	description:
 		"Looking for daily standup software? Discover how Cap helps remote or hybrid teams run async standups efficiently. No more timezone conflicts!",
@@ -50,11 +52,19 @@ const dailyStandupSoftwareContent = {
 			"Cap adapts to your team's Agile workflow with flexible recording options",
 		modes: [
 			{
+				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 				title: "Instant Mode for Quick Daily Updates",
 				description:
 					"Perfect for the classic 'what I did yesterday, what I'm doing today, any blockers' format. Record and share in seconds with a simple link that team members can instantly access with built-in commenting for addressing blockers.",
 			},
 			{
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="mb-4 size-8"
+						strokeWidth={1.5}
+					/>
+				),
 				title: "Studio Mode for Sprint Reviews",
 				description:
 					"Ideal for more detailed sprint reviews or retrospectives. Create professional-quality standup videos with separate screen and webcam capture to demonstrate completed work or complex blockers that need visual context.",
@@ -123,45 +133,48 @@ const dailyStandupSoftwareContent = {
 		rows: [
 			[
 				"Time Zone Flexibility",
-				"✅ Complete async freedom",
-				"❌ Requires coordination",
-				"✅ Async but text-only",
+				{ text: "Complete async freedom", status: "positive" },
+				{ text: "Requires coordination", status: "negative" },
+				{ text: "Async but text-only", status: "positive" },
 			],
 			[
 				"Visual Context",
-				"✅ Full screen & webcam capture",
-				"✅ Live video",
-				"❌ Text only with limited context",
+				{ text: "Full screen & webcam capture", status: "positive" },
+				{ text: "Live video", status: "positive" },
+				{ text: "Text only with limited context", status: "negative" },
 			],
 			[
 				"Meeting Fatigue",
-				"✅ Eliminated completely",
-				"❌ Daily drain on focus",
-				"✅ Reduced significantly",
+				{ text: "Eliminated completely", status: "positive" },
+				{ text: "Daily drain on focus", status: "negative" },
+				{ text: "Reduced significantly", status: "positive" },
 			],
 			[
 				"Information Retention",
-				"✅ Rewatchable, permanent record",
-				"⚠️ Unless recorded (uncommon)",
-				"✅ Searchable text history",
+				{ text: "Rewatchable, permanent record", status: "positive" },
+				{ text: "Unless recorded (uncommon)", status: "warning" },
+				{ text: "Searchable text history", status: "positive" },
 			],
 			[
 				"Time Efficiency",
-				"✅ Watch at 2x speed, skip irrelevant updates",
-				"❌ Must attend entire meeting",
-				"✅ Quick to scan but lacks detail",
+				{
+					text: "Watch at 2x speed, skip irrelevant updates",
+					status: "positive",
+				},
+				{ text: "Must attend entire meeting", status: "negative" },
+				{ text: "Quick to scan but lacks detail", status: "positive" },
 			],
 			[
 				"Blocker Resolution",
-				"✅ Visual demonstration + comments",
-				"✅ Real-time discussion",
-				"⚠️ Text description only",
+				{ text: "Visual demonstration + comments", status: "positive" },
+				{ text: "Real-time discussion", status: "positive" },
+				{ text: "Text description only", status: "warning" },
 			],
 			[
 				"Privacy & Security",
-				"✅ Own your data with S3 integration",
-				"⚠️ Varies by provider",
-				"⚠️ Typically stored on vendor servers",
+				{ text: "Own your data with S3 integration", status: "positive" },
+				{ text: "Varies by provider", status: "warning" },
+				{ text: "Stored on vendor servers", status: "warning" },
 			],
 		],
 	},

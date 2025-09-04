@@ -1,8 +1,7 @@
-"use client";
-
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
+import type { SeoPageContent } from "../../seo/types";
 
-export const screenRecorderContent = {
+export const screenRecorderContent: SeoPageContent = {
 	title: "Screen Recorder: High-Quality, User-Friendly, and 100% Free Locally",
 	description:
 		"Cap is a powerful, user-friendly screen recorder and is 100% free locally with no usage limits. Perfect for team collaboration, creating tutorials, or recording professional presentations with ease and precision.",

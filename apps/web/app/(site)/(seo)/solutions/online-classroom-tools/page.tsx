@@ -1,8 +1,10 @@
+import { Clapperboard, Zap } from "lucide-react";
 import type { Metadata } from "next";
 import Script from "next/script";
 import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
+import type { SeoPageContent } from "@/components/seo/types";
 
-const onlineClassroomToolsContent = {
+const onlineClassroomToolsContent: SeoPageContent = {
 	title: "Online Classroom Tools: Empower Remote Teaching with Cap",
 	description:
 		"Searching for online classroom tools? Learn how Cap's screen recorder helps educators create engaging lessons, manage student feedback, and streamline remote learning.",
@@ -50,11 +52,19 @@ const onlineClassroomToolsContent = {
 			"Cap adapts to different teaching scenarios with flexible recording options",
 		modes: [
 			{
+				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 				title: "Instant Mode for Quick Explanations",
 				description:
 					"Perfect for answering student questions, providing assignment feedback, or recording short concept explanations. Record and share in seconds with a simple link that students can instantly access with built-in commenting for follow-up questions.",
 			},
 			{
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="mb-4 size-8"
+						strokeWidth={1.5}
+					/>
+				),
 				title: "Studio Mode for Complete Lessons",
 				description:
 					"Ideal for creating comprehensive lectures or demonstrations. Record high-quality videos with separate screen and webcam capture, allowing for professional presentation of complex material with visual and verbal explanations.",
@@ -123,45 +133,48 @@ const onlineClassroomToolsContent = {
 		rows: [
 			[
 				"Student-Paced Learning",
-				"✅ Complete control over pace",
-				"❌ Must follow live pace",
-				"✅ Self-paced but limited context",
+				{ text: "Complete control over pace", status: "positive" },
+				{ text: "Must follow live pace", status: "negative" },
+				{ text: "Self-paced but limited context", status: "positive" },
 			],
 			[
 				"Visual & Audio Context",
-				"✅ Full screen & webcam capture",
-				"✅ Live video but not replayable",
-				"❌ Static visuals only",
+				{ text: "Full screen & webcam capture", status: "positive" },
+				{ text: "Live video but not replayable", status: "positive" },
+				{ text: "Static visuals only", status: "negative" },
 			],
 			[
 				"Reusability",
-				"✅ Create once, use indefinitely",
-				"⚠️ Must record separately",
-				"✅ Reusable documents",
+				{ text: "Create once, use indefinitely", status: "positive" },
+				{ text: "Must record separately", status: "warning" },
+				{ text: "Reusable documents", status: "positive" },
 			],
 			[
 				"Student Questions",
-				"✅ Timestamped comments on specific moments",
-				"✅ Real-time but time-limited",
-				"⚠️ Separate from content",
+				{
+					text: "Timestamped comments on specific moments",
+					status: "positive",
+				},
+				{ text: "Real-time but time-limited", status: "positive" },
+				{ text: "Separate from content", status: "warning" },
 			],
 			[
 				"Time Efficiency for Educators",
-				"✅ Record once, share with all sections",
-				"❌ Repeat for each class section",
-				"✅ Share widely but less engaging",
+				{ text: "Record once, share with all sections", status: "positive" },
+				{ text: "Repeat for each class section", status: "negative" },
+				{ text: "Share widely but less engaging", status: "positive" },
 			],
 			[
 				"Technology Barriers",
-				"✅ Simple download and record",
-				"⚠️ Connection and scheduling issues",
-				"✅ Minimal tech requirements",
+				{ text: "Simple download and record", status: "positive" },
+				{ text: "Connection and scheduling issues", status: "warning" },
+				{ text: "Minimal tech requirements", status: "positive" },
 			],
 			[
 				"Privacy & Security",
-				"✅ Own your data with S3 integration",
-				"⚠️ Varies by provider",
-				"⚠️ Varies by platform",
+				{ text: "Own your data with S3 integration", status: "positive" },
+				{ text: "Varies by provider", status: "warning" },
+				{ text: "Varies by platform", status: "warning" },
 			],
 		],
 	},
