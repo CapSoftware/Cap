@@ -197,57 +197,30 @@ async setCameraPreviewState(state: CameraPreviewState) : Promise<null> {
 async awaitCameraPreviewReady() : Promise<boolean> {
     return await TAURI_INVOKE("await_camera_preview_ready");
 },
-/**
- * Function to handle creating directories for the model
- */
 async createDir(path: string, recursive: boolean) : Promise<null> {
     return await TAURI_INVOKE("create_dir", { path, recursive });
 },
-/**
- * Function to save the model file
- */
 async saveModelFile(path: string, data: number[]) : Promise<null> {
     return await TAURI_INVOKE("save_model_file", { path, data });
 },
-/**
- * Function to transcribe audio from a video file using Whisper
- */
 async transcribeAudio(videoPath: string, modelPath: string, language: string) : Promise<CaptionData> {
     return await TAURI_INVOKE("transcribe_audio", { videoPath, modelPath, language });
 },
-/**
- * Function to save caption data to a file
- */
 async saveCaptions(videoId: string, captions: CaptionData) : Promise<null> {
     return await TAURI_INVOKE("save_captions", { videoId, captions });
 },
-/**
- * Function to load caption data from a file
- */
 async loadCaptions(videoId: string) : Promise<CaptionData | null> {
     return await TAURI_INVOKE("load_captions", { videoId });
 },
-/**
- * Helper function to download a Whisper model from Hugging Face Hub
- */
 async downloadWhisperModel(modelName: string, outputPath: string) : Promise<null> {
     return await TAURI_INVOKE("download_whisper_model", { modelName, outputPath });
 },
-/**
- * Function to check if a model file exists
- */
 async checkModelExists(modelPath: string) : Promise<boolean> {
     return await TAURI_INVOKE("check_model_exists", { modelPath });
 },
-/**
- * Function to delete a downloaded model
- */
 async deleteWhisperModel(modelPath: string) : Promise<null> {
     return await TAURI_INVOKE("delete_whisper_model", { modelPath });
 },
-/**
- * Export captions to an SRT file
- */
 async exportCaptionsSrt(videoId: string) : Promise<string | null> {
     return await TAURI_INVOKE("export_captions_srt", { videoId });
 },

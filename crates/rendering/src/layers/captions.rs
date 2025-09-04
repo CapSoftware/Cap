@@ -12,12 +12,11 @@ pub struct CaptionWord {
     pub start: f32,
     pub end: f32,
 }
-use log::{debug, info, warn};
+use log::warn;
 use wgpu::{Device, Queue, util::DeviceExt};
 
-use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants, parse_color_component};
+use crate::{DecodedSegmentFrames, ProjectUniforms, RenderVideoConstants};
 
-/// Represents a caption segment with timing and text
 #[derive(Debug, Clone)]
 pub struct CaptionSegment {
     pub id: String,
@@ -27,19 +26,18 @@ pub struct CaptionSegment {
     pub words: Vec<CaptionWord>,
 }
 
-/// Settings for caption rendering
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct CaptionSettings {
-    pub enabled: u32, // 0 = disabled, 1 = enabled
+    pub enabled: u32,
     pub font_size: f32,
     pub color: [f32; 4],
     pub background_color: [f32; 4],
-    pub position: u32, // 0 = top, 1 = middle, 2 = bottom
-    pub outline: u32,  // 0 = disabled, 1 = enabled
+    pub position: u32,
+    pub outline: u32,
     pub outline_color: [f32; 4],
-    pub font: u32,          // 0 = SansSerif, 1 = Serif, 2 = Monospace
-    pub _padding: [f32; 1], // for alignment
+    pub font: u32,
+    pub _padding: [f32; 1],
 }
 
 impl Default for CaptionSettings {
@@ -47,18 +45,17 @@ impl Default for CaptionSettings {
         Self {
             enabled: 1,
             font_size: 24.0,
-            color: [1.0, 1.0, 1.0, 1.0],            // white
-            background_color: [0.0, 0.0, 0.0, 0.8], // 80% black
-            position: 2,                            // bottom
-            outline: 1,                             // enabled
-            outline_color: [0.0, 0.0, 0.0, 1.0],    // black
-            font: 0,                                // SansSerif
+            color: [1.0, 1.0, 1.0, 1.0],
+            background_color: [0.0, 0.0, 0.0, 0.8],
+            position: 2,
+            outline: 1,
+            outline_color: [0.0, 0.0, 0.0, 1.0],
+            font: 0,
             _padding: [0.0],
         }
     }
 }
 
-/// Caption layer that renders text using GPU
 pub struct CaptionsLayer {
     settings_buffer: wgpu::Buffer,
     font_system: FontSystem,
@@ -66,17 +63,18 @@ pub struct CaptionsLayer {
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
     viewport: Viewport,
-    // Current caption state
     current_caption: Option<CaptionSegment>,
+    next_caption: Option<CaptionSegment>,
     current_time: f32,
-    // Store individual buffers for each word
-    word_buffers: Vec<(Buffer, usize)>, // (buffer, word_index)
-    // Background rendering
+    word_buffers: Vec<(Buffer, usize)>,
+    next_word_buffers: Vec<(Buffer, usize)>,
     background_pipeline: CaptionBackgroundPipeline,
-    background_uniforms_buffer: Option<wgpu::Buffer>,
-    background_bind_group: Option<wgpu::BindGroup>,
-    // Store background info
-    background_info: Option<BackgroundInfo>,
+    current_background_uniforms_buffer: Option<wgpu::Buffer>,
+    current_background_bind_group: Option<wgpu::BindGroup>,
+    current_background_info: Option<BackgroundInfo>,
+    next_background_uniforms_buffer: Option<wgpu::Buffer>,
+    next_background_bind_group: Option<wgpu::BindGroup>,
+    next_background_info: Option<BackgroundInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -88,7 +86,6 @@ struct BackgroundInfo {
 
 impl CaptionsLayer {
     pub fn new(device: &Device, queue: &Queue) -> Self {
-        // Create default settings buffer
         let settings = CaptionSettings::default();
         let settings_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Caption Settings Buffer"),
@@ -96,7 +93,6 @@ impl CaptionsLayer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        // Initialize glyphon text rendering components
         let font_system = FontSystem::new();
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
@@ -120,32 +116,43 @@ impl CaptionsLayer {
             text_renderer,
             viewport,
             current_caption: None,
+            next_caption: None,
             current_time: 0.0,
             word_buffers: Vec::new(),
+            next_word_buffers: Vec::new(),
             background_pipeline,
-            background_uniforms_buffer: None,
-            background_bind_group: None,
-            background_info: None,
+            current_background_uniforms_buffer: None,
+            current_background_bind_group: None,
+            current_background_info: None,
+            next_background_uniforms_buffer: None,
+            next_background_bind_group: None,
+            next_background_info: None,
         }
     }
 
-    /// Update the settings for caption rendering
     pub fn update_settings(&mut self, queue: &Queue, settings: CaptionSettings) {
         queue.write_buffer(&self.settings_buffer, 0, bytemuck::cast_slice(&[settings]));
     }
 
-    /// Update current caption state - simpler approach
     pub fn update_current_caption(
         &mut self,
         current_time: f32,
         segments: &[cap_project::CaptionSegment],
     ) {
         self.current_time = current_time;
+        const TRANSITION_DURATION: f32 = 0.25;
 
-        // Find current caption segment
-        self.current_caption = segments
+        let mut visible_captions: Vec<CaptionSegment> = segments
             .iter()
-            .find(|segment| current_time >= segment.start && current_time < segment.end)
+            .filter(|segment| {
+                let in_fade_in = current_time >= segment.start - TRANSITION_DURATION
+                    && current_time < segment.start;
+                let in_main = current_time >= segment.start && current_time <= segment.end;
+                let in_fade_out =
+                    current_time > segment.end && current_time <= segment.end + TRANSITION_DURATION;
+
+                in_fade_in || in_main || in_fade_out
+            })
             .map(|segment| CaptionSegment {
                 id: segment.id.clone(),
                 start: segment.start,
@@ -160,7 +167,102 @@ impl CaptionsLayer {
                         end: word.end,
                     })
                     .collect(),
-            });
+            })
+            .collect();
+
+        visible_captions.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+
+        let before_dedup = visible_captions.len();
+        visible_captions.dedup_by(|a, b| a.id == b.id);
+        if before_dedup != visible_captions.len() {
+            log::warn!(
+                "Removed {} duplicate captions",
+                before_dedup - visible_captions.len()
+            );
+        }
+
+        if !visible_captions.is_empty() {
+            log::debug!(
+                "Visible captions at time {:.2}: {:?}",
+                current_time,
+                visible_captions
+                    .iter()
+                    .map(|c| (&c.id, c.start, c.end))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        if visible_captions.len() >= 2 {
+            let first = &visible_captions[0];
+            let second = &visible_captions[1];
+
+            let gap = second.start - first.end;
+            let crossfade_window = TRANSITION_DURATION * 2.0;
+
+            let captions_are_adjacent = gap < crossfade_window;
+
+            let in_crossfade = if !captions_are_adjacent {
+                false
+            } else if gap <= 0.0 {
+                current_time >= second.start && current_time <= first.end
+            } else {
+                current_time >= first.end - TRANSITION_DURATION
+                    && current_time < second.start + TRANSITION_DURATION
+            };
+
+            log::info!(
+                "Caption timing - current: {:.2}, first: {:.2}-{:.2}, second: {:.2}-{:.2}, gap: {:.2}, in_crossfade: {}",
+                current_time,
+                first.start,
+                first.end,
+                second.start,
+                second.end,
+                gap,
+                in_crossfade
+            );
+
+            if in_crossfade {
+                log::info!(
+                    "CROSSFADING at time {:.2}: '{}' -> '{}'",
+                    current_time,
+                    first.text,
+                    second.text
+                );
+                self.current_caption = Some(first.clone());
+                self.next_caption = Some(second.clone());
+            } else if current_time >= second.start && captions_are_adjacent {
+                self.current_caption = Some(second.clone());
+                self.next_caption = None;
+            } else {
+                if current_time < first.end + TRANSITION_DURATION {
+                    self.current_caption = Some(first.clone());
+                    self.next_caption = None;
+                } else if current_time >= second.start - TRANSITION_DURATION {
+                    self.current_caption = Some(second.clone());
+                    self.next_caption = None;
+                } else {
+                    self.current_caption = None;
+                    self.next_caption = None;
+                }
+            }
+        } else if visible_captions.len() == 1 {
+            let is_last = segments
+                .last()
+                .map(|last| last.id == visible_captions[0].id)
+                .unwrap_or(false);
+            if is_last {
+                log::debug!(
+                    "Showing last caption: {} at time {:.2}",
+                    visible_captions[0].id,
+                    current_time
+                );
+            }
+            self.current_caption = Some(visible_captions[0].clone());
+            self.next_caption = None;
+        } else {
+            self.current_caption = None;
+            self.next_caption = None;
+        }
     }
 
     pub fn prepare(
@@ -170,13 +272,15 @@ impl CaptionsLayer {
         output_size: XY<u32>,
         constants: &RenderVideoConstants,
     ) {
-        // Clear any existing word buffers
         self.word_buffers.clear();
-        self.background_uniforms_buffer = None;
-        self.background_bind_group = None;
-        self.background_info = None;
+        self.next_word_buffers.clear();
+        self.current_background_uniforms_buffer = None;
+        self.current_background_bind_group = None;
+        self.current_background_info = None;
+        self.next_background_uniforms_buffer = None;
+        self.next_background_bind_group = None;
+        self.next_background_info = None;
 
-        // Only render if captions are enabled and available
         let Some(caption_data) = &uniforms.project.captions else {
             return;
         };
@@ -186,11 +290,9 @@ impl CaptionsLayer {
 
         let current_time = segment_frames.segment_time;
 
-        // Update current caption state
         self.update_current_caption(current_time, &caption_data.segments);
 
-        // Only proceed if we have a current caption
-        let Some(ref current_caption) = self.current_caption else {
+        if self.current_caption.is_none() && self.next_caption.is_none() {
             return;
         };
 
@@ -198,253 +300,552 @@ impl CaptionsLayer {
         let device = &constants.device;
         let queue = &constants.queue;
 
-        // Calculate fade in/out
-        let fade_duration = 0.3;
-        let segment_duration = current_caption.end - current_caption.start;
-        let relative_time = current_time - current_caption.start;
+        self.viewport.update(queue, Resolution { width, height });
 
-        let opacity = if relative_time < fade_duration {
-            relative_time / fade_duration
-        } else if relative_time > segment_duration - fade_duration {
-            (segment_duration - relative_time) / fade_duration
-        } else {
-            1.0
-        }
-        .clamp(0.0, 1.0);
+        let mut all_text_areas = Vec::new();
+        let transition_duration = 0.25;
 
-        // Skip if completely faded out
-        if opacity < 0.01 {
-            return;
-        }
+        if let Some(ref current_caption) = self.current_caption {
+            let segment_duration = current_caption.end - current_caption.start;
+            let relative_time = current_time - current_caption.start;
 
-        // Calculate responsive sizing with better quality
-        let base_size = caption_data.settings.size as f32 * 1.8; // Larger base size for better quality
-        let scale_factor = (height as f32 / 1080.0).max(1.0); // Don't go below 1.0
-        let font_size = base_size * scale_factor;
-        let y_position = match caption_data.settings.position.as_str() {
-            "top" => height as f32 * 0.1,
-            "middle" => height as f32 * 0.5,
-            _ => height as f32 * 0.85, // bottom
-        };
+            let mut current_opacity = 1.0;
+            let mut y_offset = 0.0;
+            let mut blur_amount = 0.0;
 
-        // Find currently active word
-        let active_word_idx = current_caption
-            .words
-            .iter()
-            .position(|word| current_time >= word.start && current_time < word.end);
+            if let Some(ref next_caption) = self.next_caption {
+                let gap = next_caption.start - current_caption.end;
 
-        let line_height = font_size * 1.2;
-        let metrics = Metrics::new(font_size, line_height);
-        let text_opacity = (opacity * 255.0) as u8;
+                if gap <= 0.0 {
+                    if current_time >= next_caption.start && current_time <= current_caption.end {
+                        let overlap_duration = current_caption.end - next_caption.start;
+                        let overlap_progress =
+                            (current_time - next_caption.start) / overlap_duration;
 
-        // Colors for active and inactive words
-        let inactive_color = Color::rgba(200, 200, 200, text_opacity); // Light grey
-        let active_color = Color::rgba(255, 255, 255, text_opacity); // White
+                        current_opacity = 1.0 - overlap_progress;
+                        current_opacity = current_opacity.clamp(0.0, 1.0);
 
-        // Create the full text to measure total width
-        let full_text = if current_caption.words.is_empty() {
-            current_caption.text.clone()
-        } else {
-            current_caption
-                .words
-                .iter()
-                .enumerate()
-                .map(|(i, word)| {
-                    if i == 0 {
-                        word.text.clone()
-                    } else {
-                        format!(" {}", word.text)
+                        current_opacity = current_opacity * current_opacity;
+
+                        y_offset = -5.0 * (1.0 - current_opacity);
+                        blur_amount = 2.0 * (1.0 - current_opacity);
+
+                        log::info!(
+                            "Current caption crossfading out (overlap): opacity = {:.2}, progress = {:.2}",
+                            current_opacity,
+                            overlap_progress
+                        );
                     }
-                })
-                .collect::<String>()
-        };
+                } else {
+                    let crossfade_start = current_caption.end - transition_duration;
+                    let crossfade_end = next_caption.start + transition_duration;
 
-        // Create a measuring buffer to get the full width
-        let mut measure_buffer = Buffer::new(&mut self.font_system, metrics);
-        measure_buffer.set_size(&mut self.font_system, None, None);
-        measure_buffer.set_text(
-            &mut self.font_system,
-            &full_text,
-            &Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
-        );
+                    if current_time >= crossfade_start && current_time <= crossfade_end {
+                        let crossfade_duration = crossfade_end - crossfade_start;
+                        let crossfade_progress =
+                            (current_time - crossfade_start) / crossfade_duration;
 
-        // Create individual buffers for each word
-        if current_caption.words.is_empty() {
-            // No word-level data, create single buffer
-            let mut buffer = Buffer::new(&mut self.font_system, metrics);
-            buffer.set_size(&mut self.font_system, None, None);
+                        current_opacity = 1.0 - crossfade_progress;
+                        current_opacity = current_opacity.clamp(0.0, 1.0);
 
-            let color = if active_word_idx.is_some() {
-                active_color
+                        current_opacity = current_opacity * current_opacity;
+
+                        y_offset = -5.0 * (1.0 - current_opacity);
+                        blur_amount = 2.0 * (1.0 - current_opacity);
+
+                        log::info!(
+                            "Current caption crossfading out: opacity = {:.2}, progress = {:.2}",
+                            current_opacity,
+                            crossfade_progress
+                        );
+                    }
+                }
             } else {
-                inactive_color
-            };
-            buffer.set_text(
-                &mut self.font_system,
-                &current_caption.text,
-                &Attrs::new()
-                    .family(Family::SansSerif)
-                    .weight(Weight::NORMAL)
-                    .color(color),
-                Shaping::Advanced,
-            );
-            self.word_buffers.push((buffer, 0));
-        } else {
-            // Create buffer for each word
-            for (i, word) in current_caption.words.iter().enumerate() {
-                let mut buffer = Buffer::new(&mut self.font_system, metrics);
-                buffer.set_size(&mut self.font_system, None, None);
+                if relative_time < transition_duration {
+                    let progress = relative_time / transition_duration;
+                    let ease_progress = progress * progress;
+                    current_opacity = ease_progress;
+                    y_offset = 5.0 * (1.0 - ease_progress);
+                    blur_amount = 2.0 * (1.0 - ease_progress);
+                } else if relative_time > segment_duration - transition_duration
+                    && relative_time <= segment_duration
+                {
+                    let progress = (segment_duration - relative_time) / transition_duration;
+                    let ease_progress = progress * progress;
+                    current_opacity = ease_progress;
+                    y_offset = -5.0 * (1.0 - ease_progress);
+                    blur_amount = 2.0 * (1.0 - ease_progress);
+                } else if relative_time > segment_duration {
+                    current_opacity = 0.0;
+                }
+            }
 
-                let word_text = if i == 0 {
-                    word.text.clone()
+            if current_opacity > 0.01 {
+                let base_size = caption_data.settings.size as f32 * 1.8;
+                let scale_factor = (height as f32 / 1080.0).max(1.0);
+                let font_size = base_size * scale_factor;
+                let base_y_position = match caption_data.settings.position.as_str() {
+                    "top" => height as f32 * 0.1,
+                    "middle" => height as f32 * 0.5,
+                    _ => height as f32 * 0.85,
+                };
+                let y_position = base_y_position + y_offset;
+
+                let active_word_idx = current_caption
+                    .words
+                    .iter()
+                    .position(|word| current_time >= word.start && current_time < word.end);
+
+                let line_height = font_size * 1.2;
+                let metrics = Metrics::new(font_size, line_height);
+                let effective_opacity = current_opacity * (1.0 - blur_amount * 0.3);
+                let text_opacity = (effective_opacity * 255.0) as u8;
+
+                let inactive_color = Color::rgba(200, 200, 200, text_opacity);
+                let active_color = Color::rgba(255, 255, 255, text_opacity);
+
+                let full_text = if current_caption.words.is_empty() {
+                    current_caption.text.clone()
                 } else {
-                    format!(" {}", word.text)
+                    current_caption
+                        .words
+                        .iter()
+                        .enumerate()
+                        .map(|(i, word)| {
+                            if i == 0 {
+                                word.text.clone()
+                            } else {
+                                format!(" {}", word.text)
+                            }
+                        })
+                        .collect::<String>()
                 };
 
-                let color = if Some(i) == active_word_idx {
-                    active_color
-                } else {
-                    inactive_color
-                };
-
-                buffer.set_text(
+                let mut measure_buffer = Buffer::new(&mut self.font_system, metrics);
+                measure_buffer.set_size(&mut self.font_system, None, None);
+                measure_buffer.set_text(
                     &mut self.font_system,
-                    &word_text,
+                    &full_text,
                     &Attrs::new()
                         .family(Family::SansSerif)
-                        .weight(Weight::NORMAL)
-                        .color(color),
+                        .weight(Weight::NORMAL),
                     Shaping::Advanced,
                 );
 
-                self.word_buffers.push((buffer, i));
+                let mut buffer = Buffer::new(&mut self.font_system, metrics);
+                buffer.set_size(&mut self.font_system, None, None);
+
+                let mut spans = Vec::new();
+
+                if current_caption.words.is_empty() {
+                    let color = inactive_color;
+                    spans.push((
+                        current_caption.text.as_str(),
+                        Attrs::new()
+                            .family(Family::SansSerif)
+                            .weight(Weight::NORMAL)
+                            .color(color),
+                    ));
+                } else {
+                    for (i, word) in current_caption.words.iter().enumerate() {
+                        if i > 0 {
+                            spans.push((
+                                " ",
+                                Attrs::new()
+                                    .family(Family::SansSerif)
+                                    .weight(Weight::NORMAL)
+                                    .color(inactive_color),
+                            ));
+                        }
+
+                        let is_active = active_word_idx == Some(i);
+                        let color = if is_active {
+                            active_color
+                        } else {
+                            inactive_color
+                        };
+
+                        spans.push((
+                            word.text.as_str(),
+                            Attrs::new()
+                                .family(Family::SansSerif)
+                                .weight(Weight::NORMAL)
+                                .color(color),
+                        ));
+                    }
+                }
+
+                buffer.set_rich_text(
+                    &mut self.font_system,
+                    spans,
+                    &Attrs::new()
+                        .family(Family::SansSerif)
+                        .weight(Weight::NORMAL),
+                    Shaping::Advanced,
+                    None,
+                );
+
+                self.word_buffers.push((buffer, 0));
+
+                if !self.word_buffers.is_empty() {
+                    let mut text_areas = Vec::new();
+
+                    let measure_width = measure_buffer
+                        .layout_runs()
+                        .next()
+                        .map(|r| r.line_w)
+                        .unwrap_or(0.0);
+
+                    let total_width = measure_width;
+
+                    let start_x = (width as f32 - total_width) / 2.0;
+                    let _text_height = font_size * 1.5;
+
+                    let h_padding = 40.0;
+                    let v_padding_top = 20.0;
+                    let v_padding_bottom = 28.0;
+                    let bg_opacity =
+                        (caption_data.settings.background_opacity as f32 / 100.0) * current_opacity;
+
+                    if bg_opacity > 0.1 {
+                        let bg_center_y = y_position - v_padding_top
+                            + (font_size + v_padding_top + v_padding_bottom) / 2.0;
+                        self.current_background_info = Some(BackgroundInfo {
+                            position: [start_x + total_width / 2.0, bg_center_y],
+                            size: [
+                                total_width + h_padding * 2.0,
+                                font_size + v_padding_top + v_padding_bottom,
+                            ],
+                            opacity: bg_opacity,
+                        });
+
+                        let bg_uniforms = CaptionBackgroundUniforms {
+                            position: [start_x + total_width / 2.0, bg_center_y],
+                            size: [
+                                total_width + h_padding * 2.0,
+                                font_size + v_padding_top + v_padding_bottom,
+                            ],
+                            color: [0.0, 0.0, 0.0, bg_opacity],
+                            corner_radius: 12.0,
+                            _padding1: [0.0],
+                            viewport_size: [width as f32, height as f32],
+                            _padding2: 0.0,
+                            _padding3: [0.0, 0.0, 0.0],
+                            _padding4: [0.0, 0.0, 0.0, 0.0],
+                        };
+
+                        let uniforms_buffer =
+                            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("Current Caption Background Uniforms"),
+                                contents: bytemuck::cast_slice(&[bg_uniforms]),
+                                usage: wgpu::BufferUsages::UNIFORM,
+                            });
+
+                        let bind_group = self
+                            .background_pipeline
+                            .create_bind_group(device, &uniforms_buffer);
+
+                        self.current_background_uniforms_buffer = Some(uniforms_buffer);
+                        self.current_background_bind_group = Some(bind_group);
+                    }
+
+                    if let Some((buffer, _)) = self.word_buffers.first() {
+                        let text_bounds = TextBounds {
+                            left: start_x.floor() as i32,
+                            top: (y_position - 10.0) as i32,
+                            right: (start_x + total_width).ceil() as i32,
+                            bottom: (y_position + font_size * 1.3) as i32,
+                        };
+
+                        let color = if active_word_idx.is_some() {
+                            Color::rgba(255, 255, 255, text_opacity)
+                        } else {
+                            Color::rgba(200, 200, 200, text_opacity)
+                        };
+
+                        text_areas.push(TextArea {
+                            buffer,
+                            left: start_x.floor(),
+                            top: y_position.floor(),
+                            scale: 1.0,
+                            bounds: text_bounds,
+                            default_color: color,
+                            custom_glyphs: &[],
+                        });
+                    }
+
+                    all_text_areas.extend(text_areas);
+                }
             }
         }
 
-        // Update viewport
-        self.viewport.update(queue, Resolution { width, height });
+        if let Some(ref next_caption) = self.next_caption {
+            if let Some(ref current_caption) = self.current_caption {
+                let gap = next_caption.start - current_caption.end;
 
-        // Prepare text areas for rendering
-        if !self.word_buffers.is_empty() {
-            let mut text_areas = Vec::new();
+                let mut next_opacity = 0.0;
+                let mut y_offset = 0.0;
+                let mut blur_amount = 0.0;
 
-            // Calculate total text width by summing word widths
-            let mut total_width = 0.0;
-            let word_widths: Vec<f32> = self
-                .word_buffers
-                .iter()
-                .map(|(buffer, _)| {
-                    // Get the width of this word's buffer
-                    let run = buffer.layout_runs().next();
-                    run.map(|r| r.line_w).unwrap_or(0.0)
-                })
-                .collect();
+                if gap <= 0.0 {
+                    if current_time >= next_caption.start && current_time <= current_caption.end {
+                        let overlap_duration = current_caption.end - next_caption.start;
+                        let overlap_progress =
+                            (current_time - next_caption.start) / overlap_duration;
 
-            total_width = word_widths.iter().sum();
+                        next_opacity = overlap_progress;
+                        next_opacity = next_opacity.clamp(0.0, 1.0);
 
-            // Center the text
-            let start_x = (width as f32 - total_width) / 2.0;
-            let _text_height = font_size * 1.5; // Proper text height for layout
+                        next_opacity = next_opacity * next_opacity;
 
-            // Create background with padding
-            let h_padding = 40.0;
-            let v_padding_top = 20.0;
-            let v_padding_bottom = 28.0; // Balanced padding - text bounds now handle descender space
-            let bg_opacity = (caption_data.settings.background_opacity as f32 / 100.0) * opacity;
+                        y_offset = 5.0 * (1.0 - next_opacity);
+                        blur_amount = 2.0 * (1.0 - next_opacity);
 
-            if bg_opacity > 0.1 {
-                // Store background info for rendering
-                // Adjust position to account for unequal padding
-                let bg_center_y = y_position - v_padding_top
-                    + (font_size + v_padding_top + v_padding_bottom) / 2.0;
-                self.background_info = Some(BackgroundInfo {
-                    position: [start_x + total_width / 2.0, bg_center_y],
-                    size: [
-                        total_width + h_padding * 2.0,
-                        font_size + v_padding_top + v_padding_bottom,
-                    ],
-                    opacity: bg_opacity,
-                });
-
-                // Create background uniforms
-                let bg_uniforms = CaptionBackgroundUniforms {
-                    position: [start_x + total_width / 2.0, bg_center_y],
-                    size: [
-                        total_width + h_padding * 2.0,
-                        font_size + v_padding_top + v_padding_bottom,
-                    ],
-                    color: [0.0, 0.0, 0.0, bg_opacity],
-                    corner_radius: 12.0, // Nice rounded corners
-                    _padding1: [0.0],
-                    viewport_size: [width as f32, height as f32],
-                    _padding2: 0.0,
-                    _padding3: [0.0, 0.0, 0.0],
-                    _padding4: [0.0, 0.0, 0.0, 0.0],
-                };
-
-                // Create buffer and bind group
-                let uniforms_buffer =
-                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Caption Background Uniforms"),
-                        contents: bytemuck::cast_slice(&[bg_uniforms]),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-
-                let bind_group = self
-                    .background_pipeline
-                    .create_bind_group(device, &uniforms_buffer);
-
-                self.background_uniforms_buffer = Some(uniforms_buffer);
-                self.background_bind_group = Some(bind_group);
-            }
-
-            // Add each word at its position
-            let mut current_x = start_x;
-            for (i, (buffer, word_idx)) in self.word_buffers.iter().enumerate() {
-                let word_width = if i < word_widths.len() {
-                    word_widths[i]
+                        log::info!(
+                            "Next caption crossfading in (overlap): opacity = {:.2}, progress = {:.2}",
+                            next_opacity,
+                            overlap_progress
+                        );
+                    } else {
+                        log::info!("Next caption not in overlap zone");
+                    }
                 } else {
-                    0.0
-                };
+                    let crossfade_start = current_caption.end - transition_duration;
+                    let crossfade_end = next_caption.start + transition_duration;
 
-                // Text bounds for this word - add extra space for descenders
-                let word_bounds = TextBounds {
-                    left: current_x as i32,
-                    top: (y_position - 10.0) as i32, // Add some top space
-                    right: (current_x + word_width) as i32,
-                    bottom: (y_position + font_size * 1.3) as i32, // Extra space for descenders
-                };
+                    if current_time >= crossfade_start && current_time <= crossfade_end {
+                        let crossfade_duration = crossfade_end - crossfade_start;
+                        let crossfade_progress =
+                            (current_time - crossfade_start) / crossfade_duration;
 
-                // Determine color based on whether this is the active word
-                let is_active = active_word_idx == Some(*word_idx);
-                let color = if is_active {
-                    Color::rgba(255, 255, 255, text_opacity) // Bright white
-                } else {
-                    Color::rgba(180, 180, 180, text_opacity) // Lighter grey for better readability
-                };
+                        next_opacity = crossfade_progress;
+                        next_opacity = next_opacity.clamp(0.0, 1.0);
 
-                text_areas.push(TextArea {
-                    buffer,
-                    left: current_x,
-                    top: y_position,
-                    scale: 1.0,
-                    bounds: word_bounds,
-                    default_color: color,
-                    custom_glyphs: &[],
-                });
+                        next_opacity = next_opacity * next_opacity;
 
-                current_x += word_width;
+                        y_offset = 5.0 * (1.0 - next_opacity);
+                        blur_amount = 2.0 * (1.0 - next_opacity);
+
+                        log::info!(
+                            "Next caption crossfading in: opacity = {:.2}, progress = {:.2}",
+                            next_opacity,
+                            crossfade_progress
+                        );
+                    } else {
+                        log::info!("Next caption not in crossfade zone");
+                    }
+                }
+
+                if next_opacity > 0.01 {
+                    let base_size = caption_data.settings.size as f32 * 1.8;
+                    let scale_factor = (height as f32 / 1080.0).max(1.0);
+                    let font_size = base_size * scale_factor;
+                    let base_y_position = match caption_data.settings.position.as_str() {
+                        "top" => height as f32 * 0.1,
+                        "middle" => height as f32 * 0.5,
+                        _ => height as f32 * 0.85,
+                    };
+                    let y_position = base_y_position + y_offset;
+
+                    let active_word_idx = next_caption
+                        .words
+                        .iter()
+                        .position(|word| current_time >= word.start && current_time < word.end);
+
+                    let line_height = font_size * 1.2;
+                    let metrics = Metrics::new(font_size, line_height);
+                    let effective_opacity = next_opacity * (1.0 - blur_amount * 0.3);
+                    let text_opacity = (effective_opacity * 255.0) as u8;
+
+                    let inactive_color = Color::rgba(200, 200, 200, text_opacity);
+                    let active_color = Color::rgba(255, 255, 255, text_opacity);
+
+                    let full_text = if next_caption.words.is_empty() {
+                        next_caption.text.clone()
+                    } else {
+                        next_caption
+                            .words
+                            .iter()
+                            .enumerate()
+                            .map(|(i, word)| {
+                                if i == 0 {
+                                    word.text.clone()
+                                } else {
+                                    format!(" {}", word.text)
+                                }
+                            })
+                            .collect::<String>()
+                    };
+
+                    let mut measure_buffer = Buffer::new(&mut self.font_system, metrics);
+                    measure_buffer.set_size(&mut self.font_system, None, None);
+                    measure_buffer.set_text(
+                        &mut self.font_system,
+                        &full_text,
+                        &Attrs::new()
+                            .family(Family::SansSerif)
+                            .weight(Weight::NORMAL),
+                        Shaping::Advanced,
+                    );
+
+                    let mut temp_buffers = Vec::new();
+                    let mut buffer = Buffer::new(&mut self.font_system, metrics);
+                    buffer.set_size(&mut self.font_system, None, None);
+
+                    let mut spans = Vec::new();
+
+                    if next_caption.words.is_empty() {
+                        let color = inactive_color;
+                        spans.push((
+                            next_caption.text.as_str(),
+                            Attrs::new()
+                                .family(Family::SansSerif)
+                                .weight(Weight::NORMAL)
+                                .color(color),
+                        ));
+                    } else {
+                        for (i, word) in next_caption.words.iter().enumerate() {
+                            if i > 0 {
+                                spans.push((
+                                    " ",
+                                    Attrs::new()
+                                        .family(Family::SansSerif)
+                                        .weight(Weight::NORMAL)
+                                        .color(inactive_color),
+                                ));
+                            }
+
+                            let is_active = active_word_idx == Some(i);
+                            let color = if is_active {
+                                active_color
+                            } else {
+                                inactive_color
+                            };
+
+                            spans.push((
+                                word.text.as_str(),
+                                Attrs::new()
+                                    .family(Family::SansSerif)
+                                    .weight(Weight::NORMAL)
+                                    .color(color),
+                            ));
+                        }
+                    }
+
+                    buffer.set_rich_text(
+                        &mut self.font_system,
+                        spans,
+                        &Attrs::new()
+                            .family(Family::SansSerif)
+                            .weight(Weight::NORMAL),
+                        Shaping::Advanced,
+                        None,
+                    );
+
+                    temp_buffers.push((buffer, 0));
+
+                    if !temp_buffers.is_empty() {
+                        self.next_word_buffers = temp_buffers;
+
+                        let mut text_areas = Vec::new();
+
+                        let measure_width = measure_buffer
+                            .layout_runs()
+                            .next()
+                            .map(|r| r.line_w)
+                            .unwrap_or(0.0);
+
+                        let total_width = measure_width;
+
+                        let start_x = (width as f32 - total_width) / 2.0;
+
+                        let h_padding = 40.0;
+                        let v_padding_top = 20.0;
+                        let v_padding_bottom = 28.0;
+                        let bg_opacity = (caption_data.settings.background_opacity as f32 / 100.0)
+                            * next_opacity;
+
+                        if bg_opacity > 0.01 {
+                            let bg_center_y = y_position - v_padding_top
+                                + (font_size + v_padding_top + v_padding_bottom) / 2.0;
+                            self.next_background_info = Some(BackgroundInfo {
+                                position: [start_x + total_width / 2.0, bg_center_y],
+                                size: [
+                                    total_width + h_padding * 2.0,
+                                    font_size + v_padding_top + v_padding_bottom,
+                                ],
+                                opacity: bg_opacity,
+                            });
+
+                            let bg_uniforms = CaptionBackgroundUniforms {
+                                position: [start_x + total_width / 2.0, bg_center_y],
+                                size: [
+                                    total_width + h_padding * 2.0,
+                                    font_size + v_padding_top + v_padding_bottom,
+                                ],
+                                color: [0.0, 0.0, 0.0, bg_opacity],
+                                corner_radius: 12.0,
+                                _padding1: [0.0],
+                                viewport_size: [width as f32, height as f32],
+                                _padding2: 0.0,
+                                _padding3: [0.0, 0.0, 0.0],
+                                _padding4: [0.0, 0.0, 0.0, 0.0],
+                            };
+
+                            let uniforms_buffer =
+                                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("Next Caption Background Uniforms"),
+                                    contents: bytemuck::cast_slice(&[bg_uniforms]),
+                                    usage: wgpu::BufferUsages::UNIFORM,
+                                });
+
+                            let bind_group = self
+                                .background_pipeline
+                                .create_bind_group(device, &uniforms_buffer);
+
+                            self.next_background_uniforms_buffer = Some(uniforms_buffer);
+                            self.next_background_bind_group = Some(bind_group);
+                        }
+
+                        if let Some((buffer, _)) = self.next_word_buffers.first() {
+                            let text_bounds = TextBounds {
+                                left: start_x.floor() as i32,
+                                top: (y_position - 10.0) as i32,
+                                right: (start_x + total_width).ceil() as i32,
+                                bottom: (y_position + font_size * 1.3) as i32,
+                            };
+
+                            let color = if active_word_idx.is_some() {
+                                Color::rgba(255, 255, 255, text_opacity)
+                            } else {
+                                Color::rgba(200, 200, 200, text_opacity)
+                            };
+
+                            text_areas.push(TextArea {
+                                buffer,
+                                left: start_x.floor(),
+                                top: y_position.floor(),
+                                scale: 1.0,
+                                bounds: text_bounds,
+                                default_color: color,
+                                custom_glyphs: &[],
+                            });
+                        }
+
+                        all_text_areas.extend(text_areas);
+                    }
+                }
             }
+        }
 
-            // Prepare for GPU rendering
+        if !all_text_areas.is_empty() {
             if let Err(e) = self.text_renderer.prepare(
                 device,
                 queue,
                 &mut self.font_system,
                 &mut self.text_atlas,
                 &self.viewport,
-                text_areas,
+                all_text_areas,
                 &mut self.swash_cache,
             ) {
                 warn!("Caption text preparation failed: {:?}", e);
@@ -452,20 +853,25 @@ impl CaptionsLayer {
         }
     }
 
-    /// Render the caption background
     pub fn render_background<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        // Render background if available
-        if let (Some(ref bind_group), Some(_)) =
-            (&self.background_bind_group, &self.background_info)
+        if let (Some(bind_group), Some(_)) = (
+            &self.current_background_bind_group,
+            &self.current_background_info,
+        ) {
+            self.background_pipeline.render(pass, bind_group);
+        }
+
+        if let (Some(bind_group), Some(_)) =
+            (&self.next_background_bind_group, &self.next_background_info)
         {
             self.background_pipeline.render(pass, bind_group);
         }
     }
 
-    /// Render the caption text
     pub fn render_text<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        // Only render if we have word buffers prepared and current caption exists
-        if !self.word_buffers.is_empty() && self.current_caption.is_some() {
+        if (!self.word_buffers.is_empty() && self.current_caption.is_some())
+            || (!self.next_word_buffers.is_empty() && self.next_caption.is_some())
+        {
             if let Err(e) = self
                 .text_renderer
                 .render(&self.text_atlas, &self.viewport, pass)
@@ -476,15 +882,12 @@ impl CaptionsLayer {
     }
 }
 
-/// Function to find the current caption segment based on playback time
 pub fn find_caption_at_time(time: f32, segments: &[CaptionSegment]) -> Option<&CaptionSegment> {
     segments
         .iter()
         .find(|segment| time >= segment.start && time < segment.end)
 }
 
-// Adding a new version that accepts cap_project::CaptionSegment
-/// Function to find the current caption segment from cap_project::CaptionSegment based on playback time
 pub fn find_caption_at_time_project(
     time: f32,
     segments: &[cap_project::CaptionSegment],
