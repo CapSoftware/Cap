@@ -151,7 +151,10 @@ const onlineClassroomToolsContent: SeoPageContent = {
 			],
 			[
 				"Student Questions",
-				{ text: "Timestamped comments on specific moments", status: "positive" },
+				{
+					text: "Timestamped comments on specific moments",
+					status: "positive",
+				},
 				{ text: "Real-time but time-limited", status: "positive" },
 				{ text: "Separate from content", status: "warning" },
 			],
