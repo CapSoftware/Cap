@@ -477,6 +477,8 @@ pub struct SplitViewSettings {
     pub camera_zoom: f64,
     #[serde(default = "default_zoom")]
     pub screen_zoom: f64,
+    #[serde(default)]
+    pub fullscreen: bool,
 }
 
 fn default_zoom() -> f64 {
@@ -491,6 +493,7 @@ impl Default for SplitViewSettings {
             camera_side: SplitViewSide::Right,
             camera_zoom: 1.0,
             screen_zoom: 1.0,
+            fullscreen: false,
         }
     }
 }

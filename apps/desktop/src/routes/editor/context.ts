@@ -159,6 +159,87 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			duplicateSceneSegment: (segmentIndex: number) => {
+				if (!project.timeline?.sceneSegments?.[segmentIndex]) return;
+				const segment = project.timeline.sceneSegments[segmentIndex];
+				const segmentDuration = segment.end - segment.start;
+				const newSegmentStart = segment.end;
+				const newSegmentEnd = newSegmentStart + segmentDuration;
+				
+				// Check if there's enough space in the timeline
+				const timelineDuration = totalDuration();
+				if (newSegmentEnd > timelineDuration) {
+					// Not enough space for the duplicate
+					return;
+				}
+				
+				// Check if the new segment would overlap with any existing scene segments
+				const wouldOverlap = project.timeline.sceneSegments.some((s, i) => {
+					if (i === segmentIndex) return false; // Skip the original segment
+					return (newSegmentStart < s.end && newSegmentEnd > s.start);
+				});
+				
+				if (wouldOverlap) {
+					// Would overlap with another segment
+					return;
+				}
+				
+				batch(() => {
+					setProject(
+						"timeline",
+						"sceneSegments",
+						produce((s) => {
+							if (!s) return;
+							// Insert duplicate right after the original
+							s.splice(segmentIndex + 1, 0, {
+								...segment,
+								start: newSegmentStart,
+								end: newSegmentEnd,
+								// Deep clone split view settings if present
+								splitViewSettings: segment.splitViewSettings 
+									? { ...segment.splitViewSettings }
+									: undefined,
+							});
+						}),
+					);
+					// Select and click on the newly duplicated segment
+					setEditorState("timeline", "selection", {
+						type: "scene",
+						index: segmentIndex + 1,
+					});
+					// Move playhead to the start of the new segment
+					setEditorState("playbackTime", newSegmentStart);
+					// Center the timeline view on the new segment
+					const currentZoom = editorState.timeline.transform.zoom;
+					const targetPosition = Math.max(0, newSegmentStart - currentZoom / 2);
+					editorState.timeline.transform.setPosition(targetPosition);
+				});
+			},
+			copySceneSettingsFromOriginal: (segmentIndex: number) => {
+				if (!project.timeline?.sceneSegments?.[segmentIndex]) return;
+				
+				// Find the first segment with the same mode
+				const currentSegment = project.timeline.sceneSegments[segmentIndex];
+				const originalSegment = project.timeline.sceneSegments.find(
+					(s, i) => i !== segmentIndex && s.mode === currentSegment.mode
+				);
+				
+				if (!originalSegment) return;
+				
+				setProject(
+					"timeline",
+					"sceneSegments",
+					segmentIndex,
+					produce((s) => {
+						if (!s) return;
+						// Copy settings based on mode
+						if (s.mode === "splitView" && originalSegment.splitViewSettings) {
+							s.splitViewSettings = { ...originalSegment.splitViewSettings };
+						}
+						// Can add more mode-specific settings copying here in the future
+					}),
+				);
+			},
 		};
 
 		createEffect(

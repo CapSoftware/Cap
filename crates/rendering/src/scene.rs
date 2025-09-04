@@ -126,6 +126,7 @@ impl InterpolatedScene {
                         (SceneMode::CameraOnly, SceneMode::CameraOnly)
                             | (SceneMode::Default, SceneMode::Default)
                             | (SceneMode::HideCamera, SceneMode::HideCamera)
+                            | (SceneMode::SplitView, SceneMode::SplitView)
                     );
                     if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                         // Keep the current mode without transitioning
@@ -174,6 +175,7 @@ impl InterpolatedScene {
                     (SceneMode::CameraOnly, SceneMode::CameraOnly)
                         | (SceneMode::Default, SceneMode::Default)
                         | (SceneMode::HideCamera, SceneMode::HideCamera)
+                        | (SceneMode::SplitView, SceneMode::SplitView)
                 );
                 if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                     (prev_seg.mode.clone(), prev_seg.mode.clone(), 1.0)

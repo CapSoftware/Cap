@@ -638,7 +638,8 @@ impl ProjectUniforms {
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
                 opacity: scene.regular_screen_transition_opacity() as f32,
-                _padding: [0.0; 3],
+                rounding_mask: 15.0,
+                _padding: [0.0; 2],
             }
         };
 
@@ -747,7 +748,8 @@ impl ProjectUniforms {
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
                     opacity: scene.regular_camera_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    rounding_mask: 15.0,
+                    _padding: [0.0; 2],
                 }
             });
 
@@ -776,16 +778,11 @@ impl ProjectUniforms {
                     position[1] + size[1],
                 ];
 
-                // In camera-only mode, we ignore the camera shape setting (Square/Source)
-                // and just apply the minimum crop needed to fill the output aspect ratio.
-                // This prevents excessive zooming when shape is set to Square.
                 let crop_bounds = if aspect > output_aspect {
-                    // Camera is wider than output - crop left and right
                     let visible_width = frame_size[1] * output_aspect;
                     let crop_x = (frame_size[0] - visible_width) / 2.0;
                     [crop_x, 0.0, frame_size[0] - crop_x, frame_size[1]]
                 } else {
-                    // Camera is taller than output - crop top and bottom
                     let visible_height = frame_size[0] / output_aspect;
                     let crop_y = (frame_size[1] - visible_height) / 2.0;
                     [0.0, crop_y, frame_size[0], frame_size[1] - crop_y]
@@ -810,31 +807,32 @@ impl ProjectUniforms {
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
                     opacity: scene.camera_only_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    rounding_mask: 15.0,
+                    _padding: [0.0; 2],
                 }
             });
 
-        // Calculate split view uniforms
-        let (split_view_camera, split_view_display) = if scene.is_split_view() || scene.is_transitioning_split_view() {
-            // Get split view settings from current or upcoming scene segment
-            // During transitions, we need to look for the segment we're transitioning into
-            let split_settings = project.timeline
+        let (split_view_camera, split_view_display) = if scene.is_split_view()
+            || scene.is_transitioning_split_view()
+        {
+            let split_settings = project
+                .timeline
                 .as_ref()
                 .and_then(|t| {
-                    // First try to find the current segment
-                    let current = t.scene_segments.iter()
+                    let current = t
+                        .scene_segments
+                        .iter()
                         .find(|s| frame_time as f64 >= s.start && (frame_time as f64) < s.end)
                         .and_then(|s| s.split_view_settings.as_ref());
-                    
-                    // If not in a segment, look for the next segment we're transitioning into
-                    // This handles the transition period before the segment starts
+
                     if current.is_none() && scene.is_transitioning_split_view() {
-                        t.scene_segments.iter()
+                        t.scene_segments
+                            .iter()
                             .find(|s| {
-                                // Check if this is a split view segment we're transitioning into
-                                matches!(s.mode, cap_project::SceneMode::SplitView) && 
-                                s.start > frame_time as f64 && 
-                                (s.start - frame_time as f64) < scene::SCENE_TRANSITION_DURATION
+                                matches!(s.mode, cap_project::SceneMode::SplitView)
+                                    && s.start > frame_time as f64
+                                    && (s.start - frame_time as f64)
+                                        < scene::SCENE_TRANSITION_DURATION
                             })
                             .and_then(|s| s.split_view_settings.as_ref())
                     } else {
@@ -843,76 +841,94 @@ impl ProjectUniforms {
                 })
                 .cloned()
                 .unwrap_or_else(SplitViewSettings::default);
-            
+
             let output_size_f32 = [output_size.0 as f32, output_size.1 as f32];
-            let half_width = output_size_f32[0] / 2.0;
-            
-            // Determine which side camera and screen are on
+
+            let (split_width, split_height, split_x_offset, split_y_offset) =
+                if split_settings.fullscreen {
+                    (output_size_f32[0], output_size_f32[1], 0.0, 0.0)
+                } else {
+                    let display_offset = Self::display_offset(&options, project, resolution_base);
+                    let display_size = Self::display_size(&options, project, resolution_base);
+
+                    let display_width = display_size.coord.x as f32;
+                    let display_height = display_size.coord.y as f32;
+                    let display_x = display_offset.coord.x as f32;
+                    let display_y = display_offset.coord.y as f32;
+
+                    (display_width, display_height, display_x, display_y)
+                };
+
+            let half_width = split_width / 2.0;
+
             let (camera_x_offset, screen_x_offset) = match split_settings.camera_side {
-                SplitViewSide::Left => (0.0, half_width),
-                SplitViewSide::Right => (half_width, 0.0),
+                SplitViewSide::Left => (split_x_offset, split_x_offset + half_width),
+                SplitViewSide::Right => (split_x_offset + half_width, split_x_offset),
             };
 
-            // Display uniforms for screen
             let split_display = {
                 let screen_size = options.screen_size;
                 let crop = Self::get_crop(&options, project);
                 let frame_size = [screen_size.x as f32, screen_size.y as f32];
-                
-                // Calculate crop bounds to fill the half while maintaining aspect ratio
+
                 let crop_size = [crop.size.x as f32, crop.size.y as f32];
                 let source_aspect = crop_size[0] / crop_size[1];
-                let target_aspect = half_width / output_size_f32[1];
-                
-                // Apply position adjustment (0.0 = full crop from one side, 1.0 = full crop from other side)
+                let target_aspect = half_width / split_height;
+
                 let position_factor = split_settings.screen_position.x as f32;
                 let zoom = split_settings.screen_zoom as f32;
-                
-                // Apply zoom by adjusting the visible area
+
                 let zoomed_crop_size = [crop_size[0] / zoom, crop_size[1] / zoom];
-                
-                // We want to fill the entire half, so we crop the source
+
                 let (crop_x, crop_y, crop_width, crop_height) = if source_aspect > target_aspect {
-                    // Source is wider - crop left and right
                     let visible_width = zoomed_crop_size[1] * target_aspect;
                     let max_crop_offset = crop_size[0] - visible_width;
                     let crop_offset = max_crop_offset * position_factor;
-                    
-                    // Center the zoomed area
+
                     let zoom_offset_x = (crop_size[0] - zoomed_crop_size[0]) * position_factor;
-                    let zoom_offset_y = (crop_size[1] - zoomed_crop_size[1]) * split_settings.screen_position.y as f32;
-                    
+                    let zoom_offset_y = (crop_size[1] - zoomed_crop_size[1])
+                        * split_settings.screen_position.y as f32;
+
                     (
                         crop.position.x as f32 + crop_offset + zoom_offset_x,
                         crop.position.y as f32 + zoom_offset_y,
                         visible_width,
-                        zoomed_crop_size[1]
+                        zoomed_crop_size[1],
                     )
                 } else {
-                    // Source is taller - crop top and bottom
                     let visible_height = zoomed_crop_size[0] / target_aspect;
                     let max_crop_offset = crop_size[1] - visible_height;
                     let crop_offset = max_crop_offset * (split_settings.screen_position.y as f32);
-                    
-                    // Center the zoomed area
+
                     let zoom_offset_x = (crop_size[0] - zoomed_crop_size[0]) * position_factor;
-                    let zoom_offset_y = (crop_size[1] - zoomed_crop_size[1]) * split_settings.screen_position.y as f32;
-                    
+                    let zoom_offset_y = (crop_size[1] - zoomed_crop_size[1])
+                        * split_settings.screen_position.y as f32;
+
                     (
                         crop.position.x as f32 + zoom_offset_x,
                         crop.position.y as f32 + crop_offset + zoom_offset_y,
                         zoomed_crop_size[0],
-                        visible_height
+                        visible_height,
                     )
                 };
-                
+
                 Some(CompositeVideoFrameUniforms {
                     output_size: output_size_f32,
                     frame_size,
                     crop_bounds: [crop_x, crop_y, crop_x + crop_width, crop_y + crop_height],
-                    target_bounds: [screen_x_offset, 0.0, screen_x_offset + half_width, output_size_f32[1]],
-                    target_size: [half_width, output_size_f32[1]],
-                    rounding_px: 0.0,
+                    target_bounds: [
+                        screen_x_offset,
+                        split_y_offset,
+                        screen_x_offset + half_width,
+                        split_y_offset + split_height,
+                    ],
+                    target_size: [half_width, split_height],
+                    rounding_px: if split_settings.fullscreen {
+                        0.0
+                    } else {
+                        let min_axis = split_width.min(split_height);
+                        (project.background.rounding / 100.0 * 0.5 * min_axis as f64) as f32
+                    },
                     mirror_x: 0.0,
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
@@ -922,62 +938,76 @@ impl ProjectUniforms {
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
                     opacity: (scene.split_view_transition_opacity() * scene.screen_opacity) as f32,
-                    _padding: [0.0; 3],
+                    rounding_mask: if split_settings.fullscreen {
+                        0.0
+                    } else {
+                        match split_settings.camera_side {
+                            SplitViewSide::Left => 6.0,
+                            SplitViewSide::Right => 5.0,
+                        }
+                    },
+                    _padding: [0.0; 2],
                 })
             };
 
-            // Camera uniforms
             let split_camera = options.camera_size.map(|camera_size| {
                 let frame_size = [camera_size.x as f32, camera_size.y as f32];
                 let source_aspect = frame_size[0] / frame_size[1];
-                let target_aspect = half_width / output_size_f32[1];
-                
-                // Apply position adjustment for camera
+                let target_aspect = half_width / split_height;
+
                 let cam_pos_x = split_settings.camera_position.x as f32;
                 let cam_pos_y = split_settings.camera_position.y as f32;
                 let cam_zoom = split_settings.camera_zoom as f32;
-                
-                // Apply zoom by adjusting the visible area
+
                 let zoomed_frame_size = [frame_size[0] / cam_zoom, frame_size[1] / cam_zoom];
-                
-                // Calculate crop bounds to fill the half while maintaining aspect ratio
+
                 let crop_bounds = if source_aspect > target_aspect {
-                    // Camera is wider - crop left and right to fit
                     let visible_width = zoomed_frame_size[1] * target_aspect;
                     let max_crop_offset = frame_size[0] - visible_width;
                     let crop_x = max_crop_offset * cam_pos_x;
-                    
-                    // Center the zoomed area
+
                     let zoom_offset_x = (frame_size[0] - zoomed_frame_size[0]) * cam_pos_x;
                     let zoom_offset_y = (frame_size[1] - zoomed_frame_size[1]) * cam_pos_y;
-                    
-                    [crop_x + zoom_offset_x, 
-                     zoom_offset_y, 
-                     crop_x + zoom_offset_x + visible_width, 
-                     zoom_offset_y + zoomed_frame_size[1]]
+
+                    [
+                        crop_x + zoom_offset_x,
+                        zoom_offset_y,
+                        crop_x + zoom_offset_x + visible_width,
+                        zoom_offset_y + zoomed_frame_size[1],
+                    ]
                 } else {
-                    // Camera is taller - crop top and bottom to fit
                     let visible_height = zoomed_frame_size[0] / target_aspect;
                     let max_crop_offset = frame_size[1] - visible_height;
                     let crop_y = max_crop_offset * cam_pos_y;
-                    
-                    // Center the zoomed area
+
                     let zoom_offset_x = (frame_size[0] - zoomed_frame_size[0]) * cam_pos_x;
                     let zoom_offset_y = (frame_size[1] - zoomed_frame_size[1]) * cam_pos_y;
-                    
-                    [zoom_offset_x, 
-                     crop_y + zoom_offset_y, 
-                     zoom_offset_x + zoomed_frame_size[0], 
-                     crop_y + zoom_offset_y + visible_height]
+
+                    [
+                        zoom_offset_x,
+                        crop_y + zoom_offset_y,
+                        zoom_offset_x + zoomed_frame_size[0],
+                        crop_y + zoom_offset_y + visible_height,
+                    ]
                 };
-                
+
                 CompositeVideoFrameUniforms {
                     output_size: output_size_f32,
                     frame_size,
                     crop_bounds,
-                    target_bounds: [camera_x_offset, 0.0, camera_x_offset + half_width, output_size_f32[1]],
-                    target_size: [half_width, output_size_f32[1]],
-                    rounding_px: 0.0,
+                    target_bounds: [
+                        camera_x_offset,
+                        split_y_offset,
+                        camera_x_offset + half_width,
+                        split_y_offset + split_height,
+                    ],
+                    target_size: [half_width, split_height],
+                    rounding_px: if split_settings.fullscreen {
+                        0.0
+                    } else {
+                        let min_axis = split_width.min(split_height);
+                        (project.background.rounding / 100.0 * 0.5 * min_axis as f64) as f32
+                    },
                     mirror_x: if project.camera.mirror { 1.0 } else { 0.0 },
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
@@ -987,7 +1017,15 @@ impl ProjectUniforms {
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
                     opacity: (scene.split_view_transition_opacity() * scene.camera_opacity) as f32,
-                    _padding: [0.0; 3],
+                    rounding_mask: if split_settings.fullscreen {
+                        0.0
+                    } else {
+                        match split_settings.camera_side {
+                            SplitViewSide::Left => 5.0,
+                            SplitViewSide::Right => 10.0,
+                        }
+                    },
+                    _padding: [0.0; 2],
                 }
             });
 
@@ -1154,7 +1192,6 @@ impl RendererLayers {
             })(),
         );
 
-        // Prepare split view layers
         self.split_view_display.prepare(
             &constants.device,
             &constants.queue,
@@ -1204,12 +1241,27 @@ impl RendererLayers {
             };
         }
 
-        {
+        let split_view_fullscreen = uniforms
+            .split_view_display
+            .map(|u| u.target_bounds[0] < 1.0 && u.target_bounds[1] < 1.0)
+            .unwrap_or(false);
+
+        // Only skip background when fully in split view, not during transitions
+        let skip_background = uniforms.scene.is_split_view()
+            && !uniforms.scene.is_transitioning_split_view()
+            && split_view_fullscreen;
+
+        if !skip_background {
             let mut pass = render_pass!(
                 session.current_texture_view(),
                 wgpu::LoadOp::Clear(wgpu::Color::BLACK)
             );
             self.background.render(&mut pass);
+        } else {
+            let _pass = render_pass!(
+                session.current_texture_view(),
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+            );
         }
 
         if self.background_blur.blur_amount > 0.0 {
@@ -1220,23 +1272,25 @@ impl RendererLayers {
             session.swap_textures();
         }
 
-        if uniforms.scene.should_render_screen() {
+        // During split view transitions, render screen content for cross-fade effect
+        let should_render_regular_screen = uniforms.scene.should_render_screen() 
+            && (!split_view_fullscreen || uniforms.scene.is_transitioning_split_view());
+            
+        if should_render_regular_screen {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
         }
 
-        if uniforms.scene.should_render_screen() {
+        if should_render_regular_screen {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.cursor.render(&mut pass);
         }
 
-        // Render camera-only layer when transitioning with CameraOnly mode
         if uniforms.scene.is_transitioning_camera_only() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.camera_only.render(&mut pass);
         }
 
-        // Also render regular camera overlay during transitions when its opacity > 0
         if uniforms.scene.should_render_camera()
             && uniforms.scene.regular_camera_transition_opacity() > 0.01
         {
@@ -1244,7 +1298,6 @@ impl RendererLayers {
             self.camera.render(&mut pass);
         }
 
-        // Render split view when active or transitioning
         if uniforms.scene.is_split_view() || uniforms.scene.is_transitioning_split_view() {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.split_view_display.render(&mut pass);

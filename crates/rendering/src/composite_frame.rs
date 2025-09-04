@@ -26,7 +26,8 @@ pub struct CompositeVideoFrameUniforms {
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
     pub opacity: f32,
-    pub _padding: [f32; 3],
+    pub rounding_mask: f32,  // Bitmask for which corners to round: 0x1=TL, 0x2=TR, 0x4=BL, 0x8=BR
+    pub _padding: [f32; 2],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -47,6 +48,7 @@ impl Default for CompositeVideoFrameUniforms {
             shadow_opacity: Default::default(),
             shadow_blur: Default::default(),
             opacity: 1.0,
+            rounding_mask: 15.0,  // Default: all corners rounded (0xF = 0b1111)
             _padding: Default::default(),
         }
     }
