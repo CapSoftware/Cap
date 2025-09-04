@@ -1,5 +1,7 @@
+import { Clapperboard, Zap } from "lucide-react";
 import type { Metadata } from "next";
 import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
+import type { SeoPageContent } from "@/components/seo/types";
 
 export const metadata: Metadata = {
 	title: "Employee Onboarding Platform: Streamline New-Hire Training with Cap",
@@ -34,7 +36,7 @@ export const metadata: Metadata = {
 
 import Script from "next/script";
 
-const content = {
+const content: SeoPageContent = {
 	title: "Employee Onboarding Platform: Streamline New-Hire Training with Cap",
 	description:
 		"Looking for a powerful employee onboarding platform? Discover how Cap's open-source screen recorder and asynchronous features simplify new-hire training.",
@@ -82,11 +84,19 @@ const content = {
 			"Cap adapts to your organization's onboarding requirements with flexible recording options",
 		modes: [
 			{
+				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 				title: "Instant Mode for Quick Walkthroughs",
 				description:
 					"Perfect for brief system introductions and quick process demonstrations. Record and share in seconds with a simple link that new hires can instantly access with built-in commenting for questions.",
 			},
 			{
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="mb-4 size-8"
+						strokeWidth={1.5}
+					/>
+				),
 				title: "Studio Mode for Comprehensive Training",
 				description:
 					"Ideal for detailed company overviews and complex system training. Create professional-quality onboarding videos with separate screen and webcam capture for engaging, thorough new-hire education.",
@@ -162,45 +172,45 @@ const content = {
 		rows: [
 			[
 				"Upfront Cost",
-				"✅ Free tier available",
-				"❌ High monthly subscriptions",
-				"⚠️ Mixed (free to premium)",
+				{ text: "Free tier available", status: "positive" },
+				{ text: "High monthly subscriptions", status: "negative" },
+				{ text: "Mixed (free to premium)", status: "warning" },
 			],
 			[
 				"Data Ownership",
-				"✅ Complete with S3 integration",
-				"⚠️ Vendor controlled",
-				"❌ Often stored on third-party servers",
+				{ text: "Complete with S3 integration", status: "positive" },
+				{ text: "Vendor controlled", status: "warning" },
+				{ text: "Often stored on third-party servers", status: "negative" },
 			],
 			[
 				"Onboarding Feedback",
-				"✅ Built-in threaded comments",
-				"✅ Sophisticated systems",
-				"❌ Typically requires separate tools",
+				{ text: "Built-in threaded comments", status: "positive" },
+				{ text: "Sophisticated systems", status: "positive" },
+				{ text: "Typically requires separate tools", status: "negative" },
 			],
 			[
 				"Video Quality",
-				"✅ High-resolution (up to 4K)",
-				"❌ Limited or no video capability",
-				"⚠️ Variable quality",
+				{ text: "High-resolution (up to 4K)", status: "positive" },
+				{ text: "Limited or no video capability", status: "negative" },
+				{ text: "Variable quality", status: "warning" },
 			],
 			[
 				"Implementation Time",
-				"✅ Minutes to set up",
-				"❌ Weeks of configuration",
-				"✅ Quick setup",
+				{ text: "Minutes to set up", status: "positive" },
+				{ text: "Weeks of configuration", status: "negative" },
+				{ text: "Quick setup", status: "positive" },
 			],
 			[
 				"Privacy & Security",
-				"✅ Open-source transparency",
-				"⚠️ Varies by provider",
-				"❌ Often limited",
+				{ text: "Open-source transparency", status: "positive" },
+				{ text: "Varies by provider", status: "warning" },
+				{ text: "Often limited", status: "negative" },
 			],
 			[
 				"Specialized HR Features",
-				"⚠️ Focused on visual training",
-				"✅ Comprehensive HR tools",
-				"❌ None",
+				{ text: "Focused on visual training", status: "warning" },
+				{ text: "Comprehensive HR tools", status: "positive" },
+				{ text: "None", status: "negative" },
 			],
 		],
 	},

@@ -1,3 +1,9 @@
+export type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
+export interface ComparisonCell {
+	text: string;
+	status?: ComparisonStatus;
+}
+
 export interface SeoPageContent {
 	title: string;
 	description: string;
@@ -36,7 +42,7 @@ export interface SeoPageContent {
 	comparisonTable?: {
 		title: string;
 		headers: string[];
-		rows: string[][];
+		rows: (string | ComparisonCell)[][];
 	};
 	testimonials?: {
 		title: string;
@@ -53,6 +59,7 @@ export interface SeoPageContent {
 		title: string;
 		description: string;
 		modes: {
+			icon: JSX.Element;
 			title: string;
 			description: string;
 		}[];

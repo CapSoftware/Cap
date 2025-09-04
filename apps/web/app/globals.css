@@ -52,6 +52,10 @@ html {
 	background-color: #f2f2f2;
 }
 
+.left-perspective {
+	transform: scale(1.2) rotateX(47deg) rotateY(31deg) rotate(324deg);
+}
+
 ::-webkit-scrollbar {
 	width: 4px;
 	height: 4px;
@@ -295,8 +299,7 @@ button {
 	@apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
 }
 
-a,
-button {
+a {
 	@apply transition-all;
 }
 

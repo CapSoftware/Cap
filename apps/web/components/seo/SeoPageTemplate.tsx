@@ -1,8 +1,25 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import {
+	faCheck,
+	faExclamation,
+	faInfo,
+	faMinus,
+	faPlus,
+	faTimes,
+} from "@fortawesome/free-solid-svg-icons";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import MuxPlayer from "@mux/mux-player-react";
-import type { SeoPageContent } from "@/components/seo/types";
+import clsx from "clsx";
+import { AnimatePresence, motion } from "motion/react";
+import Image from "next/image";
+import { useState } from "react";
+import { ComparisonSlider } from "@/components/seo/ComparisonSlider";
+import type { ComparisonCell, SeoPageContent } from "@/components/seo/types";
+
+const MotionButton = motion.create(Button);
+const MotionImage = motion.create(Image);
 
 const renderHTML = (content: string) => {
 	const styledContent = content.replace(
@@ -13,66 +30,192 @@ const renderHTML = (content: string) => {
 	return <span dangerouslySetInnerHTML={{ __html: styledContent }} />;
 };
 
+const renderComparisonCell = (cell: string | ComparisonCell) => {
+	if (typeof cell === "string") {
+		return renderHTML(cell);
+	}
+
+	const icons = {
+		positive: (
+			<div className="flex flex-shrink-0 justify-center items-center bg-blue-500 rounded-full size-5 min-w-5 min-h-5">
+				<FontAwesomeIcon icon={faCheck} className="text-[11px] text-white" />
+			</div>
+		),
+		negative: (
+			<div className="flex flex-shrink-0 justify-center items-center bg-red-500 rounded-full size-5 min-w-5 min-h-5">
+				<FontAwesomeIcon icon={faTimes} className="text-[11px] text-white" />
+			</div>
+		),
+		warning: (
+			<div className="flex flex-shrink-0 justify-center items-center bg-yellow-500 rounded-full size-5 min-w-5 min-h-5">
+				<FontAwesomeIcon
+					icon={faExclamation}
+					className="text-[11px] text-white"
+				/>
+			</div>
+		),
+		neutral: (
+			<div className="flex flex-shrink-0 justify-center items-center bg-gray-500 rounded-full size-5 min-w-5 min-h-5">
+				<FontAwesomeIcon icon={faInfo} className="text-[11px] text-white" />
+			</div>
+		),
+	};
+
+	const icon = cell.status ? icons[cell.status] : null;
+
+	return (
+		<div className="flex gap-4 items-center md:gap-3">
+			{icon && <span className="inline-flex items-center">{icon}</span>}
+			<span>{cell.text}</span>
+		</div>
+	);
+};
+
 export const SeoPageTemplate = ({
 	content,
+	showLogosInHeader,
+	showLoomComparisonSlider,
 	showVideo = true,
 }: {
 	content: SeoPageContent;
 	showVideo?: boolean;
+	showLogosInHeader?: boolean;
+	showLoomComparisonSlider?: boolean;
 }) => {
+	const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
+
+	const toggleFaq = (index: number) => {
+		setOpenFaqIndex(openFaqIndex === index ? null : index);
+	};
+
 	return (
 		<>
-			<div
-				className="relative overflow-hidden mt-[60px]"
-				style={{ height: "calc(100vh - 60px)" }}
-			>
-				<div className="flex relative z-10 flex-col justify-center px-5 w-full h-full">
+			{showLogosInHeader && (
+				<>
+					<MotionImage
+						alt="Cap Logo"
+						initial={{ opacity: 0, left: "-40vw" }}
+						animate={{ opacity: 0.5, left: "-17vw" }}
+						transition={{ duration: 1 }}
+						width={500}
+						height={500}
+						className="absolute top-[200px] hidden md:flex md:size-[300px] lg:size-[400px] xl:size-[500px]"
+						style={{
+							// Fade LEFT edge -> opaque towards center
+							WebkitMaskImage:
+								"linear-gradient(to right, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
+							maskImage:
+								"linear-gradient(to right, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
+							WebkitMaskRepeat: "no-repeat",
+							maskRepeat: "no-repeat",
+							WebkitMaskSize: "100% 100%",
+							maskSize: "100% 100%",
+						}}
+						src="/logos/logo-solo.svg"
+					/>
+
+					<MotionImage
+						alt="Loom Logo"
+						initial={{ opacity: 0, right: "-40vw" }}
+						animate={{ opacity: 0.5, right: "-17vw" }}
+						transition={{ duration: 1 }}
+						width={500}
+						height={500}
+						className="absolute hidden md:flex top-[200px] md:size-[300px] lg:size-[400px] xl:size-[500px]"
+						style={{
+							// Fade RIGHT edge -> opaque towards center
+							WebkitMaskImage:
+								"linear-gradient(to left, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
+							maskImage:
+								"linear-gradient(to left, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
+							WebkitMaskRepeat: "no-repeat",
+							maskRepeat: "no-repeat",
+							WebkitMaskSize: "100% 100%",
+							maskSize: "100% 100%",
+						}}
+						src="/logos/loom.svg"
+					/>
+				</>
+			)}
+
+			<div className="relative mt-12">
+				<div className="flex relative z-10 flex-col md:mt-[20vh] mt-[12vh] px-5 w-full h-full">
 					<div className="mx-auto text-center wrapper wrapper-sm">
-						<h1 className="fade-in-down text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6">
+						<motion.h1
+							initial={{ opacity: 0, y: 20 }}
+							animate={{ opacity: 1, y: 0 }}
+							transition={{ duration: 0.3 }}
+							className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6"
+						>
 							{content.title}
-						</h1>
-						<p className="mx-auto mb-10 max-w-2xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
+						</motion.h1>
+						<motion.p
+							initial={{ opacity: 0, y: 20 }}
+							animate={{ opacity: 1, y: 0 }}
+							transition={{ duration: 0.3, delay: 0.2 }}
+							className="mx-auto mb-10 max-w-3xl text-md sm:text-xl text-gray-10"
+						>
 							{content.description}
-						</p>
+						</motion.p>
 					</div>
-					<div className="flex flex-col justify-center items-center space-y-2 fade-in-up animate-delay-2 sm:flex-row sm:space-y-0 sm:space-x-4">
-						<Button
+					<motion.div
+						initial={{ opacity: 0, y: 20 }}
+						animate={{
+							opacity: 1,
+							y: 0,
+							transition: {
+								duration: 0.3,
+								delay: 0.3,
+							},
+						}}
+					>
+						<MotionButton
 							variant="blue"
 							href="/download"
 							size="lg"
-							className="relative z-[20] w-full font-medium text-md sm:w-auto"
+							className="relative z-[20] w-full md:max-w-fit mx-auto font-medium text-md sm:w-auto"
 						>
 							{content.cta.buttonText}
-						</Button>
-					</div>
+						</MotionButton>
+					</motion.div>
 				</div>
 			</div>
 
+			{showLoomComparisonSlider && (
+				<ComparisonSlider
+					leftImage="/app/capdashboard.webp"
+					rightImage="/app/loomdashboard.webp"
+					leftAlt="Cap Dashboard"
+					rightAlt="Loom Dashboard"
+					leftLabel="Cap"
+					rightLabel="Loom"
+				/>
+			)}
+
 			{/* Main Content */}
-			<div className="relative z-10 py-24 wrapper">
+			<div className="relative z-10 space-y-[120px] md:space-y-[240px] mt-32 mb-[260px] wrapper">
 				{/* Features Section */}
 				<div className="mb-28">
 					<div className="text-center max-w-[800px] mx-auto mb-16">
-						<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 							{content.featuresTitle}
-							<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 						</h2>
 						<p className="text-xl leading-relaxed text-gray-600">
 							{renderHTML(content.featuresDescription)}
 						</p>
 					</div>
-					<div className="grid grid-cols-1 gap-8 px-4 md:grid-cols-3">
+					<div className="grid grid-cols-1 w-full max-w-[1250px] mx-auto gap-8 px-4 md:grid-cols-3">
 						{content.features.map((feature, index) => (
 							<div
-								key={index}
-								className="p-8 rounded-2xl border border-gray-100 shadow-md transition-all duration-300 transform bg-gray-1 hover:shadow-xl hover:border-blue-100 hover:-translate-y-1"
+								key={index.toString()}
+								className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform border-gray-4 bg-gray-1 hover:shadow-xl hover:-translate-y-1"
 							>
-								<div className="flex justify-center items-center mb-4 w-12 h-12 bg-blue-50 rounded-full">
-									<span className="text-xl font-medium text-blue-500">
+								<div className="flex justify-center items-center mb-4 rounded-full bg-gray-4 size-8">
+									<span className="text-sm font-medium text-gray-12">
 										{index + 1}
 									</span>
 								</div>
-								<h3 className="mb-4 text-xl font-semibold text-gray-800">
+								<h3 className="mb-4 text-xl font-semibold text-gray-12">
 									{feature.title}
 								</h3>
 								<p className="leading-relaxed text-gray-600">
@@ -85,24 +228,27 @@ export const SeoPageTemplate = ({
 
 				{/* Video Demonstration */}
 				{showVideo && (
-					<div className="mb-28">
+					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-10">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium text-gray-800 md:text-4xl">
 								See Cap In Action
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
-							<p className="text-xl leading-relaxed text-gray-600">
+							<p className="text-xl leading-relaxed text-gray-10">
 								Watch how Cap makes screen recording simple, powerful, and
 								accessible.
 							</p>
 						</div>
 						<div className="mx-auto max-w-2xl">
-							<div className="overflow-hidden rounded-xl shadow-lg">
+							<div className="overflow-hidden rounded-xl shadow-md">
 								<MuxPlayer
 									playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
+									playerInitTime={0}
 									metadataVideoTitle="Cap Demo"
 									accentColor="#5C9FFF"
-									style={{ aspectRatio: "16/9", width: "100%" }}
+									style={{
+										aspectRatio: "16/9",
+										width: "100%",
+									}}
 								/>
 							</div>
 						</div>
@@ -111,14 +257,13 @@ export const SeoPageTemplate = ({
 
 				{/* Comparison Section */}
 				{content.comparison && content.comparisonTitle && (
-					<div className="mb-28">
-						<div className="text-center max-w-[800px] mx-auto mb-16">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-8">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium text-gray-800 md:text-4xl">
 								{content.comparisonTitle}
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
 							{content.comparisonDescription && (
-								<p className="text-xl leading-relaxed text-gray-600">
+								<p className="text-xl leading-relaxed text-gray-10">
 									{renderHTML(content.comparisonDescription)}
 								</p>
 							)}
@@ -126,11 +271,12 @@ export const SeoPageTemplate = ({
 						<div className="grid grid-cols-1 gap-8 md:grid-cols-2">
 							{content.comparison.map((item, index) => (
 								<div
-									key={index}
-									className="p-8 rounded-2xl border border-gray-100 shadow-md transition-all duration-300 transform bg-gray-1 hover:shadow-xl hover:border-blue-100 hover:-translate-y-1"
+									key={index.toString()}
+									className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform border-gray-4 bg-gray-1 hover:shadow-xl hover:-translate-y-1"
 								>
-									<div className="flex justify-center items-center mb-4 w-12 h-12 bg-indigo-50 rounded-full">
-										<span className="text-xl font-medium text-indigo-500">
+									<div className="flex justify-center items-center mb-4 rounded-full bg-gray-4 size-8">
+										{" "}
+										<span className="text-sm font-medium text-gray-12">
 											{index + 1}
 										</span>
 									</div>
@@ -148,28 +294,23 @@ export const SeoPageTemplate = ({
 
 				{/* Recording Modes Section */}
 				{content.recordingModes && (
-					<div className="mb-28">
-						<div className="text-center max-w-[800px] mx-auto mb-16">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-12">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 								{content.recordingModes.title}
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
-							<p className="text-xl leading-relaxed text-gray-600">
+							<p className="text-lg leading-relaxed w-full max-w-[600px] mx-auto text-gray-10">
 								{renderHTML(content.recordingModes.description)}
 							</p>
 						</div>
 						<div className="grid grid-cols-1 gap-8 mx-auto max-w-4xl md:grid-cols-2">
 							{content.recordingModes.modes.map((mode, index) => (
 								<div
-									key={index}
-									className="p-8 rounded-2xl border shadow-md transition-all duration-300 transform bg-blue-50/50 hover:shadow-xl border-blue-100/20 hover:-translate-y-1"
+									key={index.toString()}
+									className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform hover:shadow-xl bg-gray-1 hover:-translate-y-1"
 								>
-									<div className="flex justify-center items-center mb-4 w-12 h-12 bg-blue-500 rounded-full">
-										<span className="text-xl font-medium text-white">
-											{index + 1}
-										</span>
-									</div>
-									<h3 className="mb-4 text-xl font-semibold text-blue-700">
+									{mode.icon}
+									<h3 className="mb-4 text-xl font-semibold text-gray-12">
 										{mode.title}
 									</h3>
 									<p className="leading-relaxed text-gray-600">
@@ -183,21 +324,20 @@ export const SeoPageTemplate = ({
 
 				{/* Comparison Table Section */}
 				{content.comparisonTable && (
-					<div className="mb-28">
-						<div className="text-center max-w-[800px] mx-auto mb-16">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-12">
+							<h2 className="inline-block relative text-3xl font-medium text-gray-12 md:text-4xl">
 								{content.comparisonTable.title}
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
 						</div>
 						<div className="overflow-x-auto">
-							<table className="overflow-hidden mx-auto w-full max-w-4xl rounded-2xl shadow-md bg-gray-1">
-								<thead className="bg-blue-50">
+							<table className="overflow-hidden mx-auto w-full max-w-4xl rounded-2xl bg-gray-1">
+								<thead className="bg-gray-4">
 									<tr>
 										{content.comparisonTable.headers.map((header, index) => (
 											<th
-												key={index}
-												className="px-6 py-4 font-semibold text-left text-gray-700 border-b border-gray-200"
+												key={index.toString()}
+												className="px-6 py-4 text-lg font-semibold text-left border-b border-gray-5 text-gray-12"
 											>
 												{header}
 											</th>
@@ -207,17 +347,20 @@ export const SeoPageTemplate = ({
 								<tbody>
 									{content.comparisonTable.rows.map((row, rowIndex) => (
 										<tr
-											key={rowIndex}
-											className={
-												rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"
-											}
+											key={rowIndex.toString()}
+											className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-2"}
 										>
 											{row.map((cell, cellIndex) => (
 												<td
-													key={cellIndex}
-													className="px-6 py-4 border-b border-gray-200"
+													key={cellIndex.toString()}
+													className={`px-6 py-4 text-[15px] text-gray-10 ${
+														rowIndex ===
+														content.comparisonTable!.rows.length - 1
+															? ""
+															: "border-b border-gray-5"
+													}`}
 												>
-													{cell}
+													{renderComparisonCell(cell)}
 												</td>
 											))}
 										</tr>
@@ -229,25 +372,25 @@ export const SeoPageTemplate = ({
 				)}
 
 				{/* Use Cases Section */}
-				<div className="mb-28">
-					<div className="text-center max-w-[800px] mx-auto mb-16">
-						<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+				<div>
+					<div className="text-center max-w-[800px] mx-auto mb-12">
+						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 							{content.useCasesTitle}
-							<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 						</h2>
-						<p className="text-xl leading-relaxed text-gray-600">
+						<p className="text-xl leading-relaxed text-gray-10">
 							{renderHTML(content.useCasesDescription)}
 						</p>
 					</div>
-					<div className="grid grid-cols-1 gap-8 px-4 md:grid-cols-2">
+					<div className="grid w-full max-w-[1000px] mx-auto grid-cols-1 gap-8 px-4 md:grid-cols-2">
 						{content.useCases.map((useCase, index) => (
 							<div
-								key={index}
-								className="p-8 rounded-2xl border border-gray-100 shadow-md transition-all duration-300 transform bg-gray-1 hover:shadow-xl hover:border-blue-100 hover:-translate-y-1"
+								key={index.toString()}
+								className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform border-gray-4 bg-gray-1 hover:shadow-xl hover:-translate-y-1"
 							>
-								<div className="flex justify-center items-center mb-4 w-12 h-12 bg-blue-50 rounded-full">
-									<span className="text-xl font-medium text-blue-500">
-										{String.fromCharCode(65 + index)}
+								<div className="flex justify-center items-center mb-4 rounded-full bg-gray-4 size-8">
+									{" "}
+									<span className="text-sm font-medium text-gray-12">
+										{index + 1}
 									</span>
 								</div>
 								<h3 className="mb-4 text-xl font-semibold text-gray-800">
@@ -263,17 +406,16 @@ export const SeoPageTemplate = ({
 
 				{/* Testimonials Section */}
 				{content.testimonials && (
-					<div className="mb-28">
-						<div className="text-center max-w-[800px] mx-auto mb-16">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-8">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 								{content.testimonials.title}
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
 						</div>
 						<div className="grid grid-cols-1 gap-8 md:grid-cols-3">
 							{content.testimonials.items.map((testimonial, index) => (
 								<div
-									key={index}
+									key={index.toString()}
 									className="p-8 rounded-2xl border border-gray-100 shadow-md transition-all duration-300 bg-gray-1 hover:shadow-xl"
 								>
 									<div className="mb-4 text-blue-500">
@@ -282,6 +424,7 @@ export const SeoPageTemplate = ({
 											fill="currentColor"
 											viewBox="0 0 24 24"
 										>
+											<title>Quote</title>
 											<path d="M3.691 6.292C5.094 4.771 7.217 4 10.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569zm16 0C21.094 4.771 23.217 4 26.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569z"></path>
 										</svg>
 									</div>
@@ -299,21 +442,23 @@ export const SeoPageTemplate = ({
 
 				{/* Migration Guide Section */}
 				{content.migrationGuide && (
-					<div className="mb-28">
-						<div className="text-center max-w-[800px] mx-auto mb-16">
-							<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-8">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 								{content.migrationGuide.title}
-								<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 							</h2>
 						</div>
-						<div className="p-8 mx-auto max-w-3xl rounded-2xl shadow-md bg-gray-1">
+						<div className="px-8 mx-auto max-w-3xl rounded-2xl shadow-sm bg-gray-1">
 							<ol className="list-none">
 								{content.migrationGuide.steps.map((step, index) => (
-									<li key={index} className="flex items-start mb-6">
-										<div className="flex flex-shrink-0 justify-center items-center mt-1 mr-4 w-8 h-8 text-white bg-blue-500 rounded-full">
+									<li
+										key={index.toString()}
+										className="flex items-start py-6 [&:not(:last-child)]:border-b border-gray-4"
+									>
+										<div className="flex justify-center items-center mr-4 rounded-full bg-gray-4 size-8">
 											{index + 1}
 										</div>
-										<p className="mt-1 text-gray-700">{step}</p>
+										<p className="mt-1 text-gray-12">{step}</p>
 									</li>
 								))}
 							</ol>
@@ -322,27 +467,69 @@ export const SeoPageTemplate = ({
 				)}
 
 				{/* FAQ Section */}
-				<div className="mb-28">
-					<div className="text-center max-w-[800px] mx-auto mb-16">
-						<h2 className="inline-block relative mb-6 text-4xl font-medium text-gray-800">
+				<div>
+					<div className="text-center max-w-[800px] mx-auto mb-8">
+						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
 							{content.faqsTitle}
-							<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 						</h2>
 					</div>
 					<div className="mx-auto mb-10 max-w-3xl">
-						{content.faqs.map((faq, index) => (
-							<div
-								key={index}
-								className="p-6 my-6 rounded-xl border border-gray-100 shadow-sm transition-all duration-300 bg-gray-1 hover:shadow-md"
-							>
-								<h2 className="mb-3 text-xl font-semibold text-gray-800">
-									{faq.question}
-								</h2>
-								<div className="leading-relaxed text-gray-600">
-									{renderHTML(faq.answer)}
+						<div className="space-y-4">
+							{content.faqs.map((faq, index) => (
+								<div
+									key={index.toString()}
+									className={clsx(
+										"rounded-xl overflow-hidden border border-gray-5",
+										openFaqIndex === index
+											? "bg-blue-500 text-white"
+											: "bg-gray-1 hover:bg-gray-3 text-gray-12",
+										"transition-colors duration-200",
+									)}
+								>
+									<button
+										type="button"
+										className="flex justify-between items-center px-6 py-4 w-full text-left"
+										onClick={() => toggleFaq(index)}
+									>
+										<p
+											className={clsx(
+												"text-lg font-medium",
+												openFaqIndex === index ? "text-gray-1" : "text-gray-12",
+											)}
+										>
+											{faq.question}
+										</p>
+										{openFaqIndex === index ? (
+											<FontAwesomeIcon
+												icon={faMinus}
+												className="flex-shrink-0 w-5 h-5 text-gray-1"
+											/>
+										) : (
+											<FontAwesomeIcon
+												icon={faPlus}
+												className="flex-shrink-0 w-5 h-5"
+											/>
+										)}
+									</button>
+
+									<AnimatePresence>
+										{openFaqIndex === index && (
+											<motion.div
+												initial={{ height: 0, opacity: 0 }}
+												animate={{ height: "auto", opacity: 1 }}
+												exit={{ height: 0, opacity: 0 }}
+												transition={{ duration: 0.3 }}
+												className="overflow-hidden"
+											>
+												<div className="px-6 pb-4">
+													<p className="text-gray-3">{faq.answer}</p>
+												</div>
+											</motion.div>
+										)}
+									</AnimatePresence>
 								</div>
-							</div>
-						))}
+							))}
+						</div>
 					</div>
 				</div>
 
@@ -378,46 +565,6 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 			</div>
-
-			<style jsx global>{`
-        @keyframes fade-in-down {
-          0% {
-            opacity: 0;
-            transform: translateY(-10px);
-          }
-          100% {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        @keyframes fade-in-up {
-          0% {
-            opacity: 0;
-            transform: translateY(10px);
-          }
-          100% {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .fade-in-down {
-          animation: fade-in-down 0.8s ease-out forwards;
-        }
-
-        .fade-in-up {
-          animation: fade-in-up 0.8s ease-out forwards;
-        }
-
-        .animate-delay-1 {
-          animation-delay: 0.1s;
-        }
-
-        .animate-delay-2 {
-          animation-delay: 0.2s;
-        }
-      `}</style>
 		</>
 	);
 };
