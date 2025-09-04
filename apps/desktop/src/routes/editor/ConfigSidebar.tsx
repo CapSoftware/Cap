@@ -45,6 +45,7 @@ import {
 	type CameraShape,
 	commands,
 	type SceneSegment,
+	type SplitViewSettings,
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
@@ -53,6 +54,7 @@ import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
+import { SceneSegmentConfig } from "./SceneSegmentConfig";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
@@ -2284,11 +2286,20 @@ function ClipSegmentConfig(props: {
 	);
 }
 
-function SceneSegmentConfig(props: {
+// SceneSegmentConfig moved to separate file for better organization
+// The old implementation below is kept temporarily for reference
+function OldSceneSegmentConfig(props: {
 	segmentIndex: number;
 	segment: SceneSegment;
 }) {
 	const { setProject, setEditorState, projectActions } = useEditorContext();
+
+	// Initialize split view settings if not present
+	const splitViewSettings = (): SplitViewSettings => props.segment.splitViewSettings || {
+		cameraPosition: { x: 0.5, y: 0.5 },
+		screenPosition: { x: 0.5, y: 0.5 },
+		cameraSide: "right",
+	};
 
 	return (
 		<>
@@ -2312,8 +2323,7 @@ function SceneSegmentConfig(props: {
 				</EditorButton>
 			</div>
 			<Field name="Camera Layout" icon={<IconLucideLayout />}>
-				<KTabs
-					class="space-y-6"
+				<KRadioGroup
 					value={props.segment.mode || "default"}
 					onChange={(v) => {
 						setProject(
@@ -2321,71 +2331,97 @@ function SceneSegmentConfig(props: {
 							"sceneSegments",
 							props.segmentIndex,
 							"mode",
-							v as "default" | "cameraOnly" | "hideCamera",
+							v as "default" | "cameraOnly" | "hideCamera" | "splitView",
 						);
 					}}
+					class="flex flex-col gap-3"
 				>
-					<KTabs.List class="flex flex-col gap-3">
-						<div class="flex flex-row items-center rounded-[0.5rem] relative border">
-							<KTabs.Trigger
-								value="default"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
+					<div class="grid grid-cols-2 gap-2">
+						<KRadioGroup.Item value="default" class="relative">
+							<KRadioGroup.ItemInput class="peer" />
+							<KRadioGroup.ItemControl class="flex items-center justify-center px-3 py-2.5 w-full text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer hover:border-gray-4">
 								Default
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="cameraOnly"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
+							</KRadioGroup.ItemControl>
+						</KRadioGroup.Item>
+						<KRadioGroup.Item value="splitView" class="relative">
+							<KRadioGroup.ItemInput class="peer" />
+							<KRadioGroup.ItemControl class="flex items-center justify-center px-3 py-2.5 w-full text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer hover:border-gray-4">
+								Split View
+							</KRadioGroup.ItemControl>
+						</KRadioGroup.Item>
+						<KRadioGroup.Item value="cameraOnly" class="relative">
+							<KRadioGroup.ItemInput class="peer" />
+							<KRadioGroup.ItemControl class="flex items-center justify-center px-3 py-2.5 w-full text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer hover:border-gray-4">
 								Camera Only
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="hideCamera"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
+							</KRadioGroup.ItemControl>
+						</KRadioGroup.Item>
+						<KRadioGroup.Item value="hideCamera" class="relative">
+							<KRadioGroup.ItemInput class="peer" />
+							<KRadioGroup.ItemControl class="flex items-center justify-center px-3 py-2.5 w-full text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer hover:border-gray-4">
 								Hide Camera
-							</KTabs.Trigger>
-							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-								<div class="flex-1 bg-gray-3" />
-							</KTabs.Indicator>
-						</div>
+							</KRadioGroup.ItemControl>
+						</KRadioGroup.Item>
+					</div>
 
-						<div class="relative">
-							<div
-								class="absolute -top-3 w-px h-3 transition-all duration-200 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div
-								class="absolute -top-1 w-2 h-2 rounded-full transition-all duration-200 -translate-x-1/2 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
-								<div class="text-xs text-center text-gray-11">
-									{props.segment.mode === "cameraOnly"
-										? "Shows only the camera feed"
-										: props.segment.mode === "hideCamera"
-											? "Shows only the screen recording"
-											: "Shows both screen and camera"}
-								</div>
-							</div>
+					<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
+						<div class="text-xs text-center text-gray-11">
+							{props.segment.mode === "cameraOnly"
+								? "Shows only the camera feed"
+								: props.segment.mode === "hideCamera"
+									? "Shows only the screen recording"
+									: props.segment.mode === "splitView"
+										? `Shows screen on ${splitViewSettings().cameraSide === "left" ? "right" : "left"}, camera on ${splitViewSettings().cameraSide}`
+										: "Shows both screen and camera"}
 						</div>
-					</KTabs.List>
-				</KTabs>
+					</div>
+				</KRadioGroup>
 			</Field>
+			
+			<Show when={props.segment.mode === "splitView"}>
+				<Field name="Split View Settings" icon={<IconCapSettings />}>
+					<div class="space-y-4">
+						<Subfield name="Camera Side">
+							<KRadioGroup
+								value={splitViewSettings().cameraSide}
+								onChange={(value) => {
+									const currentSettings = splitViewSettings();
+									setProject(
+										"timeline",
+										"sceneSegments",
+										props.segmentIndex,
+										"splitViewSettings",
+										{ ...currentSettings, cameraSide: value as "left" | "right" },
+									);
+								}}
+								class="flex flex-row gap-2"
+							>
+								<KRadioGroup.Item value="left" class="flex-1">
+									<KRadioGroup.ItemInput class="peer" />
+									<KRadioGroup.ItemControl class="w-full px-3 py-2 text-center text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer">
+										Left
+									</KRadioGroup.ItemControl>
+								</KRadioGroup.Item>
+								<KRadioGroup.Item value="right" class="flex-1">
+									<KRadioGroup.ItemInput class="peer" />
+									<KRadioGroup.ItemControl class="w-full px-3 py-2 text-center text-sm rounded-lg border border-gray-3 bg-gray-2 ui-checked:bg-gray-3 ui-checked:border-gray-4 transition-colors cursor-pointer">
+										Right
+									</KRadioGroup.ItemControl>
+								</KRadioGroup.Item>
+							</KRadioGroup>
+						</Subfield>
+						
+						<Subfield name="Camera Position">
+							{/* Position controls are now handled in SceneSegmentConfig */}
+							<div>Please use the new scene segment controls</div>
+						</Subfield>
+						
+						<Subfield name="Screen Position">
+							{/* Position controls are now handled in SceneSegmentConfig */}
+							<div>Please use the new scene segment controls</div>
+						</Subfield>
+					</div>
+				</Field>
+			</Show>
 		</>
 	);
 }
@@ -2455,3 +2491,5 @@ function hexToRgb(hex: string): [number, number, number] | null {
 	if (!match) return null;
 	return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
 }
+
+// Position control moved to SceneSegmentConfig.tsx for better organization
