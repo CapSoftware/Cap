@@ -49,9 +49,9 @@ import {
 	type TimelineSegment,
 	type ZoomSegment,
 } from "~/utils/tauri";
+import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
-import IconLucideGauge from "~icons/lucide/gauge";
 import IconLucideVolumeX from "~icons/lucide/volume-x";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
@@ -2257,7 +2257,7 @@ function ClipSegmentConfig(props: {
 	];
 
 	const [muteAudio, setMuteAudio] = createSignal(
-		(props.segment as any).muteAudio ?? false
+		(props.segment as any).muteAudio ?? false,
 	);
 
 	const currentSpeed = () => props.segment.timescale || 1;
@@ -2270,7 +2270,7 @@ function ClipSegmentConfig(props: {
 			"segments",
 			props.segmentIndex,
 			"timescale",
-			clampedSpeed
+			clampedSpeed,
 		);
 	};
 
@@ -2281,7 +2281,7 @@ function ClipSegmentConfig(props: {
 			"segments",
 			props.segmentIndex,
 			"muteAudio" as any,
-			muted
+			muted,
 		);
 	};
 
@@ -2313,7 +2313,7 @@ function ClipSegmentConfig(props: {
 					Delete
 				</EditorButton>
 			</div>
-			
+
 			<Field name="Playback Speed" icon={<IconLucideGauge class="size-4" />}>
 				<div class="space-y-3">
 					<div class="flex items-center gap-2">
@@ -2325,8 +2325,6 @@ function ClipSegmentConfig(props: {
 							value={[currentSpeed()]}
 							onChange={(value: number[]) => {
 								let speed = value[0];
-								// Workaround: The slider seems to be outputting values 10x higher than expected
-								// If the value is above 5, divide by 10
 								if (speed > 5) {
 									speed = speed / 10;
 								}
@@ -2345,7 +2343,7 @@ function ClipSegmentConfig(props: {
 										"px-2.5 py-1 text-xs rounded-md border transition-colors",
 										currentSpeed() === preset.value
 											? "bg-blue-9 text-white border-blue-9"
-											: "bg-gray-3 text-gray-11 border-gray-4 hover:border-gray-6"
+											: "bg-gray-3 text-gray-11 border-gray-4 hover:border-gray-6",
 									)}
 									onClick={() => handleSpeedChange(preset.value)}
 								>
@@ -2357,15 +2355,10 @@ function ClipSegmentConfig(props: {
 				</div>
 			</Field>
 
-			<Field 
-				name="Audio" 
+			<Field
+				name="Audio"
 				icon={<IconLucideVolumeX class="size-4" />}
-				value={
-					<Toggle
-						checked={muteAudio()}
-						onChange={handleMuteToggle}
-					/>
-				}
+				value={<Toggle checked={muteAudio()} onChange={handleMuteToggle} />}
 			>
 				<Subfield name="Mute audio for this segment" />
 			</Field>
