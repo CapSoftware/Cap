@@ -1059,7 +1059,6 @@ impl ProjectUniforms {
                 }
             });
 
-            // Compose a unified shadow that wraps both halves
             let split_view_shadow = if split_settings.fullscreen {
                 None
             } else {

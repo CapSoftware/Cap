@@ -54,12 +54,12 @@ import IconLucideMonitor from "~icons/lucide/monitor";
 import IconLucideSparkles from "~icons/lucide/sparkles";
 import { CaptionsTab } from "./CaptionsTab";
 import { useEditorContext } from "./context";
-import { SceneSegmentConfig } from "./SceneSegmentConfig";
 import {
 	DEFAULT_GRADIENT_FROM,
 	DEFAULT_GRADIENT_TO,
 	type RGBColor,
 } from "./projectConfig";
+import { SceneSegmentConfig } from "./SceneSegmentConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import {
@@ -2295,11 +2295,12 @@ function OldSceneSegmentConfig(props: {
 	const { setProject, setEditorState, projectActions } = useEditorContext();
 
 	// Initialize split view settings if not present
-	const splitViewSettings = (): SplitViewSettings => props.segment.splitViewSettings || {
-		cameraPosition: { x: 0.5, y: 0.5 },
-		screenPosition: { x: 0.5, y: 0.5 },
-		cameraSide: "right",
-	};
+	const splitViewSettings = (): SplitViewSettings =>
+		props.segment.splitViewSettings || {
+			cameraPosition: { x: 0.5, y: 0.5 },
+			screenPosition: { x: 0.5, y: 0.5 },
+			cameraSide: "right",
+		};
 
 	return (
 		<>
@@ -2376,7 +2377,7 @@ function OldSceneSegmentConfig(props: {
 					</div>
 				</KRadioGroup>
 			</Field>
-			
+
 			<Show when={props.segment.mode === "splitView"}>
 				<Field name="Split View Settings" icon={<IconCapSettings />}>
 					<div class="space-y-4">
@@ -2390,7 +2391,10 @@ function OldSceneSegmentConfig(props: {
 										"sceneSegments",
 										props.segmentIndex,
 										"splitViewSettings",
-										{ ...currentSettings, cameraSide: value as "left" | "right" },
+										{
+											...currentSettings,
+											cameraSide: value as "left" | "right",
+										},
 									);
 								}}
 								class="flex flex-row gap-2"
@@ -2409,12 +2413,12 @@ function OldSceneSegmentConfig(props: {
 								</KRadioGroup.Item>
 							</KRadioGroup>
 						</Subfield>
-						
+
 						<Subfield name="Camera Position">
 							{/* Position controls are now handled in SceneSegmentConfig */}
 							<div>Please use the new scene segment controls</div>
 						</Subfield>
-						
+
 						<Subfield name="Screen Position">
 							{/* Position controls are now handled in SceneSegmentConfig */}
 							<div>Please use the new scene segment controls</div>

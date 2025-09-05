@@ -165,25 +165,25 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 				const segmentDuration = segment.end - segment.start;
 				const newSegmentStart = segment.end;
 				const newSegmentEnd = newSegmentStart + segmentDuration;
-				
+
 				// Check if there's enough space in the timeline
 				const timelineDuration = totalDuration();
 				if (newSegmentEnd > timelineDuration) {
 					// Not enough space for the duplicate
 					return;
 				}
-				
+
 				// Check if the new segment would overlap with any existing scene segments
 				const wouldOverlap = project.timeline.sceneSegments.some((s, i) => {
 					if (i === segmentIndex) return false; // Skip the original segment
-					return (newSegmentStart < s.end && newSegmentEnd > s.start);
+					return newSegmentStart < s.end && newSegmentEnd > s.start;
 				});
-				
+
 				if (wouldOverlap) {
 					// Would overlap with another segment
 					return;
 				}
-				
+
 				batch(() => {
 					setProject(
 						"timeline",
@@ -196,7 +196,7 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 								start: newSegmentStart,
 								end: newSegmentEnd,
 								// Deep clone split view settings if present
-								splitViewSettings: segment.splitViewSettings 
+								splitViewSettings: segment.splitViewSettings
 									? { ...segment.splitViewSettings }
 									: undefined,
 							});
@@ -217,15 +217,15 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 			},
 			copySceneSettingsFromOriginal: (segmentIndex: number) => {
 				if (!project.timeline?.sceneSegments?.[segmentIndex]) return;
-				
+
 				// Find the first segment with the same mode
 				const currentSegment = project.timeline.sceneSegments[segmentIndex];
 				const originalSegment = project.timeline.sceneSegments.find(
-					(s, i) => i !== segmentIndex && s.mode === currentSegment.mode
+					(s, i) => i !== segmentIndex && s.mode === currentSegment.mode,
 				);
-				
+
 				if (!originalSegment) return;
-				
+
 				setProject(
 					"timeline",
 					"sceneSegments",
