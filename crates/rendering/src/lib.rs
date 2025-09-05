@@ -621,7 +621,11 @@ impl ProjectUniforms {
                 velocity_uv: velocity,
                 motion_blur_amount: (motion_blur_amount + scene.screen_blur as f32 * 0.8).min(1.0),
                 camera_motion_blur_amount: 0.0,
-                shadow: project.background.shadow,
+                shadow: if scene.is_split_view() || scene.is_transitioning_split_view() {
+                    0.0
+                } else {
+                    project.background.shadow
+                },
                 shadow_size: project
                     .background
                     .advanced_shadow
@@ -933,10 +937,22 @@ impl ProjectUniforms {
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
                     camera_motion_blur_amount: 0.0,
-                    shadow: 0.0,
-                    shadow_size: 0.0,
-                    shadow_opacity: 0.0,
-                    shadow_blur: 0.0,
+                    shadow: project.background.shadow,
+                    shadow_size: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.size),
+                    shadow_opacity: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(18.0, |s| s.opacity),
+                    shadow_blur: project
+                        .background
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.blur),
                     opacity: (scene.split_view_transition_opacity() * scene.screen_opacity) as f32,
                     rounding_mask: if split_settings.fullscreen {
                         0.0
@@ -1012,10 +1028,22 @@ impl ProjectUniforms {
                     velocity_uv: [0.0, 0.0],
                     motion_blur_amount: 0.0,
                     camera_motion_blur_amount: 0.0,
-                    shadow: 0.0,
-                    shadow_size: 0.0,
-                    shadow_opacity: 0.0,
-                    shadow_blur: 0.0,
+                    shadow: project.camera.shadow,
+                    shadow_size: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.size),
+                    shadow_opacity: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(18.0, |s| s.opacity),
+                    shadow_blur: project
+                        .camera
+                        .advanced_shadow
+                        .as_ref()
+                        .map_or(50.0, |s| s.blur),
                     opacity: (scene.split_view_transition_opacity() * scene.camera_opacity) as f32,
                     rounding_mask: if split_settings.fullscreen {
                         0.0
@@ -1273,9 +1301,9 @@ impl RendererLayers {
         }
 
         // During split view transitions, render screen content for cross-fade effect
-        let should_render_regular_screen = uniforms.scene.should_render_screen() 
+        let should_render_regular_screen = uniforms.scene.should_render_screen()
             && (!split_view_fullscreen || uniforms.scene.is_transitioning_split_view());
-            
+
         if should_render_regular_screen {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.display.render(&mut pass);
