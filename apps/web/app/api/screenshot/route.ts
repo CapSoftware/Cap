@@ -1,8 +1,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
@@ -90,11 +88,7 @@ export async function GET(request: NextRequest) {
 
 		let screenshotUrl: string;
 
-		if (video.awsBucket !== serverEnv().CAP_AWS_BUCKET) {
-			screenshotUrl = await bucketProvider.getSignedObjectUrl(screenshot.Key!);
-		} else {
-			screenshotUrl = `${S3_BUCKET_URL}/${screenshot.Key}`;
-		}
+		screenshotUrl = await bucketProvider.getSignedObjectUrl(screenshot.Key!);
 
 		return new Response(JSON.stringify({ url: screenshotUrl }), {
 			status: 200,

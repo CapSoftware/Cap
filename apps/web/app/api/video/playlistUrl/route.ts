@@ -1,10 +1,11 @@
 import { db } from "@cap/database";
-import { videos } from "@cap/database/schema";
+import { getCurrentUser } from "@cap/database/auth/session";
+import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { CACHE_CONTROL_HEADERS, getHeaders } from "@/utils/helpers";
+import { createBucketProvider } from "@/utils/s3";
 
 export const revalidate = 0;
 
@@ -36,7 +37,11 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
-	const query = await db().select().from(videos).where(eq(videos.id, videoId));
+	const query = await db()
+		.select({ video: videos, bucket: s3Buckets })
+		.from(videos)
+		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+		.where(eq(videos.id, videoId));
 
 	if (query.length === 0) {
 		return new Response(
@@ -48,8 +53,8 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
-	const video = query[0];
-	if (!video) {
+	const result = query[0];
+	if (!result?.video) {
 		return new Response(
 			JSON.stringify({ error: true, message: "Video not found" }),
 			{
@@ -59,8 +64,24 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
+	const { video, bucket } = result;
+
 	if (video.jobStatus === "COMPLETE") {
-		const playlistUrl = `${S3_BUCKET_URL}/${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+		// Enforce access control for non-public videos
+		if (video.public === false) {
+			const user = await getCurrentUser();
+			if (!user || user.id !== video.ownerId) {
+				return new Response(
+					JSON.stringify({ error: true, message: "Video is not public" }),
+					{ status: 401, headers: getHeaders(origin) },
+				);
+			}
+		}
+
+		const bucketProvider = await createBucketProvider(bucket);
+		const playlistKey = `${video.ownerId}/${video.id}/output/video_recording_000_output.m3u8`;
+		const playlistUrl = await bucketProvider.getSignedObjectUrl(playlistKey);
+
 		return new Response(
 			JSON.stringify({ playlistOne: playlistUrl, playlistTwo: null }),
 			{
