@@ -14,6 +14,7 @@ struct Uniforms {
     shadow_opacity: f32,
     shadow_blur: f32,
     opacity: f32,
+    rounding_mask: f32,  // Bitmask: 1=TL, 2=TR, 4=BL, 8=BR
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -203,17 +204,37 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
-    let target_coord = abs(target_uv * uniforms.target_size - uniforms.target_size / 2.0);
+    let target_coord = target_uv * uniforms.target_size - uniforms.target_size / 2.0;
+    let abs_coord = abs(target_coord);
     let rounding_point = uniforms.target_size / 2.0 - uniforms.rounding_px;
-    let target_rounding_coord = target_coord - rounding_point;
+    let target_rounding_coord = abs_coord - rounding_point;
 
-    let distance = abs(length(target_rounding_coord)) - uniforms.rounding_px;
-
-    let distance_blur = 1.0;
-
-    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 && distance >= -distance_blur/2.0 {
-    		return vec4<f32>(0.0);
-        // return mix(current_color, vec4<f32>(0.0), min(distance / distance_blur + 0.5, 1.0));
+    // Determine which corner we're in
+    let is_left = target_coord.x < 0.0;
+    let is_top = target_coord.y < 0.0;
+    
+    // Calculate corner mask bit (1=TL, 2=TR, 4=BL, 8=BR)
+    var corner_bit: f32 = 0.0;
+    if is_top && is_left {
+        corner_bit = 1.0;  // Top-left
+    } else if is_top && !is_left {
+        corner_bit = 2.0;  // Top-right
+    } else if !is_top && is_left {
+        corner_bit = 4.0;  // Bottom-left
+    } else {
+        corner_bit = 8.0;  // Bottom-right
+    }
+    
+    // Check if this corner should be rounded
+    let should_round = (u32(uniforms.rounding_mask) & u32(corner_bit)) != 0u;
+    
+    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 && should_round {
+        let distance = abs(length(target_rounding_coord)) - uniforms.rounding_px;
+        let distance_blur = 1.0;
+        
+        if distance >= -distance_blur/2.0 {
+            return vec4<f32>(0.0);
+        }
     }
 
     return current_color;

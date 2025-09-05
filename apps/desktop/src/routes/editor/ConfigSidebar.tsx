@@ -45,6 +45,7 @@ import {
 	type CameraShape,
 	commands,
 	type SceneSegment,
+	type SplitViewSettings,
 	type StereoMode,
 	type TimelineSegment,
 	type ZoomSegment,
@@ -58,6 +59,7 @@ import {
 	DEFAULT_GRADIENT_TO,
 	type RGBColor,
 } from "./projectConfig";
+import { SceneSegmentConfig } from "./SceneSegmentConfig";
 import ShadowSettings from "./ShadowSettings";
 import { TextInput } from "./TextInput";
 import {
@@ -2284,112 +2286,6 @@ function ClipSegmentConfig(props: {
 	);
 }
 
-function SceneSegmentConfig(props: {
-	segmentIndex: number;
-	segment: SceneSegment;
-}) {
-	const { setProject, setEditorState, projectActions } = useEditorContext();
-
-	return (
-		<>
-			<div class="flex flex-row justify-between items-center">
-				<div class="flex gap-2 items-center">
-					<EditorButton
-						onClick={() => setEditorState("timeline", "selection", null)}
-						leftIcon={<IconLucideCheck />}
-					>
-						Done
-					</EditorButton>
-				</div>
-				<EditorButton
-					variant="danger"
-					onClick={() => {
-						projectActions.deleteSceneSegment(props.segmentIndex);
-					}}
-					leftIcon={<IconCapTrash />}
-				>
-					Delete
-				</EditorButton>
-			</div>
-			<Field name="Camera Layout" icon={<IconLucideLayout />}>
-				<KTabs
-					class="space-y-6"
-					value={props.segment.mode || "default"}
-					onChange={(v) => {
-						setProject(
-							"timeline",
-							"sceneSegments",
-							props.segmentIndex,
-							"mode",
-							v as "default" | "cameraOnly" | "hideCamera",
-						);
-					}}
-				>
-					<KTabs.List class="flex flex-col gap-3">
-						<div class="flex flex-row items-center rounded-[0.5rem] relative border">
-							<KTabs.Trigger
-								value="default"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
-								Default
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="cameraOnly"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
-								Camera Only
-							</KTabs.Trigger>
-							<KTabs.Trigger
-								value="hideCamera"
-								class="z-10 flex-1 py-2.5 text-gray-11 transition-colors duration-100 outline-none ui-selected:text-gray-12 peer"
-							>
-								Hide Camera
-							</KTabs.Trigger>
-							<KTabs.Indicator class="absolute flex p-px inset-0 transition-transform peer-focus-visible:outline outline-2 outline-blue-9 outline-offset-2 rounded-[0.6rem] overflow-hidden">
-								<div class="flex-1 bg-gray-3" />
-							</KTabs.Indicator>
-						</div>
-
-						<div class="relative">
-							<div
-								class="absolute -top-3 w-px h-3 transition-all duration-200 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div
-								class="absolute -top-1 w-2 h-2 rounded-full transition-all duration-200 -translate-x-1/2 bg-gray-3"
-								style={{
-									left:
-										props.segment.mode === "cameraOnly"
-											? "50%"
-											: props.segment.mode === "hideCamera"
-												? "83.33%"
-												: "16.67%",
-								}}
-							/>
-							<div class="p-2.5 rounded-md bg-gray-2 border border-gray-3">
-								<div class="text-xs text-center text-gray-11">
-									{props.segment.mode === "cameraOnly"
-										? "Shows only the camera feed"
-										: props.segment.mode === "hideCamera"
-											? "Shows only the screen recording"
-											: "Shows both screen and camera"}
-								</div>
-							</div>
-						</div>
-					</KTabs.List>
-				</KTabs>
-			</Field>
-		</>
-	);
-}
-
 function RgbInput(props: {
 	value: [number, number, number];
 	onChange: (value: [number, number, number]) => void;
@@ -2455,3 +2351,5 @@ function hexToRgb(hex: string): [number, number, number] | null {
 	if (!match) return null;
 	return match.slice(1).map((c) => Number.parseInt(c, 16)) as any;
 }
+
+// Position control moved to SceneSegmentConfig.tsx for better organization
