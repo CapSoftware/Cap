@@ -181,12 +181,19 @@ impl AudioRenderer {
 
         let mut ret = vec![0.0; samples * 2];
 
+        let segment_muted = project
+            .timeline
+            .as_ref()
+            .and_then(|t| t.get_segment_at_time(self.elapsed_samples_to_playhead()))
+            .map(|s| s.mute_audio)
+            .unwrap_or(false);
+
         let track_datas = tracks
             .iter()
             .map(|t| {
                 (
                     t.data().as_ref(),
-                    if project.audio.mute {
+                    if project.audio.mute || segment_muted {
                         f32::NEG_INFINITY
                     } else {
                         let g = t.gain(&project.audio);

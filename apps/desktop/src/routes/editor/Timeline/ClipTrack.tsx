@@ -192,7 +192,7 @@ export function ClipTrack(
 
 					const relativeSegment = mergeProps(segment, () => ({
 						start: prevDuration(),
-						end: segment.end - segment.start + prevDuration(),
+						end: (segment.end - segment.start) / segment.timescale + prevDuration(),
 					}));
 
 					const segmentX = useSegmentTranslateX(() => relativeSegment);

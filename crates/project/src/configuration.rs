@@ -424,6 +424,8 @@ pub struct TimelineSegment {
     pub timescale: f64,
     pub start: f64,
     pub end: f64,
+    #[serde(default)]
+    pub mute_audio: bool,
 }
 
 impl TimelineSegment {
@@ -495,6 +497,19 @@ impl TimelineConfiguration {
                     .map(|t| (t, segment.recording_segment));
             }
 
+            accum_duration += segment.duration();
+        }
+
+        None
+    }
+
+    pub fn get_segment_at_time(&self, frame_time: f64) -> Option<&TimelineSegment> {
+        let mut accum_duration = 0.0;
+
+        for segment in self.segments.iter() {
+            if frame_time < accum_duration + segment.duration() {
+                return Some(segment);
+            }
             accum_duration += segment.duration();
         }
 

@@ -1011,6 +1011,7 @@ fn project_config_from_recording(
                     start: 0.0,
                     end: segment.duration(),
                     timescale: 1.0,
+                    mute_audio: false,
                 })
                 .collect(),
             zoom_segments: if settings.auto_zoom_on_clicks {
