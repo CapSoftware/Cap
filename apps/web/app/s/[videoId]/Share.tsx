@@ -213,6 +213,13 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
+	console.log({
+		aiLoading: aiLoading,
+		aiData: aiData,
+		transcriptionStatus: transcriptionStatus,
+		aiGenerationEnabled: aiGenerationEnabled,
+	});
+
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
 			playerRef.current.currentTime = time;
