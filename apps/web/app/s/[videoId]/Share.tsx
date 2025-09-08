@@ -180,10 +180,7 @@ export const Share = ({
 	);
 
 	const shouldShowLoading = () => {
-		if (!aiGenerationEnabled) {
-			return false;
-		}
-
+		// Show loading while transcription is pending or processing regardless of AI flag
 		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
 			return true;
 		}
@@ -193,13 +190,10 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			// if (aiData.generationError) {
-			// 	return false;
-			// }
-			if (aiData.processing === true) {
+			// Only show loading for AI if enabled and currently processing
+			if (aiGenerationEnabled && aiData.processing === true) {
 				return true;
 			}
-
 			return false;
 		}
 
