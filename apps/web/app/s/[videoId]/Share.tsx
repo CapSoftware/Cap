@@ -132,7 +132,9 @@ const useVideoStatus = (
 
 			return shouldContinuePolling() ? 2000 : false;
 		},
-		refetchIntervalInBackground: false,
+		refetchIntervalInBackground: true,
+		refetchOnWindowFocus: true,
+		refetchOnMount: "always",
 		staleTime: 1000,
 	});
 };
@@ -196,20 +198,12 @@ export const Share = ({
 			if (aiGenerationEnabled && aiData.processing === true) {
 				return true;
 			}
-			return false;
 		}
 
 		return false;
 	};
 
 	const aiLoading = shouldShowLoading();
-
-	console.log({
-		aiLoading,
-		aiData,
-		transcriptionStatus,
-		aiGenerationEnabled,
-	});
 
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
