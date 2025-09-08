@@ -36,10 +36,10 @@ export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
 		data: typeof videos.$inferSelect & {
-			owner: {
+			owner?: {
 				stripeSubscriptionStatus: string | null;
 				thirdPartyStripeSubscriptionId: string | null;
-			};
+			} | null;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;

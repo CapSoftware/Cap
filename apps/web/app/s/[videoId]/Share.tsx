@@ -46,7 +46,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	owner?: {
 		stripeSubscriptionStatus: string | null;
 		thirdPartyStripeSubscriptionId: string | null;
-	};
+	} | null;
 };
 
 interface ShareProps {
