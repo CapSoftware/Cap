@@ -7,6 +7,7 @@ import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
 import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
+import { revalidatePath } from "next/cache";
 import * as EffectRuntime from "@/lib/server";
 import { isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
@@ -178,6 +179,8 @@ export async function getVideoStatus(
 					console.log(
 						`[Get Status] AI metadata generation completed for video ${videoId}`,
 					);
+					// Revalidate the share page to reflect new AI data
+					revalidatePath(`/s/${videoId}`);
 				} catch (error) {
 					console.error(
 						`[Get Status] Error generating AI metadata for video ${videoId}:`,
