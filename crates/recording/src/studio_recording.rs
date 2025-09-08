@@ -1,9 +1,6 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{
-        MakeCapturePipeline, ScreenCaptureMethod, SourceTimestamp, SourceTimestamps,
-        create_screen_capture,
-    },
+    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     pipeline::Pipeline,
@@ -12,6 +9,7 @@ use crate::{
 use cap_enc_ffmpeg::{H264Encoder, MP4File, OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
+use cap_timestamp::{Timestamp, Timestamps};
 use cap_utils::spawn_actor;
 use flume::Receiver;
 use relative_path::RelativePathBuf;
@@ -64,7 +62,7 @@ pub struct StudioRecordingSegment {
 
 pub struct PipelineOutput {
     pub path: PathBuf,
-    pub first_timestamp_rx: flume::Receiver<SourceTimestamp>,
+    pub first_timestamp_rx: flume::Receiver<Timestamp>,
 }
 
 pub struct ScreenPipelineOutput {
@@ -73,7 +71,7 @@ pub struct ScreenPipelineOutput {
 }
 
 struct StudioRecordingPipeline {
-    pub start_time: SourceTimestamps,
+    pub start_time: Timestamps,
     pub inner: Pipeline,
     pub screen: ScreenPipelineOutput,
     pub microphone: Option<PipelineOutput>,
@@ -149,7 +147,7 @@ pub async fn spawn_studio_recording_actor(
     let cursors_dir = ensure_dir(&content_dir.join("cursors"))?;
 
     // TODO: move everything to start_instant
-    let start_time = SystemTime::now();
+    let start_time = Timestamps::now();
     let start_instant = Instant::now();
 
     if let Some(camera_feed) = &base_inputs.camera_feed {
@@ -167,7 +165,6 @@ pub async fn spawn_studio_recording_actor(
         base_inputs.clone(),
         custom_cursor_capture,
         start_time,
-        start_instant,
     );
 
     let index = 0;
@@ -575,8 +572,7 @@ struct SegmentPipelineFactory {
     cursors_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
-    start_time: SystemTime,
-    start_instant: Instant,
+    start_time: Timestamps,
     index: u32,
 }
 
@@ -587,8 +583,7 @@ impl SegmentPipelineFactory {
         cursors_dir: PathBuf,
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
-        start_time: SystemTime,
-        start_instant: Instant,
+        start_time: Timestamps,
     ) -> Self {
         Self {
             segments_dir,
@@ -596,7 +591,6 @@ impl SegmentPipelineFactory {
             base_inputs,
             custom_cursor_capture,
             start_time,
-            start_instant,
             index: 0,
         }
     }
@@ -624,7 +618,6 @@ impl SegmentPipelineFactory {
             next_cursors_id,
             self.custom_cursor_capture,
             self.start_time,
-            self.start_instant,
         )
         .await?;
 
@@ -665,8 +658,7 @@ async fn create_segment_pipeline(
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
-    start_time: SystemTime,
-    start_instant: Instant,
+    start_time: Timestamps,
 ) -> Result<
     (
         StudioRecordingPipeline,
@@ -674,8 +666,6 @@ async fn create_segment_pipeline(
     ),
     CreateSegmentPipelineError,
 > {
-    let start_time = SourceTimestamps::now();
-
     let system_audio = if capture_system_audio {
         let (tx, rx) = flume::bounded(64);
         (Some(tx), Some(rx))
@@ -698,6 +688,7 @@ async fn create_segment_pipeline(
         !custom_cursor_capture,
         120,
         system_audio.0,
+        start_time.system_time(),
         #[cfg(windows)]
         d3d_device,
     )
@@ -826,7 +817,7 @@ async fn create_segment_pipeline(
     let camera = if let Some(camera_feed) = camera_feed {
         let (tx, rx) = flume::bounded(8);
 
-        let camera_source = CameraSource::init(camera_feed, tx, start_instant);
+        let camera_source = CameraSource::init(camera_feed, tx);
         let camera_config = camera_source.info();
         let output_path = dir.join("camera.mp4");
 
@@ -852,7 +843,7 @@ async fn create_segment_pipeline(
                     timestamp_tx.send(frame.1).unwrap();
                 }
 
-                if let Some(start) = start {
+                if let Some(_) = start {
                     // frame.0.set_pts(Some(
                     //     ((camera_config.time_base.denominator() as f64
                     //         / camera_config.time_base.numerator() as f64)

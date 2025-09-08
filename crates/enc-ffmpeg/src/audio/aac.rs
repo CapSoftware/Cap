@@ -5,9 +5,8 @@ use ffmpeg::{
     frame,
     threading::Config,
 };
-use std::collections::VecDeque;
 
-use crate::AudioEncoder;
+use crate::{AudioEncoder, audio::buffered_resampler::BufferedResampler};
 
 #[derive(thiserror::Error, Debug)]
 pub enum AACEncoderError {
@@ -24,9 +23,7 @@ pub struct AACEncoder {
     tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
-    resampler: Option<ffmpeg::software::resampling::Context>,
-    resampled_frame: frame::Audio,
-    buffer: Vec<VecDeque<u8>>,
+    resampler: BufferedResampler,
     stream_index: usize,
 }
 
@@ -75,33 +72,20 @@ impl AACEncoder {
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
-        let resampler = if (
-            input_config.sample_format,
-            input_config.channel_layout(),
-            input_config.sample_rate,
-        ) != (
-            output_config.sample_format,
-            output_config.channel_layout(),
-            output_config.sample_rate,
-        ) {
-            Some(
-                ffmpeg::software::resampler(
-                    (
-                        input_config.sample_format,
-                        input_config.channel_layout(),
-                        input_config.sample_rate,
-                    ),
-                    (
-                        output_config.sample_format,
-                        output_config.channel_layout(),
-                        output_config.sample_rate,
-                    ),
-                )
-                .unwrap(),
-            )
-        } else {
-            None
-        };
+        let resampler = ffmpeg::software::resampler(
+            (
+                input_config.sample_format,
+                input_config.channel_layout(),
+                input_config.sample_rate,
+            ),
+            (
+                output_config.sample_format,
+                output_config.channel_layout(),
+                output_config.sample_rate,
+            ),
+        )
+        .unwrap();
+        let resampler = BufferedResampler::new(resampler);
 
         encoder.set_bit_rate(Self::OUTPUT_BITRATE);
         encoder.set_rate(rate);
@@ -118,50 +102,19 @@ impl AACEncoder {
 
         Ok(Self {
             tag,
-            buffer: vec![VecDeque::new(); 2],
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
-            resampled_frame: frame::Audio::empty(),
             resampler,
         })
     }
 
     pub fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        let frame = if let Some(resampler) = &mut self.resampler {
-            resampler.run(&frame, &mut self.resampled_frame).unwrap();
-            &self.resampled_frame
-        } else {
-            &frame
-        };
+        self.resampler.add_frame(frame);
 
-        for i in 0..frame.planes() {
-            self.buffer[i]
-                .extend(&frame.data(i)[0..frame_size_bytes(frame) / frame.channels() as usize]);
-        }
+        let frame_size = self.encoder.frame_size() as usize;
 
-        let channel_size_bytes = self.encoder.frame_size() as usize * self.encoder.format().bytes();
-
-        loop {
-            if self.buffer[0].len() < channel_size_bytes {
-                break;
-            }
-
-            let mut frame = frame::Audio::new(
-                self.encoder.format(),
-                self.encoder.frame_size() as usize,
-                self.encoder.channel_layout(),
-            );
-
-            for i in 0..frame.planes() {
-                let bytes = self.buffer[i]
-                    .drain(0..channel_size_bytes)
-                    .collect::<Vec<_>>();
-
-                frame.data_mut(i)[0..channel_size_bytes]
-                    .copy_from_slice(&bytes[0..channel_size_bytes]);
-            }
-
+        while let Some(frame) = self.resampler.get_frame(frame_size) {
             self.encoder.send_frame(&frame).unwrap();
 
             self.process_packets(output);
@@ -180,69 +133,10 @@ impl AACEncoder {
     }
 
     pub fn finish(&mut self, output: &mut format::context::Output) {
-        let frame_size_bytes = self.encoder.frame_size() as usize
-            * self.encoder.channels() as usize
-            * self.encoder.format().bytes();
+        while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
+            self.encoder.send_frame(&frame).unwrap();
 
-        if let Some(mut resampler) = self.resampler.take() {
-            while resampler.delay().is_some() {
-                resampler.flush(&mut self.resampled_frame).unwrap();
-                if self.resampled_frame.samples() == 0 {
-                    break;
-                }
-
-                for i in 0..self.resampled_frame.planes() {
-                    self.buffer[i].extend(
-                        &self.resampled_frame.data(0)[0..self.resampled_frame.samples()
-                            * self.resampled_frame.format().bytes()],
-                    );
-                }
-
-                while self.buffer.len() >= frame_size_bytes {
-                    let mut frame = frame::Audio::new(
-                        self.encoder.format(),
-                        self.encoder.frame_size() as usize,
-                        self.encoder.channel_layout(),
-                    );
-
-                    for i in 0..frame.planes() {
-                        let bytes = self.buffer[i]
-                            .drain(0..frame_size_bytes)
-                            .collect::<Vec<_>>();
-
-                        frame.data_mut(0)[0..frame_size_bytes].copy_from_slice(&bytes);
-                    }
-
-                    self.encoder.send_frame(&frame).unwrap();
-
-                    self.process_packets(output);
-                }
-            }
-
-            while !self.buffer[0].is_empty() {
-                let channel_size_bytes =
-                    (frame_size_bytes / self.encoder.channels() as usize).min(self.buffer[0].len());
-                let frame_size = channel_size_bytes / self.encoder.format().bytes();
-
-                let mut frame = frame::Audio::new(
-                    self.encoder.format(),
-                    frame_size,
-                    self.encoder.channel_layout(),
-                );
-
-                for i in 0..frame.planes() {
-                    let bytes = self.buffer[i]
-                        .drain(0..channel_size_bytes)
-                        .collect::<Vec<_>>();
-
-                    frame.data_mut(i)[0..channel_size_bytes]
-                        .copy_from_slice(&bytes[0..channel_size_bytes]);
-                }
-
-                self.encoder.send_frame(&frame).unwrap();
-
-                self.process_packets(output);
-            }
+            self.process_packets(output);
         }
 
         self.encoder.send_eof().unwrap();
@@ -259,8 +153,4 @@ impl AudioEncoder for AACEncoder {
     fn finish(&mut self, output: &mut format::context::Output) {
         self.finish(output);
     }
-}
-
-fn frame_size_bytes(frame: &frame::Audio) -> usize {
-    frame.samples() * frame.format().bytes() * frame.channels() as usize
 }

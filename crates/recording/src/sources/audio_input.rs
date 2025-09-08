@@ -1,11 +1,11 @@
 use crate::{
-    capture_pipeline::SourceTimestamp,
     feeds::microphone::{self, MicrophoneFeedLock, MicrophoneSamples},
     pipeline::{control::Control, task::PipelineSourceTask},
 };
 use cap_fail::fail;
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
+use cap_timestamp::Timestamp;
 use cpal::{Device, SupportedStreamConfig};
 use ffmpeg::frame::Audio as FFAudio;
 use flume::{Receiver, Sender};
@@ -18,11 +18,11 @@ pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>
 pub struct AudioInputSource {
     feed: Arc<MicrophoneFeedLock>,
     audio_info: AudioInfo,
-    tx: Sender<(FFAudio, SourceTimestamp)>,
+    tx: Sender<(FFAudio, Timestamp)>,
 }
 
 impl AudioInputSource {
-    pub fn init(feed: Arc<MicrophoneFeedLock>, tx: Sender<(FFAudio, SourceTimestamp)>) -> Self {
+    pub fn init(feed: Arc<MicrophoneFeedLock>, tx: Sender<(FFAudio, Timestamp)>) -> Self {
         Self {
             audio_info: *feed.audio_info(),
             feed,
@@ -35,7 +35,7 @@ impl AudioInputSource {
     }
 
     fn process_frame(&mut self, samples: MicrophoneSamples) -> Result<(), MediaError> {
-        let timestamp = SourceTimestamp::from_cpal(samples.info.timestamp().capture);
+        let timestamp = Timestamp::from_cpal(samples.info.timestamp().capture);
 
         let frame = self.audio_info.wrap_frame(&samples.data);
         if self.tx.send((frame, timestamp)).is_err() {

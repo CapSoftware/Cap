@@ -1,11 +1,10 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
-use std::{collections::HashMap, path::PathBuf, time::SystemTime};
+use cap_timestamp::Timestamps;
+use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-
-use crate::capture_pipeline::SourceTimestamps;
 
 pub struct Cursor {
     pub file_name: String,
@@ -43,7 +42,7 @@ pub fn spawn_cursor_recorder(
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
-    start_time: SourceTimestamps,
+    start_time: Timestamps,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};

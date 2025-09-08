@@ -3,7 +3,7 @@
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(target_os = "macos")]

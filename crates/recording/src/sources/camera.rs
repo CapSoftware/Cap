@@ -1,41 +1,27 @@
-use cap_media_info::VideoInfo;
-use ffmpeg::frame;
-use flume::{Receiver, Sender};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tracing::{error, info};
-
 use crate::{
     MediaError,
-    capture_pipeline::SourceTimestamp,
     feeds::camera::{self, CameraFeedLock, RawCameraFrame},
     pipeline::{control::Control, task::PipelineSourceTask},
 };
+use cap_media_info::VideoInfo;
+use cap_timestamp::Timestamp;
+use ffmpeg::frame;
+use flume::{Receiver, Sender};
+use std::sync::Arc;
+use tracing::{error, info};
 
 pub struct CameraSource {
     feed: Arc<CameraFeedLock>,
     video_info: VideoInfo,
-    output: Sender<(frame::Video, SourceTimestamp)>,
-    first_frame_instant: Option<Instant>,
-    first_frame_timestamp: Option<Duration>,
-    start_instant: Instant,
+    output: Sender<(frame::Video, Timestamp)>,
 }
 
 impl CameraSource {
-    pub fn init(
-        feed: Arc<CameraFeedLock>,
-        output: Sender<(frame::Video, SourceTimestamp)>,
-        start_instant: Instant,
-    ) -> Self {
+    pub fn init(feed: Arc<CameraFeedLock>, output: Sender<(frame::Video, Timestamp)>) -> Self {
         Self {
             video_info: *feed.video_info(),
             feed,
             output,
-            first_frame_instant: None,
-            first_frame_timestamp: None,
-            start_instant,
         }
     }
 

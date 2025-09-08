@@ -20,7 +20,7 @@ cap-cursor-info = { path = "../cursor-info" }
 cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
-cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
+cap-timestamp = { path = "../timestamp" }
 
 specta.workspace = true
 tokio.workspace = true

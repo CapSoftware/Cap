@@ -6,7 +6,7 @@ members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
-cpal = { git = "https://github.com/CapSoftware/cpal", rev = "75a365a24507" }
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
     "macros",

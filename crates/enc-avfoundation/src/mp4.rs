@@ -1,7 +1,6 @@
-use cap_ffmpeg_utils::PlanarData;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
-use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
+use ffmpeg::frame;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -265,7 +264,7 @@ impl MP4Encoder {
         if frame.is_planar() {
             let mut offset = 0;
             for plane_i in 0..frame.planes() {
-                let data = frame.plane_data(plane_i);
+                let data = frame.data(plane_i);
                 block_buf_slice[offset..offset + data.len()]
                     .copy_from_slice(&data[0..frame.samples() * frame.format().bytes()]);
                 offset += data.len();
@@ -277,12 +276,16 @@ impl MP4Encoder {
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
 
-        let time = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
+        let time = cm::Time::new(frame.pts().unwrap_or(0), frame.rate() as i32);
+
+        // dbg!(time);
 
         let pts = self
             .start_time
             .add(self.elapsed_duration)
             .add(time.sub(self.segment_first_timestamp.unwrap()));
+
+        // dbg!(pts);
 
         let buffer = cm::SampleBuf::create(
             Some(&block_buf),

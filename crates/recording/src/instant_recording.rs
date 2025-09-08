@@ -1,6 +1,7 @@
 use cap_media::MediaError;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
+use cap_timestamp::Timestamp;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
 use std::{
@@ -13,9 +14,7 @@ use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
     ActorError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{
-        MakeCapturePipeline, SourceTimestamp, SourceTimestamps, create_screen_capture,
-    },
+    capture_pipeline::{MakeCapturePipeline, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
     pipeline::Pipeline,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
@@ -114,10 +113,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: (
         ScreenCaptureSource<TCaptureFormat>,
-        flume::Receiver<(TCaptureFormat::VideoFormat, SourceTimestamp)>,
+        flume::Receiver<(TCaptureFormat::VideoFormat, Timestamp)>,
     ),
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    system_audio: Option<Receiver<(ffmpeg::frame::Audio, SourceTimestamp)>>,
+    system_audio: Option<Receiver<(ffmpeg::frame::Audio, Timestamp)>>,
 ) -> Result<
     (
         InstantRecordingPipeline,
@@ -173,6 +172,8 @@ pub async fn spawn_instant_recording_actor(
 > {
     ensure_dir(&recording_dir)?;
 
+    let start_time = SystemTime::now();
+
     let (done_tx, done_rx) = oneshot::channel();
 
     trace!("creating recording actor");
@@ -195,6 +196,7 @@ pub async fn spawn_instant_recording_actor(
         true,
         30,
         system_audio.0,
+        start_time,
         #[cfg(windows)]
         d3d_device,
     )
