@@ -156,19 +156,19 @@
 }
 
 .dark .gray-button-border {
-	@apply border-gray-2
+	@apply border-gray-2;
 }
 
 .gray-button-border {
-	@apply border-gray-8
+	@apply border-gray-8;
 }
 
 .dark .dark-button-border {
-	@apply border-gray-2
+	@apply border-gray-2;
 }
 
 .dark-button-border {
-	@apply border-gray-12
+	@apply border-gray-12;
 }
 
 
