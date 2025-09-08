@@ -133,8 +133,6 @@ const useVideoStatus = (
 			return shouldContinuePolling() ? 2000 : false;
 		},
 		refetchIntervalInBackground: true,
-		refetchOnWindowFocus: true,
-		refetchOnMount: "always",
 		staleTime: 1000,
 	});
 };
@@ -194,9 +192,16 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			// Only show loading for AI if enabled and currently processing
-			if (aiGenerationEnabled && aiData.processing === true) {
-				return true;
+			if (aiGenerationEnabled) {
+				const noAiData = !(
+					aiData.title ||
+					aiData.summary ||
+					(aiData.chapters && aiData.chapters.length > 0)
+				);
+				// Show loading if AI is processing OR if no AI data exists yet
+				if (aiData.processing === true || noAiData) {
+					return true;
+				}
 			}
 		}
 
