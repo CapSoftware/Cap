@@ -75,13 +75,8 @@ impl DisplayLayer {
             },
         );
 
-        self.uniforms_buffer = uniforms.to_buffer(device);
-
-        self.bind_group = Some(self.pipeline.bind_group(
-            device,
-            &self.uniforms_buffer,
-            &self.frame_texture_view,
-        ));
+        // Update existing uniform buffer in place; bind group remains valid.
+        uniforms.write_to_buffer(queue, &self.uniforms_buffer);
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {

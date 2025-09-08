@@ -74,6 +74,10 @@ impl CompositeVideoFrameUniforms {
             }),
         )
     }
+
+    pub fn write_to_buffer(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer) {
+        queue.write_buffer(buffer, 0, bytemuck::bytes_of(self));
+    }
 }
 
 // pub struct CompositeFrameResources {

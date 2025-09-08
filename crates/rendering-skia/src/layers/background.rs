@@ -134,8 +134,8 @@ impl BackgroundLayer {
         let border_rect = Rect::from_xywh(
             bounds.left() + inset,
             bounds.top() + inset,
-            bounds.width() - border.width,
-            bounds.height() - border.width,
+            (bounds.width() - border.width).max(0.0),
+            (bounds.height() - border.width).max(0.0),
         );
 
         canvas.draw_rect(border_rect, &paint);

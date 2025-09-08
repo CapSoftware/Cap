@@ -635,7 +635,7 @@ impl ProjectUniforms {
                     .advanced_shadow
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
-                opacity: layout.screen_opacity as f32,
+                opacity: scene.screen_opacity as f32,
                 border_enabled: if project
                     .background
                     .border
@@ -650,26 +650,17 @@ impl ProjectUniforms {
                 _padding0: 0.0,
                 _padding1: [0.0; 2],
                 _padding1b: [0.0; 2],
-                border_color: {
-                    let border = project.background.border.as_ref().unwrap_or(
-                        &cap_project::BorderConfiguration {
-                            enabled: false,
-                            width: 5.0,
-                            color: [255, 255, 255],
-                            opacity: 80.0,
-                        },
-                    );
-
+                border_color: if let Some(b) = project.background.border.as_ref() {
                     [
-                        border.color[0] as f32 / 255.0,
-                        border.color[1] as f32 / 255.0,
-                        border.color[2] as f32 / 255.0,
-                        (border.opacity / 100.0).clamp(0.0, 1.0),
+                        b.color[0] as f32 / 255.0,
+                        b.color[1] as f32 / 255.0,
+                        b.color[2] as f32 / 255.0,
+                        (b.opacity / 100.0).clamp(0.0, 1.0),
                     ]
+                } else {
+                    [1.0, 1.0, 1.0, 0.8]
                 },
                 _padding2: [0.0; 4],
-                opacity: scene.screen_opacity as f32,
-                _padding: [0.0; 3],
             }
         };
 
@@ -777,7 +768,7 @@ impl ProjectUniforms {
                         .advanced_shadow
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
-                    opacity: layout.regular_camera_transition_opacity() as f32,
+                    opacity: scene.regular_camera_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
                     _padding0: 0.0,
@@ -785,8 +776,6 @@ impl ProjectUniforms {
                     _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     _padding2: [0.0; 4],
-                    opacity: scene.regular_camera_transition_opacity() as f32,
-                    _padding: [0.0; 3],
                 }
             });
 
@@ -848,7 +837,7 @@ impl ProjectUniforms {
                     shadow_size: 0.0,
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
-                    opacity: layout.camera_only_transition_opacity() as f32,
+                    opacity: scene.camera_only_transition_opacity() as f32,
                     border_enabled: 0.0,
                     border_width: 0.0,
                     _padding0: 0.0,
@@ -856,8 +845,6 @@ impl ProjectUniforms {
                     _padding1b: [0.0; 2],
                     border_color: [0.0, 0.0, 0.0, 0.0],
                     _padding2: [0.0; 4],
-                    opacity: scene.camera_only_transition_opacity() as f32,
-                    _padding: [0.0; 3],
                 }
             });
 
