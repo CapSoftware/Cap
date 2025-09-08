@@ -205,19 +205,6 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
-	console.log({
-		transcriptionStatus,
-		aiData,
-		aiGenerationEnabled,
-	});
-
-	console.log({
-		aiLoading,
-		aiData,
-		transcriptionStatus,
-		aiGenerationEnabled,
-	});
-
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
 			playerRef.current.currentTime = time;
