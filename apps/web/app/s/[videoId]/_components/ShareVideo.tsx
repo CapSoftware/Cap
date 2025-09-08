@@ -55,6 +55,8 @@ export const ShareVideo = forwardRef<
 	const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 	const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
 
+	const isVideoOwnerPro = userIsPro(data.owner);
+
 	const { data: transcriptContent, error: transcriptError } = useTranscript(
 		data.id,
 		data.transcriptionStatus,
@@ -148,8 +150,6 @@ export const ShareVideo = forwardRef<
 	} else {
 		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
 	}
-
-	const isVideoOwnerPro = userIsPro(data.owner);
 
 	return (
 		<>

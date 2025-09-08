@@ -43,7 +43,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	organizationId?: string;
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
-	owner: {
+	owner?: {
 		stripeSubscriptionStatus: string | null;
 		thirdPartyStripeSubscriptionId: string | null;
 	};

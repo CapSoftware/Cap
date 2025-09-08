@@ -108,6 +108,10 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	password?: string | null;
 	hasPassword?: boolean;
+	owner?: {
+		stripeSubscriptionStatus: string | null;
+		thirdPartyStripeSubscriptionId: string | null;
+	};
 };
 
 const ALLOWED_REFERRERS = [
@@ -346,6 +350,10 @@ async function AuthorizedContent({
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
 		hasPassword: number;
+		owner?: {
+			stripeSubscriptionStatus: string | null;
+			thirdPartyStripeSubscriptionId: string | null;
+		};
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
