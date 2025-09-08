@@ -289,7 +289,7 @@ export default async function ShareVideoPage(props: Props) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
@@ -441,7 +441,7 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
-				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				awsRegion: videos.awsRegion,
@@ -652,8 +652,8 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
-		hasPassword: video.hasPassword === 1,
-		ownerIsPro: video.ownerIsPro === 1,
+		hasPassword: Number(video.hasPassword) === 1,
+		ownerIsPro: Number(video.ownerIsPro) === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
