@@ -196,13 +196,18 @@ export const Share = ({
 			if (aiGenerationEnabled && aiData.processing === true) {
 				return true;
 			}
-			return false;
 		}
 
 		return false;
 	};
 
 	const aiLoading = shouldShowLoading();
+
+	console.log({
+		transcriptionStatus,
+		aiData,
+		aiGenerationEnabled,
+	});
 
 	console.log({
 		aiLoading,
