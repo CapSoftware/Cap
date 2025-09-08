@@ -241,7 +241,7 @@ export const Share = ({
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
 				<div className="flex-1">
-					<div className="overflow-hidden relative p-3 aspect-video new-card-style">
+					<div className="overflow-hidden relative bg-white rounded-2xl border aspect-video border-gray-5">
 						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-hidden rounded-xl">
 							<ShareVideo
 								data={{ ...data, transcriptionStatus }}
@@ -333,7 +333,7 @@ export const Share = ({
 				{!aiLoading &&
 					(aiData?.summary ||
 						(aiData?.chapters && aiData.chapters.length > 0)) && (
-						<div className="p-4 new-card-style">
+						<div className="p-4 bg-white rounded-2xl border border-gray-3">
 							{aiData?.summary && (
 								<>
 									<h3 className="text-lg font-medium">Summary</h3>

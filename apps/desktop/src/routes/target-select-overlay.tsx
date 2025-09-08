@@ -23,6 +23,7 @@ import {
 import { createStore, reconcile } from "solid-js/store";
 import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
+import { createOptionsQuery } from "~/utils/queries";
 import {
 	commands,
 	type DisplayId,

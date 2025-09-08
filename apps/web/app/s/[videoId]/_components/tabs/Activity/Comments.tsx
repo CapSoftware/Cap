@@ -228,7 +228,7 @@ export const Comments = Object.assign(
 					{props.children}
 				</div>
 
-				<div className="flex-none p-2 border-t border-gray-200 bg-gray-1">
+				<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
 					{props.user ? (
 						<CommentInput
 							{...props.commentInputProps}

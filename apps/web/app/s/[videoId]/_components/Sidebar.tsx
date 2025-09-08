@@ -155,9 +155,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		};
 
 		return (
-			<div className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
+			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
 				<div className="flex-none">
-					<div className="flex border-b border-gray-200">
+					<div className="flex border-b border-gray-5">
 						{tabs.map((tab) => (
 							<button
 								key={tab.id}
