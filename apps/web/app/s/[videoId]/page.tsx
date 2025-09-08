@@ -311,7 +311,7 @@ export default async function ShareVideoPage(props: Props) {
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),
-		Effect.map((data, idx) => (
+		Effect.map((data) => (
 			<div className="flex flex-col min-h-screen bg-gray-2">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
