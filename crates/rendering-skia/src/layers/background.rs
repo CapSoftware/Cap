@@ -58,9 +58,11 @@ impl From<BackgroundSource> for Background {
 pub struct BackgroundLayer {
     // Current background configuration
     current_background: Option<Background>,
+    current_border: Option<cap_project::BorderConfiguration>,
 
     // Track what we rendered last to detect changes
     last_rendered_background: Option<Background>,
+    last_rendered_border: Option<cap_project::BorderConfiguration>,
     last_rendered_size: (u32, u32),
 
     // For image backgrounds
@@ -72,7 +74,9 @@ impl BackgroundLayer {
     pub fn new() -> Self {
         Self {
             current_background: None,
+            current_border: None,
             last_rendered_background: None,
+            last_rendered_border: None,
             last_rendered_size: (0, 0),
             image_path: None,
             loaded_image: None,
@@ -102,6 +106,41 @@ impl BackgroundLayer {
         }
     }
 
+    fn render_border(
+        &self,
+        canvas: &Canvas,
+        bounds: Rect,
+        border: &cap_project::BorderConfiguration,
+    ) {
+        if !border.enabled || border.width <= 0.0 {
+            return;
+        }
+
+        let mut paint = Paint::default();
+        paint.set_style(skia_safe::PaintStyle::Stroke);
+        paint.set_stroke_width(border.width);
+        paint.set_anti_alias(true);
+
+        let alpha = ((border.opacity / 100.0).clamp(0.0, 1.0) * 255.0) as u8;
+        let border_color = Color::from_argb(
+            alpha,
+            (border.color[0] >> 8) as u8,
+            (border.color[1] >> 8) as u8,
+            (border.color[2] >> 8) as u8,
+        );
+        paint.set_color(border_color);
+
+        let inset = border.width / 2.0;
+        let border_rect = Rect::from_xywh(
+            bounds.left() + inset,
+            bounds.top() + inset,
+            (bounds.width() - border.width).max(0.0),
+            (bounds.height() - border.width).max(0.0),
+        );
+
+        canvas.draw_rect(border_rect, &paint);
+    }
+
     fn render_color(&self, canvas: &Canvas, color: &[u16; 3], _bounds: Rect) {
         // Convert from u16 (0-65535) to u8 (0-255)
         let skia_color = Color::from_argb(
@@ -121,7 +160,6 @@ impl BackgroundLayer {
         angle: u16,
         bounds: Rect,
     ) {
-        // Convert colors from u16 (0-65535) to u8 (0-255)
         let start_color = Color::from_argb(
             255, // Full opacity
             (from[0] >> 8) as u8,
@@ -208,8 +246,16 @@ impl RecordableLayer for BackgroundLayer {
         let canvas = recorder.begin_recording(bounds, None);
         self.render_background(canvas, bounds);
 
+        // Render border if enabled
+        if let Some(border) = &uniforms.border {
+            if border.enabled {
+                self.render_border(canvas, bounds, border);
+            }
+        }
+
         // Update what was last rendered
         self.last_rendered_background = self.current_background.clone();
+        self.last_rendered_border = self.current_border.clone();
         self.last_rendered_size = uniforms.output_size;
 
         recorder.finish_recording_as_picture(None)
@@ -217,10 +263,12 @@ impl RecordableLayer for BackgroundLayer {
 
     fn needs_update(&self, uniforms: &SkiaProjectUniforms) -> bool {
         let new_background = Background::from(uniforms.background.clone());
+        let new_border = uniforms.border.clone();
         let new_size = uniforms.output_size;
 
         // Check against what was last rendered, not what's currently prepared
         self.last_rendered_background.as_ref() != Some(&new_background)
+            || self.last_rendered_border != new_border
             || self.last_rendered_size != new_size
     }
 
@@ -261,6 +309,7 @@ impl RecordableLayer for BackgroundLayer {
 
         // Update current state (but not last_rendered, that happens in record())
         self.current_background = Some(new_background);
+        self.current_border = frame_data.uniforms.border.clone();
 
         Ok(())
     }

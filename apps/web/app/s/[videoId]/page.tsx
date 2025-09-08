@@ -108,10 +108,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	password?: string | null;
 	hasPassword?: boolean;
-	owner?: {
-		stripeSubscriptionStatus: string | null;
-		thirdPartyStripeSubscriptionId: string | null;
-	} | null;
+	ownerIsPro?: boolean;
 };
 
 const ALLOWED_REFERRERS = [
@@ -292,11 +289,7 @@ export default async function ShareVideoPage(props: Props) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					owner: {
-						stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-						thirdPartyStripeSubscriptionId:
-							users.thirdPartyStripeSubscriptionId,
-					},
+					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
@@ -350,10 +343,7 @@ async function AuthorizedContent({
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
 		hasPassword: number;
-		owner: {
-			stripeSubscriptionStatus: string | null;
-			thirdPartyStripeSubscriptionId: string | null;
-		} | null;
+		ownerIsPro?: number;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -451,10 +441,7 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
-				owner: {
-					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
-					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
-				},
+				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				awsRegion: videos.awsRegion,
@@ -665,7 +652,8 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
-		hasPassword: video.hasPassword === 1,
+		hasPassword: Number(video.hasPassword) === 1,
+		ownerIsPro: Number(video.ownerIsPro) === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,
