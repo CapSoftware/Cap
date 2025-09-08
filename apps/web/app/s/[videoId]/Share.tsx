@@ -114,18 +114,16 @@ const useVideoStatus = (
 				}
 
 				if (data.transcriptionStatus === "COMPLETE") {
-					if (!aiGenerationEnabled) {
-						return false;
+					if (aiGenerationEnabled) {
+						const noAiData = !(
+							data.aiTitle ||
+							data.summary ||
+							(data.chapters && data.chapters.length > 0)
+						);
+						if (data.aiProcessing || noAiData) {
+							return true;
+						}
 					}
-
-					if (data.aiProcessing) {
-						return true;
-					}
-
-					if (!data.summary && !data.chapters) {
-						return true;
-					}
-
 					return false;
 				}
 
@@ -184,10 +182,7 @@ export const Share = ({
 	);
 
 	const shouldShowLoading = () => {
-		if (!aiGenerationEnabled) {
-			return false;
-		}
-
+		// Show loading while transcription is pending or processing regardless of AI flag
 		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
 			return true;
 		}
@@ -197,21 +192,24 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			// if (aiData.generationError) {
-			// 	return false;
-			// }
-			if (aiData.processing === true) {
+			// Only show loading for AI if enabled and currently processing
+			if (aiGenerationEnabled && aiData.processing === true) {
 				return true;
 			}
-			if (!aiData.summary && !aiData.chapters) {
-				return true;
-			}
+			return false;
 		}
 
 		return false;
 	};
 
 	const aiLoading = shouldShowLoading();
+
+	console.log({
+		aiLoading,
+		aiData,
+		transcriptionStatus,
+		aiGenerationEnabled,
+	});
 
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {

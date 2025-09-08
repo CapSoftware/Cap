@@ -213,16 +213,43 @@ export async function getVideoStatus(
 				}
 			})();
 
-			return {
-				transcriptionStatus:
-					(video.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
-					null,
-				aiProcessing: true,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-				// generationError: metadata.generationError || null,
-			};
+			const updatedVideo = await db()
+				.select({
+					transcriptionStatus: videos.transcriptionStatus,
+					metadata: videos.metadata,
+				})
+				.from(videos)
+				.where(eq(videos.id, videoId))
+				.limit(1);
+			if (updatedVideo.length > 0) {
+				const row = updatedVideo[0];
+				if (!row) {
+					return {
+						transcriptionStatus:
+							(video.transcriptionStatus as
+								| "PROCESSING"
+								| "COMPLETE"
+								| "ERROR") || null,
+						aiProcessing: metadata.aiProcessing || false,
+						aiTitle: metadata.aiTitle || null,
+						summary: metadata.summary || null,
+						chapters: metadata.chapters || null,
+						// generationError: metadata.generationError || null,
+					};
+				}
+				const updatedMetadata = (row.metadata as VideoMetadata) || {};
+
+				return {
+					transcriptionStatus:
+						(row.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
+						null,
+					aiProcessing: updatedMetadata.aiProcessing || false,
+					aiTitle: updatedMetadata.aiTitle || null,
+					summary: updatedMetadata.summary || null,
+					chapters: updatedMetadata.chapters || null,
+					// generationError: updatedMetadata.generationError || null,
+				};
+			}
 		} else {
 			const videoOwner = videoOwnerQuery[0];
 			console.log(
