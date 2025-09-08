@@ -214,19 +214,35 @@ export async function getVideoStatus(
 			})();
 
 			const updatedVideo = await db()
-				.select()
+				.select({
+					transcriptionStatus: videos.transcriptionStatus,
+					metadata: videos.metadata,
+				})
 				.from(videos)
-				.where(eq(videos.id, videoId));
-			if (updatedVideo.length > 0 && updatedVideo[0]) {
-				const updatedMetadata =
-					(updatedVideo[0].metadata as VideoMetadata) || {};
+				.where(eq(videos.id, videoId))
+				.limit(1);
+			if (updatedVideo.length > 0) {
+				const row = updatedVideo[0];
+				if (!row) {
+					return {
+						transcriptionStatus:
+							(video.transcriptionStatus as
+								| "PROCESSING"
+								| "COMPLETE"
+								| "ERROR") || null,
+						aiProcessing: metadata.aiProcessing || false,
+						aiTitle: metadata.aiTitle || null,
+						summary: metadata.summary || null,
+						chapters: metadata.chapters || null,
+						// generationError: metadata.generationError || null,
+					};
+				}
+				const updatedMetadata = (row.metadata as VideoMetadata) || {};
 
 				return {
 					transcriptionStatus:
-						(updatedVideo[0].transcriptionStatus as
-							| "PROCESSING"
-							| "COMPLETE"
-							| "ERROR") || null,
+						(row.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
+						null,
 					aiProcessing: updatedMetadata.aiProcessing || false,
 					aiTitle: updatedMetadata.aiTitle || null,
 					summary: updatedMetadata.summary || null,

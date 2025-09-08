@@ -114,14 +114,13 @@ const useVideoStatus = (
 				}
 
 				if (data.transcriptionStatus === "COMPLETE") {
-					if (!aiGenerationEnabled) {
-						return false;
+					if (aiGenerationEnabled) {
+						const noAiData =
+							!(data.aiTitle || data.summary || (data.chapters && data.chapters.length > 0));
+						if (data.aiProcessing || noAiData) {
+							return true;
+						}
 					}
-
-					if (data.aiProcessing) {
-						return true;
-					}
-
 					return false;
 				}
 
