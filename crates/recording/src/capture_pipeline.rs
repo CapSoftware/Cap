@@ -3,40 +3,131 @@ use crate::{
     feeds::microphone::MicrophoneFeedLock,
     pipeline::builder::PipelineBuilder,
     sources::{
-        AudioInputSource, AudioMixer, ScreenCaptureFormat, ScreenCaptureSource,
-        ScreenCaptureTarget, screen_capture,
+        AudioInputSource, ScreenCaptureFormat, ScreenCaptureSource, ScreenCaptureTarget,
+        screen_capture,
     },
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
+use cpal::StreamInstant;
 use flume::{Receiver, Sender};
 use std::{
     future::Future,
+    ops::Add,
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
-    time::{Instant, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
+#[cfg(windows)]
+mod win {
+    use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
+
+    use super::*;
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct PerformanceCounterTimestamp(i64);
+
+    impl PerformanceCounterTimestamp {
+        pub fn new(value: i64) -> Self {
+            Self(value)
+        }
+
+        pub fn duration_since(&self, other: Self) -> Duration {
+            let mut freq = 0;
+            unsafe { QueryPerformanceFrequency(&mut freq).unwrap() };
+
+            Duration::from_secs_f64((self.0 - other.0) as f64 / freq as f64)
+        }
+
+        pub fn from_cpal(instant: StreamInstant) -> Self {
+            use cpal::host::wasapi::StreamInstantExt;
+
+            Self(instant.as_performance_counter())
+        }
+
+        pub fn now() -> Self {
+            let mut value = 0;
+            unsafe { QueryPerformanceCounter(&mut value).unwrap() };
+            Self(value)
+        }
+    }
+
+    impl Add<Duration> for PerformanceCounterTimestamp {
+        type Output = Self;
+
+        fn add(self, rhs: Duration) -> Self::Output {
+            let mut freq = 0;
+            unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
+            Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i64)
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use win::*;
+
+#[derive(Clone, Copy, Debug)]
 pub enum SourceTimestamp {
     Instant(Instant),
     SystemTime(SystemTime),
     #[cfg(windows)]
-    PerformanceCounter(u64),
+    PerformanceCounter(PerformanceCounterTimestamp),
 }
 
-struct StartSourceTimestamp {
+impl SourceTimestamp {
+    pub fn duration_since(&self, start: SourceTimestamps) -> Duration {
+        match self {
+            Self::Instant(instant) => instant.duration_since(start.instant),
+            Self::SystemTime(time) => time.duration_since(start.system_time).unwrap(),
+            #[cfg(windows)]
+            Self::PerformanceCounter(counter) => counter.duration_since(start.performance_counter),
+        }
+    }
+
+    pub fn from_cpal(instant: StreamInstant) -> Self {
+        #[cfg(windows)]
+        Self::PerformanceCounter(PerformanceCounterTimestamp::from_cpal(instant))
+    }
+}
+
+impl Add<Duration> for &SourceTimestamp {
+    type Output = SourceTimestamp;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        match *self {
+            SourceTimestamp::Instant(i) => SourceTimestamp::Instant(i + rhs),
+            SourceTimestamp::SystemTime(t) => SourceTimestamp::SystemTime(t + rhs),
+            #[cfg(windows)]
+            SourceTimestamp::PerformanceCounter(c) => SourceTimestamp::PerformanceCounter(c + rhs),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SourceTimestamps {
     instant: Instant,
     system_time: SystemTime,
     #[cfg(windows)]
-    performance_counter: u64,
+    performance_counter: PerformanceCounterTimestamp,
 }
 
-impl StartSourceTimestamp {
-    fn new() -> Self {
+impl SourceTimestamps {
+    pub fn now() -> Self {
         Self {
             instant: Instant::now(),
             system_time: SystemTime::now(),
+            #[cfg(windows)]
+            performance_counter: PerformanceCounterTimestamp::now(),
         }
+    }
+
+    pub fn instant(&self) -> Instant {
+        self.instant
+    }
+
+    pub fn system_time(&self) -> SystemTime {
+        self.system_time
     }
 }
 
@@ -45,10 +136,10 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
+            flume::Receiver<(Self::VideoFormat, SourceTimestamp)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError>
+    ) -> Result<(PipelineBuilder, flume::Receiver<SourceTimestamp>), MediaError>
     where
         Self: Sized;
 
@@ -56,10 +147,10 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
         builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
+            flume::Receiver<(Self::VideoFormat, SourceTimestamp)>,
         ),
         audio: Option<Arc<MicrophoneFeedLock>>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
+        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, SourceTimestamp)>, AudioInfo)>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
     ) -> impl Future<Output = Result<PipelineBuilder, MediaError>> + Send
@@ -73,10 +164,10 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
+            flume::Receiver<(Self::VideoFormat, SourceTimestamp)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError> {
+    ) -> Result<(PipelineBuilder, flume::Receiver<SourceTimestamp>), MediaError> {
         let screen_config = source.0.info();
         tracing::info!("screen config: {:?}", screen_config);
 
@@ -180,7 +271,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                 let _ = ready.send(Ok(()));
                 let mut time = None;
 
-                while let Ok(mut frame) = audio_rx.recv() {
+                while let Ok((mut frame, duration, start_timestamps)) = audio_rx.recv() {
                     let pts = frame.pts().unwrap();
 
                     if let Ok(first_time) = first_frame_rx.try_recv() {
@@ -251,10 +342,10 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
+            flume::Receiver<(Self::VideoFormat, SourceTimestamp)>,
         ),
         output_path: PathBuf,
-    ) -> Result<(PipelineBuilder, flume::Receiver<f64>), MediaError>
+    ) -> Result<(PipelineBuilder, flume::Receiver<SourceTimestamp>), MediaError>
     where
         Self: Sized,
     {
@@ -281,7 +372,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
             match native_encoder {
                 Ok(encoder) => {
-                    let mut muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+                    let muxer = cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
                         &mut output,
                         cap_mediafoundation_ffmpeg::MuxerConfig {
                             width: screen_config.width,
@@ -405,31 +496,38 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mut builder: PipelineBuilder,
         source: (
             ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, f64)>,
+            flume::Receiver<(Self::VideoFormat, SourceTimestamp)>,
         ),
         audio: Option<Arc<MicrophoneFeedLock>>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, f64)>, AudioInfo)>,
+        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, SourceTimestamp)>, AudioInfo)>,
         output_path: PathBuf,
         _pause_flag: Arc<AtomicBool>,
     ) -> Result<PipelineBuilder, MediaError>
     where
         Self: Sized,
     {
+        use std::sync::mpsc;
+
         use cap_enc_ffmpeg::{AACEncoder, AudioEncoder};
         use windows::Graphics::SizeInt32;
 
+        use crate::sources::new_audio_mixer;
+
         cap_mediafoundation_utils::thread_init();
 
+        let start_time = SourceTimestamps::now();
+
         let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = AudioMixer::new(audio_tx);
+        let mut audio_mixer = new_audio_mixer::AudioMixer::builder(audio_tx);
 
         if let Some(system_audio) = system_audio {
             audio_mixer.add_source(system_audio.1, system_audio.0);
         }
 
         if let Some(audio) = audio {
-            let sink = audio_mixer.sink(*audio.audio_info());
-            let source = AudioInputSource::init(audio, sink.tx, SystemTime::now());
+            let (tx, rx) = flume::bounded(32);
+            audio_mixer.add_source(*audio.audio_info(), rx);
+            let source = AudioInputSource::init(audio, tx);
 
             builder.spawn_source("microphone_capture", source);
         }
@@ -492,7 +590,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let audio_encoder = has_audio_sources
             .then(|| {
-                AACEncoder::init("mic_audio", AudioMixer::info(), &mut output)
+                AACEncoder::init("mic_audio", new_audio_mixer::AudioMixer::INFO, &mut output)
                     .map(|v| v.boxed())
                     .map_err(|e| MediaError::Any(e.to_string().into()))
             })
@@ -505,14 +603,40 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let output = Arc::new(std::sync::Mutex::new(output));
 
+        let (screen_first_tx, screen_first_rx) = mpsc::sync_channel(1);
+
         if let Some(mut audio_encoder) = audio_encoder {
             builder.spawn_source("audio_mixer", audio_mixer);
 
             // let is_done = is_done.clone();
             let output = output.clone();
             builder.spawn_task("audio_encoding", move |ready| {
+                let screen_first_offset = loop {
+                    match screen_first_rx.recv_timeout(Duration::from_millis(5)) {
+                        Ok(offset) => {
+                            audio_rx.drain().count();
+                            break offset;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
+                    }
+                };
+
                 let _ = ready.send(Ok(()));
-                while let Ok(frame) = audio_rx.recv() {
+
+                while let Ok((mut frame, timestamp)) = audio_rx.recv() {
+                    let ts_offset = timestamp.duration_since(start_time);
+                    // dbg!(ts_offset, frame.samples());
+
+                    let Some(ts_offset) = ts_offset.checked_sub(screen_first_offset) else {
+                        continue;
+                    };
+
+                    let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
+                    frame.set_pts(Some(pts));
+
+                    // dbg!(pts);
+
                     if let Ok(mut output) = output.lock() {
                         audio_encoder.queue_frame(frame, &mut *output);
                     }
@@ -532,6 +656,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                     let _ = ready.send(Ok(()));
 
+                    let mut screen_first_tx = Some(screen_first_tx);
+
                     while let Ok(e) = encoder.get_event() {
                         match e {
                             MediaFoundation::METransformNeedInput => {
@@ -543,6 +669,15 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                                     .inner()
                                     .SystemRelativeTime()
                                     .map_err(|e| format!("Frame Time: {e}"))?;
+
+                                let timestamp = SourceTimestamp::PerformanceCounter(
+                                    PerformanceCounterTimestamp::new(frame_time.Duration),
+                                );
+
+                                if let Some(screen_first_tx) = screen_first_tx.take() {
+                                    let _ = screen_first_tx
+                                        .try_send(timestamp.duration_since(start_time));
+                                }
 
                                 encoder
                                     .handle_needs_input(frame.texture(), frame_time)
@@ -611,7 +746,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
 type ScreenCaptureReturn<T> = (
     ScreenCaptureSource<T>,
-    Receiver<(<T as ScreenCaptureFormat>::VideoFormat, f64)>,
+    Receiver<(<T as ScreenCaptureFormat>::VideoFormat, SourceTimestamp)>,
 );
 
 #[cfg(target_os = "macos")]
@@ -624,8 +759,7 @@ pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     force_show_cursor: bool,
     max_fps: u32,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
-    start_time: SystemTime,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, SourceTimestamp)>>,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
@@ -636,7 +770,6 @@ pub async fn create_screen_capture(
         max_fps,
         video_tx,
         audio_tx,
-        start_time,
         tokio::runtime::Handle::current(),
         #[cfg(windows)]
         d3d_device,

@@ -1,3 +1,4 @@
+use crate::capture_pipeline::SourceTimestamp;
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
 use cpal::{
     Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
@@ -21,6 +22,7 @@ pub struct MicrophoneSamples {
     pub data: Vec<u8>,
     pub format: SampleFormat,
     pub info: InputCallbackInfo,
+    pub timestamp: SourceTimestamp,
 }
 
 #[derive(Actor)]
@@ -297,6 +299,7 @@ impl Message<SetInput> for MicrophoneFeed {
                                     data: data.bytes().to_vec(),
                                     format: data.sample_format(),
                                     info: info.clone(),
+                                    timestamp: SourceTimestamp::from_cpal(info.timestamp().capture),
                                 })
                                 .try_send();
                         }

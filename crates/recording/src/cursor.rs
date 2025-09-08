@@ -5,6 +5,8 @@ use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
+use crate::capture_pipeline::SourceTimestamps;
+
 pub struct Cursor {
     pub file_name: String,
     pub id: u32,
@@ -41,7 +43,7 @@ pub fn spawn_cursor_recorder(
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
-    start_time: SystemTime,
+    start_time: SourceTimestamps,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
@@ -81,10 +83,7 @@ pub fn spawn_cursor_recorder(
                 break;
             };
 
-            let Ok(elapsed) = start_time.elapsed() else {
-                continue;
-            };
-            let elapsed = elapsed.as_secs_f64() * 1000.0;
+            let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
             let cursor_data = get_cursor_data();

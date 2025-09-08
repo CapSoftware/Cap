@@ -13,7 +13,9 @@ use tracing::{Instrument, debug, error, info, trace};
 
 use crate::{
     ActorError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, SourceTimestamp, SourceTimestamps, create_screen_capture,
+    },
     feeds::microphone::MicrophoneFeedLock,
     pipeline::Pipeline,
     sources::{ScreenCaptureSource, ScreenCaptureTarget},
@@ -112,10 +114,10 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: (
         ScreenCaptureSource<TCaptureFormat>,
-        flume::Receiver<(TCaptureFormat::VideoFormat, f64)>,
+        flume::Receiver<(TCaptureFormat::VideoFormat, SourceTimestamp)>,
     ),
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    system_audio: Option<Receiver<(ffmpeg::frame::Audio, f64)>>,
+    system_audio: Option<Receiver<(ffmpeg::frame::Audio, SourceTimestamp)>>,
 ) -> Result<
     (
         InstantRecordingPipeline,
@@ -171,8 +173,6 @@ pub async fn spawn_instant_recording_actor(
 > {
     ensure_dir(&recording_dir)?;
 
-    let start_time = SystemTime::now();
-
     let (done_tx, done_rx) = oneshot::channel();
 
     trace!("creating recording actor");
@@ -195,7 +195,6 @@ pub async fn spawn_instant_recording_actor(
         true,
         30,
         system_audio.0,
-        start_time,
         #[cfg(windows)]
         d3d_device,
     )

@@ -115,8 +115,8 @@ mod windows {
                     &selected_format.media_type,
                     Box::new(|frame| {
                         unsafe { dbg!(frame.sample.GetActualDataLength()) };
-                        dbg!(frame.media_type.subtype_str());
-                        dbg!(frame.reference_time);
+                        // dbg!(frame.media_type.subtype_str());
+                        // dbg!(frame.reference_time);
                         dbg!(frame.timestamp);
                     }),
                 )

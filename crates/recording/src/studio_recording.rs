@@ -1,6 +1,9 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
+    capture_pipeline::{
+        MakeCapturePipeline, ScreenCaptureMethod, SourceTimestamp, SourceTimestamps,
+        create_screen_capture,
+    },
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     pipeline::Pipeline,
@@ -61,7 +64,7 @@ pub struct StudioRecordingSegment {
 
 pub struct PipelineOutput {
     pub path: PathBuf,
-    pub first_timestamp_rx: flume::Receiver<f64>,
+    pub first_timestamp_rx: flume::Receiver<SourceTimestamp>,
 }
 
 pub struct ScreenPipelineOutput {
@@ -70,6 +73,7 @@ pub struct ScreenPipelineOutput {
 }
 
 struct StudioRecordingPipeline {
+    pub start_time: SourceTimestamps,
     pub inner: Pipeline,
     pub screen: ScreenPipelineOutput,
     pub microphone: Option<PipelineOutput>,
@@ -489,38 +493,46 @@ async fn stop_recording(
         RelativePathBuf::from_path(path.strip_prefix(&actor.recording_dir).unwrap()).unwrap()
     };
 
-    let recv_timestamp = |pipeline: &PipelineOutput| pipeline.first_timestamp_rx.try_recv().ok();
-
     let meta = StudioRecordingMeta::MultipleSegments {
         inner: MultipleSegments {
             segments: {
                 actor
                     .segments
                     .iter()
-                    .map(|s| MultipleSegment {
-                        display: VideoMeta {
-                            path: make_relative(&s.pipeline.screen.inner.path),
-                            fps: actor.fps,
-                            start_time: recv_timestamp(&s.pipeline.screen.inner),
-                        },
-                        camera: s.pipeline.camera.as_ref().map(|camera| VideoMeta {
-                            path: make_relative(&camera.inner.path),
-                            fps: camera.fps,
-                            start_time: recv_timestamp(&camera.inner),
-                        }),
-                        mic: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
-                            path: make_relative(&mic.path),
-                            start_time: recv_timestamp(mic),
-                        }),
-                        cursor: s
-                            .pipeline
-                            .cursor
-                            .as_ref()
-                            .map(|cursor| make_relative(&cursor.output_path)),
-                        system_audio: s.pipeline.system_audio.as_ref().map(|audio| AudioMeta {
-                            path: make_relative(&audio.path),
-                            start_time: recv_timestamp(audio),
-                        }),
+                    .map(|s| {
+                        let recv_timestamp = |pipeline: &PipelineOutput| {
+                            pipeline
+                                .first_timestamp_rx
+                                .try_recv()
+                                .ok()
+                                .map(|v| v.duration_since(s.pipeline.start_time).as_secs_f64())
+                        };
+
+                        MultipleSegment {
+                            display: VideoMeta {
+                                path: make_relative(&s.pipeline.screen.inner.path),
+                                fps: actor.fps,
+                                start_time: recv_timestamp(&s.pipeline.screen.inner),
+                            },
+                            camera: s.pipeline.camera.as_ref().map(|camera| VideoMeta {
+                                path: make_relative(&camera.inner.path),
+                                fps: camera.fps,
+                                start_time: recv_timestamp(&camera.inner),
+                            }),
+                            mic: s.pipeline.microphone.as_ref().map(|mic| AudioMeta {
+                                path: make_relative(&mic.path),
+                                start_time: recv_timestamp(mic),
+                            }),
+                            cursor: s
+                                .pipeline
+                                .cursor
+                                .as_ref()
+                                .map(|cursor| make_relative(&cursor.output_path)),
+                            system_audio: s.pipeline.system_audio.as_ref().map(|audio| AudioMeta {
+                                path: make_relative(&audio.path),
+                                start_time: recv_timestamp(audio),
+                            }),
+                        }
                     })
                     .collect()
             },
@@ -662,6 +674,8 @@ async fn create_segment_pipeline(
     ),
     CreateSegmentPipelineError,
 > {
+    let start_time = SourceTimestamps::now();
+
     let system_audio = if capture_system_audio {
         let (tx, rx) = flume::bounded(64);
         (Some(tx), Some(rx))
@@ -684,7 +698,6 @@ async fn create_segment_pipeline(
         !custom_cursor_capture,
         120,
         system_audio.0,
-        start_time,
         #[cfg(windows)]
         d3d_device,
     )
@@ -731,7 +744,7 @@ async fn create_segment_pipeline(
     let microphone = if let Some(mic_feed) = mic_feed {
         let (tx, rx) = flume::bounded(8);
 
-        let mic_source = AudioInputSource::init(mic_feed, tx, start_time);
+        let mic_source = AudioInputSource::init(mic_feed, tx);
 
         let mic_config = mic_source.info();
         let output_path = dir.join("audio-input.ogg");
@@ -744,7 +757,7 @@ async fn create_segment_pipeline(
 
         pipeline_builder.spawn_source("microphone_capture", mic_source);
 
-        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
+        let (timestamp_tx, first_timestamp_rx) = flume::bounded(1);
 
         pipeline_builder.spawn_task("microphone_encoder", move |ready| {
             let mut timestamp_tx = Some(timestamp_tx);
@@ -768,7 +781,7 @@ async fn create_segment_pipeline(
 
         Some(PipelineOutput {
             path: output_path,
-            first_timestamp_rx: timestamp_rx,
+            first_timestamp_rx,
         })
     } else {
         None
@@ -840,11 +853,11 @@ async fn create_segment_pipeline(
                 }
 
                 if let Some(start) = start {
-                    frame.0.set_pts(Some(
-                        ((camera_config.time_base.denominator() as f64
-                            / camera_config.time_base.numerator() as f64)
-                            * (frame.1 - start)) as i64,
-                    ));
+                    // frame.0.set_pts(Some(
+                    //     ((camera_config.time_base.denominator() as f64
+                    //         / camera_config.time_base.numerator() as f64)
+                    //         * (frame.1 - start)) as i64,
+                    // ));
                 } else {
                     start = Some(frame.1);
                     frame.0.set_pts(Some(0));
@@ -903,6 +916,7 @@ async fn create_segment_pipeline(
     Ok((
         StudioRecordingPipeline {
             inner: pipeline,
+            start_time,
             screen,
             microphone,
             camera,

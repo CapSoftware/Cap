@@ -16,13 +16,16 @@ use tracing::{debug, error, trace, warn};
 
 use cap_camera_ffmpeg::*;
 
+#[cfg(windows)]
+use crate::capture_pipeline::PerformanceCounterTimestamp;
+use crate::capture_pipeline::SourceTimestamp;
+
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
     pub frame: frame::Video,
-    pub timestamp: Duration,
-    pub reference_time: Instant,
+    pub timestamp: SourceTimestamp,
 }
 
 #[derive(Actor)]
@@ -282,8 +285,10 @@ async fn setup_camera(
             let _ = recipient
                 .tell(NewFrame(RawCameraFrame {
                     frame: ff_frame,
-                    timestamp: frame.timestamp,
-                    reference_time: frame.reference_time,
+                    #[cfg(windows)]
+                    timestamp: SourceTimestamp::PerformanceCounter(
+                        PerformanceCounterTimestamp::new(frame.native().perf_counter),
+                    ),
                 }))
                 .try_send();
         })
