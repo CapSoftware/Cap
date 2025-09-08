@@ -122,10 +122,6 @@ const useVideoStatus = (
 						return true;
 					}
 
-					if (!data.summary && !data.chapters) {
-						return true;
-					}
-
 					return false;
 				}
 
@@ -201,9 +197,6 @@ export const Share = ({
 			// 	return false;
 			// }
 			if (aiData.processing === true) {
-				return true;
-			}
-			if (!aiData.summary && !aiData.chapters) {
 				return true;
 			}
 
