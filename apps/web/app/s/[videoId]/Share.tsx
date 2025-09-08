@@ -206,6 +206,8 @@ export const Share = ({
 			if (!aiData.summary && !aiData.chapters) {
 				return true;
 			}
+
+			return false;
 		}
 
 		return false;
