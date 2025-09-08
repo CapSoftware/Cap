@@ -928,6 +928,7 @@ dependencies = [
 name = "cap-camera-mediafoundation"
 version = "0.1.0"
 dependencies = [
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "tracing",
@@ -941,6 +942,7 @@ version = "0.1.0"
 dependencies = [
  "cap-camera-directshow",
  "cap-camera-mediafoundation",
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "windows 0.60.0",
@@ -951,6 +953,7 @@ dependencies = [
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
 ]
@@ -1094,13 +1097,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-enc-avfoundation"
+version = "0.1.0"
+dependencies = [
+ "cap-ffmpeg-utils",
+ "cap-media-info",
+ "cidre 0.11.0",
+ "ffmpeg-next",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "ffmpeg-next",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-gif"
+version = "0.1.0"
+dependencies = [
+ "gifski",
+ "imgref",
+ "rgb",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-mediafoundation"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "clap",
+ "futures",
+ "scap-direct3d",
+ "scap-targets",
+ "thiserror 1.0.69",
+ "windows 0.60.0",
+ "windows-core 0.60.1",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
 name = "cap-export"
 version = "0.1.0"
 dependencies = [
  "cap-editor",
+ "cap-enc-ffmpeg",
+ "cap-enc-gif",
  "cap-flags",
  "cap-media",
- "cap-media-encoders",
  "cap-media-info",
  "cap-project",
  "cap-rendering",
@@ -1108,9 +1160,12 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "futures",
+ "gifski",
  "image 0.25.6",
+ "imgref",
  "inquire",
  "mp4",
+ "rgb",
  "serde",
  "serde_json",
  "specta",
@@ -1125,6 +1180,13 @@ name = "cap-fail"
 version = "0.1.0"
 dependencies = [
  "inventory",
+]
+
+[[package]]
+name = "cap-ffmpeg-utils"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
 ]
 
 [[package]]
@@ -1146,79 +1208,44 @@ dependencies = [
 name = "cap-media"
 version = "0.1.0"
 dependencies = [
- "axum",
- "cap-audio",
- "cap-camera",
- "cap-camera-ffmpeg",
- "cap-camera-windows",
- "cap-cpal-ffmpeg",
- "cap-fail",
- "cap-flags",
- "cap-media-encoders",
  "cap-media-info",
- "cap-project",
- "cidre 0.11.0",
- "cocoa 0.26.1",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
- "flume",
- "futures",
- "gif",
- "image 0.25.6",
- "indexmap 2.10.0",
  "inquire",
- "kameo",
- "num-traits",
- "objc",
- "objc-foundation",
- "objc2-foundation 0.2.2",
- "ringbuf",
- "scap",
- "scap-direct3d",
- "scap-ffmpeg",
- "scap-screencapturekit",
- "scap-targets",
- "screencapturekit",
- "serde",
- "specta",
- "sync_wrapper",
- "tempfile",
  "thiserror 1.0.69",
  "tokio",
- "tokio-util",
- "tracing",
  "tracing-subscriber",
- "windows 0.60.0",
- "windows-capture",
-]
-
-[[package]]
-name = "cap-media-encoders"
-version = "0.1.0"
-dependencies = [
- "cap-audio",
- "cap-fail",
- "cap-flags",
- "cap-media-info",
- "cap-project",
- "cidre 0.11.0",
- "ffmpeg-next",
- "gifski",
- "imgref",
- "rgb",
- "thiserror 1.0.69",
- "tracing",
 ]
 
 [[package]]
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cap-mediafoundation-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "cap-mediafoundation-utils",
+ "ffmpeg-next",
+ "flume",
+ "thiserror 1.0.69",
+ "tracing",
+ "windows 0.60.0",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
+name = "cap-mediafoundation-utils"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+ "windows-core 0.60.1",
 ]
 
 [[package]]
@@ -1244,11 +1271,16 @@ dependencies = [
  "cap-camera-ffmpeg",
  "cap-cursor-capture",
  "cap-cursor-info",
+ "cap-enc-avfoundation",
+ "cap-enc-ffmpeg",
+ "cap-enc-mediafoundation",
  "cap-fail",
+ "cap-ffmpeg-utils",
  "cap-flags",
  "cap-media",
- "cap-media-encoders",
  "cap-media-info",
+ "cap-mediafoundation-ffmpeg",
+ "cap-mediafoundation-utils",
  "cap-project",
  "cap-utils",
  "chrono",
@@ -1523,9 +1555,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.42"
+version = "4.5.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed87a9d530bb41a67537289bafcac159cb3ee28460e0a4571123d2a778a6a882"
+checksum = "7eac00902d9d136acd712710d71823fb8ac8004ca445a89e73a41d45aa712931"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1533,9 +1565,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.42"
+version = "4.5.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f4f3f3c77c94aff3c7e9aac9a2ca1974a5adf392a8bb751e827d6d127ab966"
+checksum = "2ad9bbf750e73b5884fb8a211a9424a1906c1e156724260fdae972f31d70e1d6"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1545,9 +1577,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.41"
+version = "4.5.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4f52386a59ca4c860f7393bcf8abd8dfd91ecccc0f774635ff68e92eeef491"
+checksum = "bbfd7eae0b0f1a6e63d4b13c9c478de77c2eb546fba158ad50b4203dc24b9f9c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -6956,6 +6988,7 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cidre 0.11.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
@@ -7073,12 +7106,13 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "screencapturekit"
-version = "0.3.5"
-source = "git+https://github.com/CapSoftware/screencapturekit-rs?rev=7ff1e103742e56c8f6c2e940b5e52684ed0bed69#7ff1e103742e56c8f6c2e940b5e52684ed0bed69"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c62ae379564f834110c5b020cc731a7c14b8ec4879b4367579a467a0a704c21"
 dependencies = [
  "block2 0.6.1",
  "core-foundation 0.10.1",
- "core-graphics 0.24.0",
+ "core-graphics 0.25.0",
  "core-media-rs",
  "core-utils-rs",
  "core-video-rs",

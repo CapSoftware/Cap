@@ -6,6 +6,9 @@ pub mod pipeline;
 pub mod sources;
 pub mod studio_recording;
 
+pub use instant_recording::{
+    CompletedInstantRecording, InstantRecordingActor, spawn_instant_recording_actor,
+};
 pub use sources::{camera, screen_capture};
 pub use studio_recording::{
     CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,

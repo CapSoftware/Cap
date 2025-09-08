@@ -1,6 +1,6 @@
 use cap_audio::cast_bytes_to_f32_slice;
-
-use cap_media_info::{AudioInfo, PlanarData};
+use cap_ffmpeg_utils::*;
+use cap_media_info::AudioInfo;
 use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
 use std::collections::VecDeque;

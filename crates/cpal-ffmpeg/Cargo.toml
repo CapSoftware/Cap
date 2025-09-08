@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 cpal.workspace = true
 ffmpeg.workspace = true
+cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 [lints]
 workspace = true

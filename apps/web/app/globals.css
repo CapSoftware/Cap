@@ -52,6 +52,10 @@ html {
 	background-color: #f2f2f2;
 }
 
+.left-perspective {
+	transform: scale(1.2) rotateX(47deg) rotateY(31deg) rotate(324deg);
+}
+
 ::-webkit-scrollbar {
 	width: 4px;
 	height: 4px;
@@ -78,6 +82,22 @@ html {
 
 .dark .gray-button-shadow {
 	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.dark .gray-button-border {
+	@apply border-gray-2;
+}
+
+.gray-button-border {
+	@apply border-gray-8;
+}
+
+.dark .dark-button-border {
+	@apply border-gray-2;
+}
+
+.dark-button-border {
+	@apply border-gray-12;
 }
 
 .gray-button-shadow {
@@ -295,8 +315,7 @@ button {
 	@apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
 }
 
-a,
-button {
+a {
 	@apply transition-all;
 }
 

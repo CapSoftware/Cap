@@ -1,6 +1,6 @@
 "use client";
 
-import { Fit, Layout, RiveFile, useRive } from "@rive-app/react-canvas";
+import { Fit, Layout, type RiveFile, useRive } from "@rive-app/react-canvas";
 import React, { useImperativeHandle } from "react";
 import { useTheme } from "../../Contexts";
 
