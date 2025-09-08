@@ -15,7 +15,7 @@ use cap_utils::{ensure_dir, spawn_actor};
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
 use tracing::{error, info};
@@ -746,15 +746,7 @@ async fn handle_recording_finish(
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
-            let final_url = if let Ok(url) =
-                Url::parse_with_params(&video_upload_info.link, &[("on_upload", "1")])
-            {
-                url.as_str().to_string()
-            } else {
-                video_upload_info.link.clone()
-            };
-
-            let _ = open_external_link(app.clone(), final_url);
+            let _ = open_external_link(app.clone(), video_upload_info.link.clone());
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();
