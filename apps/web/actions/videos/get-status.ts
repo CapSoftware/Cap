@@ -218,7 +218,8 @@ export async function getVideoStatus(
 				.from(videos)
 				.where(eq(videos.id, videoId));
 			if (updatedVideo.length > 0 && updatedVideo[0]) {
-				const updatedMetadata = (updatedVideo[0].metadata as VideoMetadata) || {};
+				const updatedMetadata =
+					(updatedVideo[0].metadata as VideoMetadata) || {};
 
 				return {
 					transcriptionStatus:

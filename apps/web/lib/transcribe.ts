@@ -1,11 +1,11 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { createBucketProvider } from "@/utils/s3";
-import type { Video } from "@cap/web-domain";
 
 type TranscribeResult = {
 	success: boolean;
