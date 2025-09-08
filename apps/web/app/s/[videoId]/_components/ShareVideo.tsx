@@ -35,7 +35,12 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect;
+		data: typeof videos.$inferSelect & {
+			owner: {
+				stripeSubscriptionStatus: string | null;
+				thirdPartyStripeSubscriptionId: string | null;
+			};
+		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
@@ -144,6 +149,8 @@ export const ShareVideo = forwardRef<
 		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
 	}
 
+	const isVideoOwnerPro = userIsPro(data.owner);
+
 	return (
 		<>
 			<div className="relative h-full">
@@ -167,7 +174,7 @@ export const ShareVideo = forwardRef<
 				)}
 			</div>
 
-			{!userIsPro(user) && (
+			{!isVideoOwnerPro && (
 				<div className="absolute top-4 left-4 z-30">
 					<div
 						className="block cursor-pointer"

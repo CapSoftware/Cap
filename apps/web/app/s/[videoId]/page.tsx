@@ -288,9 +288,15 @@ export default async function ShareVideoPage(props: Props) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					owner: {
+						stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+						thirdPartyStripeSubscriptionId:
+							users.thirdPartyStripeSubscriptionId,
+					},
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+				.leftJoin(users, eq(videos.ownerId, users.id))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -437,6 +443,10 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
+				owner: {
+					stripeSubscriptionStatus: users.stripeSubscriptionStatus,
+					thirdPartyStripeSubscriptionId: users.thirdPartyStripeSubscriptionId,
+				},
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				awsRegion: videos.awsRegion,
@@ -459,6 +469,7 @@ async function AuthorizedContent({
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+			.leftJoin(users, eq(videos.ownerId, users.id))
 			.where(eq(videos.id, videoId))
 			.execute();
 
