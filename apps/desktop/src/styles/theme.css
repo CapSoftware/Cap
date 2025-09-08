@@ -171,7 +171,6 @@
 	@apply border-gray-12;
 }
 
-
 [data-transparent-window] {
 	background: transparent !important;
 }
