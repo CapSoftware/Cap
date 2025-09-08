@@ -544,39 +544,12 @@ function Page() {
 									auth.data?.plan?.upgraded === false
 										? "Start 5 min recording"
 										: "Start recording"}
-									{/*<Show
-									when={
-
-									}
-									fallback="Start recording"
-								>
-								Start 5 min recording
-								</Show>*/}
 								</>
 							)}
 						</Button>
 					</Tooltip>
 				)}
 			</div>
-
-			{/*<Suspense>
-				<Show
-					when={
-						rawOptions.mode === "instant" && auth.data?.plan?.upgraded === false
-					}
-				>
-					<p class="text-xs text-center">
-						Instant Mode recordings are limited
-						<br /> to 5 mins,{" "}
-						<button
-							class="underline"
-							onClick={() => commands.showWindow("Upgrade")}
-						>
-							Upgrade to Pro
-						</button>
-					</p>
-				</Show>
-			</Suspense>*/}
 		</div>
 	);
 }
