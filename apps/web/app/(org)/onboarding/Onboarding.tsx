@@ -74,7 +74,6 @@ export const Onboarding = () => {
 							id="lastName"
 							name="lastName"
 							placeholder="Last name"
-							required
 							value={lastName}
 							disabled={loading || isRedirecting}
 							onChange={(e) => setLastName(e.target.value)}
@@ -82,7 +81,7 @@ export const Onboarding = () => {
 					</div>
 				</div>
 				<Button
-					disabled={!firstName || !lastName || loading || isRedirecting}
+					disabled={!firstName || loading || isRedirecting}
 					className="mx-auto mt-6 w-full"
 					type="submit"
 					spinner={loading || isRedirecting}

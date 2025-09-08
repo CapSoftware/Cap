@@ -1,8 +1,8 @@
 use cap_cursor_capture::CursorCropBounds;
-use cap_displays::{Display, DisplayId, Window, WindowId, bounds::*};
 use cap_media_info::{AudioInfo, VideoInfo};
 use ffmpeg::sys::AV_TIME_BASE_Q;
 use flume::Sender;
+use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
@@ -77,6 +77,7 @@ impl ScreenCaptureTarget {
         match self {
             Self::Display { .. } => {
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_macos(LogicalBounds::new(
@@ -86,6 +87,7 @@ impl ScreenCaptureTarget {
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     return Some(CursorCropBounds::new_windows(PhysicalBounds::new(
@@ -98,6 +100,7 @@ impl ScreenCaptureTarget {
                 let window = Window::from_id(id)?;
 
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     let display_position = display.raw_handle().logical_position();
@@ -113,6 +116,7 @@ impl ScreenCaptureTarget {
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display_bounds = self.display()?.raw_handle().physical_bounds()?;
                     let window_bounds = window.raw_handle().physical_bounds()?;
@@ -131,11 +135,13 @@ impl ScreenCaptureTarget {
             }
             Self::Area { bounds, .. } => {
                 #[cfg(target_os = "macos")]
+                #[allow(clippy::needless_return)]
                 {
                     return Some(CursorCropBounds::new_macos(*bounds));
                 }
 
                 #[cfg(windows)]
+                #[allow(clippy::needless_return)]
                 {
                     let display = self.display()?;
                     let display_bounds = display.raw_handle().physical_bounds()?;
@@ -192,6 +198,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     start_time: SystemTime,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
+    #[cfg(windows)]
+    d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
@@ -230,12 +238,14 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
             tokio_handle: self.tokio_handle.clone(),
             start_time: self.start_time,
             _phantom: std::marker::PhantomData,
+            #[cfg(windows)]
+            d3d_device: self.d3d_device.clone(),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-struct Config {
+pub struct Config {
     display: DisplayId,
     #[cfg(windows)]
     crop_bounds: Option<PhysicalBounds>,
@@ -243,6 +253,12 @@ struct Config {
     crop_bounds: Option<LogicalBounds>,
     fps: u32,
     show_cursor: bool,
+}
+
+impl Config {
+    pub fn fps(&self) -> u32 {
+        self.fps
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -265,6 +281,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         start_time: SystemTime,
         tokio_handle: tokio::runtime::Handle,
+        #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -275,7 +292,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         let crop_bounds = match target {
             ScreenCaptureTarget::Display { .. } => None,
             ScreenCaptureTarget::Window { id } => {
-                let window = Window::from_id(&id).ok_or(ScreenCaptureInitError::NoWindow)?;
+                let window = Window::from_id(id).ok_or(ScreenCaptureInitError::NoWindow)?;
 
                 #[cfg(target_os = "macos")]
                 {
@@ -389,7 +406,18 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
             tokio_handle,
             start_time,
             _phantom: std::marker::PhantomData,
+            #[cfg(windows)]
+            d3d_device,
         })
+    }
+
+    #[cfg(windows)]
+    pub fn d3d_device(&self) -> &::windows::Win32::Graphics::Direct3D11::ID3D11Device {
+        &self.d3d_device
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     pub fn info(&self) -> VideoInfo {
@@ -402,7 +430,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
 }
 
 pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
-    cap_displays::Display::list()
+    scap_targets::Display::list()
         .into_iter()
         .filter_map(|display| {
             Some((
@@ -418,7 +446,7 @@ pub fn list_displays() -> Vec<(CaptureDisplay, Display)> {
 }
 
 pub fn list_windows() -> Vec<(CaptureWindow, Window)> {
-    cap_displays::Window::list()
+    scap_targets::Window::list()
         .into_iter()
         .flat_map(|v| {
             let name = v.name()?;

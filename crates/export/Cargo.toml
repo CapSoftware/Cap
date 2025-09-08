@@ -10,7 +10,8 @@ cap-rendering = { path = "../rendering" }
 cap-editor = { path = "../editor" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
-cap-media-encoders = { path = "../media-encoders" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-enc-gif = { path = "../enc-gif" }
 cap-media-info = { path = "../media-info" }
 
 tokio.workspace = true
@@ -24,6 +25,9 @@ serde = { workspace = true }
 specta.workspace = true
 serde_json = "1.0.140"
 tracing.workspace = true
+gifski = "1.32"
+imgref = "1.10"
+rgb = "0.8"
 
 [dev-dependencies]
 clap = { version = "4.5.41", features = ["derive"] }

@@ -43,6 +43,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	organizationId?: string;
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
+	ownerIsPro?: boolean;
 };
 
 interface ShareProps {

@@ -13,13 +13,14 @@ cap-project = { path = "../project" }
 cap-media = { path = "../media" }
 cap-flags = { path = "../flags" }
 cap-utils = { path = "../utils" }
-cap-displays = { path = "../displays" }
+scap-targets = { path = "../scap-targets" }
 cap-cursor-capture = { path = "../cursor-capture" }
-cap-media-encoders = { path = "../media-encoders" }
 cap-media-info = { path = "../media-info" }
 cap-cursor-info = { path = "../cursor-info" }
-cap-camera = { path = "../camera" }
+cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
+cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
+cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -54,12 +55,16 @@ objc = "0.2.7"
 cidre = { workspace = true }
 objc2-app-kit = "0.3.1"
 scap-screencapturekit = { path = "../scap-screencapturekit" }
+cap-enc-avfoundation = { path = "../enc-avfoundation" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
+cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 windows = { workspace = true, features = [
-	"Win32_Foundation",
-	"Win32_Graphics_Gdi",
-	"Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
@@ -67,4 +72,4 @@ scap-cpal = { path = "../scap-cpal" }
 
 [dev-dependencies]
 tempfile = "3.20.0"
-tracing-subscriber = "0.3.19"
+tracing-subscriber = { version = "0.3.19", default-features = false }

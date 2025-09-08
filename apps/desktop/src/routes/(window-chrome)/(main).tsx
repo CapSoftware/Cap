@@ -147,10 +147,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			}
 
 			return screen;
@@ -160,7 +162,8 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
-				win = _windows()?.find((s) => s.id === windowId) ?? _windows()?.[0];
+				win =
+					_windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
 			}
 
 			return win;
@@ -173,7 +176,7 @@ function Page() {
 				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
 			}),
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
+		micName: () => mics.data?.find((name: any) => name === rawOptions.micName),
 	};
 
 	// if target is window and no windows are available, switch to screen capture
@@ -477,13 +480,11 @@ function Page() {
 			<SystemAudio />
 			<div class="flex items-center space-x-1 w-full">
 				{rawOptions.mode === "instant" && !auth.data ? (
-					<>
-						<SignInButton>
-							Sign In for{" "}
-							<IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
-							Instant Mode
-						</SignInButton>
-					</>
+					<SignInButton>
+						Sign In for{" "}
+						<IconCapInstant class="invert-0 dark:invert size-[0.8rem] mx-1" />
+						Instant Mode
+					</SignInButton>
 				) : (
 					<Button
 						disabled={toggleRecording.isPending}

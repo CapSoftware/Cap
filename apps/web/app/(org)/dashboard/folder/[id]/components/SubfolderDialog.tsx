@@ -12,6 +12,8 @@ import {
 import type { Folder } from "@cap/web-domain";
 import { faFolderPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import type { RiveFile } from "@rive-app/react-canvas";
+import { useRiveFile } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { Option } from "effect";
 import { useRouter } from "next/navigation";
@@ -22,6 +24,7 @@ import { withRpc } from "@/lib/Rpcs";
 import { useDashboardContext } from "../../../Contexts";
 import {
 	BlueFolder,
+	type FolderHandle,
 	NormalFolder,
 	RedFolder,
 	YellowFolder,
@@ -37,22 +40,34 @@ const FolderOptions = [
 	{
 		value: "normal",
 		label: "Normal",
-		component: <NormalFolder />,
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <NormalFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "blue",
 		label: "Blue",
-		component: <BlueFolder />,
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <BlueFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "red",
 		label: "Red",
-		component: <RedFolder />,
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <RedFolder riveFile={riveFile} ref={ref} />,
 	},
 	{
 		value: "yellow",
 		label: "Yellow",
-		component: <YellowFolder />,
+		component: (
+			riveFile: RiveFile | undefined,
+			ref: React.Ref<FolderHandle>,
+		) => <YellowFolder riveFile={riveFile} ref={ref} />,
 	},
 ] as const;
 
@@ -65,9 +80,12 @@ export const SubfolderDialog: React.FC<Props> = ({
 		(typeof FolderOptions)[number]["value"] | null
 	>(null);
 	const [folderName, setFolderName] = useState<string>("");
-	const folderRefs = useRef<Record<string, any>>({});
 	const { activeSpace } = useDashboardContext();
 	const router = useRouter();
+
+	const { riveFile } = useRiveFile({
+		src: "/rive/dashboard.riv",
+	});
 
 	useEffect(() => {
 		if (!open) {
@@ -75,6 +93,19 @@ export const SubfolderDialog: React.FC<Props> = ({
 			setFolderName("");
 		}
 	}, [open]);
+
+	const folderRefs = useRef(
+		FolderOptions.reduce(
+			(acc, opt) => {
+				acc[opt.value] = React.createRef<FolderHandle>();
+				return acc;
+			},
+			{} as Record<
+				(typeof FolderOptions)[number]["value"],
+				React.RefObject<FolderHandle>
+			>,
+		),
+	);
 
 	const createSubfolder = useEffectMutation({
 		mutationFn: (data: { name: string; color: Folder.FolderColor }) =>
@@ -115,9 +146,6 @@ export const SubfolderDialog: React.FC<Props> = ({
 					/>
 					<div className="flex flex-wrap gap-2 mt-3">
 						{FolderOptions.map((option) => {
-							const folderRef = useRef<any>(null);
-							folderRefs.current[option.value] = folderRef;
-
 							return (
 								<div
 									className={clsx(
@@ -126,7 +154,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 											? "border-gray-12 bg-gray-3 hover:bg-gray-3 hover:border-gray-12"
 											: "border-gray-4 hover:bg-gray-3 hover:border-gray-5 bg-transparent",
 									)}
-									key={option.value}
+									key={`rive-${option.value}`}
 									onClick={() => {
 										if (selectedColor === option.value) {
 											setSelectedColor(null);
@@ -147,7 +175,10 @@ export const SubfolderDialog: React.FC<Props> = ({
 										folderRef.play("folder-close");
 									}}
 								>
-									{React.cloneElement(option.component, { ref: folderRef })}
+									{option.component(
+										riveFile as RiveFile,
+										folderRefs.current[option.value],
+									)}
 									<p className="text-xs text-gray-10">{option.label}</p>
 								</div>
 							);
@@ -175,7 +206,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 							createSubfolder.isPending
 						}
 					>
-						Create
+						{createSubfolder.isPending ? "Creating..." : "Create"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

@@ -2,7 +2,6 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -35,7 +34,9 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect;
+		data: typeof videos.$inferSelect & {
+			ownerIsPro?: boolean;
+		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
@@ -167,7 +168,7 @@ export const ShareVideo = forwardRef<
 				)}
 			</div>
 
-			{!userIsPro(user) && (
+			{!data.ownerIsPro && (
 				<div className="absolute top-4 left-4 z-30">
 					<div
 						className="block cursor-pointer"

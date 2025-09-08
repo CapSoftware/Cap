@@ -184,6 +184,7 @@ export const Navbar = () => {
 							</Suspense>
 						</div>
 						<button
+							type="button"
 							className="flex md:hidden"
 							onClick={() => setShowMobileMenu(!showMobileMenu)}
 						>

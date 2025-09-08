@@ -108,6 +108,7 @@ type VideoWithOrganization = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	password?: string | null;
 	hasPassword?: boolean;
+	ownerIsPro?: boolean;
 };
 
 const ALLOWED_REFERRERS = [
@@ -288,9 +289,11 @@ export default async function ShareVideoPage(props: Props) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+				.leftJoin(users, eq(videos.ownerId, users.id))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -340,6 +343,7 @@ async function AuthorizedContent({
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
 		hasPassword: number;
+		ownerIsPro?: number;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -437,6 +441,7 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
+				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				awsRegion: videos.awsRegion,
@@ -459,6 +464,7 @@ async function AuthorizedContent({
 			})
 			.from(videos)
 			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+			.leftJoin(users, eq(videos.ownerId, users.id))
 			.where(eq(videos.id, videoId))
 			.execute();
 
@@ -646,7 +652,8 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
-		hasPassword: video.hasPassword === 1,
+		hasPassword: Number(video.hasPassword) === 1,
+		ownerIsPro: Number(video.ownerIsPro) === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,

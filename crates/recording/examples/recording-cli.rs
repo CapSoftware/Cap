@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use cap_displays::Display;
 use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
+use scap_targets::Display;
+use tracing::info;
 
 #[tokio::main]
 pub async fn main() {
@@ -19,7 +20,7 @@ pub async fn main() {
 
     let dir = tempfile::tempdir().unwrap();
 
-    println!("Recording to directory '{}'", dir.path().display());
+    info!("Recording to directory '{}'", dir.path().display());
 
     let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
         "test".to_string(),
@@ -28,18 +29,12 @@ pub async fn main() {
             capture_target: ScreenCaptureTarget::Display {
                 id: Display::primary().id(),
             },
-            // ScreenCaptureTarget::Window {
-            //     id: Window::list()
-            //         .into_iter()
-            //         .find(|w| w.owner_name().unwrap_or_default().contains("Brave"))
-            //         .unwrap()
-            //         .id(),
-            // },
             capture_system_audio: true,
-            mic_feed: &None,
+            camera_feed: None,
+            mic_feed: None,
         },
-        None,
-        true,
+        false,
+        // true,
     )
     .await
     .unwrap();

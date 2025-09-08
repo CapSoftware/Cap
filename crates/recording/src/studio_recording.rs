@@ -1,12 +1,12 @@
 use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, create_screen_capture},
-    cursor::{CursorActor, Cursors /*spawn_cursor_recorder*/, spawn_cursor_recorder},
-    feeds::{CameraFeed, microphone::MicrophoneFeedLock},
+    cursor::{CursorActor, Cursors, spawn_cursor_recorder},
+    feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     pipeline::Pipeline,
     sources::{AudioInputSource, CameraSource, ScreenCaptureFormat, ScreenCaptureTarget},
 };
-use cap_media_encoders::{H264Encoder, MP4File, OggFile, OpusEncoder};
+use cap_enc_ffmpeg::{H264Encoder, MP4File, OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_utils::spawn_actor;
@@ -18,7 +18,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::oneshot;
 use tracing::{debug, info, trace};
 
 #[allow(clippy::large_enum_variant)]
@@ -130,7 +130,6 @@ pub async fn spawn_studio_recording_actor(
     id: String,
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs,
-    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
     custom_cursor_capture: bool,
 ) -> Result<(StudioRecordingHandle, oneshot::Receiver<Result<(), String>>), SpawnStudioRecordingError>
 {
@@ -149,8 +148,7 @@ pub async fn spawn_studio_recording_actor(
     let start_time = SystemTime::now();
     let start_instant = Instant::now();
 
-    if let Some(camera_feed) = &camera_feed {
-        let camera_feed = camera_feed.lock().await;
+    if let Some(camera_feed) = &base_inputs.camera_feed {
         debug!("camera device info: {:#?}", camera_feed.camera_info());
         debug!("camera video info: {:#?}", camera_feed.video_info());
     }
@@ -162,10 +160,7 @@ pub async fn spawn_studio_recording_actor(
     let mut segment_pipeline_factory = SegmentPipelineFactory::new(
         segments_dir,
         cursors_dir,
-        base_inputs.capture_target.clone(),
-        base_inputs.mic_feed.clone(),
-        base_inputs.capture_system_audio,
-        camera_feed,
+        base_inputs.clone(),
         custom_cursor_capture,
         start_time,
         start_instant,
@@ -566,10 +561,7 @@ async fn stop_recording(
 struct SegmentPipelineFactory {
     segments_dir: PathBuf,
     cursors_dir: PathBuf,
-    capture_target: ScreenCaptureTarget,
-    mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    capture_system_audio: bool,
-    camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+    base_inputs: RecordingBaseInputs,
     custom_cursor_capture: bool,
     start_time: SystemTime,
     start_instant: Instant,
@@ -581,10 +573,7 @@ impl SegmentPipelineFactory {
     pub fn new(
         segments_dir: PathBuf,
         cursors_dir: PathBuf,
-        capture_target: ScreenCaptureTarget,
-        mic_feed: Option<Arc<MicrophoneFeedLock>>,
-        capture_system_audio: bool,
-        camera_feed: Option<Arc<Mutex<CameraFeed>>>,
+        base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
         start_time: SystemTime,
         start_instant: Instant,
@@ -592,10 +581,7 @@ impl SegmentPipelineFactory {
         Self {
             segments_dir,
             cursors_dir,
-            capture_target,
-            mic_feed,
-            capture_system_audio,
-            camera_feed,
+            base_inputs,
             custom_cursor_capture,
             start_time,
             start_instant,
@@ -618,10 +604,10 @@ impl SegmentPipelineFactory {
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
-            self.capture_target.clone(),
-            self.mic_feed.clone(),
-            self.capture_system_audio,
-            self.camera_feed.as_deref(),
+            self.base_inputs.capture_target.clone(),
+            self.base_inputs.mic_feed.clone(),
+            self.base_inputs.capture_system_audio,
+            self.base_inputs.camera_feed.clone(),
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -663,7 +649,7 @@ async fn create_segment_pipeline(
     capture_target: ScreenCaptureTarget,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     capture_system_audio: bool,
-    camera_feed: Option<&Mutex<CameraFeed>>,
+    camera_feed: Option<Arc<CameraFeedLock>>,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
@@ -690,20 +676,20 @@ async fn create_segment_pipeline(
         .cursor_crop()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
+    #[cfg(windows)]
+    let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
+
     let (screen_source, screen_rx) = create_screen_capture(
         &capture_target,
         !custom_cursor_capture,
         120,
         system_audio.0,
         start_time,
+        #[cfg(windows)]
+        d3d_device,
     )
-    .await?;
-
-    let camera_feed = match camera_feed.as_ref() {
-        Some(camera_feed) => Some(camera_feed.lock().await),
-        None => None,
-    };
-    let camera_feed = camera_feed.as_deref();
+    .await
+    .unwrap();
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
@@ -721,7 +707,8 @@ async fn create_segment_pipeline(
                 pipeline_builder,
                 (screen_source, screen_rx),
                 screen_output_path.clone(),
-            )?;
+            )
+            .unwrap();
         pipeline_builder = pipeline_builder_;
 
         info!(

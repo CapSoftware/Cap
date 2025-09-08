@@ -142,7 +142,7 @@ export function Header() {
 					<ShareButton />
 				</Show>
 				<Button
-					variant="lightdark"
+					variant="dark"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
 						trackEvent("export_button_clicked");
@@ -216,7 +216,7 @@ function NameEditor(props: { name: string }) {
 
 	return (
 		<Tooltip disabled={!truncated()} content={props.name}>
-			<div class="flex flex-row items-center relative text-sm font-inherit font-normal tracking-inherit text-gray-12">
+			<div class="flex relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
 				<input
 					ref={prettyNameRef}
 					class={cx(

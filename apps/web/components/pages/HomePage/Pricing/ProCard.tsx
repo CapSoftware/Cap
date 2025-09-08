@@ -131,7 +131,7 @@ export const ProCard = () => {
 						<p className="text-lg text-gray-8">
 							or,{" "}
 							<NumberFlow
-								value={9 * users}
+								value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
 								className="text-lg tabular-nums"
 								format={{
 									notation: "compact",
@@ -155,7 +155,7 @@ export const ProCard = () => {
 						<p className="text-lg text-gray-8">
 							or,{" "}
 							<NumberFlow
-								value={6 * users}
+								value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
 								className="text-lg tabular-nums"
 								format={{
 									notation: "compact",
