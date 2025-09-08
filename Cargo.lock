@@ -183,9 +183,9 @@ dependencies = [
 
 [[package]]
 name = "arboard"
-version = "3.6.0"
+version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55f533f8e0af236ffe5eb979b99381df3258853f00ba2e44b6e1955292c75227"
+checksum = "0348a1c054491f4bfe6ab86a7b6ab1e44e45d899005de92f58b3df180b36ddaf"
 dependencies = [
  "clipboard-win",
  "image 0.25.6",
@@ -197,7 +197,7 @@ dependencies = [
  "objc2-foundation 0.3.1",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -281,9 +281,9 @@ dependencies = [
 
 [[package]]
 name = "async-executor"
-version = "1.13.2"
+version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb812ffb58524bdd10860d7d974e2f01cc0950c2438a74ee5ec2e2280c6c4ffa"
+checksum = "497c00e0fd83a72a79a39fcbd8e3e2f055d6f6c7e025f3b3d91f4f8e76527fb8"
 dependencies = [
  "async-task",
  "concurrent-queue",
@@ -829,9 +829,9 @@ dependencies = [
 
 [[package]]
 name = "camino"
-version = "1.1.11"
+version = "1.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d07aa9a93b00c76f71bc35d598bed923f6d4f3a9ca5c24b7737ae1a292841c0"
+checksum = "dd0b03af37dad7a14518b7691d81acb0f8222604ad3d1b02f6b4bed5188c0cd5"
 dependencies = [
  "serde",
 ]
@@ -928,6 +928,7 @@ dependencies = [
 name = "cap-camera-mediafoundation"
 version = "0.1.0"
 dependencies = [
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "tracing",
@@ -941,6 +942,7 @@ version = "0.1.0"
 dependencies = [
  "cap-camera-directshow",
  "cap-camera-mediafoundation",
+ "cap-mediafoundation-utils",
  "inquire",
  "thiserror 1.0.69",
  "windows 0.60.0",
@@ -951,6 +953,7 @@ dependencies = [
 name = "cap-cpal-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
 ]
@@ -1094,13 +1097,62 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-enc-avfoundation"
+version = "0.1.0"
+dependencies = [
+ "cap-ffmpeg-utils",
+ "cap-media-info",
+ "cidre 0.11.0",
+ "ffmpeg-next",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "ffmpeg-next",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-gif"
+version = "0.1.0"
+dependencies = [
+ "gifski",
+ "imgref",
+ "rgb",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
+name = "cap-enc-mediafoundation"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "clap",
+ "futures",
+ "scap-direct3d",
+ "scap-targets",
+ "thiserror 1.0.69",
+ "windows 0.60.0",
+ "windows-core 0.60.1",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
 name = "cap-export"
 version = "0.1.0"
 dependencies = [
  "cap-editor",
+ "cap-enc-ffmpeg",
+ "cap-enc-gif",
  "cap-flags",
  "cap-media",
- "cap-media-encoders",
  "cap-media-info",
  "cap-project",
  "cap-rendering",
@@ -1108,9 +1160,12 @@ dependencies = [
  "clap",
  "ffmpeg-next",
  "futures",
+ "gifski",
  "image 0.25.6",
+ "imgref",
  "inquire",
  "mp4",
+ "rgb",
  "serde",
  "serde_json",
  "specta",
@@ -1125,6 +1180,13 @@ name = "cap-fail"
 version = "0.1.0"
 dependencies = [
  "inventory",
+]
+
+[[package]]
+name = "cap-ffmpeg-utils"
+version = "0.1.0"
+dependencies = [
+ "ffmpeg-next",
 ]
 
 [[package]]
@@ -1146,79 +1208,44 @@ dependencies = [
 name = "cap-media"
 version = "0.1.0"
 dependencies = [
- "axum",
- "cap-audio",
- "cap-camera",
- "cap-camera-ffmpeg",
- "cap-camera-windows",
- "cap-cpal-ffmpeg",
- "cap-fail",
- "cap-flags",
- "cap-media-encoders",
  "cap-media-info",
- "cap-project",
- "cidre 0.11.0",
- "cocoa 0.26.1",
- "core-foundation 0.10.1",
- "core-graphics 0.24.0",
- "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
- "flume",
- "futures",
- "gif",
- "image 0.25.6",
- "indexmap 2.10.0",
  "inquire",
- "kameo",
- "num-traits",
- "objc",
- "objc-foundation",
- "objc2-foundation 0.2.2",
- "ringbuf",
- "scap",
- "scap-direct3d",
- "scap-ffmpeg",
- "scap-screencapturekit",
- "scap-targets",
- "screencapturekit",
- "serde",
- "specta",
- "sync_wrapper",
- "tempfile",
  "thiserror 1.0.69",
  "tokio",
- "tokio-util",
- "tracing",
  "tracing-subscriber",
- "windows 0.60.0",
- "windows-capture",
-]
-
-[[package]]
-name = "cap-media-encoders"
-version = "0.1.0"
-dependencies = [
- "cap-audio",
- "cap-fail",
- "cap-flags",
- "cap-media-info",
- "cap-project",
- "cidre 0.11.0",
- "ffmpeg-next",
- "gifski",
- "imgref",
- "rgb",
- "thiserror 1.0.69",
- "tracing",
 ]
 
 [[package]]
 name = "cap-media-info"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "cap-mediafoundation-ffmpeg"
+version = "0.1.0"
+dependencies = [
+ "cap-media-info",
+ "cap-mediafoundation-utils",
+ "ffmpeg-next",
+ "flume",
+ "thiserror 1.0.69",
+ "tracing",
+ "windows 0.60.0",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
+name = "cap-mediafoundation-utils"
+version = "0.1.0"
+dependencies = [
+ "windows 0.60.0",
+ "windows-core 0.60.1",
 ]
 
 [[package]]
@@ -1244,11 +1271,16 @@ dependencies = [
  "cap-camera-ffmpeg",
  "cap-cursor-capture",
  "cap-cursor-info",
+ "cap-enc-avfoundation",
+ "cap-enc-ffmpeg",
+ "cap-enc-mediafoundation",
  "cap-fail",
+ "cap-ffmpeg-utils",
  "cap-flags",
  "cap-media",
- "cap-media-encoders",
  "cap-media-info",
+ "cap-mediafoundation-ffmpeg",
+ "cap-mediafoundation-utils",
  "cap-project",
  "cap-utils",
  "chrono",
@@ -1523,9 +1555,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.42"
+version = "4.5.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed87a9d530bb41a67537289bafcac159cb3ee28460e0a4571123d2a778a6a882"
+checksum = "2c5e4fcf9c21d2e544ca1ee9d8552de13019a42aa7dbf32747fa7aaf1df76e57"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1533,9 +1565,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.42"
+version = "4.5.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64f4f3f3c77c94aff3c7e9aac9a2ca1974a5adf392a8bb751e827d6d127ab966"
+checksum = "fecb53a0e6fcfb055f686001bc2e2592fa527efaf38dbe81a6a9563562e57d41"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1545,9 +1577,9 @@ dependencies = [
 
 [[package]]
 name = "clap_derive"
-version = "4.5.41"
+version = "4.5.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef4f52386a59ca4c860f7393bcf8abd8dfd91ecccc0f774635ff68e92eeef491"
+checksum = "14cb31bb0a7d536caef2639baa7fad459e15c3144efefa6dbd1c84562c4739f6"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3730,7 +3762,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6204,9 +6236,9 @@ dependencies = [
 
 [[package]]
 name = "quinn"
-version = "0.11.8"
+version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "626214629cda6781b6dc1d316ba307189c85ba657213ce642d9c77670f8202c8"
+checksum = "b9e20a958963c291dc322d98411f541009df2ced7b5a4f2bd52337638cfccf20"
 dependencies = [
  "bytes",
  "cfg_aliases",
@@ -6215,7 +6247,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.5.10",
+ "socket2",
  "thiserror 2.0.12",
  "tokio",
  "tracing",
@@ -6224,9 +6256,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.12"
+version = "0.11.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49df843a9161c85bb8aae55f101bc0bac8bcafd637a620d9122fd7e0b2f7422e"
+checksum = "f1906b49b0c3bc04b5fe5d86a77925ae6524a19b816ae38ce1e426255f1d8a31"
 dependencies = [
  "bytes",
  "getrandom 0.3.3",
@@ -6245,16 +6277,16 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.13"
+version = "0.5.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcebb1209ee276352ef14ff8732e24cc2b02bbac986cd74a4c81bcb2f9881970"
+checksum = "addec6a0dcad8a8d96a771f815f0eaf55f9d1805756410b39f5fa81332574cbd"
 dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6956,6 +6988,7 @@ dependencies = [
 name = "scap-ffmpeg"
 version = "0.1.0"
 dependencies = [
+ "cap-ffmpeg-utils",
  "cidre 0.11.0",
  "cpal 0.15.3 (git+https://github.com/RustAudio/cpal?rev=f43d36e55494993bbbde3299af0c53e5cdf4d4cf)",
  "ffmpeg-next",
@@ -7073,12 +7106,13 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "screencapturekit"
-version = "0.3.5"
-source = "git+https://github.com/CapSoftware/screencapturekit-rs?rev=7ff1e103742e56c8f6c2e940b5e52684ed0bed69#7ff1e103742e56c8f6c2e940b5e52684ed0bed69"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c62ae379564f834110c5b020cc731a7c14b8ec4879b4367579a467a0a704c21"
 dependencies = [
  "block2 0.6.1",
  "core-foundation 0.10.1",
- "core-graphics 0.24.0",
+ "core-graphics 0.25.0",
  "core-media-rs",
  "core-utils-rs",
  "core-video-rs",
@@ -7632,16 +7666,6 @@ checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 
 [[package]]
 name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "socket2"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
@@ -8120,9 +8144,9 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 
 [[package]]
 name = "tauri"
-version = "2.8.2"
+version = "2.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a54629607ea3084a8b455c1ebe888cbdfc4de02fa5edb2e40db0dc97091007e3"
+checksum = "5d545ccf7b60dcd44e07c6fb5aeb09140966f0aabd5d2aa14a6821df7bc99348"
 dependencies = [
  "anyhow",
  "bytes",
@@ -8286,11 +8310,12 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-deep-link"
-version = "2.4.1"
+version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fec67f32d7a06d80bd3dc009fdb678c35a66116d9cb8cd2bb32e406c2b5bbd2"
+checksum = "6d430110d4ee102a9b673d3c03ff48098c80fe8ca71ba1ff52d8a5919538a1a6"
 dependencies = [
  "dunce",
+ "plist",
  "rust-ini",
  "serde",
  "serde_json",
@@ -8385,13 +8410,13 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-notification"
-version = "2.3.0"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe06ed89cff6d0ec06ff4f544fb961e4718348a33309f56ccb2086e77bc9116"
+checksum = "d2fbc86b929b5376ab84b25c060f966d146b2fbd59b6af8264027b343c82c219"
 dependencies = [
  "log",
  "notify-rust",
- "rand 0.8.5",
+ "rand 0.9.2",
  "serde",
  "serde_json",
  "serde_repr",
@@ -8483,9 +8508,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-shell"
-version = "2.3.0"
+version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b9ffadec5c3523f11e8273465cacb3d86ea7652a28e6e2a2e9b5c182f791d25"
+checksum = "54777d0c0d8add34eea3ced84378619ef5b97996bd967d3038c668feefd21071"
 dependencies = [
  "encoding_rs",
  "log",
@@ -8504,9 +8529,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-single-instance"
-version = "2.3.2"
+version = "2.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50a0e5a4ce43cb3a733c3aef85e8478bc769dac743c615e26639cbf5d953faf7"
+checksum = "236043404a4d1502ed7cce11a8ec88ea1e85597eec9887b4701bb10b66b13b6e"
 dependencies = [
  "serde",
  "serde_json",
@@ -8608,9 +8633,9 @@ dependencies = [
 
 [[package]]
 name = "tauri-runtime-wry"
-version = "2.8.0"
+version = "2.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bb0f10f831f75832ac74d14d98f701868f9a8adccef2c249b466cf70b607db9"
+checksum = "c1fe9d48bd122ff002064e88cfcd7027090d789c4302714e68fcccba0f4b7807"
 dependencies = [
  "gtk",
  "http",
@@ -8919,7 +8944,7 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "slab",
- "socket2 0.6.0",
+ "socket2",
  "tokio-macros",
  "tracing",
  "windows-sys 0.59.0",
@@ -10879,9 +10904,9 @@ checksum = "ea2f10b9bb0928dfb1b42b65e1f9e36f7f54dbdf08457afefb38afcdec4fa2bb"
 
 [[package]]
 name = "wry"
-version = "0.53.1"
+version = "0.53.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5698e50a589268aec06d2219f48b143222f7b5ad9aa690118b8dce0a8dcac574"
+checksum = "31f0e9642a0d061f6236c54ccae64c2722a7879ad4ec7dff59bd376d446d8e90"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.1",
@@ -11051,9 +11076,9 @@ dependencies = [
 
 [[package]]
 name = "zbus"
-version = "5.9.0"
+version = "5.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bb4f9a464286d42851d18a605f7193b8febaf5b0919d71c6399b7b26e5b0aad"
+checksum = "67a073be99ace1adc48af593701c8015cd9817df372e14a1a6b0ee8f8bf043be"
 dependencies = [
  "async-broadcast",
  "async-executor",
@@ -11076,7 +11101,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uds_windows",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "winnow 0.7.12",
  "zbus_macros",
  "zbus_names",
@@ -11085,9 +11110,9 @@ dependencies = [
 
 [[package]]
 name = "zbus_macros"
-version = "5.9.0"
+version = "5.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef9859f68ee0c4ee2e8cde84737c78e3f4c54f946f2a38645d0d4c7a95327659"
+checksum = "0e80cd713a45a49859dcb648053f63265f4f2851b6420d47a958e5697c68b131"
 dependencies = [
  "proc-macro-crate 3.3.0",
  "proc-macro2",
@@ -11198,9 +11223,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "4.3.0"
+version = "4.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9aed4ac33e8eb078c89e6cbb1d5c4c7703ec6d299fc3e7c3695af8f8b423468b"
+checksum = "8835eb39822904d39cb19465de1159e05d371973f0c6df3a365ad50565ddc8b9"
 dependencies = [
  "arbitrary",
  "crc32fast",
@@ -11240,9 +11265,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant"
-version = "5.6.0"
+version = "5.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d91b3680bb339216abd84714172b5138a4edac677e641ef17e1d8cb1b3ca6e6f"
+checksum = "999dd3be73c52b1fccd109a4a81e4fcd20fab1d3599c8121b38d04e1419498db"
 dependencies = [
  "endi",
  "enumflags2",
@@ -11255,9 +11280,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_derive"
-version = "5.6.0"
+version = "5.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a8c68501be459a8dbfffbe5d792acdd23b4959940fc87785fb013b32edbc208"
+checksum = "6643fd0b26a46d226bd90d3f07c1b5321fe9bb7f04673cb37ac6d6883885b68e"
 dependencies = [
  "proc-macro-crate 3.3.0",
  "proc-macro2",
@@ -11268,14 +11293,13 @@ dependencies = [
 
 [[package]]
 name = "zvariant_utils"
-version = "3.2.0"
+version = "3.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16edfee43e5d7b553b77872d99bc36afdda75c223ca7ad5e3fbecd82ca5fc34"
+checksum = "c6949d142f89f6916deca2232cf26a8afacf2b9fdc35ce766105e104478be599"
 dependencies = [
  "proc-macro2",
  "quote",
  "serde",
- "static_assertions",
  "syn 2.0.104",
  "winnow 0.7.12",
 ]
