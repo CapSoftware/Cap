@@ -5,6 +5,7 @@ import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { createBucketProvider } from "@/utils/s3";
+import type { Video } from "@cap/web-domain";
 
 type TranscribeResult = {
 	success: boolean;
@@ -12,7 +13,7 @@ type TranscribeResult = {
 };
 
 export async function transcribeVideo(
-	videoId: string,
+	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
 ): Promise<TranscribeResult> {

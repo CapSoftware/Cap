@@ -213,16 +213,26 @@ export async function getVideoStatus(
 				}
 			})();
 
-			return {
-				transcriptionStatus:
-					(video.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
-					null,
-				aiProcessing: true,
-				aiTitle: metadata.aiTitle || null,
-				summary: metadata.summary || null,
-				chapters: metadata.chapters || null,
-				// generationError: metadata.generationError || null,
-			};
+			const updatedVideo = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, videoId));
+			if (updatedVideo.length > 0 && updatedVideo[0]) {
+				const updatedMetadata = (updatedVideo[0].metadata as VideoMetadata) || {};
+
+				return {
+					transcriptionStatus:
+						(updatedVideo[0].transcriptionStatus as
+							| "PROCESSING"
+							| "COMPLETE"
+							| "ERROR") || null,
+					aiProcessing: updatedMetadata.aiProcessing || false,
+					aiTitle: updatedMetadata.aiTitle || null,
+					summary: updatedMetadata.summary || null,
+					chapters: updatedMetadata.chapters || null,
+					// generationError: updatedMetadata.generationError || null,
+				};
+			}
 		} else {
 			const videoOwner = videoOwnerQuery[0];
 			console.log(
