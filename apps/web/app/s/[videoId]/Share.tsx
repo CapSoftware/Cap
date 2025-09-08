@@ -132,7 +132,9 @@ const useVideoStatus = (
 
 			return shouldContinuePolling() ? 2000 : false;
 		},
-		refetchIntervalInBackground: false,
+		refetchIntervalInBackground: true,
+		refetchOnWindowFocus: true,
+		refetchOnMount: "always",
 		staleTime: 1000,
 	});
 };
