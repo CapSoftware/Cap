@@ -159,6 +159,75 @@ export const [EditorContextProvider, useEditorContext] = createContextProvider(
 					setEditorState("timeline", "selection", null);
 				});
 			},
+			duplicateSceneSegment: (segmentIndex: number) => {
+				if (!project.timeline?.sceneSegments?.[segmentIndex]) return;
+				const segment = project.timeline.sceneSegments[segmentIndex];
+				const segmentDuration = segment.end - segment.start;
+				const newSegmentStart = segment.end;
+				const newSegmentEnd = newSegmentStart + segmentDuration;
+
+				const timelineDuration = totalDuration();
+				if (newSegmentEnd > timelineDuration) {
+					return;
+				}
+
+				const wouldOverlap = project.timeline.sceneSegments.some((s, i) => {
+					if (i === segmentIndex) return false; // Skip the original segment
+					return newSegmentStart < s.end && newSegmentEnd > s.start;
+				});
+
+				if (wouldOverlap) {
+					return;
+				}
+
+				batch(() => {
+					setProject(
+						"timeline",
+						"sceneSegments",
+						produce((s) => {
+							if (!s) return;
+							s.splice(segmentIndex + 1, 0, {
+								...segment,
+								start: newSegmentStart,
+								end: newSegmentEnd,
+								splitViewSettings: segment.splitViewSettings
+									? { ...segment.splitViewSettings }
+									: undefined,
+							});
+						}),
+					);
+					setEditorState("timeline", "selection", {
+						type: "scene",
+						index: segmentIndex + 1,
+					});
+					setEditorState("playbackTime", newSegmentStart);
+					const currentZoom = editorState.timeline.transform.zoom;
+					const targetPosition = Math.max(0, newSegmentStart - currentZoom / 2);
+					editorState.timeline.transform.setPosition(targetPosition);
+				});
+			},
+			copySceneSettingsFromOriginal: (segmentIndex: number) => {
+				if (!project.timeline?.sceneSegments?.[segmentIndex]) return;
+
+				const currentSegment = project.timeline.sceneSegments[segmentIndex];
+				const originalSegment = project.timeline.sceneSegments.find(
+					(s, i) => i !== segmentIndex && s.mode === currentSegment.mode,
+				);
+
+				if (!originalSegment) return;
+
+				setProject(
+					"timeline",
+					"sceneSegments",
+					segmentIndex,
+					produce((s) => {
+						if (!s) return;
+						if (s.mode === "splitView" && originalSegment.splitViewSettings) {
+							s.splitViewSettings = { ...originalSegment.splitViewSettings };
+						}
+					}),
+				);
+			},
 		};
 
 		createEffect(
@@ -338,7 +407,7 @@ function transformMeta({ pretty_name, ...rawMeta }: RecordingMeta) {
 		throw new Error("Instant mode recordings cannot be edited");
 	}
 
-	let meta;
+	let meta = null;
 
 	if ("segments" in rawMeta) {
 		meta = {
