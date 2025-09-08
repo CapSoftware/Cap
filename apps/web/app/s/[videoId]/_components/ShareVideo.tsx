@@ -2,7 +2,6 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -36,10 +35,7 @@ export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
 		data: typeof videos.$inferSelect & {
-			owner?: {
-				stripeSubscriptionStatus: string | null;
-				thirdPartyStripeSubscriptionId: string | null;
-			} | null;
+			ownerIsPro?: boolean;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
@@ -54,8 +50,6 @@ export const ShareVideo = forwardRef<
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 	const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 	const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
-
-	const isVideoOwnerPro = userIsPro(data.owner);
 
 	const { data: transcriptContent, error: transcriptError } = useTranscript(
 		data.id,
@@ -174,7 +168,7 @@ export const ShareVideo = forwardRef<
 				)}
 			</div>
 
-			{!isVideoOwnerPro && (
+			{!data.ownerIsPro && (
 				<div className="absolute top-4 left-4 z-30">
 					<div
 						className="block cursor-pointer"
