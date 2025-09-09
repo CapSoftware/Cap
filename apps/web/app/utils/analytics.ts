@@ -1,5 +1,6 @@
 import posthog from "posthog-js";
 import * as uuid from "uuid";
+import { trackMetaEvent } from "../Layout/MetaPixel";
 
 export function initAnonymousUser() {
 	try {
@@ -42,6 +43,16 @@ export function trackEvent(
 		}
 
 		posthog.capture(eventName, { ...properties, platform: "web" });
+		
+		const metaEventMap: Record<string, string> = {
+			"purchase_completed": "Purchase",
+			"subscription_purchased": "Purchase",
+		};
+
+		const metaEventName = metaEventMap[eventName];
+		if (metaEventName) {
+			trackMetaEvent(metaEventName, properties);
+		}
 	} catch (error) {
 		console.error(`Error tracking event ${eventName}:`, error);
 	}
