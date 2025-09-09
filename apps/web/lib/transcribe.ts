@@ -1,6 +1,7 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
@@ -12,7 +13,7 @@ type TranscribeResult = {
 };
 
 export async function transcribeVideo(
-	videoId: string,
+	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
 ): Promise<TranscribeResult> {
