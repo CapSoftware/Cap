@@ -223,10 +223,9 @@ export async function getVideoStatus(
 						});
 				});
 
-			// Return immediately with aiProcessing: true
 			return {
 				transcriptionStatus: "COMPLETE",
-				aiProcessing: metadata.aiProcessing || false,
+				aiProcessing: false,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
