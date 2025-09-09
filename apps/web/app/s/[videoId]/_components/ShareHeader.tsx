@@ -246,7 +246,7 @@ export const ShareHeader = ({
 								<div className="hidden md:flex">
 									<Button
 										onClick={() => {
-											push("/dashboard");
+											push("/dashboard/caps?page=1");
 										}}
 									>
 										<span className="hidden text-sm text-white lg:block">

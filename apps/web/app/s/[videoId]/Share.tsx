@@ -114,15 +114,12 @@ const useVideoStatus = (
 				}
 
 				if (data.transcriptionStatus === "COMPLETE") {
-					if (aiGenerationEnabled) {
-						const noAiData = !(
-							data.aiTitle ||
-							data.summary ||
-							(data.chapters && data.chapters.length > 0)
-						);
-						if (data.aiProcessing || noAiData) {
-							return true;
-						}
+					if (!aiGenerationEnabled) {
+						return false;
+					}
+
+					if (data.aiProcessing) {
+						return true;
 					}
 					return false;
 				}
@@ -181,34 +178,42 @@ export const Share = ({
 		[videoStatus],
 	);
 
-	const shouldShowLoading = () => {
-		// Show loading while transcription is pending or processing regardless of AI flag
-		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
-			return true;
+	const shouldShowLoading = useCallback(() => {
+		// Don't show loading if AI generation is not enabled
+		if (!aiGenerationEnabled) {
+			return false;
 		}
 
+		// If transcription failed, don't show loading
 		if (transcriptionStatus === "ERROR") {
 			return false;
 		}
 
+		// Show loading while transcription is pending or processing
+		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
+			return true;
+		}
+
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiGenerationEnabled) {
-				const noAiData = !(
-					aiData.title ||
-					aiData.summary ||
-					(aiData.chapters && aiData.chapters.length > 0)
-				);
-				// Show loading if AI is processing OR if no AI data exists yet
-				if (aiData.processing === true || noAiData) {
-					return true;
-				}
+			// If AI is processing, show loading
+			if (aiData.processing === true) {
+				return true;
 			}
+
+			// Don't show loading if processing is false - means AI won't run or already finished
+			return false;
 		}
 
 		return false;
-	};
+	}, [transcriptionStatus, aiData, aiGenerationEnabled]);
 
 	const aiLoading = shouldShowLoading();
+
+	console.log({
+		aiLoading,
+		aiData,
+		transcriptionStatus,
+	});
 
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
