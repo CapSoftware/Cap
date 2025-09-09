@@ -9,7 +9,7 @@ import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import { revalidatePath } from "next/cache";
 import * as EffectRuntime from "@/lib/server";
-import { isAiGenerationEnabled } from "@/utils/flags";
+import { FeatureFlagUser, isAiGenerationEnabled } from "@/utils/flags";
 import { transcribeVideo } from "../../lib/transcribe";
 import { generateAiMetadata } from "./generate-ai-metadata";
 
@@ -161,11 +161,11 @@ export async function getVideoStatus(
 			.where(eq(users.id, video.ownerId))
 			.limit(1);
 
-		if (
-			videoOwnerQuery.length > 0 &&
-			videoOwnerQuery[0] &&
-			(await isAiGenerationEnabled(videoOwnerQuery[0]))
-		) {
+		const isAiGenEnabled: boolean = await isAiGenerationEnabled(
+			videoOwnerQuery[0] as FeatureFlagUser,
+		);
+
+		if (videoOwnerQuery.length > 0 && videoOwnerQuery[0] && isAiGenEnabled) {
 			console.log(
 				`[Get Status] Feature flag enabled, triggering AI generation for video ${videoId}`,
 			);
@@ -225,7 +225,7 @@ export async function getVideoStatus(
 
 			return {
 				transcriptionStatus: "COMPLETE",
-				aiProcessing: false,
+				aiProcessing: true,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
