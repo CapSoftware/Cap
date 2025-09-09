@@ -2,6 +2,8 @@ use cap_camera::CameraInfo;
 use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
+#[cfg(windows)]
+use cap_timestamp::PerformanceCounterTimestamp;
 use cap_timestamp::Timestamp;
 use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};

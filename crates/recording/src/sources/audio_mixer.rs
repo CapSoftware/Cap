@@ -158,9 +158,9 @@ impl AudioMixer {
                             && buffer_last_duration - elapsed_since_last_frame
                                 >= Duration::from_millis(1)
                         {
-                            let gap = timestamp.duration_since(start)
-                                - buffer_last_timestamp.duration_since(start)
-                                - buffer_last_duration;
+                            let gap = (buffer_last_timestamp.duration_since(start)
+                                + buffer_last_duration)
+                                - timestamp.duration_since(start);
 
                             debug!("Gap between last buffer frame, inserting {gap:?} of silence");
 
@@ -229,7 +229,6 @@ impl AudioMixer {
                         }
 
                         frame.set_rate(rate as u32);
-                        frame.data_mut(0).fill(0);
 
                         let duration =
                             Duration::from_secs_f64(leftover_chunk_size as f64 / rate as f64);
@@ -241,6 +240,7 @@ impl AudioMixer {
                     }
                 }
 
+                // dbg!(frame.samples());
                 source.buffer_last = Some((
                     timestamp,
                     Duration::from_secs_f64(frame.samples() as f64 / frame.rate() as f64),
@@ -265,6 +265,8 @@ impl AudioMixer {
             let timestamp = start.instant() + elapsed;
 
             self.samples_out += filtered.samples();
+
+            // dbg!(filtered.samples(), timestamp);
 
             if self
                 .output

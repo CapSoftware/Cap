@@ -3,16 +3,13 @@
 #![cfg(windows)]
 
 use std::{
-    os::windows::io::AsRawHandle,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::RecvError,
     },
-    thread::JoinHandle,
     time::Duration,
 };
-
 use windows::{
     Foundation::{Metadata::ApiInformation, TypedEventHandler},
     Graphics::{
@@ -23,7 +20,7 @@ use windows::{
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
     },
     Win32::{
-        Foundation::{HANDLE, HMODULE, LPARAM, S_FALSE, WPARAM},
+        Foundation::HMODULE,
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
@@ -41,16 +38,8 @@ use windows::{
                 IDXGIDevice,
             },
         },
-        System::{
-            Threading::GetThreadId,
-            WinRT::{
-                CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-                Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
-                DispatcherQueueOptions, RO_INIT_MULTITHREADED, RoInitialize,
-            },
-        },
-        UI::WindowsAndMessaging::{
-            DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_QUIT,
+        System::WinRT::Direct3D11::{
+            CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
         },
     },
     core::{HSTRING, IInspectable, Interface},

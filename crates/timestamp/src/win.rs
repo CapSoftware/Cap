@@ -1,3 +1,5 @@
+use cpal::StreamInstant;
+use std::{ops::Add, time::Duration};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 
 use super::*;

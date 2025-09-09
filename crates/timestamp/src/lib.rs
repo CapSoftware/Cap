@@ -34,9 +34,13 @@ impl Timestamp {
 
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {
         #[cfg(windows)]
-        Self::PerformanceCounter(PerformanceCounterTimestamp::from_cpal(instant));
+        {
+            Self::PerformanceCounter(PerformanceCounterTimestamp::from_cpal(instant))
+        }
         #[cfg(target_os = "macos")]
-        Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(instant))
+        {
+            Self::MachAbsoluteTime(MachAbsoluteTimestamp::from_cpal(instant))
+        }
     }
 }
 

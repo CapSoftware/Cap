@@ -4,18 +4,18 @@ use crate::{
     pipeline::builder::PipelineBuilder,
     sources::{
         AudioInputSource, ScreenCaptureFormat, ScreenCaptureSource, ScreenCaptureTarget,
-        audio_mixer, screen_capture,
+        audio_mixer::AudioMixer, screen_capture,
     },
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
-use cap_timestamp::Timestamp;
+use cap_timestamp::{Timestamp, Timestamps};
 use flume::{Receiver, Sender};
 use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
@@ -120,7 +120,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         let start_time = Timestamps::now();
 
         let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = audio_mixer::AudioMixer::builder(audio_tx);
+        let mut audio_mixer = AudioMixer::builder(audio_tx);
 
         if let Some(system_audio) = system_audio {
             audio_mixer.add_source(system_audio.1, system_audio.0);
@@ -140,14 +140,13 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             cap_enc_avfoundation::MP4Encoder::init(
                 "mp4",
                 source.0.info(),
-                has_audio_sources.then_some(audio_mixer::AudioMixer::INFO),
+                has_audio_sources.then_some(AudioMixer::INFO),
                 output_path,
                 Some(1080),
             )
             .map_err(|e| MediaError::Any(e.to_string().into()))?,
         ));
 
-        use cap_timestamp::Timestamps;
         use cidre::cm;
         use tracing::error;
 
@@ -406,7 +405,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         let start_time = Timestamps::now();
 
         let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = audio_mixerdioMixer::builder(audio_tx);
+        let mut audio_mixer = AudioMixer::builder(audio_tx);
 
         if let Some(system_audio) = system_audio {
             audio_mixer.add_source(system_audio.1, system_audio.0);
@@ -478,7 +477,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let audio_encoder = has_audio_sources
             .then(|| {
-                AACEncoder::init("mic_audio", audio_mixerdioMixer::INFO, &mut output)
+                AACEncoder::init("mic_audio", AudioMixer::INFO, &mut output)
                     .map(|v| v.boxed())
                     .map_err(|e| MediaError::Any(e.to_string().into()))
             })
@@ -514,7 +513,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                 while let Ok((mut frame, timestamp)) = audio_rx.recv() {
                     let ts_offset = timestamp.duration_since(start_time);
-                    // dbg!(ts_offset, frame.samples());
 
                     let Some(ts_offset) = ts_offset.checked_sub(screen_first_offset) else {
                         continue;
@@ -522,8 +520,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                     let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
                     frame.set_pts(Some(pts));
-
-                    // dbg!(pts);
 
                     if let Ok(mut output) = output.lock() {
                         audio_encoder.queue_frame(frame, &mut *output);
@@ -549,6 +545,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     while let Ok(e) = encoder.get_event() {
                         match e {
                             MediaFoundation::METransformNeedInput => {
+                                use cap_timestamp::PerformanceCounterTimestamp;
+
                                 let Ok((frame, _)) = source.1.recv() else {
                                     break;
                                 };

@@ -1,10 +1,10 @@
 use super::*;
-use crate::capture_pipeline::PerformanceCounterTimestamp;
 use ::windows::{
     Graphics::Capture::GraphicsCaptureItem,
     Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device},
 };
 use cap_fail::fail_err;
+use cap_timestamp::PerformanceCounterTimestamp;
 use cpal::traits::{DeviceTrait, HostTrait};
 use kameo::prelude::*;
 use scap_ffmpeg::*;
@@ -51,7 +51,7 @@ struct FrameHandler {
     last_cleanup: Instant,
     last_log: Instant,
     frame_events: VecDeque<(Instant, bool)>,
-    video_tx: Sender<(scap_direct3d::Frame, SourceTimestamp)>,
+    video_tx: Sender<(scap_direct3d::Frame, Timestamp)>,
 }
 
 impl Actor for FrameHandler {
@@ -132,9 +132,7 @@ impl Message<NewFrame> for FrameHandler {
 
         let frame_dropped = match self.video_tx.try_send((
             msg.frame,
-            SourceTimestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
-                timestamp.Duration,
-            )),
+            Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(timestamp.Duration)),
         )) {
             Err(flume::TrySendError::Disconnected(_)) => {
                 warn!("Pipeline disconnected");
@@ -481,13 +479,13 @@ pub mod audio {
 
     impl WindowsAudioCapture {
         pub fn new(
-            audio_tx: Sender<(ffmpeg::frame::Audio, SourceTimestamp)>,
+            audio_tx: Sender<(ffmpeg::frame::Audio, Timestamp)>,
         ) -> Result<Self, scap_cpal::CapturerError> {
             let capturer = scap_cpal::create_capturer(
                 move |data, info, config| {
                     use scap_ffmpeg::*;
 
-                    let timestamp = SourceTimestamp::from_cpal(info.timestamp().capture);
+                    let timestamp = Timestamp::from_cpal(info.timestamp().capture);
 
                     let _ = audio_tx.send((data.as_ffmpeg(config), timestamp));
                 },

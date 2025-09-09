@@ -1,6 +1,5 @@
-use std::{ops::Add, time::Duration};
-
 use cidre::mach::TimeBaseInfo;
+use std::{ops::Add, time::Duration};
 
 #[derive(Clone, Copy, Debug)]
 pub struct MachAbsoluteTimestamp(u64);

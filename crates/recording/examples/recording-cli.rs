@@ -7,6 +7,7 @@ use tracing::info;
 #[tokio::main]
 pub async fn main() {
     unsafe { std::env::set_var("RUST_LOG", "trace") };
+    unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
 
     #[cfg(windows)]
     {
@@ -56,7 +57,7 @@ pub async fn main() {
         },
     )
     .with_system_audio(true)
-    .with_mic_feed(Arc::new(mic_feed.ask(microphone::Lock).await.unwrap()))
+    // .with_mic_feed(Arc::new(mic_feed.ask(microphone::Lock).await.unwrap()))
     .build()
     .await
     .unwrap();
