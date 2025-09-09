@@ -121,6 +121,11 @@ const useVideoStatus = (
 					if (data.aiProcessing) {
 						return true;
 					}
+
+					if (!data.summary && !data.chapters) {
+						return true;
+					}
+
 					return false;
 				}
 
@@ -129,7 +134,7 @@ const useVideoStatus = (
 
 			return shouldContinuePolling() ? 2000 : false;
 		},
-		refetchIntervalInBackground: true,
+		refetchIntervalInBackground: false,
 		staleTime: 1000,
 	});
 };
@@ -178,42 +183,35 @@ export const Share = ({
 		[videoStatus],
 	);
 
-	const shouldShowLoading = useCallback(() => {
-		// Don't show loading if AI generation is not enabled
+	const shouldShowLoading = () => {
 		if (!aiGenerationEnabled) {
 			return false;
 		}
 
-		// If transcription failed, don't show loading
-		if (transcriptionStatus === "ERROR") {
-			return false;
-		}
-
-		// Show loading while transcription is pending or processing
 		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
 			return true;
 		}
 
-		if (transcriptionStatus === "COMPLETE") {
-			// If AI is processing, show loading
-			if (aiData.processing === true) {
-				return true;
-			}
-
-			// Don't show loading if processing is false - means AI won't run or already finished
+		if (transcriptionStatus === "ERROR") {
 			return false;
 		}
 
+		if (transcriptionStatus === "COMPLETE") {
+			// if (aiData.generationError) {
+			// 	return false;
+			// }
+			if (aiData.processing === true) {
+				return true;
+			}
+			if (!aiData.summary && !aiData.chapters) {
+				return true;
+			}
+		}
+
 		return false;
-	}, [transcriptionStatus, aiData, aiGenerationEnabled]);
+	};
 
 	const aiLoading = shouldShowLoading();
-
-	console.log({
-		aiLoading,
-		aiData,
-		transcriptionStatus,
-	});
 
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
