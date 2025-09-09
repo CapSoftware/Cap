@@ -114,15 +114,12 @@ const useVideoStatus = (
 				}
 
 				if (data.transcriptionStatus === "COMPLETE") {
-					if (aiGenerationEnabled) {
-						const noAiData = !(
-							data.aiTitle ||
-							data.summary ||
-							(data.chapters && data.chapters.length > 0)
-						);
-						if (data.aiProcessing || noAiData) {
-							return true;
-						}
+					if (!aiGenerationEnabled) {
+						return false;
+					}
+
+					if (data.aiProcessing) {
+						return true;
 					}
 					return false;
 				}
@@ -192,22 +189,18 @@ export const Share = ({
 		}
 
 		if (transcriptionStatus === "COMPLETE") {
-			if (aiGenerationEnabled) {
-				const noAiData = !(
-					aiData.title ||
-					aiData.summary ||
-					(aiData.chapters && aiData.chapters.length > 0)
-				);
-				// Show loading if AI is processing OR if no AI data exists yet
-				if (aiData.processing === true || noAiData) {
-					return true;
-				}
+			if (!aiGenerationEnabled) {
+				return false;
+			}
+
+			if (aiData.processing === true) {
+				return true;
 			}
 			return false;
 		}
 
 		return false;
-	}, [transcriptionStatus, aiGenerationEnabled, aiData]);
+	}, [transcriptionStatus, aiData, aiGenerationEnabled]);
 
 	const aiLoading = shouldShowLoading();
 
