@@ -30,6 +30,7 @@ import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
 	createCameraMutation,
+	createCurrentRecordingQuery,
 	createLicenseQuery,
 	listAudioDevices,
 	listScreens,
@@ -112,6 +113,8 @@ function createUpdateCheck() {
 
 function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
+	const currentRecording = createCurrentRecordingQuery();
+	const isRecording = () => !!currentRecording.data;
 
 	createUpdateCheck();
 
@@ -389,27 +392,34 @@ function Page() {
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "display"}
 					Component={IconMdiMonitor}
-					onClick={() =>
+					disabled={isRecording()}
+					onClick={() => {
+						//if recording early return
+						if (isRecording()) return;
 						setOptions("targetMode", (v) =>
 							v === "display" ? null : "display",
-						)
-					}
+						);
+					}}
 					name="Display"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "window"}
 					Component={IconLucideAppWindowMac}
-					onClick={() =>
-						setOptions("targetMode", (v) => (v === "window" ? null : "window"))
-					}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+					}}
 					name="Window"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "area"}
 					Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-					onClick={() =>
-						setOptions("targetMode", (v) => (v === "area" ? null : "area"))
-					}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+					}}
 					name="Area"
 				/>
 			</div>
