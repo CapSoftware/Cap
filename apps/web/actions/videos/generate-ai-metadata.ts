@@ -4,10 +4,10 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { createBucketProvider } from "@/utils/s3";
-import { Video } from "@cap/web-domain";
 export async function generateAiMetadata(
 	videoId: Video.VideoId,
 	userId: string,
