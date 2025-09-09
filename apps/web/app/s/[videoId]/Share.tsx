@@ -179,30 +179,28 @@ export const Share = ({
 	);
 
 	const shouldShowLoading = useCallback(() => {
-		// Show loading while transcription is pending or processing regardless of AI flag
-		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
-			return true;
+		// Don't show loading if AI generation is not enabled
+		if (!aiGenerationEnabled) {
+			return false;
 		}
 
+		// If transcription failed, don't show loading
 		if (transcriptionStatus === "ERROR") {
 			return false;
 		}
 
-		if (transcriptionStatus === "COMPLETE") {
-			if (!aiGenerationEnabled) {
-				return false;
-			}
+		// Show loading while transcription is pending or processing
+		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
+			return true;
+		}
 
+		if (transcriptionStatus === "COMPLETE") {
 			// If AI is processing, show loading
 			if (aiData.processing === true) {
 				return true;
 			}
 
-			// If transcription is complete but no AI data exists yet, assume processing
-			if (!aiData.summary && !aiData.chapters) {
-				return true;
-			}
-
+			// Don't show loading if processing is false - means AI won't run or already finished
 			return false;
 		}
 
