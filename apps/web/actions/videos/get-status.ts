@@ -180,7 +180,8 @@ export async function getVideoStatus(
 					);
 				} catch (error) {
 					console.error(
-						`[Get Status] Error generating AI metadata for video ${videoId}`,
+						"[Get Status] Error generating AI metadata for video %s",
+						videoId,
 						error,
 					);
 
