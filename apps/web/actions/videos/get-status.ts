@@ -204,7 +204,8 @@ export async function getVideoStatus(
 						}
 					} catch (resetError) {
 						console.error(
-							`[Get Status] Failed to reset AI processing flag for video ${videoId}`,
+							`[Get Status] Failed to reset AI processing flag for video %s`,
+							videoId,
 							resetError,
 						);
 					}
