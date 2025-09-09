@@ -170,90 +170,58 @@ export async function getVideoStatus(
 				`[Get Status] Feature flag enabled, triggering AI generation for video ${videoId}`,
 			);
 
-			(async () => {
-				try {
-					console.log(
-						`[Get Status] Starting AI metadata generation for video ${videoId}`,
-					);
-					await generateAiMetadata(videoId, video.ownerId);
-					console.log(
-						`[Get Status] AI metadata generation completed for video ${videoId}`,
-					);
-					// Revalidate the share page to reflect new AI data
-					revalidatePath(`/s/${videoId}`);
-				} catch (error) {
-					console.error(
-						`[Get Status] Error generating AI metadata for video ${videoId}:`,
-						error,
-					);
-
-					try {
-						const currentVideo = await db()
-							.select()
-							.from(videos)
-							.where(eq(videos.id, videoId));
-						if (currentVideo.length > 0 && currentVideo[0]) {
-							const currentMetadata =
-								(currentVideo[0].metadata as VideoMetadata) || {};
-							await db()
-								.update(videos)
-								.set({
-									metadata: {
-										...currentMetadata,
-										aiProcessing: false,
-										// generationError:
-										// 	error instanceof Error ? error.message : String(error),
-									},
-								})
-								.where(eq(videos.id, videoId));
-						}
-						revalidatePath(`/s/${videoId}`);
-					} catch (resetError) {
-						console.error(
-							`[Get Status] Failed to reset AI processing flag for video ${videoId}:`,
-							resetError,
-						);
-					}
-				}
-			})();
-
-			const updatedVideo = await db()
-				.select({
-					transcriptionStatus: videos.transcriptionStatus,
-					metadata: videos.metadata,
+			// Set aiProcessing to true immediately
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: true,
+					},
 				})
-				.from(videos)
-				.where(eq(videos.id, videoId))
-				.limit(1);
-			if (updatedVideo.length > 0) {
-				const row = updatedVideo[0];
-				if (!row) {
-					return {
-						transcriptionStatus:
-							(video.transcriptionStatus as
-								| "PROCESSING"
-								| "COMPLETE"
-								| "ERROR") || null,
-						aiProcessing: metadata.aiProcessing || false,
-						aiTitle: metadata.aiTitle || null,
-						summary: metadata.summary || null,
-						chapters: metadata.chapters || null,
-						// generationError: metadata.generationError || null,
-					};
-				}
-				const updatedMetadata = (row.metadata as VideoMetadata) || {};
+				.where(eq(videos.id, videoId));
 
-				return {
-					transcriptionStatus:
-						(row.transcriptionStatus as "PROCESSING" | "COMPLETE" | "ERROR") ||
-						null,
-					aiProcessing: updatedMetadata.aiProcessing || false,
-					aiTitle: updatedMetadata.aiTitle || null,
-					summary: updatedMetadata.summary || null,
-					chapters: updatedMetadata.chapters || null,
-					// generationError: updatedMetadata.generationError || null,
-				};
-			}
+			// Start AI generation asynchronously (it will skip setting aiProcessing since it's already true)
+			generateAiMetadata(videoId, video.ownerId)
+				.then(() => {
+					console.log(`[Get Status] AI metadata generation completed for video ${videoId}`);
+					revalidatePath(`/s/${videoId}`);
+				})
+				.catch((error) => {
+					console.error(`[Get Status] Error generating AI metadata for video ${videoId}:`, error);
+					// Reset aiProcessing flag on error
+					db()
+						.select()
+						.from(videos)
+						.where(eq(videos.id, videoId))
+						.then((currentVideo) => {
+							if (currentVideo.length > 0 && currentVideo[0]) {
+								const currentMetadata = (currentVideo[0].metadata as VideoMetadata) || {};
+								return db()
+									.update(videos)
+									.set({
+										metadata: {
+											...currentMetadata,
+											aiProcessing: false,
+										},
+									})
+									.where(eq(videos.id, videoId));
+							}
+						})
+						.then(() => revalidatePath(`/s/${videoId}`))
+						.catch((resetError) => {
+							console.error(`[Get Status] Failed to reset AI processing flag for video ${videoId}:`, resetError);
+						});
+				});
+
+			// Return immediately with aiProcessing: true
+			return {
+				transcriptionStatus: "COMPLETE",
+				aiProcessing: true,
+				aiTitle: metadata.aiTitle || null,
+				summary: metadata.summary || null,
+				chapters: metadata.chapters || null,
+			};
 		} else {
 			const videoOwner = videoOwnerQuery[0];
 			console.log(

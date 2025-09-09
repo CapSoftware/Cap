@@ -289,9 +289,7 @@ ${transcriptText}`;
 		}
 	} catch (error) {
 		console.error(`[generateAiMetadata] Error for video ${videoId}:`, error);
-
 		try {
-			// Use the metadata we already have instead of querying again
 			await setAiProcessingFlag(videoId, false, metadata);
 		} catch (updateError) {
 			console.error(
