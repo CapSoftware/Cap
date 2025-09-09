@@ -184,11 +184,16 @@ export async function getVideoStatus(
 			// Start AI generation asynchronously (it will skip setting aiProcessing since it's already true)
 			generateAiMetadata(videoId, video.ownerId)
 				.then(() => {
-					console.log(`[Get Status] AI metadata generation completed for video ${videoId}`);
+					console.log(
+						`[Get Status] AI metadata generation completed for video ${videoId}`,
+					);
 					revalidatePath(`/s/${videoId}`);
 				})
 				.catch((error) => {
-					console.error(`[Get Status] Error generating AI metadata for video ${videoId}:`, error);
+					console.error(
+						`[Get Status] Error generating AI metadata for video ${videoId}:`,
+						error,
+					);
 					// Reset aiProcessing flag on error
 					db()
 						.select()
@@ -196,7 +201,8 @@ export async function getVideoStatus(
 						.where(eq(videos.id, videoId))
 						.then((currentVideo) => {
 							if (currentVideo.length > 0 && currentVideo[0]) {
-								const currentMetadata = (currentVideo[0].metadata as VideoMetadata) || {};
+								const currentMetadata =
+									(currentVideo[0].metadata as VideoMetadata) || {};
 								return db()
 									.update(videos)
 									.set({
@@ -210,14 +216,17 @@ export async function getVideoStatus(
 						})
 						.then(() => revalidatePath(`/s/${videoId}`))
 						.catch((resetError) => {
-							console.error(`[Get Status] Failed to reset AI processing flag for video ${videoId}:`, resetError);
+							console.error(
+								`[Get Status] Failed to reset AI processing flag for video ${videoId}:`,
+								resetError,
+							);
 						});
 				});
 
 			// Return immediately with aiProcessing: true
 			return {
 				transcriptionStatus: "COMPLETE",
-				aiProcessing: true,
+				aiProcessing: metadata.aiProcessing || false,
 				aiTitle: metadata.aiTitle || null,
 				summary: metadata.summary || null,
 				chapters: metadata.chapters || null,
