@@ -91,7 +91,7 @@ impl AACEncoder {
         encoder.set_rate(rate);
         encoder.set_format(output_config.sample_format);
         encoder.set_channel_layout(output_config.channel_layout());
-        encoder.set_time_base(output_config.time_base);
+        encoder.set_time_base(FFRational(1, output_config.rate()));
 
         let encoder = encoder.open()?;
 

@@ -11,6 +11,8 @@ pub struct BufferedResampler {
     resampler: ffmpeg::software::resampling::Context,
     buffer: VecDeque<(ffmpeg::frame::Audio, i64)>,
     sample_index: usize,
+    // used to account for cases where pts is rounded down instead of up
+    min_next_pts: Option<i64>,
 }
 
 impl BufferedResampler {
@@ -19,6 +21,7 @@ impl BufferedResampler {
             resampler,
             buffer: VecDeque::new(),
             sample_index: 0,
+            min_next_pts: None,
         }
     }
 
@@ -46,7 +49,13 @@ impl BufferedResampler {
         *self.resampler.output()
     }
 
-    pub fn add_frame(&mut self, frame: ffmpeg::frame::Audio) {
+    pub fn add_frame(&mut self, mut frame: ffmpeg::frame::Audio) {
+        if let Some(min_next_pts) = self.min_next_pts {
+            if let Some(pts) = frame.pts() {
+                frame.set_pts(Some(pts.max(min_next_pts)));
+            }
+        }
+
         let pts = frame.pts().unwrap();
 
         let mut resampled_frame = ffmpeg::frame::Audio::empty();
@@ -76,6 +85,8 @@ impl BufferedResampler {
 
             next_pts = next_pts + samples as i64;
         }
+
+        self.min_next_pts = Some(pts + frame.samples() as i64);
     }
 
     fn get_frame_inner(&mut self, samples: usize) -> Option<ffmpeg::frame::Audio> {

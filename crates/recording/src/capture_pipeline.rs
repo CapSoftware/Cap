@@ -15,7 +15,7 @@ use std::{
     future::Future,
     path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
@@ -395,8 +395,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     where
         Self: Sized,
     {
-        use std::sync::mpsc;
-
         use cap_enc_ffmpeg::{AACEncoder, AudioEncoder};
         use windows::Graphics::SizeInt32;
 
@@ -490,29 +488,21 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let output = Arc::new(std::sync::Mutex::new(output));
 
-        let (screen_first_tx, screen_first_rx) = mpsc::sync_channel(1);
+        let (first_frame_tx, first_frame_rx) = tokio::sync::oneshot::channel::<Timestamp>();
 
         if let Some(mut audio_encoder) = audio_encoder {
             builder.spawn_source("audio_mixer", audio_mixer);
 
-            // let is_done = is_done.clone();
             let output = output.clone();
             builder.spawn_task("audio_encoding", move |ready| {
-                let screen_first_offset = loop {
-                    match screen_first_rx.recv_timeout(Duration::from_millis(5)) {
-                        Ok(offset) => {
-                            audio_rx.drain().count();
-                            break offset;
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                    }
-                };
-
                 let _ = ready.send(Ok(()));
+
+                let time = first_frame_rx.blocking_recv().unwrap();
+                let screen_first_offset = time.duration_since(start_time);
 
                 while let Ok((mut frame, timestamp)) = audio_rx.recv() {
                     let ts_offset = timestamp.duration_since(start_time);
+                    dbg!(ts_offset);
 
                     let Some(ts_offset) = ts_offset.checked_sub(screen_first_offset) else {
                         continue;
@@ -520,11 +510,13 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                     let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
                     frame.set_pts(Some(pts));
+                    dbg!(pts);
 
                     if let Ok(mut output) = output.lock() {
-                        audio_encoder.queue_frame(frame, &mut *output);
+                        audio_encoder.queue_frame(frame, &mut output)
                     }
                 }
+
                 Ok(())
             });
         }
@@ -540,7 +532,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                     let _ = ready.send(Ok(()));
 
-                    let mut screen_first_tx = Some(screen_first_tx);
+                    let mut first_frame_tx = Some(first_frame_tx);
 
                     while let Ok(e) = encoder.get_event() {
                         match e {
@@ -560,9 +552,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                                     PerformanceCounterTimestamp::new(frame_time.Duration),
                                 );
 
-                                if let Some(screen_first_tx) = screen_first_tx.take() {
-                                    let _ = screen_first_tx
-                                        .try_send(timestamp.duration_since(start_time));
+                                if let Some(first_frame_tx) = first_frame_tx.take() {
+                                    let _ = first_frame_tx.send(timestamp);
                                 }
 
                                 encoder

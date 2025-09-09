@@ -36,17 +36,17 @@ pub async fn main() {
     //     .await
     //     .unwrap();
 
-    let (error_tx, _) = flume::bounded(1);
-    let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    // let (error_tx, _) = flume::bounded(1);
+    // let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
 
-    mic_feed
-        .ask(microphone::SetInput {
-            label: MicrophoneFeed::default().map(|v| v.0).unwrap(),
-        })
-        .await
-        .unwrap()
-        .await
-        .unwrap();
+    // mic_feed
+    //     .ask(microphone::SetInput {
+    //         label: MicrophoneFeed::default().map(|v| v.0).unwrap(),
+    //     })
+    //     .await
+    //     .unwrap()
+    //     .await
+    //     .unwrap();
 
     // tokio::time::sleep(Duration::from_millis(10)).await;
 

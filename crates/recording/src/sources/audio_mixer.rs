@@ -116,6 +116,8 @@ impl AudioMixerBuilder {
             _filter_graph: filter_graph,
             _amix: amix,
             _aformat: aformat,
+            start_timestamp: None,
+            timestamps: Timestamps::now(),
         })
     }
 }
@@ -131,6 +133,8 @@ pub struct AudioMixer {
     _filter_graph: ffmpeg::filter::Graph,
     _amix: ffmpeg::filter::Context,
     _aformat: ffmpeg::filter::Context,
+    timestamps: Timestamps,
+    start_timestamp: Option<Timestamp>,
 }
 
 impl AudioMixer {
@@ -141,15 +145,15 @@ impl AudioMixer {
     );
     pub const BUFFER_TIMEOUT: Duration = Duration::from_millis(10);
 
-    fn buffer_sources(&mut self, start: Timestamps) {
+    fn buffer_sources(&mut self) {
         for source in &mut self.sources {
             let rate = source.info.rate();
 
             while let Ok((frame, timestamp)) = source.rx.try_recv() {
                 // if gap between incoming and last, insert silence
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
-                    let timestamp_elapsed = timestamp.duration_since(start);
-                    let buffer_last_elapsed = buffer_last_timestamp.duration_since(start);
+                    let timestamp_elapsed = timestamp.duration_since(self.timestamps);
+                    let buffer_last_elapsed = buffer_last_timestamp.duration_since(self.timestamps);
 
                     if timestamp_elapsed > buffer_last_elapsed {
                         let elapsed_since_last_frame = timestamp_elapsed - buffer_last_elapsed;
@@ -158,9 +162,9 @@ impl AudioMixer {
                             && buffer_last_duration - elapsed_since_last_frame
                                 >= Duration::from_millis(1)
                         {
-                            let gap = (buffer_last_timestamp.duration_since(start)
+                            let gap = (buffer_last_timestamp.duration_since(self.timestamps)
                                 + buffer_last_duration)
-                                - timestamp.duration_since(start);
+                                - timestamp.duration_since(self.timestamps);
 
                             debug!("Gap between last buffer frame, inserting {gap:?} of silence");
 
@@ -183,7 +187,7 @@ impl AudioMixer {
                         }
                     }
                 } else {
-                    let gap = timestamp.duration_since(start);
+                    let gap = timestamp.duration_since(self.timestamps);
 
                     if !gap.is_zero() {
                         debug!("Gap from beginning of stream, inserting {gap:?} of silence");
@@ -210,8 +214,9 @@ impl AudioMixer {
 
                             frame.set_rate(rate as u32);
 
-                            let timestamp =
-                                Timestamp::Instant(start.instant() + chunk_duration * i as u32);
+                            let timestamp = Timestamp::Instant(
+                                self.timestamps.instant() + chunk_duration * i as u32,
+                            );
                             source.buffer_last = Some((timestamp, chunk_duration));
                             source.buffer.push_back((frame, timestamp));
                         }
@@ -233,14 +238,15 @@ impl AudioMixer {
                         let duration =
                             Duration::from_secs_f64(leftover_chunk_size as f64 / rate as f64);
                         let timestamp = Timestamp::Instant(
-                            start.instant() + chunk_duration * chunks.floor() as u32 + duration,
+                            self.timestamps.instant()
+                                + chunk_duration * chunks.floor() as u32
+                                + duration,
                         );
                         source.buffer_last = Some((timestamp, duration));
                         source.buffer.push_back((frame, timestamp));
                     }
                 }
 
-                // dbg!(frame.samples());
                 source.buffer_last = Some((
                     timestamp,
                     Duration::from_secs_f64(frame.samples() as f64 / frame.rate() as f64),
@@ -251,7 +257,23 @@ impl AudioMixer {
     }
 
     fn tick(&mut self, start: Timestamps, now: Instant) -> Result<(), ()> {
-        self.buffer_sources(start);
+        self.buffer_sources();
+
+        if self.start_timestamp.is_none() {
+            self.start_timestamp = self
+                .sources
+                .iter()
+                .filter_map(|s| s.buffer.get(0))
+                .min_by(|a, b| {
+                    a.1.duration_since(self.timestamps)
+                        .cmp(&b.1.duration_since(self.timestamps))
+                })
+                .map(|v| v.1);
+        }
+
+        let Some(start_timestamp) = self.start_timestamp else {
+            return Ok(());
+        };
 
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
@@ -262,11 +284,9 @@ impl AudioMixer {
         let mut filtered = ffmpeg::frame::Audio::empty();
         while self.abuffersink.sink().frame(&mut filtered).is_ok() {
             let elapsed = Duration::from_secs_f64(self.samples_out as f64 / filtered.rate() as f64);
-            let timestamp = start.instant() + elapsed;
+            let timestamp = start.instant() + start_timestamp.duration_since(start) + elapsed;
 
             self.samples_out += filtered.samples();
-
-            // dbg!(filtered.samples(), timestamp);
 
             if self
                 .output
