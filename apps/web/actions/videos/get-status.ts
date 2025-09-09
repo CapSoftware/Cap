@@ -217,9 +217,10 @@ export async function getVideoStatus(
 						.then(() => revalidatePath(`/s/${videoId}`))
 						.catch((resetError) => {
 							console.error(
-								"[Get Status] Failed to reset AI processing flag for video:", videoId, resetError,
+								"[Get Status] Failed to reset AI processing flag for video:",
+								videoId,
+								resetError,
 							);
-							
 						});
 				});
 
