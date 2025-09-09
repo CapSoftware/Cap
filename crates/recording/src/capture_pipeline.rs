@@ -75,18 +75,19 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             let mut timestamp_tx = Some(timestamp_tx);
             let _ = ready.send(Ok(()));
 
-            let Ok(frame) = source.1.recv() else {
+            let Ok((frame, timestamp)) = source.1.recv() else {
                 return Ok(());
             };
 
             if let Some(timestamp_tx) = timestamp_tx.take() {
-                let _ = timestamp_tx.send(frame.1);
+                let _ = timestamp_tx.send(timestamp);
+                let _ = screen_encoder.queue_video_frame(frame.as_ref());
             }
 
             let result = loop {
                 match source.1.recv() {
-                    Ok(frame) => {
-                        let _ = screen_encoder.queue_video_frame(frame.0.as_ref());
+                    Ok((frame, _)) => {
+                        let _ = screen_encoder.queue_video_frame(frame.as_ref());
                     }
                     // Err(RecvTimeoutError::Timeout) => {
                     //     break Err("Frame receive timeout".to_string());
@@ -177,12 +178,8 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                         continue;
                     };
 
-                    // dbg!(ts_offset);
-
                     let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
                     frame.set_pts(Some(pts));
-
-                    // dbg!(pts);
 
                     if let Ok(mut mp4) = mp4.lock()
                         && let Err(e) = mp4.queue_audio_frame(frame)
@@ -208,7 +205,6 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
                     }
 
                     if let Some(first_frame_tx) = first_frame_tx.take() {
-                        // dbg!(timestamp);
                         let _ = first_frame_tx.send((frame.pts(), timestamp));
                     }
 

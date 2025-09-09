@@ -39,9 +39,9 @@ impl Message<NewFrame> for FrameHandler {
         let frame = msg.0;
         let sample_buffer = frame.sample_buf();
 
-        let timestamp = Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(
-            cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts()),
-        ));
+        let mach_timestamp = cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts());
+        let timestamp =
+            Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(mach_timestamp));
 
         match &frame {
             scap_screencapturekit::Frame::Screen(frame) => {
@@ -164,6 +164,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .build();
 
                 settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+                settings.set_color_space_name(cg::color_space::names::srgb());
 
                 if let Some(crop_bounds) = config.crop_bounds {
                     tracing::info!("crop bounds: {:?}", crop_bounds);

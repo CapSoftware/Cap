@@ -146,7 +146,6 @@ impl AudioMixer {
             let rate = source.info.rate();
 
             while let Ok((frame, timestamp)) = source.rx.try_recv() {
-                // dbg!(timestamp.duration_since(start));
                 // if gap between incoming and last, insert silence
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(start);
@@ -205,6 +204,10 @@ impl AudioMixer {
                                 source.info.channel_layout(),
                             );
 
+                            for i in 0..frame.planes() {
+                                frame.data_mut(i).fill(0);
+                            }
+
                             frame.set_rate(rate as u32);
 
                             let timestamp =
@@ -221,7 +224,12 @@ impl AudioMixer {
                             source.info.channel_layout(),
                         );
 
+                        for i in 0..frame.planes() {
+                            frame.data_mut(i).fill(0);
+                        }
+
                         frame.set_rate(rate as u32);
+                        frame.data_mut(0).fill(0);
 
                         let duration =
                             Duration::from_secs_f64(leftover_chunk_size as f64 / rate as f64);

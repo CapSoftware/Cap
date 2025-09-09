@@ -245,7 +245,12 @@ impl BufferedResampler {
     }
 
     pub fn flush(&mut self, max_samples: usize) -> Option<ffmpeg::frame::Audio> {
-        self.get_frame_inner(self.remaining_samples().min(max_samples))
+        let remaining_samples = self.remaining_samples();
+        if remaining_samples == 0 {
+            return None;
+        }
+
+        self.get_frame_inner(remaining_samples.min(max_samples))
     }
 }
 

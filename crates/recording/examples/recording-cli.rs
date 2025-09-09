@@ -1,11 +1,13 @@
-use std::time::Duration;
-
-use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
+use cap_recording::{feeds::microphone, screen_capture::ScreenCaptureTarget, *};
+use kameo::Actor;
 use scap_targets::Display;
+use std::{sync::Arc, time::Duration};
 use tracing::info;
 
 #[tokio::main]
 pub async fn main() {
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+
     #[cfg(windows)]
     {
         use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
@@ -22,20 +24,40 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    let (handle, _ready_rx) = cap_recording::spawn_instant_recording_actor(
-        "test".to_string(),
+    // let camera_feed = CameraFeed::spawn(CameraFeed::default());
+
+    // camera_feed
+    //     .ask(camera::SetInput {
+    //         id: DeviceOrModelID::from_info(&cap_camera::list_cameras().next().unwrap()),
+    //     })
+    //     .await
+    //     .unwrap()
+    //     .await
+    //     .unwrap();
+
+    let (error_tx, _) = flume::bounded(1);
+    let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+    mic_feed
+        .ask(microphone::SetInput {
+            label: MicrophoneFeed::default().map(|v| v.0).unwrap(),
+        })
+        .await
+        .unwrap()
+        .await
+        .unwrap();
+
+    // tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let (handle, _ready_rx) = instant_recording::Actor::builder(
         dir.path().into(),
-        RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Display {
-                id: Display::primary().id(),
-            },
-            capture_system_audio: true,
-            camera_feed: None,
-            mic_feed: None,
+        ScreenCaptureTarget::Display {
+            id: Display::primary().id(),
         },
-        // false,
-        // true,
     )
+    .with_system_audio(true)
+    .with_mic_feed(Arc::new(mic_feed.ask(microphone::Lock).await.unwrap()))
+    .build()
     .await
     .unwrap();
 

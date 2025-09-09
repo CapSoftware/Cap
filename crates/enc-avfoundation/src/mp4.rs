@@ -194,6 +194,8 @@ impl MP4Encoder {
         })
     }
 
+    /// Expects frames with whatever pts values you like
+    /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
         frame: &cidre::cm::SampleBuf,
@@ -204,16 +206,15 @@ impl MP4Encoder {
 
         let time = frame.pts();
 
+        let new_pts = self
+            .elapsed_duration
+            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
+
         if !self.is_writing {
             self.is_writing = true;
-            self.asset_writer.start_session_at_src_time(time);
+            self.asset_writer.start_session_at_src_time(new_pts);
             self.start_time = time;
         }
-
-        let new_pts = self
-            .start_time
-            .add(self.elapsed_duration)
-            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = new_pts;
@@ -233,8 +234,10 @@ impl MP4Encoder {
         Ok(())
     }
 
+    /// Expects frames with pts values relative to the first frame's pts
+    /// in the timebase of 1 / sample rate
     pub fn queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), QueueAudioFrameError> {
-        if self.is_paused {
+        if self.is_paused || !self.is_writing {
             return Ok(());
         }
 
@@ -278,14 +281,10 @@ impl MP4Encoder {
 
         let time = cm::Time::new(frame.pts().unwrap_or(0), frame.rate() as i32);
 
-        // dbg!(time);
-
         let pts = self
             .start_time
             .add(self.elapsed_duration)
             .add(time.sub(self.segment_first_timestamp.unwrap()));
-
-        // dbg!(pts);
 
         let buffer = cm::SampleBuf::create(
             Some(&block_buf),

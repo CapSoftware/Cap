@@ -93,43 +93,14 @@ impl MicrophoneFeed {
         }
     }
 
+    pub fn default() -> Option<(String, Device, SupportedStreamConfig)> {
+        let host = cpal::default_host();
+        host.default_input_device().and_then(get_usable_device)
+    }
+
     pub fn list() -> MicrophonesMap {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
-
-        let get_usable_device = |device: Device| {
-            device
-                .supported_input_configs()
-                .map_err(|error| {
-                    error!(
-                        "Error getting supported input configs for device: {}",
-                        error
-                    );
-                    error
-                })
-                .ok()
-                .and_then(|configs| {
-                    let mut configs = configs.collect::<Vec<_>>();
-                    configs.sort_by(|a, b| {
-                        b.sample_format()
-                            .sample_size()
-                            .cmp(&a.sample_format().sample_size())
-                            .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
-                    });
-                    configs
-                        .into_iter()
-                        .filter(|c| {
-                            c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000
-                        })
-                        .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
-                })
-                .and_then(|config| {
-                    device
-                        .name()
-                        .ok()
-                        .map(|name| (name, device, config.with_max_sample_rate()))
-                })
-        };
 
         if let Some((name, device, config)) =
             host.default_input_device().and_then(get_usable_device)
@@ -152,6 +123,38 @@ impl MicrophoneFeed {
 
         device_map
     }
+}
+
+fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
+    device
+        .supported_input_configs()
+        .map_err(|error| {
+            error!(
+                "Error getting supported input configs for device: {}",
+                error
+            );
+            error
+        })
+        .ok()
+        .and_then(|configs| {
+            let mut configs = configs.collect::<Vec<_>>();
+            configs.sort_by(|a, b| {
+                b.sample_format()
+                    .sample_size()
+                    .cmp(&a.sample_format().sample_size())
+                    .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
+            });
+            configs
+                .into_iter()
+                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000)
+                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+        })
+        .and_then(|config| {
+            device
+                .name()
+                .ok()
+                .map(|name| (name, device, config.with_max_sample_rate()))
+        })
 }
 
 #[derive(Reply)]

@@ -12,13 +12,13 @@ use crate::MediaError;
 use builder::PipelineBuilder;
 use control::{Control, ControlBroadcast, PipelineControlSignal};
 
-pub struct Pipeline {
+pub struct RecordingPipeline {
     control: ControlBroadcast,
     task_handles: IndexMap<String, JoinHandle<()>>,
     is_shutdown: bool,
 }
 
-impl Pipeline {
+impl RecordingPipeline {
     pub fn builder() -> PipelineBuilder {
         PipelineBuilder::default()
     }
