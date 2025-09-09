@@ -6,6 +6,7 @@ function TargetTypeButton(
 		selected: boolean;
 		Component: Component<ComponentProps<"svg">>;
 		name: string;
+		disabled?: boolean;
 	} & ComponentProps<"div">,
 ) {
 	return (
@@ -16,6 +17,7 @@ function TargetTypeButton(
 				props.selected
 					? "bg-gray-3 text-white ring-blue-9 ring-1"
 					: "ring-transparent ring-0",
+				props.disabled ? "opacity-70 pointer-events-none" : "",
 			)}
 		>
 			<props.Component

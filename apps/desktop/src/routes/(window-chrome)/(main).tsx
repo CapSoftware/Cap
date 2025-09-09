@@ -486,36 +486,68 @@ function Page() {
 						Instant Mode
 					</SignInButton>
 				) : (
-					<Button
-						disabled={toggleRecording.isPending}
-						variant="blue"
-						size="md"
-						onClick={() => toggleRecording.mutate()}
-						class="flex flex-grow justify-center items-center"
-					>
-						{isRecording() ? (
-							"Stop Recording"
-						) : (
+					<Tooltip
+						childClass="w-full flex"
+						placement="top"
+						content={
 							<>
-								{rawOptions.mode === "instant" ? (
-									<IconCapInstant
-										class={cx(
-											"size-[0.8rem] mr-1.5",
-											toggleRecording.isPending ? "opacity-50" : "opacity-100",
-										)}
-									/>
-								) : (
-									<IconCapFilmCut
-										class={cx(
-											"size-[0.8rem] mr-2 -mt-[1.5px]",
-											toggleRecording.isPending ? "opacity-50" : "opacity-100",
-										)}
-									/>
-								)}
-								Start Recording
+								Instant Mode recordings are limited
+								<br /> to 5 mins,{" "}
+								<button
+									class="underline"
+									onClick={() => commands.showWindow("Upgrade")}
+								>
+									Upgrade to Pro
+								</button>
 							</>
-						)}
-					</Button>
+						}
+						openDelay={0}
+						closeDelay={0}
+						disabled={
+							!(
+								rawOptions.mode === "instant" &&
+								auth.data?.plan?.upgraded === false
+							)
+						}
+					>
+						<Button
+							disabled={toggleRecording.isPending}
+							variant="blue"
+							size="md"
+							onClick={() => toggleRecording.mutate()}
+							class="flex flex-grow justify-center items-center"
+						>
+							{isRecording() ? (
+								"Stop Recording"
+							) : (
+								<>
+									{rawOptions.mode === "instant" ? (
+										<IconCapInstant
+											class={cx(
+												"size-[0.8rem] mr-1.5",
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
+											)}
+										/>
+									) : (
+										<IconCapFilmCut
+											class={cx(
+												"size-[0.8rem] mr-2 -mt-[1.5px]",
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
+											)}
+										/>
+									)}
+									{rawOptions.mode === "instant" &&
+									auth.data?.plan?.upgraded === false
+										? "Start 5 min recording"
+										: "Start recording"}
+								</>
+							)}
+						</Button>
+					</Tooltip>
 				)}
 			</div>
 		</div>

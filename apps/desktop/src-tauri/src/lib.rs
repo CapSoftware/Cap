@@ -2217,12 +2217,26 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     }
                 }
                 #[cfg(target_os = "macos")]
-                WindowEvent::Focused(focused) if *focused => {
-                    if let Ok(window_id) = CapWindowId::from_str(label)
-                        && window_id.activates_dock()
-                    {
-                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                            .ok();
+                WindowEvent::Focused(focused) => {
+                    let window_id = CapWindowId::from_str(label);
+
+                    if matches!(window_id, Ok(CapWindowId::Upgrade)) {
+                        for (label, window) in app.webview_windows() {
+                            if let Ok(id) = CapWindowId::from_str(&label)
+                                && matches!(id, CapWindowId::TargetSelectOverlay { .. })
+                            {
+                                let _ = window.hide();
+                            }
+                        }
+                    }
+
+                    if *focused {
+                        if let Ok(window_id) = window_id
+                            && window_id.activates_dock()
+                        {
+                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                                .ok();
+                        }
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

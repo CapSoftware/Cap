@@ -189,7 +189,7 @@ export const Toolbar = ({
 		<>
 			<motion.div
 				layout
-				className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full md:max-w-fit"
+				className="flex overflow-hidden p-2 mx-auto max-w-full bg-white rounded-full border border-gray-5 md:max-w-fit"
 			>
 				<AnimatePresence initial={false} mode="popLayout">
 					{commentBoxOpen ? (
@@ -272,7 +272,7 @@ export const Toolbar = ({
 							</div>
 
 							{/* Separator - hidden on mobile, visible on desktop */}
-							<motion.div className="hidden sm:block w-px bg-gray-200 h-[16px] mx-4" />
+							<motion.div className="hidden sm:block w-px bg-gray-5 h-[16px] mx-4" />
 
 							{/* Comment button - full width on mobile, normal on desktop */}
 							<div className="ml-auto w-full sm:w-auto">

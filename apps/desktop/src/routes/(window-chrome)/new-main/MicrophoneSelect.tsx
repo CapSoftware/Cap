@@ -66,7 +66,7 @@ export default function MicrophoneSelect(props: {
 		<div class="flex flex-col gap-[0.25rem] items-stretch text-[--text-primary]">
 			<button
 				disabled={!!currentRecording.data || props.disabled}
-				class="z-10 relative cursor-default flex flex-row gap-2 items-center px-2 w-full h-9 rounded-lg overflow-hidden transition-colors bg-gray-3 disabled:text-gray-11 KSelect"
+				class="flex overflow-hidden relative z-10 flex-row gap-2 items-center px-2 w-full h-9 rounded-lg transition-colors cursor-default disabled:opacity-70 bg-gray-3 disabled:text-gray-11 KSelect"
 				onClick={() => {
 					Promise.all([
 						CheckMenuItem.new({
