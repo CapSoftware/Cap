@@ -181,7 +181,7 @@ export const Share = ({
 		[videoStatus],
 	);
 
-	const shouldShowLoading = () => {
+	const shouldShowLoading = useCallback(() => {
 		// Show loading while transcription is pending or processing regardless of AI flag
 		if (!transcriptionStatus || transcriptionStatus === "PROCESSING") {
 			return true;
@@ -203,12 +203,18 @@ export const Share = ({
 					return true;
 				}
 			}
+			return false;
 		}
 
 		return false;
-	};
+	}, [transcriptionStatus, aiGenerationEnabled, aiData]);
 
 	const aiLoading = shouldShowLoading();
+
+	console.log({
+		aiLoading,
+		transcriptionStatus,
+	});
 
 	const handleSeek = (time: number) => {
 		if (playerRef.current) {
