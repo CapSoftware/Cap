@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, type Video } from "@cap/web-domain";
+import { Policy } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import * as EffectRuntime from "@/lib/server";
@@ -25,7 +25,7 @@ export interface VideoStatusResult {
 }
 
 export async function getVideoStatus(
-	videoId: Video.VideoId,
+	videoId: string,
 ): Promise<VideoStatusResult | { success: false }> {
 	if (!videoId) throw new Error("Video ID not provided");
 
