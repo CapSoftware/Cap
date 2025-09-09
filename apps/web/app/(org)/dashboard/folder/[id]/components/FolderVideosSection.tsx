@@ -27,7 +27,7 @@ export default function FolderVideosSection({
 	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
-	const { isUploading } = useUploadingContext();
+	const { isUploading, uploadingCapId } = useUploadingContext();
 	const { activeOrganization, user } = useDashboardContext();
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
@@ -164,20 +164,22 @@ export default function FolderVideosSection({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-						{initialVideos.map((video) => (
-							<CapCard
-								key={video.id}
-								cap={video}
-								analytics={analytics[video.id] || 0}
-								userId={user?.id}
-								isLoadingAnalytics={isLoadingAnalytics}
-								isSelected={selectedCaps.includes(video.id)}
-								anyCapSelected={selectedCaps.length > 0}
-								isDeleting={deleteCaps.isPending}
-								onSelectToggle={() => handleCapSelection(video.id)}
-								onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
-							/>
-						))}
+						{initialVideos
+							.filter((cap) => !isUploading || cap.id !== uploadingCapId)
+							.map((video) => (
+								<CapCard
+									key={video.id}
+									cap={video}
+									analytics={analytics[video.id] || 0}
+									userId={user?.id}
+									isLoadingAnalytics={isLoadingAnalytics}
+									isSelected={selectedCaps.includes(video.id)}
+									anyCapSelected={selectedCaps.length > 0}
+									isDeleting={deleteCaps.isPending}
+									onSelectToggle={() => handleCapSelection(video.id)}
+									onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
+								/>
+							))}
 					</>
 				)}
 			</div>

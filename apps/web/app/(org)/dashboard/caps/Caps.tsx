@@ -78,6 +78,7 @@ export const Caps = ({
 		setIsUploading,
 		setUploadingCapId,
 		setUploadProgress,
+		uploadingCapId,
 		setUploadingThumbnailUrl,
 	} = useUploadingContext();
 
@@ -321,27 +322,31 @@ export const Caps = ({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-						{data.map((cap) => (
-							<CapCard
-								key={cap.id}
-								cap={cap}
-								analytics={analytics[cap.id] || 0}
-								onDelete={() => {
-									if (selectedCaps.length > 0) {
-										deleteCaps(selectedCaps);
-									} else {
-										deleteCap(cap.id);
-									}
-								}}
-								userId={user?.id}
-								customDomain={customDomain}
-								isLoadingAnalytics={isLoadingAnalytics}
-								domainVerified={domainVerified}
-								isSelected={selectedCaps.includes(cap.id)}
-								anyCapSelected={anyCapSelected}
-								onSelectToggle={() => handleCapSelection(cap.id)}
-							/>
-						))}
+						{data
+							.filter((cap) => !isUploading || cap.id !== uploadingCapId)
+							.map((cap) => {
+								return (
+									<CapCard
+										key={cap.id}
+										cap={cap}
+										analytics={analytics[cap.id] || 0}
+										onDelete={() => {
+											if (selectedCaps.length > 0) {
+												deleteCaps(selectedCaps);
+											} else {
+												deleteCap(cap.id);
+											}
+										}}
+										userId={user?.id}
+										customDomain={customDomain}
+										isLoadingAnalytics={isLoadingAnalytics}
+										domainVerified={domainVerified}
+										isSelected={selectedCaps.includes(cap.id)}
+										anyCapSelected={anyCapSelected}
+										onSelectToggle={() => handleCapSelection(cap.id)}
+									/>
+								);
+							})}
 					</div>
 				</>
 			)}
