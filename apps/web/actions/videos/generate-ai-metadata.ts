@@ -7,47 +7,11 @@ import { serverEnv } from "@cap/env";
 import { eq } from "drizzle-orm";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { createBucketProvider } from "@/utils/s3";
-
-async function callOpenAI(prompt: string): Promise<string> {
-	const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
-		},
-		body: JSON.stringify({
-			model: "gpt-4o-mini",
-			messages: [{ role: "user", content: prompt }],
-		}),
-	});
-	if (!aiRes.ok) {
-		const errorText = await aiRes.text();
-		console.error(
-			`[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`,
-		);
-		throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
-	}
-	const aiJson = await aiRes.json();
-	return aiJson.choices?.[0]?.message?.content || "{}";
-}
-
-async function setAiProcessingFlag(
-	videoId: string,
-	processing: boolean,
-	currentMetadata: VideoMetadata,
+import { Video } from "@cap/web-domain";
+export async function generateAiMetadata(
+	videoId: Video.VideoId,
+	userId: string,
 ) {
-	await db()
-		.update(videos)
-		.set({
-			metadata: {
-				...currentMetadata,
-				aiProcessing: processing,
-			},
-		})
-		.where(eq(videos.id, videoId));
-}
-
-export async function generateAiMetadata(videoId: string, userId: string) {
 	const groqClient = getGroqClient();
 	if (!groqClient && !serverEnv().OPENAI_API_KEY) {
 		console.error(
@@ -55,30 +19,38 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 		);
 		return;
 	}
-
-	// Single optimized query to get video data with bucket info
-	const query = await db()
-		.select({ video: videos, bucket: s3Buckets })
+	const videoQuery = await db()
+		.select({ video: videos })
 		.from(videos)
-		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
 		.where(eq(videos.id, videoId));
 
-	if (query.length === 0 || !query[0]?.video) {
+	if (videoQuery.length === 0 || !videoQuery[0]?.video) {
 		console.error(
 			`[generateAiMetadata] Video ${videoId} not found in database`,
 		);
 		return;
 	}
 
-	const { video: videoData, bucket: bucketData } = query[0];
-	const metadata: VideoMetadata = (videoData.metadata as VideoMetadata) || {};
+	const videoData = videoQuery[0].video;
+	const metadata = (videoData.metadata as VideoMetadata) || {};
 
 	if (metadata.aiProcessing === true) {
 		const updatedAtTime = new Date(videoData.updatedAt).getTime();
+		const currentTime = new Date().getTime();
 		const tenMinutesInMs = 10 * 60 * 1000;
+		const minutesElapsed = Math.round((currentTime - updatedAtTime) / 60000);
 
-		if (Date.now() - updatedAtTime > tenMinutesInMs) {
-			await setAiProcessingFlag(videoId, false, metadata);
+		if (currentTime - updatedAtTime > tenMinutesInMs) {
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: false,
+					},
+				})
+				.where(eq(videos.id, videoId));
+
 			metadata.aiProcessing = false;
 		} else {
 			return;
@@ -87,23 +59,66 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 
 	if (metadata.summary || metadata.chapters) {
 		if (metadata.aiProcessing) {
-			await setAiProcessingFlag(videoId, false, metadata);
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: false,
+					},
+				})
+				.where(eq(videos.id, videoId));
 		}
 		return;
 	}
 
 	if (videoData?.transcriptionStatus !== "COMPLETE") {
 		if (metadata.aiProcessing) {
-			await setAiProcessingFlag(videoId, false, metadata);
+			await db()
+				.update(videos)
+				.set({
+					metadata: {
+						...metadata,
+						aiProcessing: false,
+					},
+				})
+				.where(eq(videos.id, videoId));
 		}
 		return;
 	}
 
 	try {
-		// Set processing flag
-		await setAiProcessingFlag(videoId, true, metadata);
+		await db()
+			.update(videos)
+			.set({
+				metadata: {
+					...metadata,
+					aiProcessing: true,
+				},
+			})
+			.where(eq(videos.id, videoId));
+		const query = await db()
+			.select({ video: videos, bucket: s3Buckets })
+			.from(videos)
+			.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
+			.where(eq(videos.id, videoId));
 
-		const awsBucket = videoData.awsBucket;
+		if (query.length === 0 || !query[0]) {
+			console.error(`[generateAiMetadata] Video data not found for ${videoId}`);
+			throw new Error(`Video data not found for ${videoId}`);
+		}
+
+		const row = query[0];
+		if (!row || !row.video) {
+			console.error(
+				`[generateAiMetadata] Video record not found for ${videoId}`,
+			);
+			throw new Error(`Video record not found for ${videoId}`);
+		}
+
+		const { video } = row;
+
+		const awsBucket = video.awsBucket;
 		if (!awsBucket) {
 			console.error(
 				`[generateAiMetadata] AWS bucket not found for video ${videoId}`,
@@ -111,7 +126,7 @@ export async function generateAiMetadata(videoId: string, userId: string) {
 			throw new Error(`AWS bucket not found for video ${videoId}`);
 		}
 
-		const bucket = await createBucketProvider(bucketData);
+		const bucket = await createBucketProvider(row.bucket);
 
 		const transcriptKey = `${userId}/${videoId}/transcription.vtt`;
 		const vtt = await bucket.getObject(transcriptKey);
@@ -159,69 +174,62 @@ ${transcriptText}`;
 				);
 				// Fallback to OpenAI if Groq fails and OpenAI key exists
 				if (serverEnv().OPENAI_API_KEY) {
-					content = await callOpenAI(prompt);
+					const aiRes = await fetch(
+						"https://api.openai.com/v1/chat/completions",
+						{
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+								Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
+							},
+							body: JSON.stringify({
+								model: "gpt-4o-mini",
+								messages: [{ role: "user", content: prompt }],
+							}),
+						},
+					);
+					if (!aiRes.ok) {
+						const errorText = await aiRes.text();
+						console.error(
+							`[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`,
+						);
+						throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
+					}
+					const aiJson = await aiRes.json();
+					content = aiJson.choices?.[0]?.message?.content || "{}";
 				} else {
 					throw groqError;
 				}
 			}
 		} else if (serverEnv().OPENAI_API_KEY) {
 			// Use OpenAI if Groq client is not available
-			content = await callOpenAI(prompt);
+			const aiRes = await fetch("https://api.openai.com/v1/chat/completions", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${serverEnv().OPENAI_API_KEY}`,
+				},
+				body: JSON.stringify({
+					model: "gpt-4o-mini",
+					messages: [{ role: "user", content: prompt }],
+				}),
+			});
+			if (!aiRes.ok) {
+				const errorText = await aiRes.text();
+				console.error(
+					`[generateAiMetadata] OpenAI API error: ${aiRes.status} ${errorText}`,
+				);
+				throw new Error(`OpenAI API error: ${aiRes.status} ${errorText}`);
+			}
+			const aiJson = await aiRes.json();
+			content = aiJson.choices?.[0]?.message?.content || "{}";
 		}
 
-		// Type-safe AI response interface
-		interface AIResponse {
+		let data: {
 			title?: string;
 			summary?: string;
 			chapters?: { title: string; start: number }[];
-		}
-
-		// Helper function to validate AI response
-		function validateAIResponse(obj: unknown): AIResponse {
-			const validated: AIResponse = {};
-
-			if (typeof obj === "object" && obj !== null) {
-				const data = obj as Record<string, unknown>;
-
-				if (typeof data.title === "string" && data.title.trim()) {
-					validated.title = data.title.trim();
-				}
-
-				if (typeof data.summary === "string" && data.summary.trim()) {
-					validated.summary = data.summary.trim();
-				}
-
-				if (Array.isArray(data.chapters)) {
-					const validChapters = data.chapters.filter(
-						(chapter: unknown): chapter is { title: string; start: number } => {
-							if (typeof chapter !== "object" || chapter === null) {
-								return false;
-							}
-
-							const chapterObj = chapter as Record<string, unknown>;
-							const title = chapterObj.title;
-							const start = chapterObj.start;
-
-							return (
-								typeof title === "string" &&
-								typeof start === "number" &&
-								title.trim().length > 0 &&
-								start >= 0
-							);
-						},
-					);
-
-					validated.chapters = validChapters.map((chapter) => ({
-						title: chapter.title.trim(),
-						start: Math.floor(chapter.start),
-					}));
-				}
-			}
-
-			return validated;
-		}
-
-		let data: AIResponse = {};
+		} = {};
 		try {
 			// Remove markdown code blocks if present
 			let cleanContent = content;
@@ -232,19 +240,9 @@ ${transcriptText}`;
 			} else if (content.includes("```")) {
 				cleanContent = content.replace(/```\s*/g, "");
 			}
-
-			const parsedData = JSON.parse(cleanContent.trim());
-			data = validateAIResponse(parsedData);
-
-			// Log if validation removed invalid data
-			if (Object.keys(parsedData).length !== Object.keys(data).length) {
-				console.warn(
-					`[generateAiMetadata] Some AI response data was invalid and filtered out`,
-				);
-			}
+			data = JSON.parse(cleanContent.trim());
 		} catch (e) {
 			console.error(`[generateAiMetadata] Error parsing AI response: ${e}`);
-			console.error(`[generateAiMetadata] Raw content: ${content}`);
 			data = {
 				title: "Generated Title",
 				summary:
@@ -253,7 +251,8 @@ ${transcriptText}`;
 			};
 		}
 
-		const currentMetadata: VideoMetadata = metadata;
+		const currentMetadata: VideoMetadata =
+			(video.metadata as VideoMetadata) || {};
 		const updatedMetadata: VideoMetadata = {
 			...currentMetadata,
 			aiTitle: data.title || currentMetadata.aiTitle,
@@ -262,35 +261,45 @@ ${transcriptText}`;
 			aiProcessing: false,
 		};
 
-		// Batch database updates
+		await db()
+			.update(videos)
+			.set({ metadata: updatedMetadata })
+			.where(eq(videos.id, videoId));
+
 		const hasDatePattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(
-			videoData.name || "",
+			video.name || "",
 		);
 
-		const shouldUpdateName =
-			(videoData.name?.startsWith("Cap Recording -") || hasDatePattern) &&
-			data.title;
-
-		if (shouldUpdateName) {
-			// Update both metadata and name in a single query
+		if (
+			(video.name?.startsWith("Cap Recording -") || hasDatePattern) &&
+			data.title
+		) {
 			await db()
 				.update(videos)
-				.set({
-					metadata: updatedMetadata,
-					name: data.title,
-				})
-				.where(eq(videos.id, videoId));
-		} else {
-			// Update only metadata
-			await db()
-				.update(videos)
-				.set({ metadata: updatedMetadata })
+				.set({ name: data.title })
 				.where(eq(videos.id, videoId));
 		}
 	} catch (error) {
 		console.error(`[generateAiMetadata] Error for video ${videoId}:`, error);
+
 		try {
-			await setAiProcessingFlag(videoId, false, metadata);
+			const currentVideo = await db()
+				.select()
+				.from(videos)
+				.where(eq(videos.id, videoId));
+			if (currentVideo.length > 0 && currentVideo[0]) {
+				const currentMetadata: VideoMetadata =
+					(currentVideo[0].metadata as VideoMetadata) || {};
+				await db()
+					.update(videos)
+					.set({
+						metadata: {
+							...currentMetadata,
+							aiProcessing: false,
+						},
+					})
+					.where(eq(videos.id, videoId));
+			}
 		} catch (updateError) {
 			console.error(
 				`[generateAiMetadata] Failed to reset processing flag:`,
