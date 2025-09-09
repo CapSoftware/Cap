@@ -193,9 +193,16 @@ export const Share = ({
 				return false;
 			}
 
+			// If AI is processing, show loading
 			if (aiData.processing === true) {
 				return true;
 			}
+
+			// If transcription is complete but no AI data exists yet, assume processing
+			if (!aiData.summary && !aiData.chapters) {
+				return true;
+			}
+
 			return false;
 		}
 
