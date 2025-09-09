@@ -213,6 +213,7 @@ export const Share = ({
 
 	console.log({
 		aiLoading,
+		aiData,
 		transcriptionStatus,
 	});
 
