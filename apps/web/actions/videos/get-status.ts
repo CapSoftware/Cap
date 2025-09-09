@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy } from "@cap/web-domain";
+import { Policy, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import * as EffectRuntime from "@/lib/server";
@@ -25,7 +25,7 @@ export interface VideoStatusResult {
 }
 
 export async function getVideoStatus(
-	videoId: string,
+	videoId: Video.VideoId,
 ): Promise<VideoStatusResult | { success: false }> {
 	if (!videoId) throw new Error("Video ID not provided");
 
@@ -180,7 +180,7 @@ export async function getVideoStatus(
 					);
 				} catch (error) {
 					console.error(
-						`[Get Status] Error generating AI metadata for video ${videoId}:`,
+						`[Get Status] Error generating AI metadata for video ${videoId}`,
 						error,
 					);
 
@@ -198,15 +198,13 @@ export async function getVideoStatus(
 									metadata: {
 										...currentMetadata,
 										aiProcessing: false,
-										// generationError:
-										// 	error instanceof Error ? error.message : String(error),
 									},
 								})
 								.where(eq(videos.id, videoId));
 						}
 					} catch (resetError) {
 						console.error(
-							`[Get Status] Failed to reset AI processing flag for video ${videoId}:`,
+							`[Get Status] Failed to reset AI processing flag for video ${videoId}`,
 							resetError,
 						);
 					}
