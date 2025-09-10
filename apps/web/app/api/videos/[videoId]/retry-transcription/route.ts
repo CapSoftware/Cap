@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
+import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
@@ -39,6 +40,9 @@ export async function POST(
 			.update(videos)
 			.set({ transcriptionStatus: null })
 			.where(eq(videos.id, videoId));
+
+		// Revalidate the video page to ensure UI updates with fresh data
+		revalidatePath(`/s/${videoId}`);
 
 		return Response.json({
 			success: true,

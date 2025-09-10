@@ -15,17 +15,13 @@ import { generateAiMetadata } from "./generate-ai-metadata";
 const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
 export interface VideoStatusResult {
-	id: string;
-	name: string;
-	status: "PROCESSING" | "COMPLETE" | "ERROR";
 	transcriptionStatus: "PROCESSING" | "COMPLETE" | "ERROR" | null;
 	aiTitle: string | null;
-	aiDescription: string | null;
-	aiTags: string[] | null;
-	duration: number | null;
-	createdAt: Date;
-	updatedAt: Date;
-}[] | null;
+	aiProcessing: boolean;
+	summary: string | null;
+	chapters: { title: string; start: number }[] | null;
+	error?: string;
+}
 
 export async function getVideoStatus(
 	videoId: Video.VideoId,

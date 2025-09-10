@@ -2,6 +2,7 @@
 
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
+import { useMutation } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -133,7 +134,6 @@ export const Transcript: React.FC<TranscriptProps> = ({
 	const [isCopying, setIsCopying] = useState(false);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [downloadPressed, setDownloadPressed] = useState(false);
-	const [isRetrying, setIsRetrying] = useState(false);
 
 	const {
 		data: transcriptContent,
@@ -142,6 +142,33 @@ export const Transcript: React.FC<TranscriptProps> = ({
 	} = useTranscript(data.id, data.transcriptionStatus);
 
 	const invalidateTranscript = useInvalidateTranscript();
+
+	const retryTranscriptionMutation = useMutation({
+		mutationFn: async () => {
+			const response = await fetch(
+				`/api/videos/${data.id}/retry-transcription`,
+				{
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+				},
+			);
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw new Error(`Failed to retry transcription: ${errorText}`);
+			}
+
+			return response.json();
+		},
+		onSuccess: () => {
+			// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
+			setIsTranscriptionProcessing(true);
+			invalidateTranscript(data.id);
+		},
+		onError: (error) => {
+			console.error("Failed to retry transcription:", error);
+		},
+	});
 
 	useEffect(() => {
 		if (transcriptContent) {
@@ -213,27 +240,8 @@ export const Transcript: React.FC<TranscriptProps> = ({
 		}
 	}, [data.id, data.transcriptionStatus, data.createdAt]);
 
-	const handleRetryTranscription = async () => {
-		setIsRetrying(true);
-		try {
-			// Reset transcription status to null to trigger retry
-			const response = await fetch(`/api/videos/${data.id}/retry-transcription`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-			});
-
-			if (response.ok) {
-				// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
-				setIsTranscriptionProcessing(true);
-				invalidateTranscript(data.id);
-			} else {
-				console.error("Failed to retry transcription:", await response.text());
-			}
-		} catch (error) {
-			console.error("Failed to retry transcription:", error);
-		} finally {
-			setIsRetrying(false);
-		}
+	const handleRetryTranscription = () => {
+		retryTranscriptionMutation.mutate();
 	};
 
 	const handleTranscriptClick = (entry: TranscriptEntry) => {
@@ -452,7 +460,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
 					<p className="mb-4 text-sm font-medium text-gray-12">
 						{data.transcriptionStatus === "ERROR"
-							? "Transcription failed"
+							? "Transcript not available"
 							: "No transcript available"}
 					</p>
 					{canEdit &&
@@ -461,12 +469,14 @@ export const Transcript: React.FC<TranscriptProps> = ({
 							hasTimedOut) && (
 							<Button
 								onClick={handleRetryTranscription}
-								disabled={isRetrying}
+								disabled={retryTranscriptionMutation.isPending}
 								variant="primary"
 								size="sm"
-								spinner={isRetrying}
+								spinner={retryTranscriptionMutation.isPending}
 							>
-								{isRetrying ? "Retrying..." : "Retry Transcription"}
+								{retryTranscriptionMutation.isPending
+									? "Retrying..."
+									: "Retry Transcription"}
 							</Button>
 						)}
 				</div>
