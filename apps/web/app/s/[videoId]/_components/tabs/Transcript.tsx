@@ -156,8 +156,6 @@ export const Transcript: React.FC<TranscriptProps> = ({
 			);
 			if (transcriptError.message === "TRANSCRIPT_NOT_READY") {
 				setIsTranscriptionProcessing(true);
-			} else if (transcriptError.message === "TRANSCRIPT_PENDING") {
-				setIsTranscriptionProcessing(false);
 			} else {
 				setIsTranscriptionProcessing(false);
 			}
@@ -218,22 +216,22 @@ export const Transcript: React.FC<TranscriptProps> = ({
 	const handleRetryTranscription = async () => {
 		setIsRetrying(true);
 		try {
-			const response = await fetch('/api/video/transcribe/retry', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ videoId: data.id })
+			// Reset transcription status to null to trigger retry
+			const response = await fetch(`/api/videos/${data.id}/retry-transcription`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
 			});
-			
+
 			if (response.ok) {
-				// Reset status and start polling
+				// Reset status and start polling - this will trigger transcribeVideo automatically
 				setIsTranscriptionProcessing(true);
-				setIsLoading(true);
+				refetchStatus();
 				invalidateTranscript(data.id);
 			} else {
-				console.error('Failed to retry transcription:', await response.text());
+				console.error("Failed to retry transcription:", await response.text());
 			}
 		} catch (error) {
-			console.error('Failed to retry transcription:', error);
+			console.error("Failed to retry transcription:", error);
 		} finally {
 			setIsRetrying(false);
 		}
@@ -443,29 +441,35 @@ export const Transcript: React.FC<TranscriptProps> = ({
 		);
 	}
 
-	if (hasTimedOut || data.transcriptionStatus === "ERROR" || data.transcriptionStatus === "PENDING" || (!transcriptData.length && !isTranscriptionProcessing)) {
+	const showRetryButton =
+		data.transcriptionStatus === "ERROR" ||
+		data.transcriptionStatus === null ||
+		(!transcriptData.length && !isTranscriptionProcessing);
+
+	if (showRetryButton) {
 		return (
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="text-sm font-medium text-gray-12 mb-4">
-						{data.transcriptionStatus === "ERROR" 
-							? "Transcription failed" 
-							: data.transcriptionStatus === "PENDING"
-							? "Transcription pending - will retry automatically"
+					<p className="mb-4 text-sm font-medium text-gray-12">
+						{data.transcriptionStatus === "ERROR"
+							? "Transcription failed"
 							: "No transcript available"}
 					</p>
-					{canEdit && (data.transcriptionStatus === "ERROR" || data.transcriptionStatus === "PENDING" || hasTimedOut) && (
-						<Button
-							onClick={handleRetryTranscription}
-							disabled={isRetrying}
-							variant="primary"
-							size="sm"
-							spinner={isRetrying}
-						>
-							{isRetrying ? "Retrying..." : "Retry Transcription"}
-						</Button>
-					)}
+					{canEdit &&
+						(data.transcriptionStatus === "ERROR" ||
+							data.transcriptionStatus === null ||
+							hasTimedOut) && (
+							<Button
+								onClick={handleRetryTranscription}
+								disabled={isRetrying}
+								variant="primary"
+								size="sm"
+								spinner={isRetrying}
+							>
+								{isRetrying ? "Retrying..." : "Retry Transcription"}
+							</Button>
+						)}
 				</div>
 			</div>
 		);
@@ -555,6 +559,7 @@ export const Transcript: React.FC<TranscriptProps> = ({
 											e.stopPropagation();
 											startEditing(entry);
 										}}
+										type="button"
 										className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-gray-3 rounded-md transition-all duration-200"
 										title="Edit transcript"
 									>

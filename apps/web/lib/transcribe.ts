@@ -82,10 +82,10 @@ export async function transcribeVideo(
 		try {
 			const headResponse = await fetch(videoUrl, { method: 'HEAD' });
 			if (!headResponse.ok) {
-				// Video not ready yet - set to PENDING for retry
+				// Video not ready yet - reset to null for retry
 				await db()
 					.update(videos)
-					.set({ transcriptionStatus: "PENDING" })
+					.set({ transcriptionStatus: null })
 					.where(eq(videos.id, videoId));
 					
 				return { 
@@ -97,7 +97,7 @@ export async function transcribeVideo(
 			console.log(`[transcribeVideo] Video file not accessible yet for ${videoId}, will retry later`);
 			await db()
 				.update(videos)
-				.set({ transcriptionStatus: "PENDING" })
+				.set({ transcriptionStatus: null })
 				.where(eq(videos.id, videoId));
 				
 			return { 
@@ -165,7 +165,7 @@ export async function transcribeVideo(
 		                       errorMessage.includes('network') ||
 		                       !isRetry; // First attempt failures are often temporary
 		
-		const newStatus = isTemporaryError ? "PENDING" : "ERROR";
+		const newStatus = isTemporaryError ? null : "ERROR";
 		
 		await db()
 			.update(videos)

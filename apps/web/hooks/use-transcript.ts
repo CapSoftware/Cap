@@ -8,27 +8,18 @@ export const useTranscript = (
 	return useQuery({
 		queryKey: ["transcript", videoId],
 		queryFn: async () => {
-			// For PENDING status, don't try to fetch transcript
-			if (transcriptionStatus === "PENDING") {
-				throw new Error("TRANSCRIPT_PENDING");
-			}
-
 			const result = await getTranscript(videoId);
 
 			if (result.success && result.content) {
 				return result.content;
 			} else {
-				console.error(
-					"[useTranscript] Failed to fetch transcript:",
-					result.message,
-				);
 				if (result.message === "Transcript is not ready yet") {
 					throw new Error("TRANSCRIPT_NOT_READY");
 				}
 				throw new Error(result.message);
 			}
 		},
-		enabled: transcriptionStatus === "COMPLETE" || transcriptionStatus === "PENDING",
+		enabled: transcriptionStatus === "COMPLETE",
 		staleTime: 0,
 		refetchOnWindowFocus: false,
 	});
