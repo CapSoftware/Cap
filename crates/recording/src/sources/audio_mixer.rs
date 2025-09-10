@@ -156,6 +156,7 @@ impl AudioMixer {
                     .checked_sub(last_end.duration_since(self.timestamps))
                 {
                     let mut remaining = elapsed_since_last;
+
                     while remaining > Self::BUFFER_TIMEOUT {
                         let chunk_samples =
                             (Self::BUFFER_TIMEOUT.as_secs_f64() * rate as f64) as usize;
@@ -172,11 +173,7 @@ impl AudioMixer {
                         }
 
                         let timestamp = last_end + (elapsed_since_last - remaining);
-                        dbg!(timestamp);
-                        source.buffer_last = Some((
-                            timestamp,
-                            Duration::from_secs_f64(chunk_samples as f64 / rate as f64),
-                        ));
+                        source.buffer_last = Some((timestamp, Self::BUFFER_TIMEOUT));
                         source.buffer.push_back((frame, timestamp));
 
                         remaining -= Self::BUFFER_TIMEOUT;
@@ -217,7 +214,6 @@ impl AudioMixer {
                             frame.set_rate(source.info.rate() as u32);
 
                             let timestamp = buffer_last_timestamp + gap;
-                            dbg!(timestamp);
                             source.buffer_last = Some((
                                 timestamp,
                                 Duration::from_secs_f64(silence_samples_count as f64 / rate as f64),
@@ -275,7 +271,6 @@ impl AudioMixer {
                             frame.set_rate(source.info.rate() as u32);
 
                             let timestamp = start_timestamp + (elapsed_since_start - remaining);
-                            dbg!(timestamp);
                             source.buffer_last = Some((
                                 timestamp,
                                 Duration::from_secs_f64(chunk_samples as f64 / rate as f64),

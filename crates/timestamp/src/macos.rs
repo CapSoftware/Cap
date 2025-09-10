@@ -5,11 +5,14 @@ use std::{
 };
 
 #[derive(Clone, Copy, Debug)]
-pub struct MachAbsoluteTimestamp(u64);
+pub struct MachAbsoluteTimestamp(
+    // Nanoseconds
+    u64,
+);
 
 impl MachAbsoluteTimestamp {
-    pub fn new(value: u64) -> Self {
-        Self(value)
+    pub fn new(nanos: u64) -> Self {
+        Self(nanos)
     }
 
     pub fn now() -> Self {
@@ -37,7 +40,7 @@ impl Add<Duration> for MachAbsoluteTimestamp {
         let info = TimeBaseInfo::new();
         let freq = info.numer as f64 / info.denom as f64;
 
-        Self((self.0 as f64 + rhs.as_secs_f64() * freq) as u64)
+        Self((self.0 as f64 + rhs.as_nanos() as f64 * freq) as u64)
     }
 }
 
@@ -48,6 +51,19 @@ impl Sub<Duration> for MachAbsoluteTimestamp {
         let info = TimeBaseInfo::new();
         let freq = info.numer as f64 / info.denom as f64;
 
-        Self((self.0 as f64 - rhs.as_secs_f64() * freq) as u64)
+        Self((self.0 as f64 - rhs.as_nanos() as f64 * freq) as u64)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test() {
+        let a = MachAbsoluteTimestamp::new(0);
+
+        dbg!(MachAbsoluteTimestamp::now());
+        dbg!(a + Duration::from_secs(1));
     }
 }
