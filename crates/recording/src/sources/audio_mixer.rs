@@ -15,7 +15,7 @@ use tracing::debug;
 // Current problem is generating an output timestamp that lines up with the input's timestamp
 
 struct MixerSource {
-    rx: std::iter::Peekable<flume::IntoIter<(ffmpeg::frame::Audio, Timestamp)>>,
+    rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>,
     info: AudioInfo,
     buffer: VecDeque<(ffmpeg::frame::Audio, Timestamp)>,
     buffer_last: Option<(Timestamp, Duration)>,
@@ -41,7 +41,7 @@ impl AudioMixerBuilder {
     pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>) {
         self.sources.push(MixerSource {
             info,
-            rx: rx.into_iter().peekable(),
+            rx,
             buffer: VecDeque::new(),
             buffer_last: None,
         });
@@ -184,7 +184,7 @@ impl AudioMixer {
                 }
             }
 
-            while let Some((frame, timestamp)) = source.rx.next() {
+            while let Ok((frame, timestamp)) = source.rx.try_recv() {
                 // if gap between incoming and last, insert silence
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
