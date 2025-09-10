@@ -72,6 +72,12 @@ export const users = mysqlTable(
 					pauseViews: boolean;
 					pauseReactions: boolean;
 				};
+				// For analytics. 
+				// Adding in preferences so we don't have to 
+				// add a new column and can be dynamic going forward.
+				trackedEvents?: {
+					user_signed_up?: boolean;
+				};
 			} | null>()
 			.default(null),
 		activeOrganizationId: nanoId("activeOrganizationId"),
@@ -452,7 +458,7 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
 
 export const verificationTokensRelations = relations(
 	verificationTokens,
-	({}) => ({
+	() => ({
 		// No relations defined
 	}),
 );

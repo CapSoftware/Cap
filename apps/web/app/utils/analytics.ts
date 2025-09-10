@@ -43,10 +43,11 @@ export function trackEvent(
 		}
 
 		posthog.capture(eventName, { ...properties, platform: "web" });
-		
+
 		const metaEventMap: Record<string, string> = {
-			"purchase_completed": "Purchase",
-			"subscription_purchased": "Purchase",
+			purchase_completed: "Purchase",
+			subscription_purchased: "Purchase",
+			user_signed_up: "CompleteRegistration",
 		};
 
 		const metaEventName = metaEventMap[eventName];
