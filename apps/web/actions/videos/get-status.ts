@@ -16,11 +16,10 @@ const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
 export interface VideoStatusResult {
 	transcriptionStatus: "PROCESSING" | "COMPLETE" | "ERROR" | null;
-	aiProcessing: boolean;
 	aiTitle: string | null;
+	aiProcessing: boolean;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
-	// generationError: string | null;
 	error?: string;
 }
 
