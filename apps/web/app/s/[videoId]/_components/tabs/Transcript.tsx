@@ -223,9 +223,8 @@ export const Transcript: React.FC<TranscriptProps> = ({
 			});
 
 			if (response.ok) {
-				// Reset status and start polling - this will trigger transcribeVideo automatically
+				// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
 				setIsTranscriptionProcessing(true);
-				refetchStatus();
 				invalidateTranscript(data.id);
 			} else {
 				console.error("Failed to retry transcription:", await response.text());
