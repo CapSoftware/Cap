@@ -487,8 +487,6 @@ pub mod audio {
 
                     let timestamp = Timestamp::from_cpal(info.timestamp().capture);
 
-                    dbg!(timestamp);
-
                     let _ = audio_tx.send((data.as_ffmpeg(config), timestamp));
                 },
                 move |e| {

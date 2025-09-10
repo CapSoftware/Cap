@@ -59,6 +59,36 @@ impl std::ops::Add<Duration> for &Timestamp {
     }
 }
 
+impl std::ops::Add<Duration> for Timestamp {
+    type Output = Timestamp;
+
+    fn add(self, rhs: Duration) -> Self::Output {
+        match self {
+            Timestamp::Instant(i) => Timestamp::Instant(i + rhs),
+            Timestamp::SystemTime(t) => Timestamp::SystemTime(t + rhs),
+            #[cfg(windows)]
+            Timestamp::PerformanceCounter(c) => Timestamp::PerformanceCounter(c + rhs),
+            #[cfg(target_os = "macos")]
+            Timestamp::MachAbsoluteTime(c) => Timestamp::MachAbsoluteTime(c + rhs),
+        }
+    }
+}
+
+impl std::ops::Sub<Duration> for Timestamp {
+    type Output = Timestamp;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        match self {
+            Timestamp::Instant(i) => Timestamp::Instant(i - rhs),
+            Timestamp::SystemTime(t) => Timestamp::SystemTime(t - rhs),
+            #[cfg(windows)]
+            Timestamp::PerformanceCounter(c) => Timestamp::PerformanceCounter(c - rhs),
+            #[cfg(target_os = "macos")]
+            Timestamp::MachAbsoluteTime(c) => Timestamp::MachAbsoluteTime(c - rhs),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Timestamps {
     instant: Instant,

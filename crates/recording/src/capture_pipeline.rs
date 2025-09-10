@@ -502,7 +502,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                 while let Ok((mut frame, timestamp)) = audio_rx.recv() {
                     let ts_offset = timestamp.duration_since(start_time);
-                    dbg!(ts_offset);
 
                     let Some(ts_offset) = ts_offset.checked_sub(screen_first_offset) else {
                         continue;
@@ -510,7 +509,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                     let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
                     frame.set_pts(Some(pts));
-                    dbg!(pts);
 
                     if let Ok(mut output) = output.lock() {
                         audio_encoder.queue_frame(frame, &mut output)

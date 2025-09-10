@@ -1,7 +1,7 @@
 use cap_recording::{feeds::microphone, screen_capture::ScreenCaptureTarget, *};
 use kameo::Actor;
 use scap_targets::Display;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tracing::info;
 
 #[tokio::main]
@@ -36,19 +36,25 @@ pub async fn main() {
     //     .await
     //     .unwrap();
 
-    // let (error_tx, _) = flume::bounded(1);
-    // let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+    let (error_tx, _) = flume::bounded(1);
+    let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
 
-    // mic_feed
-    //     .ask(microphone::SetInput {
-    //         label: MicrophoneFeed::default().map(|v| v.0).unwrap(),
-    //     })
-    //     .await
-    //     .unwrap()
-    //     .await
-    //     .unwrap();
+    mic_feed
+        .ask(microphone::SetInput {
+            label:
+            // MicrophoneFeed::list()
+            //     .into_iter()
+            //     .find(|(k, _)| k.contains("Focusrite"))
+            MicrophoneFeed::default()
+                .map(|v| v.0)
+                .unwrap(),
+        })
+        .await
+        .unwrap()
+        .await
+        .unwrap();
 
-    // tokio::time::sleep(Duration::from_millis(10)).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
 
     let (handle, _ready_rx) = instant_recording::Actor::builder(
         dir.path().into(),

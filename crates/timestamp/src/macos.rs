@@ -1,5 +1,8 @@
 use cidre::mach::TimeBaseInfo;
-use std::{ops::Add, time::Duration};
+use std::{
+    ops::{Add, Sub},
+    time::Duration,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct MachAbsoluteTimestamp(u64);
@@ -35,5 +38,16 @@ impl Add<Duration> for MachAbsoluteTimestamp {
         let freq = info.numer as f64 / info.denom as f64;
 
         Self((self.0 as f64 * rhs.as_secs_f64() * freq) as u64)
+    }
+}
+
+impl Sub<Duration> for MachAbsoluteTimestamp {
+    type Output = Self;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        let info = TimeBaseInfo::new();
+        let freq = info.numer as f64 / info.denom as f64;
+
+        Self((self.0 as f64 / freq - rhs.as_millis() as f64) as u64)
     }
 }

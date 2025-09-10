@@ -861,7 +861,7 @@ async fn create_segment_pipeline(
 
                 let elapsed = timestamp.duration_since(start_time)
                     - first_timestamp.duration_since(start_time);
-                frame.set_pts(Some(dbg!(elapsed.as_secs_f64() * rate).round() as i64));
+                frame.set_pts(Some((elapsed.as_secs_f64() * rate).round() as i64));
 
                 output.queue_frame(frame);
             }

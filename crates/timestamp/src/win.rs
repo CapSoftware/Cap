@@ -1,8 +1,9 @@
 use cpal::StreamInstant;
-use std::{ops::Add, time::Duration};
+use std::{
+    ops::{Add, Sub},
+    time::Duration,
+};
 use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
-
-use super::*;
 
 #[derive(Clone, Copy, Debug)]
 pub struct PerformanceCounterTimestamp(i64);
@@ -39,5 +40,15 @@ impl Add<Duration> for PerformanceCounterTimestamp {
         let mut freq = 0;
         unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
         Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i64)
+    }
+}
+
+impl Sub<Duration> for PerformanceCounterTimestamp {
+    type Output = Self;
+
+    fn sub(self, rhs: Duration) -> Self::Output {
+        let mut freq = 0;
+        unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
+        Self(self.0 - (rhs.as_secs_f64() * freq as f64) as i64)
     }
 }
