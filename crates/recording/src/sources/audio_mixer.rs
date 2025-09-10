@@ -15,7 +15,7 @@ use tracing::debug;
 // Current problem is generating an output timestamp that lines up with the input's timestamp
 
 struct MixerSource {
-    rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>,
+    rx: std::iter::Peekable<flume::IntoIter<(ffmpeg::frame::Audio, Timestamp)>>,
     info: AudioInfo,
     buffer: VecDeque<(ffmpeg::frame::Audio, Timestamp)>,
     buffer_last: Option<(Timestamp, Duration)>,
@@ -41,7 +41,7 @@ impl AudioMixerBuilder {
     pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>) {
         self.sources.push(MixerSource {
             info,
-            rx,
+            rx: rx.into_iter().peekable(),
             buffer: VecDeque::new(),
             buffer_last: None,
         });
@@ -143,14 +143,14 @@ impl AudioMixer {
         48_000,
         2,
     );
-    pub const BUFFER_TIMEOUT: Duration = Duration::from_millis(10);
+    pub const BUFFER_TIMEOUT: Duration = Duration::from_millis(200);
 
     fn buffer_sources(&mut self, now: Timestamp) {
         for source in &mut self.sources {
             let rate = source.info.rate();
 
             if let Some(last) = source.buffer_last {
-                let last_end = &last.0 + last.1;
+                let last_end = last.0 + last.1;
                 if let Some(elapsed_since_last) = now
                     .duration_since(self.timestamps)
                     .checked_sub(last_end.duration_since(self.timestamps))
@@ -165,13 +165,14 @@ impl AudioMixer {
                             chunk_samples,
                             source.info.channel_layout(),
                         );
+                        frame.set_rate(source.info.rate() as u32);
+
                         for i in 0..frame.planes() {
                             frame.data_mut(i).fill(0);
                         }
 
-                        frame.set_rate(source.info.rate() as u32);
-
                         let timestamp = last_end + (elapsed_since_last - remaining);
+                        dbg!(timestamp);
                         source.buffer_last = Some((
                             timestamp,
                             Duration::from_secs_f64(chunk_samples as f64 / rate as f64),
@@ -183,7 +184,7 @@ impl AudioMixer {
                 }
             }
 
-            while let Ok((frame, timestamp)) = source.rx.try_recv() {
+            while let Some((frame, timestamp)) = source.rx.next() {
                 // if gap between incoming and last, insert silence
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
@@ -216,6 +217,7 @@ impl AudioMixer {
                             frame.set_rate(source.info.rate() as u32);
 
                             let timestamp = buffer_last_timestamp + gap;
+                            dbg!(timestamp);
                             source.buffer_last = Some((
                                 timestamp,
                                 Duration::from_secs_f64(silence_samples_count as f64 / rate as f64),
@@ -273,6 +275,7 @@ impl AudioMixer {
                             frame.set_rate(source.info.rate() as u32);
 
                             let timestamp = start_timestamp + (elapsed_since_start - remaining);
+                            dbg!(timestamp);
                             source.buffer_last = Some((
                                 timestamp,
                                 Duration::from_secs_f64(chunk_samples as f64 / rate as f64),
