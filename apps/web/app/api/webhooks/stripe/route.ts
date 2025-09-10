@@ -267,8 +267,8 @@ export const POST = async (req: Request) => {
 								typeof session.metadata === "object" &&
 								session.metadata !== null &&
 								"platform" in session.metadata &&
-								typeof (session.metadata as Record<string, unknown>).platform ===
-									"string"
+								typeof (session.metadata as Record<string, unknown>)
+									.platform === "string"
 									? ((session.metadata as Record<string, unknown>)
 											.platform as string)
 									: "web",

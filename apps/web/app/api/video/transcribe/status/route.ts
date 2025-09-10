@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { Video } from "@cap/web-domain";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";

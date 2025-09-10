@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { provideOptionalAuth, VideosPolicy } from "@cap/web-backend";
-import { Policy, Video } from "@cap/web-domain";
+import { Policy, type Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Exit } from "effect";
 import * as EffectRuntime from "@/lib/server";
