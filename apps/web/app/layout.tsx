@@ -11,7 +11,9 @@ import { SonnerToaster } from "@/components/SonnerToastProvider";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./Layout/AuthContext";
+import { MetaPixel } from "./Layout/MetaPixel";
 import { PosthogIdentify } from "./Layout/PosthogIdentify";
+import { PurchaseTracker } from "./Layout/PurchaseTracker";
 import {
 	PostHogProvider,
 	ReactQueryProvider,
@@ -120,6 +122,8 @@ export default async function RootLayout({ children }: PropsWithChildren) {
 										<SonnerToaster />
 										<main className="w-full">{children}</main>
 										<PosthogIdentify />
+										<MetaPixel />
+										<PurchaseTracker />
 									</ReactQueryProvider>
 								</PublicEnvContext>
 							</SessionProvider>

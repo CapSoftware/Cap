@@ -305,7 +305,7 @@ export default async function ShareVideoPage(props: Props) {
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="min-h-screen flex flex-col bg-[#F7F8FA]">
+			<div className="flex flex-col min-h-screen bg-gray-2">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
 					<AuthorizedContent video={data.video} searchParams={searchParams} />
@@ -663,7 +663,7 @@ async function AuthorizedContent({
 
 	return (
 		<>
-			<div className="container flex-1 px-4 py-4 mx-auto">
+			<div className="container flex-1 px-4 mx-auto">
 				<ShareHeader
 					data={{
 						...videoWithOrganizationInfo,
@@ -698,7 +698,7 @@ async function AuthorizedContent({
 				<a
 					target="_blank"
 					href={`/?ref=video_${video.id}`}
-					className="flex justify-center items-center px-4 py-2 mx-auto space-x-2 rounded-full bg-gray-1 new-card-style w-fit"
+					className="flex justify-center items-center px-4 py-2 mx-auto mb-2 space-x-2 bg-white rounded-full border border-gray-5 w-fit"
 				>
 					<span className="text-sm">Recorded with</span>
 					<Logo className="w-14 h-auto" />

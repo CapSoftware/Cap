@@ -8,7 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { Rpc, withRpc } from "@/lib/Rpcs";
@@ -78,6 +78,7 @@ export const Caps = ({
 		setIsUploading,
 		setUploadingCapId,
 		setUploadProgress,
+		uploadingCapId,
 		setUploadingThumbnailUrl,
 	} = useUploadingContext();
 
@@ -265,6 +266,14 @@ export const Caps = ({
 		},
 	});
 
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? data.filter((video) => video.id !== uploadingCapId)
+				: data,
+		[data, isUploading, uploadingCapId],
+	);
+
 	if (count === 0) return <EmptyCapState />;
 
 	return (
@@ -311,7 +320,7 @@ export const Caps = ({
 					</div>
 				</>
 			)}
-			{data.length > 0 && (
+			{visibleVideos.length > 0 && (
 				<>
 					<div className="flex justify-between items-center mb-6 w-full">
 						<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
@@ -321,27 +330,29 @@ export const Caps = ({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-						{data.map((cap) => (
-							<CapCard
-								key={cap.id}
-								cap={cap}
-								analytics={analytics[cap.id] || 0}
-								onDelete={() => {
-									if (selectedCaps.length > 0) {
-										deleteCaps(selectedCaps);
-									} else {
-										deleteCap(cap.id);
-									}
-								}}
-								userId={user?.id}
-								customDomain={customDomain}
-								isLoadingAnalytics={isLoadingAnalytics}
-								domainVerified={domainVerified}
-								isSelected={selectedCaps.includes(cap.id)}
-								anyCapSelected={anyCapSelected}
-								onSelectToggle={() => handleCapSelection(cap.id)}
-							/>
-						))}
+						{visibleVideos.map((video) => {
+							return (
+								<CapCard
+									key={video.id}
+									cap={video}
+									analytics={analytics[video.id] || 0}
+									onDelete={() => {
+										if (selectedCaps.length > 0) {
+											deleteCaps(selectedCaps);
+										} else {
+											deleteCap(video.id);
+										}
+									}}
+									userId={user?.id}
+									customDomain={customDomain}
+									isLoadingAnalytics={isLoadingAnalytics}
+									domainVerified={domainVerified}
+									isSelected={selectedCaps.includes(video.id)}
+									anyCapSelected={anyCapSelected}
+									onSelectToggle={() => handleCapSelection(video.id)}
+								/>
+							);
+						})}
 					</div>
 				</>
 			)}

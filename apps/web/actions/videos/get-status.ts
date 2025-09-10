@@ -180,7 +180,8 @@ export async function getVideoStatus(
 					);
 				} catch (error) {
 					console.error(
-						`[Get Status] Error generating AI metadata for video ${videoId}:`,
+						"[Get Status] Error generating AI metadata for video %s",
+						videoId,
 						error,
 					);
 
@@ -198,15 +199,14 @@ export async function getVideoStatus(
 									metadata: {
 										...currentMetadata,
 										aiProcessing: false,
-										// generationError:
-										// 	error instanceof Error ? error.message : String(error),
 									},
 								})
 								.where(eq(videos.id, videoId));
 						}
 					} catch (resetError) {
 						console.error(
-							`[Get Status] Failed to reset AI processing flag for video ${videoId}:`,
+							`[Get Status] Failed to reset AI processing flag for video %s`,
+							videoId,
 							resetError,
 						);
 					}

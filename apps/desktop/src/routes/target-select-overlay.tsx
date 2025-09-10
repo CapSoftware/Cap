@@ -31,12 +31,24 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
 
 const capitalize = (str: string) => {
 	return str.charAt(0).toUpperCase() + str.slice(1);
 };
 
 export default function () {
+	return (
+		<RecordingOptionsProvider>
+			<Inner />
+		</RecordingOptionsProvider>
+	);
+}
+
+function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
 	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
@@ -165,6 +177,7 @@ export default function () {
 							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: params.displayId! }}
 						/>
+						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
 				)}
 			</Match>
@@ -230,6 +243,9 @@ export default function () {
 								>
 									Adjust recording area
 								</Button>
+								<ShowCapFreeWarning
+									isInstantMode={rawOptions.mode === "instant"}
+								/>
 							</div>
 						</div>
 					)}
@@ -662,6 +678,9 @@ export default function () {
 													bounds,
 												}}
 											/>
+											<ShowCapFreeWarning
+												isInstantMode={rawOptions.mode === "instant"}
+											/>
 										</div>
 									</div>
 
@@ -683,7 +702,7 @@ function RecordingControls(props: {
 	setToggleModeSelect?: (value: boolean) => void;
 }) {
 	const auth = authStore.createQuery();
-	const { rawOptions, setOptions } = createOptionsQuery();
+	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
 
@@ -813,6 +832,26 @@ function RecordingControls(props: {
 				</p>
 			</div>
 		</>
+	);
+}
+
+function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
+	const auth = authStore.createQuery();
+
+	return (
+		<Suspense>
+			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
+				<p class="text-sm text-center max-w-64">
+					Instant Mode recordings are limited to 5 mins,{" "}
+					<button
+						class="underline"
+						onClick={() => commands.showWindow("Upgrade")}
+					>
+						Upgrade to Pro
+					</button>
+				</p>
+			</Show>
+		</Suspense>
 	);
 }
 
