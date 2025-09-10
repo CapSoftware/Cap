@@ -72,8 +72,8 @@ export const users = mysqlTable(
 					pauseViews: boolean;
 					pauseReactions: boolean;
 				};
-				// For analytics. 
-				// Adding in preferences so we don't have to 
+				// For analytics.
+				// Adding in preferences so we don't have to
 				// add a new column and can be dynamic going forward.
 				trackedEvents?: {
 					user_signed_up?: boolean;
