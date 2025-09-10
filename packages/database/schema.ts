@@ -249,7 +249,7 @@ export const videos = mysqlTable(
 		metadata: json("metadata").$type<VideoMetadata>(),
 		public: boolean("public").notNull().default(true),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
-			"PROCESSING" | "COMPLETE" | "ERROR"
+			"PROCESSING" | "COMPLETE" | "ERROR" | "PENDING"
 		>(),
 		source: json("source")
 			.$type<

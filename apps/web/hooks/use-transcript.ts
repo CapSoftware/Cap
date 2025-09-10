@@ -8,6 +8,11 @@ export const useTranscript = (
 	return useQuery({
 		queryKey: ["transcript", videoId],
 		queryFn: async () => {
+			// For PENDING status, don't try to fetch transcript
+			if (transcriptionStatus === "PENDING") {
+				throw new Error("TRANSCRIPT_PENDING");
+			}
+
 			const result = await getTranscript(videoId);
 
 			if (result.success && result.content) {
@@ -23,7 +28,7 @@ export const useTranscript = (
 				throw new Error(result.message);
 			}
 		},
-		enabled: transcriptionStatus === "COMPLETE",
+		enabled: transcriptionStatus === "COMPLETE" || transcriptionStatus === "PENDING",
 		staleTime: 0,
 		refetchOnWindowFocus: false,
 	});

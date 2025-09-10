@@ -24,7 +24,7 @@ export class Video extends Schema.Class<Video>("Video")({
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
-		Schema.Literal("PROCESSING", "COMPLETE", "ERROR"),
+		Schema.Literal("PROCESSING", "COMPLETE", "ERROR", "PENDING"),
 	),
 	createdAt: Schema.Date,
 	updatedAt: Schema.Date,
