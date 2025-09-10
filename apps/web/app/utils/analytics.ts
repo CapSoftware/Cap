@@ -52,7 +52,16 @@ export function trackEvent(
 
 		const metaEventName = metaEventMap[eventName];
 		if (metaEventName) {
-			trackMetaEvent(metaEventName, properties);
+			const isSignup = eventName === "user_signed_up";
+			const metaParameters = isSignup ? undefined : properties;
+			const eventId = isSignup
+				? `signup_${posthog.get_distinct_id?.() ?? "unknown"}`
+				: undefined;
+			trackMetaEvent(
+				metaEventName,
+				metaParameters,
+				eventId ? { eventId } : undefined,
+			);
 		}
 	} catch (error) {
 		console.error(`Error tracking event ${eventName}:`, error);

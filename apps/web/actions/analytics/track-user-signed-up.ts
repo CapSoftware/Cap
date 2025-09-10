@@ -39,7 +39,7 @@ export async function checkAndMarkUserSignedUpTracked(): Promise<{
 				preferences: sql`JSON_SET(COALESCE(${users.preferences}, JSON_OBJECT()), '$.trackedEvents.user_signed_up', true)`,
 			})
 			.where(
-				sql`(${users.id} = ${currentUser.id}) AND (${users.created_at} >= CURRENT_DATE()) AND (JSON_EXTRACT(${users.preferences}, '$.trackedEvents.user_signed_up') IS NULL OR JSON_EXTRACT(${users.preferences}, '$.trackedEvents.user_signed_up') = false)`,
+				sql`(${users.id} = ${currentUser.id}) AND (${users.created_at} >= CURRENT_DATE()) AND JSON_CONTAINS(COALESCE(${users.preferences}, JSON_OBJECT()), CAST(true AS JSON), '$.trackedEvents.user_signed_up') = 0`,
 			);
 
 		if (result.rowsAffected && result.rowsAffected > 0) {
