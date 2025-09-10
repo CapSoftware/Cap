@@ -240,10 +240,6 @@ export const Transcript: React.FC<TranscriptProps> = ({
 		}
 	}, [data.id, data.transcriptionStatus, data.createdAt]);
 
-	const handleRetryTranscription = () => {
-		retryTranscriptionMutation.mutate();
-	};
-
 	const handleTranscriptClick = (entry: TranscriptEntry) => {
 		if (editingEntry === entry.id) {
 			return;
@@ -468,7 +464,9 @@ export const Transcript: React.FC<TranscriptProps> = ({
 							data.transcriptionStatus === null ||
 							hasTimedOut) && (
 							<Button
-								onClick={handleRetryTranscription}
+								onClick={() => {
+									retryTranscriptionMutation.mutate();
+								}}
 								disabled={retryTranscriptionMutation.isPending}
 								variant="primary"
 								size="sm"
