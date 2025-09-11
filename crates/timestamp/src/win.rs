@@ -53,8 +53,7 @@ impl Add<Duration> for PerformanceCounterTimestamp {
     type Output = Self;
 
     fn add(self, rhs: Duration) -> Self::Output {
-        let mut freq = 0;
-        unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
+        let freq = perf_freq();
         Self(self.0 + (rhs.as_secs_f64() * freq as f64) as i64)
     }
 }
