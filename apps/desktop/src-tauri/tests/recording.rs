@@ -1,6 +1,6 @@
 use cap_desktop_lib::{
-    recording::{start_recording, stop_recording, StartRecordingInputs},
     RecordingMode,
+    recording::{StartRecordingInputs, start_recording, stop_recording},
 };
 use common::setup_test_app;
 use scap_targets::available_displays;
@@ -40,5 +40,8 @@ async fn test_start_and_stop_recording() {
         .await
         .expect("Failed to stop recording");
 
-    assert!(result.is_some(), "Stopping the recording did not return a completed recording");
+    assert!(
+        result.is_some(),
+        "Stopping the recording did not return a completed recording"
+    );
 }

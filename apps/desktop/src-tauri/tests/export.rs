@@ -1,6 +1,6 @@
 use cap_desktop_lib::{
-    export::{export_project, ExportInput},
     ProjectConfiguration,
+    export::{ExportInput, export_project},
 };
 use common::setup_test_app;
 use std::fs;
@@ -32,5 +32,8 @@ async fn test_save_and_render_file() {
 
     let meta = fs::metadata(&output_path).expect("Exported file does not exist");
     assert!(meta.is_file(), "Exported path is not a file");
-    assert_eq!(output_path.extension().and_then(|s| s.to_str()), Some("mp4"));
+    assert_eq!(
+        output_path.extension().and_then(|s| s.to_str()),
+        Some("mp4")
+    );
 }

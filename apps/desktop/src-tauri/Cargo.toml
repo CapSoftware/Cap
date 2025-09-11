@@ -45,30 +45,23 @@ tauri-plugin-deep-link = "2.2.0"
 tauri-plugin-clipboard-manager = "2.2.1"
 tauri-plugin-opener = "2.2.6"
 
-[dev-dependencies]
-tauri = { workspace = true, features = ["test"] }
-serde_json = "1.0.111"
-
-[features]
-# DO NOT REMOVE!
-custom-protocol = ["tauri/custom-protocol"]
-
+# Workspace dependencies
 scap = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.111"
-specta.workspace = true
+specta = { workspace = true }
 specta-typescript = "0.0.7"
-tokio.workspace = true
+tokio = { workspace = true }
 uuid = { version = "1.10.0", features = ["v4"] }
 image = "0.25.2"
 mp4 = "0.14.0"
 futures-intrusive = "0.5.0"
-anyhow.workspace = true
+anyhow = { workspace = true }
 futures = { workspace = true }
 axum = { version = "0.7.5", features = ["ws", "macros"] }
-tracing.workspace = true
+tracing = { workspace = true }
 tempfile = "3.9.0"
-ffmpeg.workspace = true
+ffmpeg = { workspace = true }
 chrono = { version = "0.4.31", features = ["serde"] }
 rodio = "0.19.0"
 png = "0.17.13"
@@ -78,9 +71,9 @@ reqwest = { version = "0.12.7", features = ["json", "stream", "multipart"] }
 dotenvy_macro = "0.15.7"
 global-hotkey = "0.7.0"
 rand = "0.8.5"
-cpal.workspace = true
+cpal = { workspace = true }
 keyed_priority_queue = "0.4.2"
-sentry.workspace = true
+sentry = { workspace = true }
 clipboard-rs = "0.2.2"
 whisper-rs = "0.11.0"
 lazy_static = "1.4.0"
@@ -98,7 +91,7 @@ cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 scap-targets = { path = "../../../crates/scap-targets" }
 
-flume.workspace = true
+flume = { workspace = true }
 tracing-subscriber = "0.3.19"
 tracing-appender = "0.2.3"
 dirs = "6.0.0"
@@ -107,9 +100,17 @@ cap-fail = { version = "0.1.0", path = "../../../crates/fail" }
 tokio-stream = { version = "0.1.17", features = ["sync"] }
 md5 = "0.7.0"
 tokio-util = "0.7.15"
-wgpu.workspace = true
+wgpu = { workspace = true }
 bytemuck = "1.23.1"
 kameo = "0.17.2"
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["test"] }
+serde_json = "1.0.111"
+
+[features]
+# DO NOT REMOVE!
+custom-protocol = ["tauri/custom-protocol"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

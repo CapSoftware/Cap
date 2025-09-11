@@ -16,14 +16,11 @@ async fn test_copy_to_clipboard() {
 
     // Create a dummy image file
     let mut file = File::create(&file_path).unwrap();
-    file.write_all(include_bytes!("./test_image.png"))
-        .unwrap();
+    file.write_all(include_bytes!("./test_image.png")).unwrap();
 
-    let result = copy_screenshot_to_clipboard(
-        clipboard_state,
-        file_path.to_string_lossy().to_string(),
-    )
-    .await;
+    let result =
+        copy_screenshot_to_clipboard(clipboard_state, file_path.to_string_lossy().to_string())
+            .await;
 
     match result {
         Ok(()) => println!("Successfully copied image to clipboard"),
