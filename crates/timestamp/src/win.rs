@@ -9,12 +9,6 @@ use windows::Win32::System::Performance::{QueryPerformanceCounter, QueryPerforma
 #[derive(Clone, Copy, Debug)]
 pub struct PerformanceCounterTimestamp(i64);
 
-impl PerformanceCounterTimestamp {
-    pub fn new(value: i64) -> Self {
-        Self(value)
-    }
-}
-
 static PERF_FREQ: OnceLock<i64> = OnceLock::new();
 
 #[inline]
@@ -28,7 +22,11 @@ fn perf_freq() -> i64 {
     })
 }
 
-impl Timestamp {
+impl PerformanceCounterTimestamp {
+    pub fn new(value: i64) -> Self {
+        Self(value)
+    }
+
     pub fn duration_since(&self, other: Self) -> Duration {
         let freq = perf_freq();
         Duration::from_secs_f64((self.0 - other.0) as f64 / freq as f64)
