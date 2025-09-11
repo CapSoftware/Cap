@@ -13,13 +13,29 @@ impl PerformanceCounterTimestamp {
         Self(value)
     }
 
-    pub fn duration_since(&self, other: Self) -> Duration {
-        let mut freq = 0;
-        unsafe { QueryPerformanceFrequency(&mut freq).unwrap() };
+// At the top of crates/timestamp/src/win.rs
+use std::sync::OnceLock;
 
+static PERF_FREQ: OnceLock<i64> = OnceLock::new();
+
+#[inline]
+fn perf_freq() -> i64 {
+    *PERF_FREQ.get_or_init(|| {
+        let mut freq: i64 = 0;
+        // SAFETY: According to the Windows API docs, QueryPerformanceFrequency
+        // will succeed on all Windows XP and later systems.
+        unsafe { QueryPerformanceFrequency(&mut freq) }.unwrap();
+        freq
+    })
+}
+
+// …later in the same file, replacing the original method:
+impl Timestamp {
+    pub fn duration_since(&self, other: Self) -> Duration {
+        let freq = perf_freq();
         Duration::from_secs_f64((self.0 - other.0) as f64 / freq as f64)
     }
-
+}
     pub fn now() -> Self {
         let mut value = 0;
         unsafe { QueryPerformanceCounter(&mut value).unwrap() };
