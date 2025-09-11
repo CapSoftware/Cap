@@ -12,6 +12,8 @@ import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
+import { userIsPro } from "@cap/utils";
+import { Video } from "@cap/web-domain";
 
 export const app = new Hono().use(withAuth);
 
@@ -46,9 +48,9 @@ app.get(
 			} = c.req.valid("query");
 			const user = c.get("user");
 
-			const isUpgraded = user.stripeSubscriptionStatus === "active";
+			const isCapPro = userIsPro(user);
 
-			if (!isUpgraded && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
+			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
 				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			console.log("Video create request:", {
@@ -252,8 +254,14 @@ app.post(
 		}),
 	),
 	async (c) => {
-		const { videoId, uploaded, total, updatedAt } = c.req.valid("json");
+		const {
+			videoId: videoIdRaw,
+			uploaded,
+			total,
+			updatedAt,
+		} = c.req.valid("json");
 		const user = c.get("user");
+		const videoId = Video.VideoId.make(videoIdRaw);
 
 		try {
 			const video = await db()
@@ -282,7 +290,7 @@ app.post(
 					),
 				);
 
-			console.log("ATTEMPTED UPDATE", result);
+			console.log("ATTEMPTED UPDATE", result); // TODO
 
 			if (result.rowsAffected === 0) {
 				const result2 = await db().insert(videoUploads).values({
@@ -292,7 +300,7 @@ app.post(
 					updatedAt,
 				});
 
-				console.log("ATTEMPTED INSERT", result2);
+				console.log("ATTEMPTED INSERT", result2); // TODO
 			}
 
 			if (uploaded === total)

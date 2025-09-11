@@ -1,6 +1,6 @@
 "use client";
 
-import { Option } from "effect";
+import { Effect, Option } from "effect";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import type { Video } from "@cap/web-domain";
@@ -22,22 +22,18 @@ const fiveMinutes = 5 * 60 * 1000;
 export function useUploadProgress(videoId: Video.VideoId) {
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
-		queryFn: () => withRpc((rpc) => rpc.GetUploadProgress(videoId)),
-		refetchInterval: (query) => (!!query.state.data ? 1000 : false),
+		queryFn: () =>
+			withRpc((rpc) => rpc.GetUploadProgress(videoId)).pipe(
+				Effect.map((v) => Option.getOrNull(v ?? Option.none())),
+			),
+		refetchInterval: (query) => (query.state.data ? 1000 : false),
 	});
-
-	const result = Option.getOrUndefined(query.data ?? Option.none());
-	if (!result) return null;
+	if (!query.data) return null;
 
 	const hasUploadFailed =
-		Date.now() - new Date(result.updatedAt).getTime() > fiveMinutes;
+		Date.now() - new Date(query.data.updatedAt).getTime() > fiveMinutes;
 
-	console.log(
-		Date.now() - new Date(result.updatedAt).getTime(),
-		hasUploadFailed,
-	);
-
-	const isPreparing = result.total === 0; // `0/0` for progress is `NaN`
+	const isPreparing = query.data.total === 0; // `0/0` for progress is `NaN`
 
 	return (
 		isPreparing
@@ -50,7 +46,7 @@ export function useUploadProgress(videoId: Video.VideoId) {
 					}
 				: {
 						status: "uploading",
-						progress: (result.uploaded / result.total) * 100,
+						progress: (query.data.uploaded / query.data.total) * 100,
 					}
 	) satisfies UploadProgress;
 }

@@ -266,11 +266,9 @@ export function HLSVideoPlayer({
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					isUploading
+					isUploading || videoLoaded
 						? "opacity-0 pointer-events-none"
-						: videoLoaded
-							? "opacity-0 pointer-events-none"
-							: "opacity-100",
+						: "opacity-100",
 				)}
 			>
 				<div className="flex flex-col gap-2 items-center">
@@ -278,7 +276,7 @@ export function HLSVideoPlayer({
 				</div>
 			</div>
 			<AnimatePresence>
-				{isUploading && (
+				{!videoLoaded && isUploading && (
 					<motion.div
 						initial={{ opacity: 0, y: 10 }}
 						animate={{ opacity: 1, y: 0 }}

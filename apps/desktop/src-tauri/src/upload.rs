@@ -1018,8 +1018,7 @@ impl InstantMultipartUpload {
             }
         };
 
-        send_progress_update(&app, video_id.into(), file_size, expected_pos);
-        tokio::time::sleep(Duration::from_secs(30)).await; // TODO
+        send_progress_update(&app, video_id.into(), expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
