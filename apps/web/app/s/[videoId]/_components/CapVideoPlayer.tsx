@@ -1,10 +1,12 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
+import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
@@ -26,7 +28,6 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
-import type { Video } from "@cap/web-domain";
 
 interface Props {
 	videoSrc: string;
@@ -384,7 +385,10 @@ export function CapVideoPlayer({
 	}, []);
 
 	const uploadProgress = useUploadProgress(videoId);
-	const isUploading = uploadProgress?.status === "uploading";
+	const isUploading =
+		uploadProgress?.status === "uploading" ||
+		uploadProgress?.status === "preparing";
+	const isUploadFailed = true;
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
 	useEffect(() => {
@@ -410,10 +414,19 @@ export function CapVideoPlayer({
 			)}
 			autoHide
 		>
+			{isUploadFailed && (
+				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
+					<AlertTriangleIcon className="text-red-500 size-12" />
+					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
+						Upload failed. Please try re-uploading from the Cap desktop app via
+						Settings {">"} Previous Recordings.
+					</p>
+				</div>
+			)}
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					isUploading || videoLoaded
+					isUploading || videoLoaded || !isUploadFailed
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}
@@ -453,34 +466,45 @@ export function CapVideoPlayer({
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{!videoLoaded && isUploading && (
+				{videoLoaded && isUploading && !isUploadFailed && (
 					<motion.div
 						initial={{ opacity: 0, y: 10 }}
 						animate={{ opacity: 1, y: 0 }}
 						exit={{ opacity: 0, y: 10 }}
 						transition={{ duration: 0.2 }}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-12 xs:size-20 md:size-32"
+						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
 					>
-						<ProgressCircle progress={uploadProgress.progress} />
-					</motion.div>
-				)}
-				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (
-					<motion.div
-						whileHover={{ scale: 1.1 }}
-						whileTap={{ scale: 0.9 }}
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						onClick={() => videoRef.current?.play()}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
-					>
-						<FontAwesomeIcon
-							icon={faPlay}
-							className="text-white size-4 xs:size-8 md:size-12"
+						<ProgressCircle
+							progress={
+								uploadProgress?.status === "uploading"
+									? uploadProgress.progress
+									: 0
+							}
+							isFailed={isUploadFailed}
 						/>
 					</motion.div>
 				)}
+				{showPlayButton &&
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!isUploading &&
+					!isUploadFailed && (
+						<motion.div
+							whileHover={{ scale: 1.1 }}
+							whileTap={{ scale: 0.9 }}
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: 10 }}
+							transition={{ duration: 0.2 }}
+							onClick={() => videoRef.current?.play()}
+							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+						>
+							<FontAwesomeIcon
+								icon={faPlay}
+								className="text-white size-4 xs:size-8 md:size-12"
+							/>
+						</motion.div>
+					)}
 			</AnimatePresence>
 			{currentCue && toggleCaptions && (
 				<div
@@ -500,7 +524,10 @@ export function CapVideoPlayer({
 				<MediaPlayerError />
 			)}
 			<MediaPlayerVolumeIndicator />
-			<MediaPlayerControls className="flex-col items-start gap-2.5">
+			<MediaPlayerControls
+				className="flex-col items-start gap-2.5"
+				isUploadingOrFailed={isUploading || isUploadFailed}
+			>
 				<MediaPlayerControlsOverlay />
 				<MediaPlayerSeek
 					tooltipThumbnailSrc={

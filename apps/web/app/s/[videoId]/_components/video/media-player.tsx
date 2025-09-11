@@ -876,10 +876,11 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 
 interface MediaPlayerControlsProps extends React.ComponentProps<"div"> {
 	asChild?: boolean;
+	isUploadingOrFailed?: boolean;
 }
 
 function MediaPlayerControls(props: MediaPlayerControlsProps) {
-	const { asChild, className, ...controlsProps } = props;
+	const { asChild, className, isUploadingOrFailed, ...controlsProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
 	const isFullscreen = useMediaSelector(
@@ -888,6 +889,10 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 
 	const ControlsPrimitive = asChild ? Slot : "div";
+
+	if (isUploadingOrFailed) {
+		return null;
+	}
 
 	return (
 		<ControlsPrimitive
@@ -2324,8 +2329,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 				className={cn(
 					"flex relative items-center select-none touch-none",
 					expandable
-						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100"
-						: "w-16",
+						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100":"w-16",
 					className,
 				)}
 				disabled={isDisabled}
