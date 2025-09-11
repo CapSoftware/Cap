@@ -1,4 +1,6 @@
-use cap_audio::{AudioData, FromSampleBytes, StereoMode, cast_f32_slice_to_bytes};
+use cap_audio::{
+    AudioData, AudioRendererTrack, FromSampleBytes, StereoMode, cast_f32_slice_to_bytes,
+};
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
 use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
@@ -184,16 +186,24 @@ impl AudioRenderer {
         let track_datas = tracks
             .iter()
             .map(|t| {
-                (
-                    t.data().as_ref(),
-                    if project.audio.mute {
+                let offsets = project
+                    .clips
+                    .iter()
+                    .find(|c| c.index == start.segment_index)
+                    .map(|c| c.offsets)
+                    .unwrap_or_default();
+
+                AudioRendererTrack {
+                    data: t.data().as_ref(),
+                    gain: if project.audio.mute {
                         f32::NEG_INFINITY
                     } else {
                         let g = t.gain(&project.audio);
                         if g < -30.0 { f32::NEG_INFINITY } else { g }
                     },
-                    t.stereo_mode(&project.audio),
-                )
+                    stereo_mode: t.stereo_mode(&project.audio),
+                    offset: (offsets.system_audio * Self::SAMPLE_RATE as f32) as isize,
+                }
             })
             .collect::<Vec<_>>();
 

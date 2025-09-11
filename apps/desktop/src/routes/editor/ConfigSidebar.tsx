@@ -2375,7 +2375,7 @@ function ClipSegmentConfig(props: {
 			</div>
 
 			<div class="space-y-1">
-				<h3 class="text-base font-medium text-gray-12">Clip Settings</h3>
+				<h3 class="font-medium text-gray-12">Clip Settings</h3>
 				<p class="text-gray-11">
 					These settings apply to all segments for the current clip
 				</p>
@@ -2408,101 +2408,6 @@ function ClipSegmentConfig(props: {
 					}}
 				/>
 			)}
-
-			{/*<div class="mt-6 space-y-4">
-				<h3 class="text-sm font-medium text-gray-300">Audio/Video Offsets</h3>
-
-				<div class="space-y-4">
-					<div class="flex flex-col gap-2">
-						<label class="text-xs text-gray-400">Camera Offset</label>
-						<div class="flex items-center gap-2">
-							<input
-								type="number"
-								value={
-									project.clips?.[props.segmentIndex]?.offsets?.camera ?? 0
-								}
-								onInput={(e) => {
-									const value = parseFloat(e.currentTarget.value) || 0;
-									const clips = [...(project.clips || [])];
-									if (!clips[props.segmentIndex]) {
-										clips[props.segmentIndex] = {
-											index: props.segmentIndex,
-											offsets: {},
-										};
-									}
-									clips[props.segmentIndex].offsets.camera = value;
-									setProject("clips", clips);
-								}}
-								step="0.01"
-								min="-10"
-								max="10"
-								class="w-24 px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 focus:outline-none focus:border-blue-500"
-							/>
-							<span class="text-xs text-gray-400">seconds</span>
-						</div>
-						<p class="text-xs text-gray-500">Adjust camera video timing</p>
-					</div>
-
-					<div class="flex flex-col gap-2">
-						<label class="text-xs text-gray-400">Microphone Offset</label>
-						<div class="flex items-center gap-2">
-							<input
-								type="number"
-								value={project.clips?.[props.segmentIndex]?.offsets?.mic ?? 0}
-								onInput={(e) => {
-									const value = parseFloat(e.currentTarget.value) || 0;
-									const clips = [...(project.clips || [])];
-									if (!clips[props.segmentIndex]) {
-										clips[props.segmentIndex] = {
-											index: props.segmentIndex,
-											offsets: {},
-										};
-									}
-									clips[props.segmentIndex].offsets.mic = value;
-									setProject("clips", clips);
-								}}
-								step="0.01"
-								min="-10"
-								max="10"
-								class="w-24 px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 focus:outline-none focus:border-blue-500"
-							/>
-							<span class="text-xs text-gray-400">seconds</span>
-						</div>
-						<p class="text-xs text-gray-500">Adjust microphone audio timing</p>
-					</div>
-
-					<div class="flex flex-col gap-2">
-						<label class="text-xs text-gray-400">System Audio Offset</label>
-						<div class="flex items-center gap-2">
-							<input
-								type="number"
-								value={
-									project.clips?.[props.segmentIndex]?.offsets?.system_audio ??
-									0
-								}
-								onInput={(e) => {
-									const value = parseFloat(e.currentTarget.value) || 0;
-									const clips = [...(project.clips || [])];
-									if (!clips[props.segmentIndex]) {
-										clips[props.segmentIndex] = {
-											index: props.segmentIndex,
-											offsets: {},
-										};
-									}
-									clips[props.segmentIndex].offsets.system_audio = value;
-									setProject("clips", clips);
-								}}
-								step="0.01"
-								min="-10"
-								max="10"
-								class="w-24 px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-200 focus:outline-none focus:border-blue-500"
-							/>
-							<span class="text-xs text-gray-400">seconds</span>
-						</div>
-						<p class="text-xs text-gray-500">Adjust system audio timing</p>
-					</div>
-				</div>
-			</div>*/}
 
 			{/*<ComingSoonTooltip>
 			<Field name="Hide Cursor" disabled value={<Toggle disabled />} />

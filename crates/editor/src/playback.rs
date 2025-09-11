@@ -250,13 +250,11 @@ impl AudioPlayback {
             move |buffer: &mut [T], _info| {
                 let project = project.borrow();
 
-                if prev_audio_config != project.audio {
-                    audio_renderer.set_playhead(
-                        playhead + elapsed as f64 / output_info.sample_rate as f64,
-                        &project,
-                    );
-                    prev_audio_config = project.audio.clone();
-                }
+                audio_renderer.set_playhead(
+                    playhead + elapsed as f64 / output_info.sample_rate as f64,
+                    &project,
+                );
+                prev_audio_config = project.audio.clone();
 
                 audio_renderer.render(&project);
                 audio_renderer.fill(buffer);
