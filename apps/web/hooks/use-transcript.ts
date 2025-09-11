@@ -13,10 +13,6 @@ export const useTranscript = (
 			if (result.success && result.content) {
 				return result.content;
 			} else {
-				console.error(
-					"[useTranscript] Failed to fetch transcript:",
-					result.message,
-				);
 				if (result.message === "Transcript is not ready yet") {
 					throw new Error("TRANSCRIPT_NOT_READY");
 				}
