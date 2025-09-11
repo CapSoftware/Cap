@@ -45,6 +45,18 @@ tauri-plugin-deep-link = "2.2.0"
 tauri-plugin-clipboard-manager = "2.2.1"
 tauri-plugin-opener = "2.2.6"
 
+[[test]]
+name = "tests"
+path = "tests/main.rs"
+
+[dev-dependencies]
+tauri = { workspace = true, features = ["testing"] }
+serde_json = "1.0.111"
+
+[features]
+# DO NOT REMOVE!
+custom-protocol = ["tauri/custom-protocol"]
+
 scap = { workspace = true }
 serde = { workspace = true }
 serde_json = "1.0.111"
