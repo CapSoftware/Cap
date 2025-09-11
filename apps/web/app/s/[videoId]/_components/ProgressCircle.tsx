@@ -1,27 +1,61 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Option } from "effect";
+import { useEffectQuery } from "@/lib/EffectRuntime";
+import { withRpc } from "@/lib/Rpcs";
+import type { Video } from "@cap/web-domain";
 
-const ProgressCircle = ({ isUploading }: { isUploading: boolean }) => {
-	const [uploadProgress, setUploadProgress] = useState(0);
+type UploadProgress =
+	| {
+			status: "preparing";
+	  }
+	| {
+			status: "uploading";
+			progress: number;
+	  }
+	| {
+			status: "failed";
+	  };
 
-	// Animate progress from 0 to 100
-	useEffect(() => {
-		if (isUploading) {
-			const interval = setInterval(() => {
-				setUploadProgress((prev) => {
-					if (prev >= 100) {
-						clearInterval(interval);
-						return 100;
+const fiveMinutes = 5 * 60 * 1000;
+
+export function useUploadProgress(videoId: Video.VideoId) {
+	const query = useEffectQuery({
+		queryKey: ["getUploadProgress", videoId],
+		queryFn: () => withRpc((rpc) => rpc.GetUploadProgress(videoId)),
+		refetchInterval: (query) => (!!query.state.data ? 1000 : false),
+	});
+
+	const result = Option.getOrUndefined(query.data ?? Option.none());
+	if (!result) return null;
+
+	const hasUploadFailed =
+		Date.now() - new Date(result.updatedAt).getTime() > fiveMinutes;
+
+	console.log(
+		Date.now() - new Date(result.updatedAt).getTime(),
+		hasUploadFailed,
+	);
+
+	const isPreparing = result.total === 0; // `0/0` for progress is `NaN`
+
+	return (
+		isPreparing
+			? {
+					status: "preparing",
+				}
+			: hasUploadFailed
+				? {
+						status: "failed",
 					}
-					return prev + 1;
-				});
-			}, 50); // Update every 50ms for smooth animation
+				: {
+						status: "uploading",
+						progress: (result.uploaded / result.total) * 100,
+					}
+	) satisfies UploadProgress;
+}
 
-			return () => clearInterval(interval);
-		}
-	}, [isUploading]);
-
+const ProgressCircle = ({ progress }: { progress: number }) => {
 	return (
 		<div className="relative size-full">
 			<svg className="transform -rotate-90 size-full" viewBox="0 0 100 100">
@@ -45,14 +79,14 @@ const ProgressCircle = ({ isUploading }: { isUploading: boolean }) => {
 					strokeWidth="5"
 					strokeLinecap="round"
 					strokeDasharray={`${2 * Math.PI * 45}`}
-					strokeDashoffset={`${2 * Math.PI * 45 * (1 - uploadProgress / 100)}`}
+					strokeDashoffset={`${2 * Math.PI * 45 * (1 - progress / 100)}`}
 					className="transition-all duration-300 ease-out"
 				/>
 			</svg>
 			{/* Progress text */}
 			<div className="flex absolute inset-0 flex-col justify-center items-center">
 				<span className="text-xs font-semibold tabular-nums text-white xs:text-sm md:text-lg">
-					{Math.round(uploadProgress)}%
+					{Math.round(progress)}%
 				</span>
 				<span className="text-[11px] relative bottom-1.5 text-white opacity-75">
 					Uploading Video...

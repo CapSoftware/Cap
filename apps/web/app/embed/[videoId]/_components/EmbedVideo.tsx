@@ -198,6 +198,7 @@ export const EmbedVideo = forwardRef<
 				<div className="relative w-screen h-screen rounded-xl">
 					{data.source.type === "desktopMP4" ? (
 						<CapVideoPlayer
+							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							chaptersSrc={chaptersUrl || ""}
@@ -207,6 +208,7 @@ export const EmbedVideo = forwardRef<
 						/>
 					) : (
 						<HLSVideoPlayer
+							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							chaptersSrc={chaptersUrl || ""}

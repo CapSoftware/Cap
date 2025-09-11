@@ -7,7 +7,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import ProgressCircle from "./ProgressCircle";
+import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -27,8 +27,10 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+import type { Video } from "@cap/web-domain";
 
 interface Props {
+	videoId: Video.VideoId;
 	videoSrc: string;
 	chaptersSrc: string;
 	captionsSrc: string;
@@ -38,6 +40,7 @@ interface Props {
 }
 
 export function HLSVideoPlayer({
+	videoId,
 	videoSrc,
 	chaptersSrc,
 	captionsSrc,
@@ -245,7 +248,8 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc]);
 
-	const isUploading = true;
+	const uploadProgress = useUploadProgress(videoId);
+	const isUploading = uploadProgress?.status === "uploading";
 
 	return (
 		<MediaPlayer
@@ -282,8 +286,7 @@ export function HLSVideoPlayer({
 						transition={{ duration: 0.2 }}
 						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-12 xs:size-20 md:size-32"
 					>
-						{/* Progress Circle */}
-						<ProgressCircle isUploading={isUploading} />
+						<ProgressCircle progress={uploadProgress.progress} />
 					</motion.div>
 				)}
 				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (

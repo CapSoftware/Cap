@@ -34,6 +34,15 @@ export class Video extends Schema.Class<Video>("Video")({
 	toJS = () => Schema.encode(Video)(this).pipe(Effect.orDie);
 }
 
+export class UploadProgress extends Schema.Class<UploadProgress>(
+	"UploadProgress",
+)({
+	uploaded: Schema.Number,
+	total: Schema.Number,
+	startedAt: Schema.Date,
+	updatedAt: Schema.Date,
+}) {}
+
 /**
  * Used to specify a video password provided by a user,
  * whether via cookies in the case of the website,
@@ -89,4 +98,14 @@ export class VideoRpcs extends RpcGroup.make(
 		payload: VideoId,
 		error: Schema.Union(NotFoundError, InternalError, PolicyDeniedError),
 	}).middleware(RpcAuthMiddleware),
+	Rpc.make("GetUploadProgress", {
+		payload: VideoId,
+		success: Schema.Option(UploadProgress),
+		error: Schema.Union(
+			NotFoundError,
+			InternalError,
+			PolicyDeniedError,
+			VerifyVideoPasswordError,
+		),
+	}),
 ) {}

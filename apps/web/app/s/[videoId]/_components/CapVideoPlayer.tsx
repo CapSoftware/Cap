@@ -6,7 +6,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
-import ProgressCircle from "./ProgressCircle";
+import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -26,9 +26,11 @@ import {
 	MediaPlayerVolume,
 	MediaPlayerVolumeIndicator,
 } from "./video/media-player";
+import type { Video } from "@cap/web-domain";
 
 interface Props {
 	videoSrc: string;
+	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
 	videoRef: React.RefObject<HTMLVideoElement>;
@@ -39,6 +41,7 @@ interface Props {
 
 export function CapVideoPlayer({
 	videoSrc,
+	videoId,
 	chaptersSrc,
 	captionsSrc,
 	videoRef,
@@ -380,7 +383,8 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
-	const isUploading = true;
+	const uploadProgress = useUploadProgress(videoId);
+	const isUploading = uploadProgress?.status === "uploading";
 
 	return (
 		<MediaPlayer
@@ -447,8 +451,7 @@ export function CapVideoPlayer({
 						transition={{ duration: 0.2 }}
 						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-12 xs:size-20 md:size-32"
 					>
-						{/* Progress Circle */}
-						<ProgressCircle isUploading={isUploading} />
+						<ProgressCircle progress={uploadProgress.progress} />
 					</motion.div>
 				)}
 				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (
