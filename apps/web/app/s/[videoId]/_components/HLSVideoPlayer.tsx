@@ -6,7 +6,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import ProgressCircle from "./ProgressCircle";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -244,104 +245,122 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc]);
 
+	const isUploading = true;
+
 	return (
-		<>
-			<MediaPlayer
-				onMouseEnter={() => setControlsVisible(true)}
-				onMouseLeave={() => setControlsVisible(false)}
-				onTouchStart={() => setControlsVisible(true)}
-				onTouchEnd={() => setControlsVisible(false)}
+		<MediaPlayer
+			onMouseEnter={() => setControlsVisible(true)}
+			onMouseLeave={() => setControlsVisible(false)}
+			onTouchStart={() => setControlsVisible(true)}
+			onTouchEnd={() => setControlsVisible(false)}
+			className={clsx(
+				mediaPlayerClassName,
+				"[&::-webkit-media-text-track-display]:!hidden",
+			)}
+			autoHide
+		>
+			<div
 				className={clsx(
-					mediaPlayerClassName,
-					"[&::-webkit-media-text-track-display]:!hidden",
+					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+					isUploading
+						? "opacity-0 pointer-events-none"
+						: videoLoaded
+							? "opacity-0 pointer-events-none"
+							: "opacity-100",
 				)}
-				autoHide
 			>
-				<div
-					className={clsx(
-						"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-						videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100",
-					)}
-				>
+				<div className="flex flex-col gap-2 items-center">
 					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
 				</div>
-				<AnimatePresence>
-					{showPlayButton && videoLoaded && !hasPlayedOnce && (
-						<motion.div
-							whileHover={{ scale: 1.1 }}
-							whileTap={{ scale: 0.9 }}
-							initial={{ opacity: 0, y: 10 }}
-							animate={{ opacity: 1, y: 0 }}
-							exit={{ opacity: 0, y: 10 }}
-							transition={{ duration: 0.2 }}
-							onClick={() => videoRef.current?.play()}
-							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
-						>
-							<FontAwesomeIcon
-								icon={faPlay}
-								className="text-white size-4 xs:size-8 md:size-12"
-							/>
-						</motion.div>
-					)}
-				</AnimatePresence>
-				<MediaPlayerVideo
-					src={undefined} // HLS source is handled by HLS.js
-					ref={videoRef}
-					onPlay={() => {
-						setShowPlayButton(false);
-						setHasPlayedOnce(true);
-					}}
-					playsInline
-					autoPlay={autoplay}
-				>
-					<track default kind="chapters" src={chaptersSrc} />
-					<track
-						label="English"
-						kind="captions"
-						srcLang="en"
-						src={captionsSrc}
-						default
-					/>
-				</MediaPlayerVideo>
-				{currentCue && toggleCaptions && (
-					<div
-						className={clsx(
-							"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
-							"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
-							controlsVisible || videoRef.current?.paused
-								? "bottom-16 sm:bottom-20"
-								: "bottom-3 sm:bottom-12",
-						)}
+			</div>
+			<AnimatePresence>
+				{isUploading && (
+					<motion.div
+						initial={{ opacity: 0, y: 10 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: 10 }}
+						transition={{ duration: 0.2 }}
+						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-12 xs:size-20 md:size-32"
 					>
-						{currentCue}
-					</div>
+						{/* Progress Circle */}
+						<ProgressCircle isUploading={isUploading} />
+					</motion.div>
 				)}
-				<MediaPlayerLoading />
-				<MediaPlayerError />
-				<MediaPlayerVolumeIndicator />
-				<MediaPlayerControls className="flex-col items-start gap-2.5">
-					<MediaPlayerControlsOverlay />
-					<MediaPlayerSeek />
-					<div className="flex gap-2 items-center w-full">
-						<div className="flex flex-1 gap-2 items-center">
-							<MediaPlayerPlay />
-							<MediaPlayerSeekBackward />
-							<MediaPlayerSeekForward />
-							<MediaPlayerVolume expandable />
-							<MediaPlayerTime />
-						</div>
-						<div className="flex gap-2 items-center">
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
-							/>
-							<MediaPlayerSettings />
-							<MediaPlayerPiP />
-							<MediaPlayerFullscreen />
-						</div>
+				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (
+					<motion.div
+						whileHover={{ scale: 1.1 }}
+						whileTap={{ scale: 0.9 }}
+						initial={{ opacity: 0, y: 10 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: 10 }}
+						transition={{ duration: 0.2 }}
+						onClick={() => videoRef.current?.play()}
+						className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+					>
+						<FontAwesomeIcon
+							icon={faPlay}
+							className="text-white size-4 xs:size-8 md:size-12"
+						/>
+					</motion.div>
+				)}
+			</AnimatePresence>
+			<MediaPlayerVideo
+				src={undefined} // HLS source is handled by HLS.js
+				ref={videoRef}
+				onPlay={() => {
+					setShowPlayButton(false);
+					setHasPlayedOnce(true);
+				}}
+				playsInline
+				autoPlay={autoplay}
+			>
+				<track default kind="chapters" src={chaptersSrc} />
+				<track
+					label="English"
+					kind="captions"
+					srcLang="en"
+					src={captionsSrc}
+					default
+				/>
+			</MediaPlayerVideo>
+			{currentCue && toggleCaptions && (
+				<div
+					className={clsx(
+						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
+						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
+						controlsVisible || videoRef.current?.paused
+							? "bottom-16 sm:bottom-20"
+							: "bottom-3 sm:bottom-12",
+					)}
+				>
+					{currentCue}
+				</div>
+			)}
+			<MediaPlayerLoading />
+			<MediaPlayerError />
+			<MediaPlayerVolumeIndicator />
+			<MediaPlayerControls className="flex-col items-start gap-2.5">
+				<MediaPlayerControlsOverlay />
+				<MediaPlayerSeek />
+				<div className="flex gap-2 items-center w-full">
+					<div className="flex flex-1 gap-2 items-center">
+						<MediaPlayerPlay />
+						<MediaPlayerSeekBackward />
+						<MediaPlayerSeekForward />
+						<MediaPlayerVolume expandable />
+						<MediaPlayerTime />
 					</div>
-				</MediaPlayerControls>
-			</MediaPlayer>
-		</>
+					<div className="flex gap-2 items-center">
+						<MediaPlayerCaptions
+							setToggleCaptions={setToggleCaptions}
+							toggleCaptions={toggleCaptions}
+						/>
+						<MediaPlayerSettings />
+						<MediaPlayerPiP />
+						<MediaPlayerFullscreen />
+					</div>
+				</div>
+			</MediaPlayerControls>
+		</MediaPlayer>
 	);
 }
