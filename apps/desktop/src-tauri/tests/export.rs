@@ -18,9 +18,8 @@ async fn test_save_and_render_file() {
     fs::create_dir_all(&project_path).unwrap();
 
     let config = ProjectConfiguration::default();
-    let config_path = project_path.join("project.json");
-    fs::write(config_path, serde_json::to_string(&config).unwrap()).unwrap();
-
+    // Write the config to the canonical location expected by the export logic.
+    config.write(&project_path).expect("failed to write project-config.json");
     let export_input = ExportInput {
         project_path: project_path.to_str().unwrap().to_string(),
         ..Default::default()
