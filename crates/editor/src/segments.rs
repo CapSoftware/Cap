@@ -17,6 +17,7 @@ pub fn get_audio_segments(segments: &[Segment]) -> Vec<AudioSegment> {
                             cap_project::StereoMode::MonoL => cap_audio::StereoMode::MonoL,
                             cap_project::StereoMode::MonoR => cap_audio::StereoMode::MonoR,
                         },
+                        |o| o.mic,
                     )
                 }),
                 s.system_audio.clone().map(|a| -> AudioSegmentTrack {
@@ -24,6 +25,7 @@ pub fn get_audio_segments(segments: &[Segment]) -> Vec<AudioSegment> {
                         a,
                         |c| c.system_volume_db,
                         |_| cap_audio::StereoMode::Stereo,
+                        |o| o.system_audio,
                     )
                 }),
             ]

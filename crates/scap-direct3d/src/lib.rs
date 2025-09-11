@@ -12,7 +12,6 @@ use std::{
     thread::JoinHandle,
     time::Duration,
 };
-
 use windows::{
     Foundation::{Metadata::ApiInformation, TypedEventHandler},
     Graphics::{

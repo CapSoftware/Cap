@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorEvents,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, Crop, CursorEvents,
     ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
@@ -136,12 +136,16 @@ impl RecordingSegmentDecoders {
         &self,
         segment_time: f32,
         needs_camera: bool,
+        offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let (screen, camera) = tokio::join!(
             self.screen.get_frame(segment_time),
             OptionFuture::from(
                 needs_camera
-                    .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
+                    .then(|| self
+                        .camera
+                        .as_ref()
+                        .map(|d| d.get_frame(segment_time + offsets.camera)))
                     .flatten()
             )
         );
@@ -216,6 +220,7 @@ pub async fn render_video_to_channel(
         };
 
         let segment = &segments[segment_i as usize];
+        let clip_config = project.clips.iter().find(|v| v.index == segment_i);
 
         let frame_number = {
             let prev = frame_number;
@@ -224,7 +229,11 @@ pub async fn render_video_to_channel(
 
         if let Some(segment_frames) = segment
             .decoders
-            .get_frames(segment_time as f32, !project.camera.hide)
+            .get_frames(
+                segment_time as f32,
+                !project.camera.hide,
+                clip_config.map(|v| v.offsets).unwrap_or_default(),
+            )
             .await
         {
             let uniforms = ProjectUniforms::new(
