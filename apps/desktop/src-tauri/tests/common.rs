@@ -18,11 +18,10 @@ where
 
     trigger().await;
 
-    let handle = tokio::spawn(async move {
-        tokio::time::timeout(Duration::from_secs(5), rx.recv())
-            .await
-            .expect("event was not received")
-    });
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("event was not received")
+        .expect("channel was closed");
 
-    handle.await.unwrap();
+    assert!(event.is_some(), "event was not received");
 }

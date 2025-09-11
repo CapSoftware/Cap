@@ -50,7 +50,7 @@ name = "tests"
 path = "tests/main.rs"
 
 [dev-dependencies]
-tauri = { workspace = true, features = ["testing"] }
+tauri = { workspace = true, features = ["test"] }
 serde_json = "1.0.111"
 
 [features]
