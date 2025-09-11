@@ -21,9 +21,12 @@ async fn test_copy_to_clipboard() {
 
     let result = copy_screenshot_to_clipboard(
         clipboard_state,
-        file_path.to_str().unwrap().to_string(),
+        file_path.to_string_lossy().to_string(),
     )
     .await;
 
-    assert!(result.is_ok(), "Failed to copy to clipboard");
+    match result {
+        Ok(()) => println!("Successfully copied image to clipboard"),
+        Err(e) => panic!("Failed to copy to clipboard: {}", e),
+    }
 }

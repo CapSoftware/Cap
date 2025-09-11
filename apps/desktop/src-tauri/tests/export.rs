@@ -22,16 +22,15 @@ async fn test_save_and_render_file() {
     fs::write(config_path, serde_json::to_string(&config).unwrap()).unwrap();
 
     let export_input = ExportInput {
-        project_path: project_path.to_str().unwrap().to_string(),
+        project_path: project_path.to_string_lossy().into_owned(),
         ..Default::default()
     };
 
-    let result = export_project(app_handle, export_input).await;
-    assert!(result.is_ok(), "Failed to export (save/render) file");
+    let output_path = export_project(app_handle, export_input)
+        .await
+        .expect("Failed to export (save/render) file");
 
-    let output_path = result.unwrap();
-    assert!(
-        fs::metadata(output_path).is_ok(),
-        "Exported file does not exist"
-    );
+    let meta = fs::metadata(&output_path).expect("Exported file does not exist");
+    assert!(meta.is_file(), "Exported path is not a file");
+    assert_eq!(output_path.extension().and_then(|s| s.to_str()), Some("mp4"));
 }
