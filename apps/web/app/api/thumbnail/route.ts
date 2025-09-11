@@ -1,7 +1,5 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
-import { S3_BUCKET_URL } from "@cap/utils";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
@@ -58,19 +56,7 @@ export async function GET(request: NextRequest) {
 		);
 	}
 
-	const { video } = result;
 	const prefix = `${userId}/${videoId}/`;
-
-	let thumbnailUrl: string;
-
-	if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
-		thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
-		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
-			status: 200,
-			headers: getHeaders(origin),
-		});
-	}
-
 	const bucketProvider = await createBucketProvider(result.bucket);
 
 	try {
@@ -96,7 +82,12 @@ export async function GET(request: NextRequest) {
 			);
 		}
 
-		thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
+		const thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
+
+		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+			status: 200,
+			headers: getHeaders(origin),
+		});
 	} catch (error) {
 		return new Response(
 			JSON.stringify({
@@ -110,9 +101,4 @@ export async function GET(request: NextRequest) {
 			},
 		);
 	}
-
-	return new Response(JSON.stringify({ screen: thumbnailUrl }), {
-		status: 200,
-		headers: getHeaders(origin),
-	});
 }

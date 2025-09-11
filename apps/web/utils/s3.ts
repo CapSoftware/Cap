@@ -19,7 +19,6 @@ import {
 	type ListObjectsV2Output,
 	type ObjectIdentifier,
 	PutObjectCommand,
-	PutObjectCommandInput,
 	type PutObjectCommandOutput,
 	type PutObjectRequest,
 	S3Client,
@@ -262,13 +261,14 @@ function createS3Provider(
 				),
 			);
 		},
-		headObject: (key) =>
-			getClient(true).then((client) =>
-				client.send(new HeadObjectCommand({ Bucket: bucket, Key: key })),
-			),
-		putObject: (key, body, fields) =>
-			getClient(true).then((client) =>
-				client.send(
+		async headObject(key: string) {
+			return await getClient(true).then((c) =>
+				c.send(new HeadObjectCommand({ Bucket: bucket, Key: key })),
+			);
+		},
+		async putObject(key: string, body, fields) {
+			return await getClient(true).then((c) =>
+				c.send(
 					new PutObjectCommand({
 						Bucket: bucket,
 						Key: key,
@@ -276,10 +276,11 @@ function createS3Provider(
 						ContentType: fields?.contentType,
 					}),
 				),
-			),
-		copyObject: (source, key, args) =>
-			getClient(true).then((client) =>
-				client.send(
+			);
+		},
+		async copyObject(source: string, key: string, args) {
+			return await getClient(true).then((c) =>
+				c.send(
 					new CopyObjectCommand({
 						Bucket: bucket,
 						CopySource: source,
@@ -287,8 +288,9 @@ function createS3Provider(
 						...args,
 					}),
 				),
-			),
-		deleteObject: (key) =>
+			);
+		},
+		deleteObject: (key: string) =>
 			getClient(true).then((client) =>
 				client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key })),
 			),
