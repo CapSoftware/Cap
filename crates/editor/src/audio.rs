@@ -3,7 +3,7 @@ use cap_audio::{
 };
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
-use cap_project::{AudioConfiguration, ProjectConfiguration, TimelineConfiguration};
+use cap_project::{AudioConfiguration, ClipOffsets, ProjectConfiguration, TimelineConfiguration};
 use ffmpeg::{ChannelLayout, format as avformat, frame::Audio as FFAudio, software::resampling};
 use ringbuf::{
     HeapRb,
@@ -31,11 +31,13 @@ pub struct AudioSegment {
     pub tracks: Vec<AudioSegmentTrack>,
 }
 
+// yeah this is cursed oh well
 #[derive(Clone)]
 pub struct AudioSegmentTrack {
     data: Arc<AudioData>,
     get_gain: fn(&AudioConfiguration) -> f32,
     get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+    get_offset: fn(&ClipOffsets) -> f32,
 }
 
 impl AudioSegmentTrack {
@@ -43,11 +45,13 @@ impl AudioSegmentTrack {
         data: Arc<AudioData>,
         get_gain: fn(&AudioConfiguration) -> f32,
         get_stereo_mode: fn(&AudioConfiguration) -> StereoMode,
+        get_offset: fn(&ClipOffsets) -> f32,
     ) -> Self {
         Self {
             data,
             get_gain,
             get_stereo_mode,
+            get_offset,
         }
     }
 
@@ -61,6 +65,10 @@ impl AudioSegmentTrack {
 
     pub fn stereo_mode(&self, config: &AudioConfiguration) -> StereoMode {
         (self.get_stereo_mode)(config)
+    }
+
+    pub fn offset(&self, offsets: &ClipOffsets) -> f32 {
+        (self.get_offset)(offsets)
     }
 }
 
@@ -202,7 +210,7 @@ impl AudioRenderer {
                         if g < -30.0 { f32::NEG_INFINITY } else { g }
                     },
                     stereo_mode: t.stereo_mode(&project.audio),
-                    offset: (offsets.system_audio * Self::SAMPLE_RATE as f32) as isize,
+                    offset: (t.offset(&offsets) * Self::SAMPLE_RATE as f32) as isize,
                 }
             })
             .collect::<Vec<_>>();

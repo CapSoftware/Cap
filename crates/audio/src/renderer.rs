@@ -34,9 +34,7 @@ pub fn render_audio(
         let mut right = 0.0;
 
         for track in tracks {
-            // dbg!(i);
-            let i = i.wrapping_add_signed(dbg!(track.offset));
-            // dbg!(i);
+            let i = i.wrapping_add_signed(track.offset);
 
             let data = track.data;
             let gain = gain_for_db(track.gain);

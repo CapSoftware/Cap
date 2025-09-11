@@ -1,3 +1,4 @@
+import { NumberField } from "@kobalte/core";
 import {
 	Collapsible,
 	Collapsible as KCollapsible,
@@ -43,7 +44,7 @@ import { generalSettingsStore } from "~/store";
 import {
 	type BackgroundSource,
 	type CameraShape,
-	ClipOffsets,
+	type ClipOffsets,
 	commands,
 	type SceneSegment,
 	type StereoMode,
@@ -72,7 +73,6 @@ import {
 	Subfield,
 	topSlideAnimateClasses,
 } from "./ui";
-import { NumberField } from "@kobalte/core";
 
 const BACKGROUND_SOURCES = {
 	wallpaper: "Wallpaper",
