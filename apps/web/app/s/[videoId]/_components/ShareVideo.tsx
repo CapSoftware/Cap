@@ -150,6 +150,7 @@ export const ShareVideo = forwardRef<
 			<div className="relative h-full">
 				{data.source.type === "desktopMP4" ? (
 					<CapVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
@@ -159,6 +160,7 @@ export const ShareVideo = forwardRef<
 					/>
 				) : (
 					<HLSVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}

@@ -5,7 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -32,6 +32,19 @@ export const UploadCapButton = ({
 		useUploadingContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
+
+	// Progress tracking for API updates
+	const [uploadState, setUploadState] = useState<{
+		videoId?: string;
+		uploaded: number;
+		total: number;
+		pendingTask?: NodeJS.Timeout;
+		lastUpdateTime: number;
+	}>({
+		uploaded: 0,
+		total: 0,
+		lastUpdateTime: Date.now(),
+	});
 
 	const handleClick = () => {
 		if (!user) return;
@@ -309,11 +322,28 @@ export const UploadCapButton = ({
 						const percent = (event.loaded / event.total) * 100;
 						setUploadProgress(percent);
 						onProgress?.(uploadId, 100, percent);
+
+						// Update progress state for API updates
+						setUploadState({
+							videoId: uploadId,
+							uploaded: event.loaded,
+							total: event.total,
+							lastUpdateTime: Date.now(),
+							pendingTask: uploadState.pendingTask,
+						});
 					}
 				};
 
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
+						// Send final progress update
+						if (uploadState.videoId) {
+							sendProgressUpdate(
+								uploadState.videoId,
+								uploadState.total,
+								uploadState.total,
+							);
+						}
 						resolve();
 					} else {
 						reject(new Error(`Upload failed with status ${xhr.status}`));
@@ -375,9 +405,102 @@ export const UploadCapButton = ({
 		} finally {
 			setIsUploading(false);
 			setUploadProgress(0);
+			setUploadState({
+				uploaded: 0,
+				total: 0,
+				lastUpdateTime: Date.now(),
+			});
 			if (inputRef.current) inputRef.current.value = "";
 		}
 	};
+
+	// Function to send progress updates to the server
+	const sendProgressUpdate = async (
+		videoId: string,
+		uploaded: number,
+		total: number,
+	) => {
+		try {
+			const updatedAt = new Date().toISOString();
+
+			const response = await fetch("/api/desktop/video/progress", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					videoId,
+					uploaded,
+					total,
+					updatedAt,
+				}),
+			});
+
+			if (!response.ok) {
+				console.error("Failed to send progress update:", response.status);
+			}
+		} catch (err) {
+			console.error("Error sending progress update:", err);
+		}
+	};
+
+	// Effect to batch progress updates
+	useEffect(() => {
+		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading) {
+			return;
+		}
+
+		// Clear any existing pending task
+		if (uploadState.pendingTask) {
+			clearTimeout(uploadState.pendingTask);
+		}
+
+		const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
+
+		if (shouldSendImmediately) {
+			// Send completion update immediately
+			sendProgressUpdate(
+				uploadState.videoId,
+				uploadState.uploaded,
+				uploadState.total,
+			);
+
+			// Clear the state
+			setUploadState((prev) => ({
+				...prev,
+				pendingTask: undefined,
+			}));
+		} else {
+			// Schedule delayed update (after 2 seconds)
+			const newPendingTask = setTimeout(() => {
+				if (uploadState.videoId) {
+					sendProgressUpdate(
+						uploadState.videoId,
+						uploadState.uploaded,
+						uploadState.total,
+					);
+				}
+			}, 2000);
+
+			// Store the task handle
+			setUploadState((prev) => ({
+				...prev,
+				pendingTask: newPendingTask,
+			}));
+		}
+
+		// Cleanup on unmount
+		return () => {
+			if (uploadState.pendingTask) {
+				clearTimeout(uploadState.pendingTask);
+			}
+		};
+	}, [
+		uploadState.videoId,
+		uploadState.uploaded,
+		uploadState.total,
+		isUploading,
+	]);
 
 	return (
 		<>

@@ -2,6 +2,7 @@ import { InternalError, Video } from "@cap/web-domain";
 import { Effect } from "effect";
 
 import { Videos } from ".";
+import { provideOptionalAuth } from "../Auth";
 
 export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 	Effect.gen(function* () {
@@ -13,7 +14,7 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTags({
 						DatabaseError: () => new InternalError({ type: "database" }),
 						S3Error: () => new InternalError({ type: "s3" }),
-						UnknownException: () => new InternalError({ type: "s3" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
 			VideoDuplicate: (videoId) =>
@@ -21,7 +22,16 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTags({
 						DatabaseError: () => new InternalError({ type: "database" }),
 						S3Error: () => new InternalError({ type: "s3" }),
-						UnknownException: () => new InternalError({ type: "s3" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
+					}),
+				),
+			GetUploadProgress: (videoId) =>
+				videos.getUploadProgress(videoId).pipe(
+					provideOptionalAuth,
+					(v) => v,
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
 		};

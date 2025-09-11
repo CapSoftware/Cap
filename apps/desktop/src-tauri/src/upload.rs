@@ -3,6 +3,7 @@
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
+use chrono;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
 use futures::StreamExt;
@@ -11,20 +12,28 @@ use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use specta::Type;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::task;
+use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{error, info, trace, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct CreateErrorResponse {
+    error: String,
 }
 
 // fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -105,6 +114,158 @@ pub struct UploadedImage {
 //     pub config: S3UploadMeta,
 // }
 
+pub struct UploadProgressUpdater {
+    video_states: Arc<Mutex<HashMap<String, VideoProgressState>>>,
+    app: AppHandle,
+}
+
+struct VideoProgressState {
+    uploaded: u64,
+    total: u64,
+    pending_task: Option<JoinHandle<()>>,
+    last_update_time: Instant,
+}
+
+impl VideoProgressState {
+    fn new(uploaded: u64, total: u64) -> Self {
+        Self {
+            uploaded,
+            total,
+            pending_task: None,
+            last_update_time: Instant::now(),
+        }
+    }
+}
+
+// Global registry to manage progress updaters per AppHandle
+static PROGRESS_UPDATERS: OnceLock<Mutex<HashMap<String, Arc<UploadProgressUpdater>>>> =
+    OnceLock::new();
+
+impl UploadProgressUpdater {
+    pub fn new(app: AppHandle) -> Self {
+        Self {
+            video_states: Arc::new(Mutex::new(HashMap::new())),
+            app,
+        }
+    }
+
+    fn get_or_create_for_app(app: &AppHandle) -> Arc<UploadProgressUpdater> {
+        let registry = PROGRESS_UPDATERS.get_or_init(|| Mutex::new(HashMap::new()));
+        let mut updaters = registry.lock().unwrap();
+
+        // Use app handle pointer as unique key
+        let app_key = format!("{:p}", app as *const _);
+
+        updaters
+            .entry(app_key)
+            .or_insert_with(|| Arc::new(UploadProgressUpdater::new(app.clone())))
+            .clone()
+    }
+
+    pub fn update(&self, video_id: String, uploaded: u64, total: u64) {
+        let states_clone = Arc::clone(&self.video_states);
+        let app_clone = self.app.clone();
+        let video_id_clone = video_id.clone();
+
+        let should_send_immediately = {
+            let mut states = states_clone.lock().unwrap();
+
+            // Get or create state for this video
+            let state = states
+                .entry(video_id.clone())
+                .or_insert_with(|| VideoProgressState::new(uploaded, total));
+
+            // Cancel any pending task
+            if let Some(handle) = state.pending_task.take() {
+                handle.abort();
+            }
+
+            // Update values
+            state.uploaded = uploaded;
+            state.total = total;
+            state.last_update_time = Instant::now();
+
+            // Send immediately if upload is complete
+            uploaded >= total
+        };
+
+        if should_send_immediately {
+            // Send completion update immediately
+            let states_for_cleanup = Arc::clone(&states_clone);
+            tokio::spawn(async move {
+                Self::send_api_update(&app_clone, video_id_clone.clone(), uploaded, total).await;
+
+                // Clean up completed video from state
+                {
+                    let mut states = states_for_cleanup.lock().unwrap();
+                    states.remove(&video_id_clone);
+                }
+            });
+        } else {
+            // Schedule delayed update
+            let states_for_delayed = Arc::clone(&states_clone);
+            let handle = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+
+                // Get latest values for this video
+                let (current_uploaded, current_total) = {
+                    let states = states_for_delayed.lock().unwrap();
+                    if let Some(state) = states.get(&video_id_clone) {
+                        (state.uploaded, state.total)
+                    } else {
+                        return; // Video was removed/completed
+                    }
+                };
+
+                Self::send_api_update(&app_clone, video_id_clone, current_uploaded, current_total)
+                    .await;
+            });
+
+            // Store the task handle
+            {
+                let mut states = states_clone.lock().unwrap();
+                if let Some(state) = states.get_mut(&video_id) {
+                    state.pending_task = Some(handle);
+                }
+            }
+        }
+    }
+
+    async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
+        let updated_at = chrono::Utc::now().to_rfc3339();
+
+        // println!(
+        //     "📡 Sending batched progress update - Video: {}, Progress: {}/{}",
+        //     video_id, uploaded, total
+        // );
+
+        let response = app
+            .authed_api_request("/api/desktop/video/progress", |client, url| {
+                client.post(url).json(&json!({
+                    "videoId": video_id,
+                    "uploaded": uploaded,
+                    "total": total,
+                    "updatedAt": updated_at
+                }))
+            })
+            .await;
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                trace!("Progress update sent successfully");
+            }
+            Ok(resp) => error!("Failed to send progress update: {}", resp.status()),
+            Err(err) => error!("Failed to send progress update: {err}"),
+        }
+    }
+}
+
+// Helper function to send progress updates to the backend API
+fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
+    let updater = UploadProgressUpdater::get_or_create_for_app(app);
+    updater.update(video_id, uploaded, total);
+}
+
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -148,16 +309,18 @@ pub async fn upload_video(
     let mut bytes_uploaded = 0;
     let progress_stream = reader_stream.inspect({
         let app = app.clone();
+        let video_id = video_id.clone();
         move |chunk| {
+            if let Ok(chunk) = chunk {
+                bytes_uploaded += chunk.len();
+            }
+
             if bytes_uploaded > 0 {
                 let _ = UploadProgress {
                     progress: bytes_uploaded as f64 / total_size as f64,
                 }
                 .emit(&app);
-            }
-
-            if let Ok(chunk) = chunk {
-                bytes_uploaded += chunk.len();
+                send_progress_update(&app, video_id.clone(), bytes_uploaded as u64, total_size);
             }
         }
     });
@@ -189,6 +352,8 @@ pub async fn upload_video(
 
     if response.status().is_success() {
         println!("Video uploaded successfully");
+
+        send_progress_update(&app, video_id.clone(), total_size, total_size);
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
             if screenshot_response.status().is_success() {
@@ -314,6 +479,21 @@ pub async fn create_or_get_video(
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
+    }
+
+    if response.status() != StatusCode::OK {
+        if let Ok(error) = response.json::<CreateErrorResponse>().await {
+            if error.error == "upgrade_required" {
+                return Err(
+                    "You must upgrade to Cap Pro to upload recordings over 5 minutes in length"
+                        .into(),
+                );
+            }
+
+            return Err(format!("server error: {}", error.error));
+        }
+
+        return Err("Unknown error uploading video".into());
     }
 
     let response_text = response
@@ -837,6 +1017,8 @@ impl InstantMultipartUpload {
                 ));
             }
         };
+
+        send_progress_update(&app, video_id.into(), expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
