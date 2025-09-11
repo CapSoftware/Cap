@@ -83,10 +83,12 @@ impl Playback {
 
                 if let Some((segment_time, segment_i)) = project.get_segment_time(time) {
                     let segment = &self.segments[segment_i as usize];
+                    let clip_config = project.clips.iter().find(|v| v.index == segment_i);
+                    let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
 
                     let data = tokio::select! {
                         _ = stop_rx.changed() => { break; },
-                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide) => { data }
+                        data = segment.decoders.get_frames(segment_time as f32, !project.camera.hide, clip_offsets) => { data }
                     };
 
                     if let Some(segment_frames) = data {

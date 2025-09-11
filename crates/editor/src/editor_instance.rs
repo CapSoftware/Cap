@@ -211,10 +211,12 @@ impl EditorInstance {
                 };
 
                 let segment = &self.segments[segment_i as usize];
+                let clip_config = project.clips.iter().find(|v| v.index == segment_i);
+                let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
 
                 if let Some(segment_frames) = segment
                     .decoders
-                    .get_frames(segment_time as f32, !project.camera.hide)
+                    .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
                     .await
                 {
                     let uniforms = ProjectUniforms::new(
