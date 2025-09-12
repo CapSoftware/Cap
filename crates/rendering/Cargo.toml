@@ -30,6 +30,7 @@ glyphon = "0.9.0"
 tracing.workspace = true
 resvg = "0.45"
 tiny-skia = "0.11"
+serde_json = "1.0.143"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre.workspace = true

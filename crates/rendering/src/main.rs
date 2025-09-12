@@ -1,43 +1,81 @@
-// use cap_project::{BackgroundSource, ProjectConfiguration, RecordingMeta};
+use std::{path::PathBuf, sync::Arc, time::Instant};
+
+use cap_project::{RecordingMeta, StudioRecordingMeta};
+use cap_rendering::{
+    ProjectRecordingsMeta, RecordingSegmentDecoders, RenderSegment, RenderVideoConstants,
+    RenderedFrame, SegmentVideoPaths,
+};
 
 #[tokio::main]
 async fn main() {
-    // let project_path = PathBuf::from(
-    //     r#"/Users/brendonovich/Library/Application Support/so.cap.desktop/recordings/414f2abd-8186-479f-85e7-08a64411a33c.cap"#,
-    // );
+    let path: PathBuf = std::env::args().collect::<Vec<_>>().swap_remove(1).into();
 
-    // let mut project: ProjectConfiguration = ProjectConfiguration::default();
+    let project_config =
+        serde_json::from_reader(std::fs::File::open(path.join("project-config.json")).unwrap())
+            .unwrap();
 
-    // project.camera.position.x = cap_project::CameraXPosition::Right;
-    // project.camera.position.y = cap_project::CameraYPosition::Top;
-    // project.camera.rounding = 0;
-    // project.camera.mirror = false;
+    let recording_meta = RecordingMeta::load_for_project(&path).unwrap();
+    let studio_meta = recording_meta.studio_meta().unwrap();
 
-    // project.background.source = BackgroundSource::Gradient {
-    //     from: [71, 133, 255],
-    //     to: [255, 71, 102],
-    // };
-    // project.background.rounding = 0;
-    // project.background.padding = 0;
+    let recordings =
+        Arc::new(ProjectRecordingsMeta::new(&recording_meta.project_path, studio_meta).unwrap());
 
-    // let meta: RecordingMeta = serde_json::from_str(
-    //     &std::fs::read_to_string(project_path.join("recording-meta.json")).unwrap(),
-    // )
-    // .unwrap();
+    let render_constants = Arc::new(
+        RenderVideoConstants::new(
+            &recordings.segments,
+            recording_meta.clone(),
+            studio_meta.clone(),
+        )
+        .await
+        .unwrap(),
+    );
 
-    // render_video_to_file(
-    //     cap_rendering::RenderOptions {
-    //         camera_size: meta.camera.map(|c| (c.width, c.height)),
-    //         screen_size: (meta.display.width, meta.display.height),
-    //         output_size: (1920, 1080),
-    //     },
-    //     project,
-    //     project_path.join("output/result.mp4"),
-    //     VideoDecoderActor::new(project_path.join("content/display.mp4").clone()),
-    //     meta.camera
-    //         .map(|_| VideoDecoderActor::new(project_path.join("content/camera.mp4").clone())),
-    //     |_| {},
-    // )
-    // .await
-    // .ok();
+    let segments = match studio_meta {
+        StudioRecordingMeta::SingleSegment { segment } => {
+            todo!();
+        }
+        StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            let mut segments = vec![];
+
+            for (i, s) in inner.segments.iter().enumerate() {
+                let cursor = Arc::new(s.cursor_events(&recording_meta));
+
+                let decoders = RecordingSegmentDecoders::new(
+                    &recording_meta,
+                    studio_meta,
+                    SegmentVideoPaths {
+                        display: recording_meta.path(&s.display.path),
+                        camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
+                    },
+                    i,
+                )
+                .await
+                .unwrap();
+
+                segments.push(RenderSegment { cursor, decoders });
+            }
+
+            segments
+        }
+    };
+
+    let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
+
+    tokio::spawn(async move { while let Some(_) = video_rx.recv().await {} });
+
+    let start = Instant::now();
+    cap_rendering::render_video_to_channel(
+        &render_constants,
+        &project_config,
+        tx_image_data,
+        &recording_meta,
+        studio_meta,
+        segments,
+        30,
+        cap_project::XY::new(1920, 1080),
+        &recordings,
+    )
+    .await
+    .unwrap();
+    println!("All frames rendered in {:?}", start.elapsed());
 }
