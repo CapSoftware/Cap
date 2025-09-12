@@ -23,7 +23,11 @@ impl MachAbsoluteTimestamp {
         let info = TimeBaseInfo::new();
         let freq = info.numer as f64 / info.denom as f64;
 
-        Duration::from_nanos(((self.0 - other.0) as f64 * freq) as u64)
+        let Some(diff) = self.0.checked_sub(other.0) else {
+            return Duration::ZERO;
+        };
+
+        Duration::from_nanos((diff as f64 * freq) as u64)
     }
 
     pub fn from_cpal(instant: cpal::StreamInstant) -> Self {

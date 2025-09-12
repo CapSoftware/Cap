@@ -907,11 +907,13 @@ async fn create_segment_pipeline(
 
             while let Ok((mut frame, timestamp)) = channel.recv() {
                 if let Some(timestamp_tx) = timestamp_tx.take() {
+                    dbg!(&timestamp_tx);
                     let _ = timestamp_tx.send(timestamp);
                 }
 
                 let first_timestamp = first_timestamp.get_or_insert(timestamp);
 
+                dbg!(timestamp);
                 let elapsed = timestamp.duration_since(start_time)
                     - first_timestamp.duration_since(start_time);
                 frame.set_pts(Some((elapsed.as_secs_f64() * rate) as i64));

@@ -67,6 +67,7 @@ unexpected_cfgs = "allow"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
+unchecked_duration_subtraction = "deny"
 
 # Optimize for smaller binary size
 [profile.release]
