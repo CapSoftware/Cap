@@ -80,11 +80,11 @@ export default function DashboardInner({
 	);
 	const isSharedCapsPage = pathname === "/dashboard/shared-caps";
 	return (
-		<div className="flex flex-col min-h-screen">
+		<div className="flex flex-col flex-1 min-h-screen">
 			<div
 				className={clsx(
-					"flex sticky z-40 justify-between items-center px-5 mt-10 w-full border-b",
-					"bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8",
+					"flex fixed z-40 justify-between items-center pr-2 pl-5 w-full border-b lg:pl-0 lg:pr-10",
+					"bg-gray-1 min-h-16 lg:min-h-20 border-gray-3 lg:top-0 top-[64px] lg:border-transparent",
 				)}
 			>
 				<div className="flex flex-col gap-0.5">
@@ -172,7 +172,7 @@ export default function DashboardInner({
 			</div>
 			<main
 				className={
-					"flex flex-col flex-1 p-5 pb-5 mt-5 border border-b-0 min-h-fit bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex flex-col flex-1 p-5 pb-5 mt-20 border border-b-0 custom-scroll min-h-fit bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
 				<div className="flex flex-col flex-1 gap-4">{children}</div>

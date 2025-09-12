@@ -860,6 +860,12 @@ footer a {
 	}
 }
 
+@media (max-width: 768px) {
+	.intercom-lightweight-app-launcher {
+		bottom: 80px !important;
+	}
+}
+
 @layer base {
 	* {
 		@apply border-border;
