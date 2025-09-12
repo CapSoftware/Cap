@@ -29,6 +29,20 @@ import {
 	useSegmentWidth,
 } from "./Track";
 
+function formatTime(totalSeconds: number): string {
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = Math.floor(totalSeconds % 60);
+
+	if (hours > 0) {
+		return `${hours}h ${minutes}m ${seconds}s`;
+	} else if (minutes > 0) {
+		return `${minutes}m ${seconds}s`;
+	} else {
+		return `${seconds}s`;
+	}
+}
+
 function WaveformCanvas(props: {
 	systemWaveform?: number[];
 	micWaveform?: number[];
@@ -468,7 +482,7 @@ export function ClipTrack(
 													</span>
 													<div class="flex gap-1 items-center text-md dark:text-gray-12 text-gray-1">
 														<IconLucideClock class="size-3.5" />{" "}
-														{(segment.end - segment.start).toFixed(1)}s
+														{formatTime(segment.end - segment.start)}
 													</div>
 												</div>
 											</Show>
@@ -627,13 +641,10 @@ function CutOffsetButton(props: {
 	class?: string;
 	onClick?(): void;
 }) {
-	const formatTime = (t: number) =>
-		t < 1 ? Math.round(t * 10) / 10 : Math.round(t);
-
 	return (
 		<button
 			class={cx(
-				"h-7 bg-red-300 hover:bg-red-400 text-xs tabular-nums text-white p-2 flex flex-row items-center transition-colors",
+				"h-7 bg-red-300 text-nowrap hover:bg-red-400 text-xs tabular-nums text-white p-2 flex flex-row items-center transition-colors",
 				props.class,
 			)}
 			onClick={() => props.onClick?.()}
@@ -641,7 +652,7 @@ function CutOffsetButton(props: {
 			{props.value === 0 ? (
 				<IconCapScissors class="size-3.5" />
 			) : (
-				<>{formatTime(props.value)}s</>
+				<>{formatTime(props.value)}</>
 			)}
 		</button>
 	);
