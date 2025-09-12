@@ -18,6 +18,16 @@ import { produce } from "solid-js/store";
 
 import type { TimelineSegment } from "~/utils/tauri";
 import { useEditorContext } from "../context";
+import { useSegmentContext, useTimelineContext } from "./context";
+import { getSectionMarker } from "./sectionMarker";
+import {
+	SegmentContent,
+	SegmentHandle,
+	SegmentRoot,
+	TrackRoot,
+	useSegmentTranslateX,
+	useSegmentWidth,
+} from "./Track";
 
 function formatTime(totalSeconds: number): string {
 	const hours = Math.floor(totalSeconds / 3600);
@@ -32,16 +42,6 @@ function formatTime(totalSeconds: number): string {
 		return `${seconds}s`;
 	}
 }
-import { useSegmentContext, useTimelineContext } from "./context";
-import { getSectionMarker } from "./sectionMarker";
-import {
-	SegmentContent,
-	SegmentHandle,
-	SegmentRoot,
-	TrackRoot,
-	useSegmentTranslateX,
-	useSegmentWidth,
-} from "./Track";
 
 function WaveformCanvas(props: {
 	systemWaveform?: number[];
