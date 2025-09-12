@@ -24,6 +24,10 @@ impl OggFile {
         Ok(Self { encoder, output })
     }
 
+    pub fn encoder(&self) -> &OpusEncoder {
+        &self.encoder
+    }
+
     pub fn queue_frame(&mut self, frame: frame::Audio) {
         self.encoder.queue_frame(frame, &mut self.output);
     }

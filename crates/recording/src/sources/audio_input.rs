@@ -5,11 +5,12 @@ use crate::{
 use cap_fail::fail;
 use cap_media::MediaError;
 use cap_media_info::AudioInfo;
-use cpal::{Device, StreamInstant, SupportedStreamConfig};
-use ffmpeg::{frame::Audio as FFAudio, sys::AV_TIME_BASE_Q};
+use cap_timestamp::Timestamp;
+use cpal::{Device, SupportedStreamConfig};
+use ffmpeg::frame::Audio as FFAudio;
 use flume::{Receiver, Sender};
 use indexmap::IndexMap;
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
 use tracing::{error, info};
 
 pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>;
@@ -17,26 +18,15 @@ pub type AudioInputDeviceMap = IndexMap<String, (Device, SupportedStreamConfig)>
 pub struct AudioInputSource {
     feed: Arc<MicrophoneFeedLock>,
     audio_info: AudioInfo,
-    tx: Sender<(FFAudio, f64)>,
-    start_timestamp: Option<(StreamInstant, SystemTime)>,
-    start_time: f64,
+    tx: Sender<(FFAudio, Timestamp)>,
 }
 
 impl AudioInputSource {
-    pub fn init(
-        feed: Arc<MicrophoneFeedLock>,
-        tx: Sender<(FFAudio, f64)>,
-        start_time: SystemTime,
-    ) -> Self {
+    pub fn init(feed: Arc<MicrophoneFeedLock>, tx: Sender<(FFAudio, Timestamp)>) -> Self {
         Self {
             audio_info: *feed.audio_info(),
             feed,
             tx,
-            start_timestamp: None,
-            start_time: start_time
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_secs_f64(),
         }
     }
 
@@ -45,33 +35,9 @@ impl AudioInputSource {
     }
 
     fn process_frame(&mut self, samples: MicrophoneSamples) -> Result<(), MediaError> {
-        let start_timestamp = match self.start_timestamp {
-            None => *self
-                .start_timestamp
-                .insert((samples.info.timestamp().capture, SystemTime::now())),
-            Some(v) => v,
-        };
+        let timestamp = Timestamp::from_cpal(samples.info.timestamp().capture);
 
-        let elapsed = samples
-            .info
-            .timestamp()
-            .capture
-            .duration_since(&start_timestamp.0)
-            .unwrap();
-
-        let timestamp = start_timestamp
-            .1
-            .checked_add(elapsed)
-            .unwrap()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64()
-            - self.start_time;
-
-        let frame = self.audio_info.wrap_frame(
-            &samples.data,
-            (elapsed.as_secs_f64() * AV_TIME_BASE_Q.den as f64) as i64,
-        );
+        let frame = self.audio_info.wrap_frame(&samples.data);
         if self.tx.send((frame, timestamp)).is_err() {
             return Err(MediaError::Any(
                 "Pipeline is unreachable! Stopping capture".into(),

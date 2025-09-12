@@ -1,5 +1,4 @@
 use cap_audio::cast_bytes_to_f32_slice;
-use cap_ffmpeg_utils::*;
 use cap_media_info::AudioInfo;
 use ffmpeg::encoder;
 pub use ffmpeg::util::frame::Audio as FFAudio;
@@ -47,8 +46,7 @@ impl AudioBuffer {
 
         if frame.is_planar() {
             for channel in 0..self.config.channels {
-                self.data[channel]
-                    .extend(unsafe { cast_bytes_to_f32_slice(frame.plane_data(channel)) });
+                self.data[channel].extend(unsafe { cast_bytes_to_f32_slice(frame.data(channel)) });
             }
         } else {
             self.data[0].extend(unsafe {
@@ -80,7 +78,7 @@ impl AudioBuffer {
                     .drain(0..actual_samples_per_channel)
                     .enumerate()
                 {
-                    self.frame.plane_data_mut(channel)[index * 4..(index + 1) * 4]
+                    self.frame.data_mut(channel)[index * 4..(index + 1) * 4]
                         .copy_from_slice(&byte.to_ne_bytes());
                 }
             }
@@ -89,7 +87,7 @@ impl AudioBuffer {
                 .drain(0..actual_samples_per_channel * self.config.channels)
                 .enumerate()
             {
-                self.frame.plane_data_mut(0)[index * 4..(index + 1) * 4]
+                self.frame.data_mut(0)[index * 4..(index + 1) * 4]
                     .copy_from_slice(&byte.to_ne_bytes());
             }
         }

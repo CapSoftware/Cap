@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 cap-media-info = { path = "../media-info" }
-cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 ffmpeg.workspace = true
 thiserror.workspace = true

@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use tracing::{error, info};
 
 use crate::pipeline::{
-    MediaError, Pipeline,
+    MediaError, RecordingPipeline,
     control::ControlBroadcast,
     task::{PipelineReadySignal, PipelineSourceTask},
 };
@@ -107,7 +107,7 @@ impl PipelineBuilder {
 impl PipelineBuilder {
     pub async fn build(
         self,
-    ) -> Result<(Pipeline, oneshot::Receiver<Result<(), String>>), MediaError> {
+    ) -> Result<(RecordingPipeline, oneshot::Receiver<Result<(), String>>), MediaError> {
         let Self { control, tasks } = self;
 
         if tasks.is_empty() {
@@ -154,7 +154,7 @@ impl PipelineBuilder {
         });
 
         Ok((
-            Pipeline {
+            RecordingPipeline {
                 control,
                 task_handles,
                 is_shutdown: false,

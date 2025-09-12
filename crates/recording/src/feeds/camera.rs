@@ -1,6 +1,10 @@
 use cap_camera::CameraInfo;
+use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
+#[cfg(windows)]
+use cap_timestamp::PerformanceCounterTimestamp;
+use cap_timestamp::Timestamp;
 use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};
 use kameo::prelude::*;
@@ -9,20 +13,17 @@ use std::{
     cmp::Ordering,
     ops::Deref,
     sync::mpsc::{self, SyncSender},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
 use tracing::{debug, error, trace, warn};
-
-use cap_camera_ffmpeg::*;
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
     pub frame: frame::Video,
-    pub timestamp: Duration,
-    pub reference_time: Instant,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Actor)]
@@ -282,8 +283,18 @@ async fn setup_camera(
             let _ = recipient
                 .tell(NewFrame(RawCameraFrame {
                     frame: ff_frame,
-                    timestamp: frame.timestamp,
-                    reference_time: frame.reference_time,
+                    #[cfg(windows)]
+                    timestamp: Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
+                        frame.native().perf_counter,
+                    )),
+                    #[cfg(target_os = "macos")]
+                    timestamp: Timestamp::MachAbsoluteTime(
+                        cap_timestamp::MachAbsoluteTimestamp::new(
+                            cidre::cm::Clock::convert_host_time_to_sys_units(
+                                frame.native().sample_buf().pts(),
+                            ),
+                        ),
+                    ),
                 }))
                 .try_send();
         })

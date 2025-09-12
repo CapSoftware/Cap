@@ -1,7 +1,6 @@
-use cap_ffmpeg_utils::PlanarData;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
-use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
+use ffmpeg::frame;
 use std::path::PathBuf;
 use tracing::{debug, info};
 
@@ -195,6 +194,8 @@ impl MP4Encoder {
         })
     }
 
+    /// Expects frames with whatever pts values you like
+    /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
         frame: &cidre::cm::SampleBuf,
@@ -205,16 +206,15 @@ impl MP4Encoder {
 
         let time = frame.pts();
 
+        let new_pts = self
+            .elapsed_duration
+            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
+
         if !self.is_writing {
             self.is_writing = true;
-            self.asset_writer.start_session_at_src_time(time);
+            self.asset_writer.start_session_at_src_time(new_pts);
             self.start_time = time;
         }
-
-        let new_pts = self
-            .start_time
-            .add(self.elapsed_duration)
-            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = new_pts;
@@ -234,8 +234,10 @@ impl MP4Encoder {
         Ok(())
     }
 
+    /// Expects frames with pts values relative to the first frame's pts
+    /// in the timebase of 1 / sample rate
     pub fn queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), QueueAudioFrameError> {
-        if self.is_paused {
+        if self.is_paused || !self.is_writing {
             return Ok(());
         }
 
@@ -244,7 +246,7 @@ impl MP4Encoder {
         };
 
         if !audio_input.is_ready_for_more_media_data() {
-            return Err(QueueAudioFrameError::NotReady);
+            return Ok(());
         }
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
@@ -265,7 +267,7 @@ impl MP4Encoder {
         if frame.is_planar() {
             let mut offset = 0;
             for plane_i in 0..frame.planes() {
-                let data = frame.plane_data(plane_i);
+                let data = frame.data(plane_i);
                 block_buf_slice[offset..offset + data.len()]
                     .copy_from_slice(&data[0..frame.samples() * frame.format().bytes()]);
                 offset += data.len();
@@ -277,7 +279,7 @@ impl MP4Encoder {
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
 
-        let time = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
+        let time = cm::Time::new(frame.pts().unwrap_or(0), frame.rate() as i32);
 
         let pts = self
             .start_time

@@ -21,6 +21,7 @@ use windows::{
         },
         System::{
             Com::{StructuredStorage::IPropertyBag, *},
+            Performance::QueryPerformanceCounter,
             Variant::{VARIANT, VT_BSTR},
         },
     },
@@ -790,8 +791,8 @@ impl<'a> IEnumPins_Impl for PinEnumerator_Impl<'a> {
 pub struct CallbackData<'a> {
     pub sample: &'a IMediaSample,
     pub media_type: &'a AMMediaType,
-    pub reference_time: Instant,
     pub timestamp: Duration,
+    pub perf_counter: i64,
 }
 
 pub type SinkCallback = Box<dyn FnMut(CallbackData)>;
@@ -994,6 +995,9 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         &self,
         psample: windows_core::Ref<'_, windows::Win32::Media::DirectShow::IMediaSample>,
     ) -> windows_core::Result<()> {
+        let mut perf_counter = 0;
+        unsafe { QueryPerformanceCounter(&mut perf_counter)? };
+
         let Some(psample) = psample.as_ref() else {
             return Ok(());
         };
@@ -1022,20 +1026,13 @@ impl IMemInputPin_Impl for SinkInputPin_Impl {
         let mut start_time = 0;
         let mut end_time = 0;
 
-        let mut timestamp = unsafe { psample.GetTime(&mut start_time, &mut end_time) }
-            .ok()
-            .map(|_| Duration::from_micros(start_time as u64 / 10));
-
-        let mut first_ref_time = self.first_ref_time.borrow_mut();
-        let first_ref_time = first_ref_time.get_or_insert(Instant::now());
-
-        let timestamp = timestamp.get_or_insert(Instant::now() - *first_ref_time);
+        unsafe { psample.GetTime(&mut start_time, &mut end_time) }?;
 
         (self.callback.borrow_mut())(CallbackData {
             sample: psample,
             media_type: &media_type,
-            reference_time: *first_ref_time,
-            timestamp: *timestamp,
+            timestamp: Duration::from_micros(start_time as u64 / 10),
+            perf_counter,
         });
 
         Ok(())

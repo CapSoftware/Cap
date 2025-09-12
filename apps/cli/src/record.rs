@@ -1,4 +1,4 @@
-use cap_recording::screen_capture::ScreenCaptureTarget;
+use cap_recording::{screen_capture::ScreenCaptureTarget, studio_recording};
 use clap::Args;
 use scap_targets::{DisplayId, WindowId};
 use std::{env::current_dir, path::PathBuf};
@@ -58,19 +58,12 @@ impl RecordStart {
             .path
             .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
 
-        let actor = cap_recording::spawn_studio_recording_actor(
-            id,
-            path,
-            cap_recording::RecordingBaseInputs {
-                capture_target: target_info,
-                capture_system_audio: self.system_audio,
-                mic_feed: None,
-                camera_feed: None, // camera.map(|c| Arc::new(Mutex::new(c))),
-            },
-            false,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let actor = studio_recording::Actor::builder(path, target_info)
+            .with_system_audio(self.system_audio)
+            .with_custom_cursor(false)
+            .build()
+            .await
+            .map_err(|e| e.to_string())?;
 
         println!("Recording starting, press Enter to stop");
 
