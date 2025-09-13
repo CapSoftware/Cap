@@ -7,7 +7,8 @@
 		"preparescript": "node scripts/prepare.js",
 		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",
 		"build": "vinxi build",
-		"tauri": "tauri"
+		"tauri": "tauri",
+		"test:desktop": "cd src-tauri && cargo test"
 	},
 	"dependencies": {
 		"@aerofoil/rive-solid-canvas": "^2.1.4",
