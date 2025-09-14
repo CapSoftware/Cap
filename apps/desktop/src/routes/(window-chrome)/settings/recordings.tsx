@@ -1,3 +1,4 @@
+import { ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -12,7 +13,6 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -20,7 +20,6 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
-
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -267,9 +266,11 @@ function RecordingItem(props: {
 											onClick={() => reupload.mutate()}
 										>
 											{reupload.isPending ? (
-												<div class="relative size-6">
-													<ProgressCircle progress={progress()} />
-												</div>
+												<ProgressCircle
+													variant="primary"
+													progress={progress()}
+													size="sm"
+												/>
 											) : (
 												<IconLucideRotateCcw class="size-4" />
 											)}
@@ -308,36 +309,6 @@ function RecordingItem(props: {
 		</li>
 	);
 }
-
-const ProgressCircle = (props: { progress: number }) => {
-	return (
-		<div class="relative scale-100 size-full">
-			<svg class="transform -rotate-90 size-full" viewBox="0 0 100 100">
-				<title>Progress Circle</title>
-				<circle
-					cx="50"
-					cy="50"
-					r="45"
-					fill="none"
-					stroke="rgba(255, 255, 255, 0.2)"
-					stroke-width="5"
-				/>
-				<circle
-					cx="50"
-					cy="50"
-					r="45"
-					fill="none"
-					stroke="#3b82f6"
-					stroke-width="5"
-					stroke-linecap="round"
-					stroke-dasharray={`${2 * Math.PI * 45}`}
-					stroke-dashoffset={`${2 * Math.PI * 45 * (1 - props.progress / 100)}`}
-					class="transition-all duration-300 ease-out"
-				/>
-			</svg>
-		</div>
-	);
-};
 
 function TooltipIconButton(
 	props: ParentProps<{
