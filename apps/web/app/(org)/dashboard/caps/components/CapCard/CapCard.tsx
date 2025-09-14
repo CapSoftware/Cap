@@ -26,13 +26,13 @@ import { toast } from "sonner";
 import { downloadVideo } from "@/actions/videos/download";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import ProgressCircle, {
+	useUploadProgress,
+} from "@/app/s/[videoId]/_components/ProgressCircle";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
-import ProgressCircle, {
-	useUploadProgress,
-} from "@/app/s/[videoId]/_components/ProgressCircle";
 import { PasswordDialog } from "../PasswordDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";

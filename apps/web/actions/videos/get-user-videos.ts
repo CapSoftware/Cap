@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { comments, users, videoUploads, videos } from "@cap/database/schema";
+import { comments, users, videos, videoUploads } from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 
 export async function getUserVideos(limit?: number) {

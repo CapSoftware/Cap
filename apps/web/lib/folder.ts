@@ -10,8 +10,8 @@ import {
 	spaces,
 	spaceVideos,
 	users,
-	videoUploads,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { Folder } from "@cap/web-domain";
