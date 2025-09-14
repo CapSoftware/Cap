@@ -295,8 +295,6 @@ pub async fn upload_video(
     if response.status().is_success() {
         println!("Video uploaded successfully");
 
-        // progress.update(total_size, total_size); // TODO: Is this required?
-
         if let Some(Ok(screenshot_response)) = screenshot_result {
             if screenshot_response.status().is_success() {
                 println!("Screenshot uploaded successfully");
