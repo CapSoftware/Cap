@@ -2231,13 +2231,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }
                     }
 
-                    if *focused {
-                        if let Ok(window_id) = window_id
-                            && window_id.activates_dock()
-                        {
-                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                                .ok();
-                        }
+                    if *focused
+                        && let Ok(window_id) = window_id
+                        && window_id.activates_dock()
+                    {
+                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .ok();
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

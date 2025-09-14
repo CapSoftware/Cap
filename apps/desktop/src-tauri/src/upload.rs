@@ -3,7 +3,6 @@
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
-use chrono;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
 use futures::StreamExt;
@@ -14,10 +13,9 @@ use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::ipc::Channel;
@@ -128,17 +126,6 @@ struct VideoProgressState {
     last_update_time: Instant,
 }
 
-impl VideoProgressState {
-    fn new(uploaded: u64, total: u64) -> Self {
-        Self {
-            uploaded,
-            total,
-            pending_task: None,
-            last_update_time: Instant::now(),
-        }
-    }
-}
-
 impl UploadProgressUpdater {
     pub fn new(app: AppHandle, video_id: String) -> Self {
         Self {
@@ -149,21 +136,19 @@ impl UploadProgressUpdater {
     }
 
     pub fn update(&mut self, uploaded: u64, total: u64) {
-        let app_clone = self.app.clone();
-        let video_id_clone = self.video_id.clone();
-
         let should_send_immediately = {
-            // Get or create state
-            let state = self
-                .video_state
-                .get_or_insert_with(|| VideoProgressState::new(uploaded, total));
+            let state = self.video_state.get_or_insert_with(|| VideoProgressState {
+                uploaded,
+                total,
+                pending_task: None,
+                last_update_time: Instant::now(),
+            });
 
             // Cancel any pending task
             if let Some(handle) = state.pending_task.take() {
                 handle.abort();
             }
 
-            // Update values
             state.uploaded = uploaded;
             state.total = total;
             state.last_update_time = Instant::now();
@@ -172,10 +157,13 @@ impl UploadProgressUpdater {
             uploaded >= total
         };
 
+        let app = self.app.clone();
         if should_send_immediately {
-            // Send completion update immediately
-            tokio::spawn(async move {
-                Self::send_api_update(&app_clone, video_id_clone, uploaded, total).await;
+            tokio::spawn({
+                let video_id = self.video_id.clone();
+                async move {
+                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                }
             });
 
             // Clear state since upload is complete
@@ -183,14 +171,13 @@ impl UploadProgressUpdater {
         } else {
             // Schedule delayed update
             let handle = {
-                let video_id = video_id_clone.clone();
+                let video_id = self.video_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    Self::send_api_update(&app_clone, video_id, uploaded, total).await;
+                    Self::send_api_update(&app, video_id, uploaded, total).await;
                 })
             };
 
-            // Store the task handle
             if let Some(state) = &mut self.video_state {
                 state.pending_task = Some(handle);
             }
@@ -322,7 +309,7 @@ pub async fn upload_video(
     if response.status().is_success() {
         println!("Video uploaded successfully");
 
-        send_progress_update(&app, video_id.clone(), total_size, total_size);
+        send_progress_update(app, video_id.clone(), total_size, total_size);
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
             if screenshot_response.status().is_success() {
@@ -987,7 +974,7 @@ impl InstantMultipartUpload {
             }
         };
 
-        send_progress_update(&app, video_id.into(), expected_pos, file_size);
+        send_progress_update(app, video_id.into(), expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();

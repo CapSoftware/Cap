@@ -640,7 +640,7 @@ impl ProjectUniforms {
                     .background
                     .border
                     .as_ref()
-                    .map_or(false, |b| b.enabled)
+                    .is_some_and(|b| b.enabled)
                 {
                     1.0
                 } else {
