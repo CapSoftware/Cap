@@ -202,11 +202,6 @@ impl UploadProgressUpdater {
     async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
         let updated_at = chrono::Utc::now().to_rfc3339();
 
-        // println!(
-        //     "📡 Sending batched progress update - Video: {}, Progress: {}/{}",
-        //     video_id, uploaded, total
-        // );
-
         let response = app
             .authed_api_request("/api/desktop/video/progress", |client, url| {
                 client.post(url).json(&json!({
