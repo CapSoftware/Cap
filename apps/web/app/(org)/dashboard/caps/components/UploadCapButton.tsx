@@ -12,6 +12,14 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
 
+type UploadState = {
+	videoId?: string;
+	uploaded: number;
+	total: number;
+	pendingTask?: NodeJS.Timeout;
+	lastUpdateTime: number;
+};
+
 export const UploadCapButton = ({
 	onStart,
 	onProgress,
@@ -33,14 +41,7 @@ export const UploadCapButton = ({
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
 
-	// Progress tracking for API updates
-	const [uploadState, setUploadState] = useState<{
-		videoId?: string;
-		uploaded: number;
-		total: number;
-		pendingTask?: NodeJS.Timeout;
-		lastUpdateTime: number;
-	}>({
+	const [uploadState, setUploadState] = useState<UploadState>({
 		uploaded: 0,
 		total: 0,
 		lastUpdateTime: Date.now(),
@@ -323,7 +324,6 @@ export const UploadCapButton = ({
 						setUploadProgress(percent);
 						onProgress?.(uploadId, 100, percent);
 
-						// Update progress state for API updates
 						setUploadState({
 							videoId: uploadId,
 							uploaded: event.loaded,
@@ -336,7 +336,6 @@ export const UploadCapButton = ({
 
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
-						// Send final progress update
 						if (uploadState.videoId) {
 							sendProgressUpdate(
 								uploadState.videoId,
@@ -414,15 +413,12 @@ export const UploadCapButton = ({
 		}
 	};
 
-	// Function to send progress updates to the server
 	const sendProgressUpdate = async (
 		videoId: string,
 		uploaded: number,
 		total: number,
 	) => {
 		try {
-			const updatedAt = new Date().toISOString();
-
 			const response = await fetch("/api/desktop/video/progress", {
 				method: "POST",
 				headers: {
@@ -432,13 +428,12 @@ export const UploadCapButton = ({
 					videoId,
 					uploaded,
 					total,
-					updatedAt,
+					updatedAt: new Date().toISOString(),
 				}),
 			});
 
-			if (!response.ok) {
+			if (!response.ok)
 				console.error("Failed to send progress update:", response.status);
-			}
 		} catch (err) {
 			console.error("Error sending progress update:", err);
 		}
@@ -459,28 +454,23 @@ export const UploadCapButton = ({
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
 	}, [isUploading]);
 
-	// Effect to batch progress updates
 	useEffect(() => {
-		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading) {
+		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading)
 			return;
-		}
 
 		// Clear any existing pending task
-		if (uploadState.pendingTask) {
-			clearTimeout(uploadState.pendingTask);
-		}
+		if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
 
 		const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
 
 		if (shouldSendImmediately) {
-			// Send completion update immediately
+			// Send completion update immediately and clear state
 			sendProgressUpdate(
 				uploadState.videoId,
 				uploadState.uploaded,
 				uploadState.total,
 			);
 
-			// Clear the state
 			setUploadState((prev) => ({
 				...prev,
 				pendingTask: undefined,
@@ -497,18 +487,14 @@ export const UploadCapButton = ({
 				}
 			}, 2000);
 
-			// Store the task handle
 			setUploadState((prev) => ({
 				...prev,
 				pendingTask: newPendingTask,
 			}));
 		}
 
-		// Cleanup on unmount
 		return () => {
-			if (uploadState.pendingTask) {
-				clearTimeout(uploadState.pendingTask);
-			}
+			if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
 		};
 	}, [
 		uploadState.videoId,
