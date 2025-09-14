@@ -444,6 +444,21 @@ export const UploadCapButton = ({
 		}
 	};
 
+	// Prevent the user closing the tab while uploading
+	useEffect(() => {
+		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+			if (isUploading) {
+				e.preventDefault();
+				// Chrome requires returnValue to be set
+				e.returnValue = "";
+				return "";
+			}
+		};
+
+		window.addEventListener("beforeunload", handleBeforeUnload);
+		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+	}, [isUploading]);
+
 	// Effect to batch progress updates
 	useEffect(() => {
 		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading) {

@@ -388,7 +388,7 @@ export function CapVideoPlayer({
 	const isUploading =
 		uploadProgress?.status === "uploading" ||
 		uploadProgress?.status === "preparing";
-	const isUploadFailed = true;
+	const isUploadFailed = uploadProgress?.status === "failed";
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
 	useEffect(() => {
@@ -466,7 +466,7 @@ export function CapVideoPlayer({
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
-				{videoLoaded && isUploading && !isUploadFailed && (
+				{!videoLoaded && isUploading && !isUploadFailed && (
 					<motion.div
 						initial={{ opacity: 0, y: 10 }}
 						animate={{ opacity: 1, y: 0 }}
@@ -480,7 +480,6 @@ export function CapVideoPlayer({
 									? uploadProgress.progress
 									: 0
 							}
-							isFailed={isUploadFailed}
 						/>
 					</motion.div>
 				)}
