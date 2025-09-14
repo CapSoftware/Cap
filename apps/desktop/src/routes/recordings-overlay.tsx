@@ -3,7 +3,7 @@ import Tooltip from "@corvu/tooltip";
 import { createElementBounds } from "@solid-primitives/bounds";
 import { makePersisted } from "@solid-primitives/storage";
 import { createMutation, createQuery } from "@tanstack/solid-query";
-import { convertFileSrc, Channel } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { cx } from "cva";
 import {
 	type Accessor,
@@ -30,8 +30,8 @@ import {
 	commands,
 	events,
 	type FramesRendered,
+	type UploadProgress,
 	type UploadResult,
-	UploadProgress,
 } from "~/utils/tauri";
 import IconLucideClock from "~icons/lucide/clock";
 import { FPS, OUTPUT_SIZE } from "./editor/context";

@@ -1,12 +1,12 @@
+import * as Db from "@cap/database/schema";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
+import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
+import { Database } from "../Database";
 import { S3Buckets } from "../S3Buckets";
 import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
 import { VideosPolicy } from "./VideosPolicy";
 import { VideosRepo } from "./VideosRepo";
-import { Database } from "../Database";
-import * as Db from "@cap/database/schema";
-import * as Dz from "drizzle-orm";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {

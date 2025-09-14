@@ -2,8 +2,10 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videoUploads, videos } from "@cap/database/schema";
+import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { Hono } from "hono";
@@ -12,8 +14,6 @@ import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
-import { userIsPro } from "@cap/utils";
-import { Video } from "@cap/web-domain";
 
 export const app = new Hono().use(withAuth);
 

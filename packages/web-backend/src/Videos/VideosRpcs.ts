@@ -1,8 +1,7 @@
 import { InternalError, Video } from "@cap/web-domain";
 import { Effect } from "effect";
-
-import { Videos } from ".";
 import { provideOptionalAuth } from "../Auth";
+import { Videos } from ".";
 
 export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 	Effect.gen(function* () {

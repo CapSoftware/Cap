@@ -5,7 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
-import { useRef, useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";

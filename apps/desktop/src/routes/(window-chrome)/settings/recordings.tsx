@@ -5,7 +5,7 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { convertFileSrc, Channel } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";

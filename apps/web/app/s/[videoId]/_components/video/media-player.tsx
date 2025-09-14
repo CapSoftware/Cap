@@ -2329,7 +2329,8 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 				className={cn(
 					"flex relative items-center select-none touch-none",
 					expandable
-						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100":"w-16",
+						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100"
+						: "w-16",
 					className,
 				)}
 				disabled={isDisabled}
