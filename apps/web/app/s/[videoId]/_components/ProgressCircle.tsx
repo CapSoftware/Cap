@@ -1,6 +1,7 @@
 "use client";
 
 import type { Video } from "@cap/web-domain";
+import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
@@ -63,9 +64,24 @@ export function useUploadProgress(
 	) satisfies UploadProgress;
 }
 
-const ProgressCircle = ({ progress }: { progress: number }) => {
+const ProgressCircle = ({
+	progress,
+	className,
+	progressTextClassName,
+	subTextClassName,
+}: {
+	progress: number;
+	className?: string;
+	progressTextClassName?: string;
+	subTextClassName?: string;
+}) => {
 	return (
-		<div className="relative scale-100 size-full sm:scale-110 md:scale-[1.3]">
+		<div
+			className={clsx(
+				"relative scale-100 size-full sm:scale-110 md:scale-[1.3]",
+				className,
+			)}
+		>
 			<svg className="transform -rotate-90 size-full" viewBox="0 0 100 100">
 				<title>Progress Circle</title>
 				<circle
@@ -91,10 +107,22 @@ const ProgressCircle = ({ progress }: { progress: number }) => {
 			</svg>
 
 			<div className="flex absolute inset-0 flex-col justify-center items-center p-2">
-				<p className="text-sm font-semibold tabular-nums text-white xs:text-sm md:text-lg">
+				<p
+					className={clsx(
+						"text-sm font-semibold tabular-nums md:leading-tight leading-tight text-white xs:text-sm md:text-lg",
+						progressTextClassName,
+					)}
+				>
 					{Math.round(progress)}%
 				</p>
-				<p className="mt-0.5 text-[10px] text-white/80">Uploading...</p>
+				<p
+					className={clsx(
+						"mt-0.5 leading-tight text-[10px] text-white/80",
+						subTextClassName,
+					)}
+				>
+					Uploading...
+				</p>
 			</div>
 		</div>
 	);
