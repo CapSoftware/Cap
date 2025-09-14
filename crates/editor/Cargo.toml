@@ -15,7 +15,7 @@ cap-media-info = { path = "../media-info" }
 
 tokio = { workspace = true, features = ["macros", "process", "fs"] }
 cpal.workspace = true
-axum = { version = "0.7.5", features = ["ws"] }
+axum = { version = "0.8.4", features = ["ws"] }
 ffmpeg.workspace = true
 specta.workspace = true
 serde = { workspace = true }
@@ -23,5 +23,5 @@ sentry.workspace = true
 futures = { workspace = true }
 tracing.workspace = true
 flume.workspace = true
-tokio-util = "0.7.15"
+tokio-util = "0.7.16"
 ringbuf = "0.4.8"

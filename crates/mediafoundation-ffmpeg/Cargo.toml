@@ -45,7 +45,7 @@ windows = { workspace = true, features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Security_Authorization_AppCapabilityAccess",
 ] }
-windows-numerics = "0.2.0"
+windows-numerics = "0.3.0"
 
 [lints]
 workspace = true

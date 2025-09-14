@@ -30,27 +30,27 @@ ffmpeg = { workspace = true }
 
 serde = { workspace = true }
 serde_json = "1"
-chrono = "0.4.38"
+chrono = "0.4.42"
 tracing.workspace = true
 device_query = "4.0.1"
-image = "0.25.2"
-either = "1.13.0"
-tracing-subscriber = { version = "0.3.19" }
-relative-path = "1.9.3"
+image = "0.25.8"
+either = "1.15.0"
+tracing-subscriber = { version = "0.3.20" }
+relative-path = "2.0.1"
 futures = { workspace = true }
-tokio-util = "0.7.15"
+tokio-util = "0.7.16"
 sha2 = "0.10.9"
 hex = "0.4.3"
 ringbuf = "0.4.8"
 cpal.workspace = true
-indexmap = "2.10.0"
-kameo = "0.17.2"
-inquire = "0.7.5"
+indexmap = "2.11.1"
+kameo = "0.18.0"
+inquire = "0.8.0"
 replace_with = "0.1.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-screencapturekit = "0.3.5"
-cocoa = "0.26.0"
+screencapturekit = "0.3.6"
+cocoa = "0.26.1"
 objc = "0.2.7"
 cidre = { workspace = true }
 objc2-app-kit = "0.3.1"
@@ -71,5 +71,5 @@ scap-ffmpeg = { path = "../scap-ffmpeg" }
 scap-cpal = { path = "../scap-cpal" }
 
 [dev-dependencies]
-tempfile = "3.20.0"
-tracing-subscriber = { version = "0.3.19", default-features = false }
+tempfile = "3.22.0"
+tracing-subscriber = { version = "0.3.20", default-features = false }

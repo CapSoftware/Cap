@@ -7,16 +7,16 @@ edition = "2024"
 workspace = true
 
 [dependencies]
-serde = { version = "1.0.219", features = ["derive"] }
+serde = { version = "1.0.221", features = ["derive"] }
 specta.workspace = true
-image = "0.24"
+image = "0.25"
 tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true, default-features = false, features = ["sc"] }
-core-graphics = "0.24.0"
-core-foundation = "0.10.0"
-cocoa = "0.26.0"
+core-graphics = "0.25.0"
+core-foundation = "0.10.1"
+cocoa = "0.26.1"
 objc = "0.2.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]

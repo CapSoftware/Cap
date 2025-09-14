@@ -34,7 +34,7 @@ windows = { workspace = true, features = [
 [dev-dependencies]
 scap-targets = { path = "../scap-targets" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
-windows-numerics = "0.2.0"
+windows-numerics = "0.3.0"
 
 [lints]
 workspace = true

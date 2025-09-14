@@ -24,6 +24,6 @@ windows = { workspace = true, features = [
 workspace = true
 
 [dev-dependencies]
-inquire = "0.7.5"
+inquire = "0.8.0"
 tracing.workspace = true
-tracing-subscriber = "0.3.19"
+tracing-subscriber = "0.3.20"

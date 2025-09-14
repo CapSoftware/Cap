@@ -6,8 +6,8 @@ edition = "2024"
 [dependencies]
 thiserror.workspace = true
 tracing.workspace = true
-gifski = "1.32"
-imgref = "1.10"
+gifski = "1.34"
+imgref = "1.11"
 rgb = "0.8"
 
 [lints]

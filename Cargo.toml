@@ -3,12 +3,12 @@ resolver = "2"
 members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 
 [workspace.dependencies]
-anyhow = { version = "1.0.86" }
+anyhow = { version = "1.0.99" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
 cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
-tokio = { version = "1.39.3", features = [
+tokio = { version = "1.47.1", features = [
     "macros",
     "process",
     "fs",
@@ -17,7 +17,7 @@ tokio = { version = "1.39.3", features = [
     "rt-multi-thread",
     "time",
 ] }
-tauri = { version = "2.5.0", features = ["specta"] }
+tauri = { version = "2.8.5", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
     "derive",
     "serde_json",
@@ -31,10 +31,10 @@ nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", 
     "serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = "26.0.0"
-flume = "0.11.0"
-thiserror = "1.0"
-sentry = { version = "0.34.0", features = [
+wgpu = "26.0.1"
+flume = "0.11.1"
+thiserror = "2.0"
+sentry = { version = "0.42.0", features = [
     "anyhow",
     "backtrace",
     "debug-images",
@@ -53,11 +53,11 @@ cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", fe
     "dispatch",
 ], default-features = false }
 
-windows = "0.60.0"
-windows-core = "0.60"
-windows-sys = "0.59.0"
+windows = "0.62.0"
+windows-core = "0.62"
+windows-sys = "0.61.0"
 windows-capture = "1.5.0"
-percent-encoding = "2.3.1"
+percent-encoding = "2.3.2"
 
 # TODO: Reenable these: https://github.com/CapSoftware/Cap/issues/859
 [workspace.lints.rust]

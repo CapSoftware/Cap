@@ -19,7 +19,7 @@ windows-core = { workspace = true }
 cap-camera-windows = { path = "../camera-windows" }
 
 [dev-dependencies]
-inquire = "0.7.5"
+inquire = "0.8.0"
 
 [lints]
 workspace = true

@@ -8,7 +8,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-bytemuck = { version = "1.7", features = ["derive"] }
+bytemuck = { version = "1.23", features = ["derive"] }
 cap-flags = { path = "../flags" }
 cap-project = { path = "../project" }
 cap-video-decode = { path = "../video-decode" }
@@ -18,14 +18,14 @@ tokio.workspace = true
 ffmpeg.workspace = true
 futures = { workspace = true }
 futures-intrusive = "0.5.0"
-image = "0.25.2"
+image = "0.25.8"
 log = "0.4"
 serde = { workspace = true }
 specta.workspace = true
 thiserror.workspace = true
 wgpu.workspace = true
 bezier_easing = "0.1.1"
-reactive_graph = "0.1.5"
+reactive_graph = "0.2.6"
 glyphon = "0.9.0"
 tracing.workspace = true
 resvg = "0.45"

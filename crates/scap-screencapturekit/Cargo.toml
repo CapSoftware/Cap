@@ -10,7 +10,7 @@ tracing = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { workspace = true }
-objc2 = "0.6.1"
+objc2 = "0.6.2"
 objc2-app-kit = "0.3.1"
 objc2-foundation = "0.3.1"
 
@@ -18,6 +18,6 @@ objc2-foundation = "0.3.1"
 workspace = true
 
 [dev-dependencies]
-clap = { version = "4.5.40", features = ["derive"] }
-inquire = "0.7.5"
+clap = { version = "4.5.47", features = ["derive"] }
+inquire = "0.8.0"
 scap-targets = { path = "../scap-targets" }

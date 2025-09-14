@@ -12,8 +12,8 @@ cap-cursor-info = { path = "../cursor-info" }
 specta.workspace = true
 serde = { workspace = true }
 
-serde_json = "1.0.127"
-either = "1.13.0"
-relative-path = { version = "1.9.3", features = ["serde"] }
+serde_json = "1.0.144"
+either = "1.15.0"
+relative-path = { version = "2.0.1", features = ["serde"] }
 log = "0.4"
 tracing = "0.1.41"
