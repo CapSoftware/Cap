@@ -113,8 +113,8 @@ async doPermissionsCheck(initialCheck: boolean) : Promise<OSPermissionsCheck> {
 async requestPermission(permission: OSPermission) : Promise<void> {
     await TAURI_INVOKE("request_permission", { permission });
 },
-async uploadExportedVideo(path: string, mode: UploadMode) : Promise<UploadResult> {
-    return await TAURI_INVOKE("upload_exported_video", { path, mode });
+async uploadExportedVideo(path: string, mode: UploadMode, channel: TAURI_CHANNEL<UploadProgress>) : Promise<UploadResult> {
+    return await TAURI_INVOKE("upload_exported_video", { path, mode, channel });
 },
 async uploadScreenshot(screenshotPath: string) : Promise<UploadResult> {
     return await TAURI_INVOKE("upload_screenshot", { screenshotPath });
@@ -287,8 +287,7 @@ renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenSettings: RequestOpenSettings,
 requestStartRecording: RequestStartRecording,
-targetUnderCursor: TargetUnderCursor,
-uploadProgress: UploadProgress
+targetUnderCursor: TargetUnderCursor
 }>({
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
@@ -308,8 +307,7 @@ renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenSettings: "request-open-settings",
 requestStartRecording: "request-start-recording",
-targetUnderCursor: "target-under-cursor",
-uploadProgress: "upload-progress"
+targetUnderCursor: "target-under-cursor"
 })
 
 /** user-defined constants **/

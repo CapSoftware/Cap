@@ -70,7 +70,7 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tauri::{AppHandle, Manager, State, Window, WindowEvent};
+use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -1024,7 +1024,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(MicrophoneFeed::list().keys().cloned().collect())
 }
 
-#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+#[derive(Serialize, Type, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
 }
@@ -1043,6 +1043,7 @@ async fn upload_exported_video(
     app: AppHandle,
     path: PathBuf,
     mode: UploadMode,
+    channel: Channel<UploadProgress>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1064,7 +1065,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::UpgradeRequired);
     }
 
-    UploadProgress { progress: 0.0 }.emit(&app).ok();
+    channel.send(UploadProgress { progress: 0.0 }).ok();
 
     let s3_config = async {
         let video_id = match mode {
@@ -1103,11 +1104,12 @@ async fn upload_exported_video(
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
         Some(metadata),
+        Some(channel.clone()),
     )
     .await
     {
         Ok(uploaded_video) => {
-            UploadProgress { progress: 1.0 }.emit(&app).ok();
+            channel.send(UploadProgress { progress: 1.0 }).ok();
 
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
@@ -1905,7 +1907,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
-            UploadProgress,
             captions::DownloadProgress,
             recording::RecordingEvent,
             RecordingDeleted,

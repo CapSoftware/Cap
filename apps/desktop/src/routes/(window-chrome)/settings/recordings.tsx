@@ -5,7 +5,7 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, Channel } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -22,7 +22,12 @@ import {
 
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { commands, events, type RecordingMetaWithMode } from "~/utils/tauri";
+import {
+	commands,
+	events,
+	type RecordingMetaWithMode,
+	type UploadProgress,
+} from "~/utils/tauri";
 
 type Recording = {
 	meta: RecordingMetaWithMode;
@@ -237,13 +242,19 @@ function RecordingItem(props: {
 				</Show>
 				<Show when={mode() === "instant"}>
 					{(_) => {
+						const [progress, setProgress] = createSignal(0);
 						const reupload = createMutation(() => ({
-							mutationFn: () => {
-								return commands.uploadExportedVideo(
+							mutationFn: async () => {
+								setProgress(0);
+								return await commands.uploadExportedVideo(
 									props.recording.path,
 									"Reupload",
+									new Channel<UploadProgress>((progress) =>
+										setProgress(Math.round(progress.progress * 100)),
+									),
 								);
 							},
+							onSettled: () => setProgress(0),
 						}));
 
 						return (

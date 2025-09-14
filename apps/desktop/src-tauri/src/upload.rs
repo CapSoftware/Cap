@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
+use tauri::ipc::Channel;
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
@@ -273,6 +273,7 @@ pub async fn upload_video(
     existing_config: Option<S3UploadMeta>,
     screenshot_path: Option<PathBuf>,
     meta: Option<S3VideoMeta>,
+    channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -316,10 +317,14 @@ pub async fn upload_video(
             }
 
             if bytes_uploaded > 0 {
-                let _ = UploadProgress {
-                    progress: bytes_uploaded as f64 / total_size as f64,
+                if let Some(channel) = &channel {
+                    channel
+                        .send(UploadProgress {
+                            progress: bytes_uploaded as f64 / total_size as f64,
+                        })
+                        .ok();
                 }
-                .emit(&app);
+
                 send_progress_update(&app, video_id.clone(), bytes_uploaded as u64, total_size);
             }
         }

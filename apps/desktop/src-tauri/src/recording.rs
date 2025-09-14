@@ -804,6 +804,7 @@ async fn handle_recording_finish(
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
                                 meta,
+                                None,
                             )
                             .await
                             {
