@@ -139,8 +139,6 @@ impl VideoProgressState {
     }
 }
 
-// No global registry needed anymore
-
 impl UploadProgressUpdater {
     pub fn new(app: AppHandle, video_id: String) -> Self {
         Self {

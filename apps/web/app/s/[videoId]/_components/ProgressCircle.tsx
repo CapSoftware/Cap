@@ -7,17 +7,19 @@ import { withRpc } from "@/lib/Rpcs";
 
 type UploadProgress =
 	| {
-			status: "preparing";
-	  }
-	| {
 			status: "uploading";
+			lastUpdated: Date;
 			progress: number;
 	  }
 	| {
 			status: "failed";
+			lastUpdated: Date;
 	  };
 
-const fiveMinutes = 5 * 60 * 1000;
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * 60 * SECOND;
+const DAY = 24 * HOUR;
 
 export function useUploadProgress(videoId: Video.VideoId) {
 	const query = useEffectQuery({
@@ -26,28 +28,34 @@ export function useUploadProgress(videoId: Video.VideoId) {
 			withRpc((rpc) => rpc.GetUploadProgress(videoId)).pipe(
 				Effect.map((v) => Option.getOrNull(v ?? Option.none())),
 			),
-		refetchInterval: (query) => (query.state.data ? 1000 : false),
+		refetchInterval: (query) => {
+			if (!query.state.data) return false;
+
+			const timeSinceUpdate = Date.now() - query.state.data.updatedAt.getTime();
+			if (timeSinceUpdate > DAY) return 30 * SECOND;
+			if (timeSinceUpdate > HOUR) return 15 * SECOND;
+			else if (timeSinceUpdate > 5 * MINUTE) return 5 * SECOND;
+			else return SECOND;
+		},
 	});
 	if (!query.data) return null;
-
-	const hasUploadFailed =
-		Date.now() - new Date(query.data.updatedAt).getTime() > fiveMinutes;
-
-	const isPreparing = query.data.total === 0; // `0/0` for progress is `NaN`
+	const lastUpdated = new Date(query.data.updatedAt);
 
 	return (
-		isPreparing
+		Date.now() - lastUpdated.getTime() > 5 * MINUTE
 			? {
-					status: "preparing",
+					status: "failed",
+					lastUpdated,
 				}
-			: hasUploadFailed
-				? {
-						status: "failed",
-					}
-				: {
-						status: "uploading",
-						progress: (query.data.uploaded / query.data.total) * 100,
-					}
+			: {
+					status: "uploading",
+					lastUpdated,
+					progress:
+						// `0/0` for progress is `NaN`
+						query.data.total === 0
+							? 0
+							: (query.data.uploaded / query.data.total) * 100,
+				}
 	) satisfies UploadProgress;
 }
 

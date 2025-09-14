@@ -250,9 +250,7 @@ export function HLSVideoPlayer({
 	}, [captionsSrc]);
 
 	const uploadProgress = useUploadProgress(videoId);
-	const isUploading =
-		uploadProgress?.status === "uploading" ||
-		uploadProgress?.status === "preparing";
+	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 
 	return (
@@ -303,7 +301,6 @@ export function HLSVideoPlayer({
 									? uploadProgress.progress
 									: 0
 							}
-							isFailed={isUploadFailed}
 						/>
 					</motion.div>
 				)}

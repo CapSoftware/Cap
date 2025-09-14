@@ -385,9 +385,7 @@ export function CapVideoPlayer({
 	}, []);
 
 	const uploadProgress = useUploadProgress(videoId);
-	const isUploading =
-		uploadProgress?.status === "uploading" ||
-		uploadProgress?.status === "preparing";
+	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 
 	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
