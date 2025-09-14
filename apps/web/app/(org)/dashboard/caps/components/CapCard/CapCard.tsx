@@ -30,6 +30,9 @@ import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
+import ProgressCircle, {
+	useUploadProgress,
+} from "@/app/s/[videoId]/_components/ProgressCircle";
 import { PasswordDialog } from "../PasswordDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
@@ -59,6 +62,7 @@ export interface CapCardProps extends PropsWithChildren {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
+		hasActiveUpload?: boolean;
 		duration?: number;
 	};
 	analytics: number;
@@ -159,6 +163,8 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+
+	const uploadProgress = useUploadProgress(cap.id, cap.hasActiveUpload);
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {
@@ -422,33 +428,57 @@ export const CapCard = ({
 						</div>
 					</div>
 				)}
-				<Link
-					className={clsx(
-						"block group",
-						anyCapSelected && "cursor-pointer pointer-events-none",
-					)}
-					onClick={(e) => {
-						if (isDeleting) {
-							e.preventDefault();
-						}
-					}}
-					href={`/s/${cap.id}`}
-				>
-					<VideoThumbnail
-						videoDuration={cap.duration}
-						imageClass={clsx(
-							anyCapSelected
-								? "opacity-50"
-								: isDropdownOpen
-									? "opacity-30"
-									: "group-hover:opacity-30",
-							"transition-opacity duration-200",
+				<div className="relative">
+					<Link
+						className={clsx(
+							"block group",
+							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
-						userId={cap.ownerId}
-						videoId={cap.id}
-						alt={`${cap.name} Thumbnail`}
-					/>
-				</Link>
+						onClick={(e) => {
+							if (isDeleting) {
+								e.preventDefault();
+							}
+						}}
+						href={`/s/${cap.id}`}
+					>
+						<VideoThumbnail
+							videoDuration={cap.duration}
+							imageClass={clsx(
+								anyCapSelected
+									? "opacity-50"
+									: isDropdownOpen
+										? "opacity-30"
+										: "group-hover:opacity-30",
+								"transition-opacity duration-200",
+								uploadProgress && "opacity-30",
+							)}
+							userId={cap.ownerId}
+							videoId={cap.id}
+							alt={`${cap.name} Thumbnail`}
+						/>
+					</Link>
+					{uploadProgress && (
+						<div className="absolute inset-0 flex items-center justify-center">
+							{uploadProgress.status === "failed" ? (
+								<div className="flex flex-col items-center">
+									<div className="flex items-center justify-center mb-2 w-8 h-8 bg-red-500 rounded-full">
+										<FontAwesomeIcon
+											icon={faVideo}
+											className="text-white size-3"
+										/>
+									</div>
+									<p className="text-xs text-white text-center">
+										Upload failed
+									</p>
+								</div>
+							) : (
+								<div className="size-16">
+									<ProgressCircle progress={uploadProgress.progress} />
+								</div>
+							)}
+						</div>
+					)}
+				</div>
 				<div
 					className={clsx(
 						"flex flex-col flex-grow gap-3 px-4 pb-4 w-full",

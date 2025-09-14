@@ -46,6 +46,7 @@ export type VideoData = {
 	ownerName: string;
 	metadata?: VideoMetadata;
 	hasPassword: boolean;
+	hasActiveUpload: boolean;
 }[];
 
 export const Caps = ({

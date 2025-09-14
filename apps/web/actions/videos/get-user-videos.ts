@@ -2,7 +2,7 @@
 
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
-import { comments, users, videos } from "@cap/database/schema";
+import { comments, users, videoUploads, videos } from "@cap/database/schema";
 import { desc, eq, sql } from "drizzle-orm";
 
 export async function getUserVideos(limit?: number) {
@@ -31,10 +31,12 @@ export async function getUserVideos(limit?: number) {
             ${videos.createdAt}
           )
         `,
+				hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
 			})
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))
 			.leftJoin(users, eq(videos.ownerId, users.id))
+			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 			.where(eq(videos.ownerId, userId))
 			.groupBy(
 				videos.id,
@@ -60,6 +62,7 @@ export async function getUserVideos(limit?: number) {
 				metadata: video.metadata as
 					| { customCreatedAt?: string; [key: string]: any }
 					| undefined,
+				hasActiveUpload: video.hasActiveUpload === 1,
 			};
 		});
 

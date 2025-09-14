@@ -21,15 +21,19 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId) {
+export function useUploadProgress(
+	videoId: Video.VideoId,
+	enabled: boolean = true,
+) {
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
 			withRpc((rpc) => rpc.GetUploadProgress(videoId)).pipe(
 				Effect.map((v) => Option.getOrNull(v ?? Option.none())),
 			),
+		enabled,
 		refetchInterval: (query) => {
-			if (!query.state.data) return false;
+			if (!enabled || !query.state.data) return false;
 
 			const timeSinceUpdate = Date.now() - query.state.data.updatedAt.getTime();
 			if (timeSinceUpdate > DAY) return 30 * SECOND;
@@ -38,7 +42,7 @@ export function useUploadProgress(videoId: Video.VideoId) {
 			else return SECOND;
 		},
 	});
-	if (!query.data) return null;
+	if (!enabled || !query.data) return null;
 	const lastUpdated = new Date(query.data.updatedAt);
 
 	return (

@@ -10,6 +10,7 @@ import {
 	spaces,
 	spaceVideos,
 	users,
+	videoUploads,
 	videos,
 } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
@@ -176,12 +177,14 @@ export async function getVideosByFolderId(folderId: string) {
         )
       `,
 			hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+			hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
+		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(eq(videos.folderId, folderId))
 		.groupBy(
 			videos.id,
@@ -229,6 +232,7 @@ export async function getVideosByFolderId(folderId: string) {
 				  }
 				| undefined,
 			hasPassword: video.hasPassword === 1,
+			hasActiveUpload: video.hasActiveUpload === 1,
 			foldersData: [], // Empty array since videos in a folder don't need folder data
 		};
 	});
