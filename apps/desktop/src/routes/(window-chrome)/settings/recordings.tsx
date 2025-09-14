@@ -12,6 +12,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -257,6 +258,8 @@ function RecordingItem(props: {
 							onSettled: () => setProgress(0),
 						}));
 
+						createEffect(() => console.log(progress()));
+
 						return (
 							<Show when={props.recording.meta.sharing}>
 								{(sharing) => (
@@ -266,7 +269,9 @@ function RecordingItem(props: {
 											onClick={() => reupload.mutate()}
 										>
 											{reupload.isPending ? (
-												<IconLucideLoaderCircle class="animate-spin" />
+												<div class="relative size-6">
+													<ProgressCircle progress={progress()} />
+												</div>
 											) : (
 												<IconLucideRotateCcw class="size-4" />
 											)}
@@ -305,6 +310,43 @@ function RecordingItem(props: {
 		</li>
 	);
 }
+
+const ProgressCircle = (props: { progress: number }) => {
+	return (
+		<div class="relative scale-100 size-full">
+			<svg class="transform -rotate-90 size-full" viewBox="0 0 100 100">
+				<title>Progress Circle</title>
+				<circle
+					cx="50"
+					cy="50"
+					r="45"
+					fill="none"
+					stroke="rgba(255, 255, 255, 0.2)"
+					stroke-width="5"
+				/>
+				<circle
+					cx="50"
+					cy="50"
+					r="45"
+					fill="none"
+					stroke="#3b82f6"
+					stroke-width="5"
+					stroke-linecap="round"
+					stroke-dasharray={`${2 * Math.PI * 45}`}
+					stroke-dashoffset={`${2 * Math.PI * 45 * (1 - props.progress / 100)}`}
+					class="transition-all duration-300 ease-out"
+				/>
+			</svg>
+
+			{/*<div class="flex absolute inset-0 flex-col justify-center items-center p-1">
+				<p class="text-xs font-semibold tabular-nums text-white">
+					{Math.round(displayProgress())}%
+				</p>
+				<p class="mt-0.5 text-[9px] text-white/80">Uploading...</p>
+			</div>*/}
+		</div>
+	);
+};
 
 function TooltipIconButton(
 	props: ParentProps<{
