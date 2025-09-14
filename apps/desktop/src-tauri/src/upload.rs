@@ -13,12 +13,11 @@ use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
-use tauri::AppHandle;
-use tauri::ipc::Channel;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::{self, JoinHandle};
@@ -185,15 +184,13 @@ impl UploadProgressUpdater {
     }
 
     async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
-        let updated_at = chrono::Utc::now().to_rfc3339();
-
         let response = app
             .authed_api_request("/api/desktop/video/progress", |client, url| {
                 client.post(url).json(&json!({
                     "videoId": video_id,
                     "uploaded": uploaded,
                     "total": total,
-                    "updatedAt": updated_at
+                    "updatedAt": chrono::Utc::now().to_rfc3339()
                 }))
             })
             .await;
@@ -206,12 +203,6 @@ impl UploadProgressUpdater {
             Err(err) => error!("Failed to send progress update: {err}"),
         }
     }
-}
-
-// Helper function to send progress updates to the backend API
-fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
-    let mut updater = UploadProgressUpdater::new(app.clone(), video_id);
-    updater.update(uploaded, total);
 }
 
 pub async fn upload_video(
@@ -255,29 +246,24 @@ pub async fn upload_video(
 
     let reader_stream = tokio_util::io::ReaderStream::new(file);
 
-    let bytes_uploaded = Arc::new(AtomicU64::new(0));
+    let mut bytes_uploaded = 0u64;
+    let mut progress = UploadProgressUpdater::new(app.clone(), video_id);
 
-    let progress_stream = reader_stream.inspect({
-        let app = app.clone();
-        let video_id = video_id.clone();
-        let bytes_uploaded = bytes_uploaded.clone();
-        move |chunk| {
-            if let Ok(chunk) = chunk {
-                bytes_uploaded.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+    let progress_stream = reader_stream.inspect(move |chunk| {
+        if let Ok(chunk) = chunk {
+            bytes_uploaded += chunk.len() as u64;
+        }
+
+        if bytes_uploaded > 0 {
+            if let Some(channel) = &channel {
+                channel
+                    .send(UploadProgress {
+                        progress: bytes_uploaded as f64 / total_size as f64,
+                    })
+                    .ok();
             }
 
-            let current_uploaded = bytes_uploaded.load(Ordering::SeqCst);
-            if current_uploaded > 0 {
-                if let Some(channel) = &channel {
-                    channel
-                        .send(UploadProgress {
-                            progress: current_uploaded as f64 / total_size as f64,
-                        })
-                        .ok();
-                }
-
-                send_progress_update(&app, video_id.clone(), current_uploaded, total_size);
-            }
+            progress.update(bytes_uploaded, total_size);
         }
     });
 
@@ -309,7 +295,7 @@ pub async fn upload_video(
     if response.status().is_success() {
         println!("Video uploaded successfully");
 
-        send_progress_update(app, video_id.clone(), total_size, total_size);
+        // progress.update(total_size, total_size); // TODO: Is this required?
 
         if let Some(Ok(screenshot_response)) = screenshot_result {
             if screenshot_response.status().is_success() {
@@ -680,6 +666,7 @@ impl InstantMultipartUpload {
         let mut uploaded_parts = Vec::new();
         let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
+        let mut progress = UploadProgressUpdater::new(app.clone(), video_id.clone());
 
         println!("Starting multipart upload for {video_id}...");
 
@@ -790,6 +777,7 @@ impl InstantMultipartUpload {
                     &mut part_number,
                     &mut last_uploaded_position,
                     new_data_size.min(CHUNK_SIZE),
+                    &mut progress,
                 )
                 .await
                 {
@@ -816,6 +804,7 @@ impl InstantMultipartUpload {
                         &mut 1,
                         &mut 0,
                         uploaded_parts[0].size as u64,
+                        &mut progress,
                     )
                     .await
                     .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
@@ -862,6 +851,7 @@ impl InstantMultipartUpload {
         part_number: &mut i32,
         last_uploaded_position: &mut u64,
         chunk_size: u64,
+        progress: &mut UploadProgressUpdater,
     ) -> Result<UploadedPart, String> {
         let file_size = match tokio::fs::metadata(file_path).await {
             Ok(metadata) => metadata.len(),
@@ -974,7 +964,7 @@ impl InstantMultipartUpload {
             }
         };
 
-        send_progress_update(app, video_id.into(), expected_pos, file_size);
+        progress.update(expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
