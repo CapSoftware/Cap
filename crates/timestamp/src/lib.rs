@@ -79,7 +79,7 @@ impl std::ops::Sub<Duration> for Timestamp {
 
     fn sub(self, rhs: Duration) -> Self::Output {
         match self {
-            Timestamp::Instant(i) => Timestamp::Instant(i - rhs),
+            Timestamp::Instant(i) => Timestamp::Instant(i.checked_sub(rhs).unwrap()),
             Timestamp::SystemTime(t) => Timestamp::SystemTime(t - rhs),
             #[cfg(windows)]
             Timestamp::PerformanceCounter(c) => Timestamp::PerformanceCounter(c - rhs),
