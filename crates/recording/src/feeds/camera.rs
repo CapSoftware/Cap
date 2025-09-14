@@ -331,7 +331,7 @@ impl Message<SetInput> for CameraFeed {
         });
 
         let id = msg.id.clone();
-        let actor_ref = ctx.actor_ref();
+        let actor_ref = ctx.actor_ref().clone();
         let new_frame_recipient = actor_ref.clone().recipient();
 
         let rt = Runtime::new().expect("Failed to get Tokio runtime!");
@@ -500,7 +500,7 @@ impl Message<Lock> for CameraFeed {
 
         let (drop_tx, drop_rx) = oneshot::channel();
 
-        let actor_ref = ctx.actor_ref();
+        let actor_ref = ctx.actor_ref().clone();
         tokio::spawn(async move {
             let _ = drop_rx.await;
             let _ = actor_ref.tell(Unlock).await;
@@ -509,7 +509,7 @@ impl Message<Lock> for CameraFeed {
         Ok(CameraFeedLock {
             camera_info,
             video_info,
-            actor: ctx.actor_ref(),
+            actor: ctx.actor_ref().clone(),
             drop_tx: Some(drop_tx),
         })
     }

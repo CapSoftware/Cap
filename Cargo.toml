@@ -18,7 +18,7 @@ tokio = { version = "1.47.1", features = [
     "time",
 ] }
 tauri = { version = "2.8.5", features = ["specta"] }
-specta = { version = "=2.0.0-rc.20", features = [
+specta = { version = "=2.0.0-rc.22", features = [
     "derive",
     "serde_json",
     "uuid",
@@ -81,3 +81,6 @@ debug = true
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "04a34016384963bf26353fad472b5d2c5ecdc359" }
+# `main` - For wgpu 26
+# https://github.com/brendanzab/codespan/issues/389#issuecomment-3157285757
+glyphon = { git = "https://github.com/grovesNL/glyphon.git", rev = "724ab57edbd6c59ba219cd99cf89925d056392db" }

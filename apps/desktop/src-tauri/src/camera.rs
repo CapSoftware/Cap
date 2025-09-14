@@ -181,7 +181,7 @@ impl InitializedCameraPreview {
                     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
                         backend_options: wgpu::BackendOptions {
                             dx12: wgpu::Dx12BackendOptions {
-                                presentation_system: wgpu::Dx12SwapchainKind::DxgiFromVisual,
+                                // presentation_system: wgpu::Dx12SwapchainKind::DxgiFromVisual, // TODO
                                 ..Default::default()
                             },
                             ..Default::default()

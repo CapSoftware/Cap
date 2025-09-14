@@ -6,11 +6,11 @@ use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::
 use core_graphics::{
     display::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
-        CGRect, kCGWindowListOptionIncludingWindow,
+        CGRect,
     },
     window::{
-        CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowName, kCGWindowNumber,
-        kCGWindowOwnerName,
+        CGWindowID, kCGWindowBounds, kCGWindowLayer, kCGWindowListOptionIncludingWindow,
+        kCGWindowName, kCGWindowNumber, kCGWindowOwnerName,
     },
 };
 

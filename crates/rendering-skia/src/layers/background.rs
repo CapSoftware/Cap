@@ -243,7 +243,7 @@ impl RecordableLayer for BackgroundLayer {
         bounds: Rect,
         uniforms: &SkiaProjectUniforms,
     ) -> Option<Picture> {
-        let canvas = recorder.begin_recording(bounds, None);
+        let canvas = recorder.begin_recording(bounds, None, false); // TODO: Should we enable bbh: https://chatgpt.com/share/68c69489-3508-8009-8e35-57e9d492b7c9
         self.render_background(canvas, bounds);
 
         // Render border if enabled

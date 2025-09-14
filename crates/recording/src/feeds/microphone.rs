@@ -254,7 +254,7 @@ impl Message<SetInput> for MicrophoneFeed {
         let (ready_tx, ready_rx) = oneshot::channel();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        let actor_ref = ctx.actor_ref();
+        let actor_ref = ctx.actor_ref().clone();
         let ready = {
             let config = config.clone();
             ready_rx
@@ -336,7 +336,7 @@ impl Message<SetInput> for MicrophoneFeed {
 
         tokio::spawn({
             let ready = ready.clone();
-            let actor = ctx.actor_ref();
+            let actor = ctx.actor_ref().clone();
             async move {
                 match ready.await {
                     Ok(config) => {
@@ -446,7 +446,7 @@ impl Message<Lock> for MicrophoneFeed {
 
         let (drop_tx, drop_rx) = oneshot::channel();
 
-        let actor_ref = ctx.actor_ref();
+        let actor_ref = ctx.actor_ref().clone();
         tokio::spawn(async move {
             let _ = drop_rx.await;
             let _ = actor_ref.tell(Unlock).await;
@@ -454,7 +454,7 @@ impl Message<Lock> for MicrophoneFeed {
 
         Ok(MicrophoneFeedLock {
             audio_info: AudioInfo::from_stream_config(&config),
-            actor: ctx.actor_ref(),
+            actor: ctx.actor_ref().clone(),
             config,
             drop_tx: Some(drop_tx),
         })
