@@ -16,6 +16,7 @@ use serde_json::json;
 use specta::Type;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
@@ -115,8 +116,9 @@ pub struct UploadedImage {
 // }
 
 pub struct UploadProgressUpdater {
-    video_states: Arc<Mutex<HashMap<String, VideoProgressState>>>,
+    video_state: Option<VideoProgressState>,
     app: AppHandle,
+    video_id: String,
 }
 
 struct VideoProgressState {
@@ -137,43 +139,26 @@ impl VideoProgressState {
     }
 }
 
-// Global registry to manage progress updaters per AppHandle
-static PROGRESS_UPDATERS: OnceLock<Mutex<HashMap<String, Arc<UploadProgressUpdater>>>> =
-    OnceLock::new();
+// No global registry needed anymore
 
 impl UploadProgressUpdater {
-    pub fn new(app: AppHandle) -> Self {
+    pub fn new(app: AppHandle, video_id: String) -> Self {
         Self {
-            video_states: Arc::new(Mutex::new(HashMap::new())),
+            video_state: None,
             app,
+            video_id,
         }
     }
 
-    fn get_or_create_for_app(app: &AppHandle) -> Arc<UploadProgressUpdater> {
-        let registry = PROGRESS_UPDATERS.get_or_init(|| Mutex::new(HashMap::new()));
-        let mut updaters = registry.lock().unwrap();
-
-        // Use app handle pointer as unique key
-        let app_key = format!("{:p}", app as *const _);
-
-        updaters
-            .entry(app_key)
-            .or_insert_with(|| Arc::new(UploadProgressUpdater::new(app.clone())))
-            .clone()
-    }
-
-    pub fn update(&self, video_id: String, uploaded: u64, total: u64) {
-        let states_clone = Arc::clone(&self.video_states);
+    pub fn update(&mut self, uploaded: u64, total: u64) {
         let app_clone = self.app.clone();
-        let video_id_clone = video_id.clone();
+        let video_id_clone = self.video_id.clone();
 
         let should_send_immediately = {
-            let mut states = states_clone.lock().unwrap();
-
-            // Get or create state for this video
-            let state = states
-                .entry(video_id.clone())
-                .or_insert_with(|| VideoProgressState::new(uploaded, total));
+            // Get or create state
+            let state = self
+                .video_state
+                .get_or_insert_with(|| VideoProgressState::new(uploaded, total));
 
             // Cancel any pending task
             if let Some(handle) = state.pending_task.take() {
@@ -191,42 +176,25 @@ impl UploadProgressUpdater {
 
         if should_send_immediately {
             // Send completion update immediately
-            let states_for_cleanup = Arc::clone(&states_clone);
             tokio::spawn(async move {
-                Self::send_api_update(&app_clone, video_id_clone.clone(), uploaded, total).await;
-
-                // Clean up completed video from state
-                {
-                    let mut states = states_for_cleanup.lock().unwrap();
-                    states.remove(&video_id_clone);
-                }
+                Self::send_api_update(&app_clone, video_id_clone, uploaded, total).await;
             });
+
+            // Clear state since upload is complete
+            self.video_state = None;
         } else {
             // Schedule delayed update
-            let states_for_delayed = Arc::clone(&states_clone);
-            let handle = tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-
-                // Get latest values for this video
-                let (current_uploaded, current_total) = {
-                    let states = states_for_delayed.lock().unwrap();
-                    if let Some(state) = states.get(&video_id_clone) {
-                        (state.uploaded, state.total)
-                    } else {
-                        return; // Video was removed/completed
-                    }
-                };
-
-                Self::send_api_update(&app_clone, video_id_clone, current_uploaded, current_total)
-                    .await;
-            });
+            let handle = {
+                let video_id = video_id_clone.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    Self::send_api_update(&app_clone, video_id, uploaded, total).await;
+                })
+            };
 
             // Store the task handle
-            {
-                let mut states = states_clone.lock().unwrap();
-                if let Some(state) = states.get_mut(&video_id) {
-                    state.pending_task = Some(handle);
-                }
+            if let Some(state) = &mut self.video_state {
+                state.pending_task = Some(handle);
             }
         }
     }
@@ -262,8 +230,8 @@ impl UploadProgressUpdater {
 
 // Helper function to send progress updates to the backend API
 fn send_progress_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
-    let updater = UploadProgressUpdater::get_or_create_for_app(app);
-    updater.update(video_id, uploaded, total);
+    let mut updater = UploadProgressUpdater::new(app.clone(), video_id);
+    updater.update(uploaded, total);
 }
 
 pub async fn upload_video(
@@ -307,25 +275,28 @@ pub async fn upload_video(
 
     let reader_stream = tokio_util::io::ReaderStream::new(file);
 
-    let mut bytes_uploaded = 0;
+    let bytes_uploaded = Arc::new(AtomicU64::new(0));
+
     let progress_stream = reader_stream.inspect({
         let app = app.clone();
         let video_id = video_id.clone();
+        let bytes_uploaded = bytes_uploaded.clone();
         move |chunk| {
             if let Ok(chunk) = chunk {
-                bytes_uploaded += chunk.len();
+                bytes_uploaded.fetch_add(chunk.len() as u64, Ordering::SeqCst);
             }
 
-            if bytes_uploaded > 0 {
+            let current_uploaded = bytes_uploaded.load(Ordering::SeqCst);
+            if current_uploaded > 0 {
                 if let Some(channel) = &channel {
                     channel
                         .send(UploadProgress {
-                            progress: bytes_uploaded as f64 / total_size as f64,
+                            progress: current_uploaded as f64 / total_size as f64,
                         })
                         .ok();
                 }
 
-                send_progress_update(&app, video_id.clone(), bytes_uploaded as u64, total_size);
+                send_progress_update(&app, video_id.clone(), current_uploaded, total_size);
             }
         }
     });
