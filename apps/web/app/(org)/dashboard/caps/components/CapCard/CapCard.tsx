@@ -458,7 +458,7 @@ export const CapCard = ({
 						/>
 					</Link>
 					{uploadProgress && (
-						<div className="absolute inset-0 flex items-center justify-center">
+						<div className="absolute inset-0 flex items-center justify-center z-50">
 							{uploadProgress.status === "failed" ? (
 								<div className="flex flex-col items-center">
 									<div className="flex items-center justify-center mb-2 w-8 h-8 bg-red-500 rounded-full">
