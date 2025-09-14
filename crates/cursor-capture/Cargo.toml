@@ -12,4 +12,4 @@ scap-targets = { path = "../scap-targets" }
 device_query = "4.0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24.0"
+core-graphics = "0.25.0"

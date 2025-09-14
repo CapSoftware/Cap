@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 thiserror.workspace = true
-inquire = "0.7.5"
+inquire = "0.8.0"
 
 [target.'cfg(windows)'.dependencies]
 cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
@@ -20,4 +20,4 @@ windows-core = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-inquire = "0.7.5"
+inquire = "0.8.0"

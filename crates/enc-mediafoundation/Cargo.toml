@@ -43,12 +43,12 @@ windows = { workspace = true, features = [
 	"Security_Authorization_AppCapabilityAccess",
 ] }
 windows-core.workspace = true
-windows-numerics = "0.2.0"
+windows-numerics = "0.3.0"
 scap-direct3d = { path = "../scap-direct3d" }
 
 [dev-dependencies]
 scap-targets = { path = "../scap-targets" }
-clap = { version = "4.5.46", features = ["derive"] }
+clap = { version = "4.5.47", features = ["derive"] }
 
 [lints]
 workspace = true

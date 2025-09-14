@@ -13,15 +13,15 @@ tracing.workspace = true
 futures = { workspace = true }
 
 # Skia dependencies
-skia-safe = "0.86.1"
+skia-safe = "0.88.0"
 tracing-subscriber = "0.3"
 
 # Project dependencies
 cap-project = { path = "../project" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-skia-safe = { version = "0.86.1", features = ["metal"] }
-metal = "0.27"
+skia-safe = { version = "0.88.0", features = ["metal"] }
+metal = "0.32"
 foreign-types-shared = "0.3"
 
 [[bin]]

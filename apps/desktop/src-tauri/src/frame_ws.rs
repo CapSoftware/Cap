@@ -50,7 +50,7 @@ pub async fn create_frame_ws(frame_rx: Receiver<WSFrame>) -> (u16, CancellationT
                             frame.data.extend_from_slice(&frame.height.to_le_bytes());
                             frame.data.extend_from_slice(&frame.width.to_le_bytes());
 
-                            if let Err(e) = socket.send(Message::Binary(frame.data)).await {
+                            if let Err(e) = socket.send(Message::Binary(frame.data.into())).await {
                                 tracing::error!("Failed to send frame to socket: {:?}", e);
                                 break;
                             }
