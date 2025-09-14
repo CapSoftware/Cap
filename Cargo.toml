@@ -31,7 +31,7 @@ nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", 
     "serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
-wgpu = "25.0.0"
+wgpu = "26.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
 sentry = { version = "0.34.0", features = [
@@ -80,4 +80,4 @@ debug = true
 # screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
-# wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }
+wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "04a34016384963bf26353fad472b5d2c5ecdc359" }

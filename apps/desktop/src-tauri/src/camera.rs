@@ -178,7 +178,16 @@ impl InitializedCameraPreview {
             .run_on_main_thread({
                 let window = window.clone();
                 move || {
-                    let instance = wgpu::Instance::default();
+                    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+                        backend_options: wgpu::BackendOptions {
+                            dx12: wgpu::Dx12BackendOptions {
+                                presentation_system: wgpu::Dx12SwapchainKind::DxgiFromVisual,
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    });
                     let surface = instance.create_surface(window.clone());
                     tx.send((instance, surface)).ok();
                 }
