@@ -207,6 +207,7 @@ impl InitializedCameraPreview {
                     .using_resolution(adapter.limits()),
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
+                experimental_features: Default::default(),
             })
             .await
             .with_context(|| "Failed to create wgpu device")?;

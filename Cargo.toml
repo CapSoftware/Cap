@@ -80,7 +80,8 @@ debug = true
 # screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
-wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "04a34016384963bf26353fad472b5d2c5ecdc359" }
+# wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "04a34016384963bf26353fad472b5d2c5ecdc359" }
+wgpu = { git = "https://github.com/oscartbeaumont/wgpu", rev = "74ccb41f1948de8632507374b6c2440cf403c3c9" }
 # `main` - For wgpu 26
 # https://github.com/brendanzab/codespan/issues/389#issuecomment-3157285757
 glyphon = { git = "https://github.com/grovesNL/glyphon.git", rev = "724ab57edbd6c59ba219cd99cf89925d056392db" }
