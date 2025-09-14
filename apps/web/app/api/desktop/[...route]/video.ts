@@ -274,8 +274,6 @@ app.post(
 					{ status: 404 },
 				);
 
-			console.log("\n\n\n\nPROGRESS", videoId, total, uploaded, updatedAt);
-
 			const result = await db()
 				.update(videoUploads)
 				.set({
@@ -286,11 +284,9 @@ app.post(
 				.where(
 					and(
 						eq(videoUploads.videoId, videoId),
-						// lte(videoUploads.updatedAt, updatedAt), // TODO: bring this back
+						lte(videoUploads.updatedAt, updatedAt),
 					),
 				);
-
-			console.log("ATTEMPTED UPDATE", result); // TODO
 
 			if (result.rowsAffected === 0) {
 				const result2 = await db().insert(videoUploads).values({
@@ -299,8 +295,6 @@ app.post(
 					total,
 					updatedAt,
 				});
-
-				console.log("ATTEMPTED INSERT", result2); // TODO
 			}
 
 			if (uploaded === total)
