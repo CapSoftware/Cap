@@ -890,9 +890,7 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 
 	const ControlsPrimitive = asChild ? Slot : "div";
 
-	if (isUploadingOrFailed) {
-		return null;
-	}
+	if (isUploadingOrFailed) return null;
 
 	return (
 		<ControlsPrimitive
