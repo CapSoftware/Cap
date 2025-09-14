@@ -258,8 +258,6 @@ function RecordingItem(props: {
 							onSettled: () => setProgress(0),
 						}));
 
-						createEffect(() => console.log(progress()));
-
 						return (
 							<Show when={props.recording.meta.sharing}>
 								{(sharing) => (
@@ -337,13 +335,6 @@ const ProgressCircle = (props: { progress: number }) => {
 					class="transition-all duration-300 ease-out"
 				/>
 			</svg>
-
-			{/*<div class="flex absolute inset-0 flex-col justify-center items-center p-1">
-				<p class="text-xs font-semibold tabular-nums text-white">
-					{Math.round(displayProgress())}%
-				</p>
-				<p class="mt-0.5 text-[9px] text-white/80">Uploading...</p>
-			</div>*/}
 		</div>
 	);
 };
