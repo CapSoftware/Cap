@@ -20,7 +20,7 @@ cap-cursor-info = { path = "../cursor-info" }
 cap-camera = { path = "../camera", features = ["serde", "specta"] }
 cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
-cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
+cap-timestamp = { path = "../timestamp" }
 
 specta.workspace = true
 tokio.workspace = true
@@ -65,6 +65,7 @@ windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Performance",
 ] }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
@@ -72,4 +73,4 @@ scap-cpal = { path = "../scap-cpal" }
 
 [dev-dependencies]
 tempfile = "3.20.0"
-tracing-subscriber = { version = "0.3.19", default-features = false }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
