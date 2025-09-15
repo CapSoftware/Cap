@@ -84,7 +84,7 @@ export default function DashboardInner({
 			{/* NavBar */}
 			<div
 				className={clsx(
-					"flex fixed z-40 justify-between items-center py-4 pr-2 pl-5 w-full md:relative mt-[64px] md:mt-0 md:py-[19px] lg:pl-0 lg:pr-10",
+					"flex fixed z-40 justify-between items-center py-3 pr-2 pl-5 w-full md:relative mt-[60px] md:mt-0 md:py-[19px] lg:pl-0 lg:pr-5",
 					"top-0 bg-gray-1 md:mt-0",
 				)}
 			>
@@ -174,7 +174,7 @@ export default function DashboardInner({
 			{/*End of NavBar*/}
 			<main
 				className={
-					"flex overscroll-contain flex-col flex-1 flex-grow p-5 pb-8 h-full border border-b-0 pt-[28px] mb-[60px] mt-[138px] md:mb-0 md:mt-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex overscroll-contain flex-col flex-1 flex-grow p-5 pb-8 h-full border border-b-0 pt-[28px] mb-[60px] mt-[126px] md:mb-0 md:mt-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
 				<div className="flex flex-col flex-1 flex-grow gap-4 min-h-fit">
