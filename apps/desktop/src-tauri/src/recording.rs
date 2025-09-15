@@ -5,10 +5,11 @@ use cap_project::{
     ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::{
-    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
+    RecordingError, RecordingMode,
     feeds::{camera, microphone},
-    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
+    instant_recording,
     sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+    studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
@@ -40,7 +41,7 @@ use crate::{
 pub enum InProgressRecording {
     Instant {
         target_name: String,
-        handle: InstantRecordingHandle,
+        handle: instant_recording::ActorHandle,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
@@ -48,7 +49,7 @@ pub enum InProgressRecording {
     },
     Studio {
         target_name: String,
-        handle: StudioRecordingHandle,
+        handle: studio_recording::ActorHandle,
         inputs: StartRecordingInputs,
         recording_dir: PathBuf,
     },
@@ -132,25 +133,18 @@ impl InProgressRecording {
 
 pub enum CompletedRecording {
     Instant {
-        recording: CompletedInstantRecording,
+        recording: instant_recording::CompletedRecording,
         target_name: String,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: CompletedStudioRecording,
+        recording: studio_recording::CompletedStudioRecording,
         target_name: String,
     },
 }
 
 impl CompletedRecording {
-    pub fn id(&self) -> &String {
-        match self {
-            Self::Instant { recording, .. } => &recording.id,
-            Self::Studio { recording, .. } => &recording.id,
-        }
-    }
-
     pub fn project_path(&self) -> &PathBuf {
         match self {
             Self::Instant { recording, .. } => &recording.project_path,
@@ -381,25 +375,28 @@ pub async fn start_recording(
                     Err(e) => return Err(e.to_string()),
                 };
 
-                let base_inputs = cap_recording::RecordingBaseInputs {
-                    capture_target: inputs.capture_target.clone(),
-                    capture_system_audio: inputs.capture_system_audio,
-                    mic_feed,
-                    camera_feed,
-                };
-
                 let (actor, actor_done_rx) = match inputs.mode {
                     RecordingMode::Studio => {
-                        let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
-                            id.clone(),
+                        let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
-                            base_inputs,
+                            inputs.capture_target.clone(),
+                        )
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_custom_cursor(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        )
-                        .await
-                        .map_err(|e| {
+                        );
+
+                        if let Some(camera_feed) = camera_feed {
+                            builder = builder.with_camera_feed(camera_feed);
+                        }
+
+                        if let Some(mic_feed) = mic_feed {
+                            builder = builder.with_mic_feed(mic_feed);
+                        }
+
+                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
                             error!("Failed to spawn studio recording actor: {e}");
                             e.to_string()
                         })?;
@@ -419,17 +416,20 @@ pub async fn start_recording(
                             return Err("Video upload info not found".to_string());
                         };
 
-                        let (handle, actor_done_rx) =
-                            cap_recording::instant_recording::spawn_instant_recording_actor(
-                                id.clone(),
-                                recording_dir.clone(),
-                                base_inputs,
-                            )
-                            .await
-                            .map_err(|e| {
-                                error!("Failed to spawn studio recording actor: {e}");
-                                e.to_string()
-                            })?;
+                        let mut builder = instant_recording::Actor::builder(
+                            recording_dir.clone(),
+                            inputs.capture_target.clone(),
+                        )
+                        .with_system_audio(inputs.capture_system_audio);
+
+                        if let Some(mic_feed) = mic_feed {
+                            builder = builder.with_mic_feed(mic_feed);
+                        }
+
+                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
+                            error!("Failed to spawn studio recording actor: {e}");
+                            e.to_string()
+                        })?;
 
                         (
                             InProgressRecording::Instant {
@@ -945,7 +945,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &CompletedStudioRecording,
+    recording: &studio_recording::CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -992,7 +992,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &CompletedStudioRecording,
+    completed_recording: &studio_recording::CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
