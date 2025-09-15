@@ -2323,7 +2323,8 @@ function ClipSegmentConfig(props: {
 		useEditorContext();
 
 	// Get current clip configuration
-	const clipConfig = () => project.clips?.[props.segmentIndex];
+	const clipConfig = () =>
+		project.clips?.find((c) => c.index === props.segmentIndex);
 	const offsets = () => clipConfig()?.offsets || {};
 
 	function setOffset(type: keyof ClipOffsets, offset: number) {
