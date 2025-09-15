@@ -79,11 +79,11 @@ export default async function DashboardLayout({
 				anyNewNotifications={anyNewNotifications}
 				userPreferences={userPreferences}
 			>
-				<div className="grid grid-cols-[auto,1fr] overflow-y-auto bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
+				<div className="grid grid-cols-[auto,1fr] bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
 					<aside className="z-10 col-span-1 row-span-2">
 						<DesktopNav />
 					</aside>
-					<div className="flex col-span-1 row-span-2 h-full custom-scroll focus:outline-none">
+					<div className="flex col-span-1 row-span-2 h-full focus:outline-none">
 						<MobileNav />
 						<DashboardInner>{children}</DashboardInner>
 					</div>
