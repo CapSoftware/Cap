@@ -174,7 +174,7 @@ export default function DashboardInner({
 			{/*End of NavBar*/}
 			<main
 				className={
-					"flex flex-col flex-1 flex-grow p-5 pb-5 mt-[138px] h-full border border-b-0 md:mt-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex overscroll-contain flex-col flex-1 flex-grow p-5 pb-8 h-full border border-b-0 pt-[28px] mb-[60px] mt-[138px] md:mb-0 md:mt-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
 				<div className="flex flex-col flex-1 flex-grow gap-4 min-h-fit">
