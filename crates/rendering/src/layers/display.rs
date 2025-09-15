@@ -39,41 +39,44 @@ impl DisplayLayer {
         frame_size: XY<u32>,
         uniforms: CompositeVideoFrameUniforms,
     ) {
-        if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
-        {
-            self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
-                device,
-                frame_size.x,
-                frame_size.y,
-            );
-            self.frame_texture_view = self.frame_texture.create_view(&Default::default());
+        self.frame_texture = segment_frames.screen_frame.clone();
+        self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
-            self.bind_group = Some(self.pipeline.bind_group(
-                device,
-                &self.uniforms_buffer,
-                &self.frame_texture_view,
-            ));
-        }
+        // if self.frame_texture.width() != frame_size.x || self.frame_texture.height() != frame_size.y
+        // {
+        //     self.frame_texture = CompositeVideoFramePipeline::create_frame_texture(
+        //         device,
+        //         frame_size.x,
+        //         frame_size.y,
+        //     );
+        //     self.frame_texture_view = self.frame_texture.create_view(&Default::default());
 
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.frame_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &segment_frames.screen_frame,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(frame_size.x * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: frame_size.x,
-                height: frame_size.y,
-                depth_or_array_layers: 1,
-            },
-        );
+        //     self.bind_group = Some(self.pipeline.bind_group(
+        //         device,
+        //         &self.uniforms_buffer,
+        //         &self.frame_texture_view,
+        //     ));
+        // }
+
+        // queue.write_texture(
+        //     wgpu::TexelCopyTextureInfo {
+        //         texture: &self.frame_texture,
+        //         mip_level: 0,
+        //         origin: wgpu::Origin3d::ZERO,
+        //         aspect: wgpu::TextureAspect::All,
+        //     },
+        //     &segment_frames.screen_frame,
+        //     wgpu::TexelCopyBufferLayout {
+        //         offset: 0,
+        //         bytes_per_row: Some(frame_size.x * 4),
+        //         rows_per_image: None,
+        //     },
+        //     wgpu::Extent3d {
+        //         width: frame_size.x,
+        //         height: frame_size.y,
+        //         depth_or_array_layers: 1,
+        //     },
+        // );
 
         // Update existing uniform buffer in place; bind group remains valid.
         uniforms.write_to_buffer(queue, &self.uniforms_buffer);

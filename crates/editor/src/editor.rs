@@ -98,7 +98,7 @@ impl Renderer {
                         }
 
                         let frame = frame_renderer
-                            .render(segment_frames, uniforms, &cursor, &mut layers)
+                            .render(segment_frames, uniforms, &mut layers)
                             .await
                             .unwrap();
 

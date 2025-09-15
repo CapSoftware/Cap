@@ -1,7 +1,8 @@
-use std::{fmt::Display, path::PathBuf};
+use std::{fmt::Display, path::PathBuf, time::Instant};
 
 use cap_export::{ExporterBase, gif::GifExportSettings, mp4::Mp4ExportSettings};
 use clap::{Parser, ValueEnum};
+use specta::NamedType;
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -44,30 +45,36 @@ async fn main() {
         .unwrap()
     });
 
-    let settings_str = cli
-        .settings
-        .unwrap_or_else(|| inquire::Text::new("Export settings JSON").prompt().unwrap());
+    let settings_str = cli.settings;
 
     match format {
         ExportFormat::GIF => {
-            let settings: GifExportSettings = serde_json::from_str(&settings_str).unwrap();
+            let settings: GifExportSettings = settings_str
+                .map(|v| serde_json::from_str(&v).unwrap())
+                .unwrap_or(GifExportSettings::default());
             let total_frames = base.total_frames(settings.fps);
+            let start = Instant::now();
             settings
                 .export(base, move |progress| {
                     print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();
+            println!("Exported in {:?}", start.elapsed());
         }
         ExportFormat::MP4 => {
-            let settings: Mp4ExportSettings = serde_json::from_str(&settings_str).unwrap();
+            let settings: Mp4ExportSettings = settings_str
+                .map(|v| serde_json::from_str(&v).unwrap())
+                .unwrap_or(Mp4ExportSettings::default());
             let total_frames = base.total_frames(settings.fps);
+            let start = Instant::now();
             settings
                 .export(base, move |progress| {
                     print!("Exporting frame {progress} of {total_frames}\r");
                 })
                 .await
                 .unwrap();
+            println!("Exported in {:?}", start.elapsed());
         }
     }
 }

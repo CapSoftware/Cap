@@ -12,7 +12,6 @@ use crate::{
 };
 
 const CURSOR_CLICK_DURATION: f64 = 0.25;
-const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
 const CLICK_SHRINK_SIZE: f32 = 0.7;
 
 /// The size to render the svg to.
@@ -185,9 +184,8 @@ impl CursorLayer {
 
     pub fn prepare(
         &mut self,
-        segment_frames: &DecodedSegmentFrames,
+
         resolution_base: XY<u32>,
-        cursor: &CursorEvents,
         zoom: &InterpolatedZoom,
         uniforms: &ProjectUniforms,
         constants: &RenderVideoConstants,
@@ -196,8 +194,6 @@ impl CursorLayer {
             self.bind_group = None;
             return;
         }
-
-        let time_s = segment_frames.recording_time;
 
         let Some(interpolated_cursor) = &uniforms.interpolated_cursor else {
             return;
@@ -289,10 +285,9 @@ impl CursorLayer {
                 uniforms.cursor_size / 100.0
             };
 
-            // 0 -> 1 indicating how much to shrink from click
-            let click_t = get_click_t(&cursor.clicks, (time_s as f64) * 1000.0);
             // lerp shrink size
-            let click_scale_factor = click_t * 1.0 + (1.0 - click_t) * CLICK_SHRINK_SIZE;
+            let click_scale_factor =
+                uniforms.click_t * 1.0 + (1.0 - uniforms.click_t) * CLICK_SHRINK_SIZE;
 
             let size = base_size_px * cursor_size_factor * click_scale_factor;
 
@@ -377,57 +372,6 @@ pub struct CursorUniforms {
     velocity: [f32; 2],
     motion_blur_amount: f32,
     _alignment: [f32; 3],
-}
-
-fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
-    fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
-        let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
-        t * t * (3.0 - 2.0 * t)
-    }
-
-    let mut prev_i = None;
-
-    for (i, clicks) in clicks.windows(2).enumerate() {
-        let left = &clicks[0];
-        let right = &clicks[1];
-
-        if left.time_ms <= time_ms && right.time_ms > time_ms {
-            prev_i = Some(i);
-            break;
-        }
-    }
-
-    let Some(prev_i) = prev_i else {
-        return 1.0;
-    };
-
-    let prev = &clicks[prev_i];
-
-    if prev.down {
-        return 0.0;
-    }
-
-    if !prev.down && time_ms - prev.time_ms <= CURSOR_CLICK_DURATION_MS {
-        return smoothstep(
-            0.0,
-            CURSOR_CLICK_DURATION_MS as f32,
-            (time_ms - prev.time_ms) as f32,
-        );
-    }
-
-    if let Some(next) = clicks.get(prev_i + 1)
-        && !prev.down
-        && next.down
-        && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS
-    {
-        return smoothstep(
-            0.0,
-            CURSOR_CLICK_DURATION_MS as f32,
-            (time_ms - next.time_ms).abs() as f32,
-        );
-    }
-
-    1.0
 }
 
 struct CursorTexture {

@@ -1,24 +1,28 @@
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::BTreeMap,
     path::PathBuf,
     rc::Rc,
     sync::{Arc, mpsc},
+    time::Instant,
 };
 
 use cidre::{
     arc::R,
     cv::{self, pixel_buffer::LockFlags},
+    mtl,
 };
 use ffmpeg::{Rational, format, frame};
+use metal::{MTLTextureType, foreign_types::ForeignTypeRef};
 use tokio::{runtime::Handle as TokioHandle, sync::oneshot};
+use wgpu::{InstanceFlags, TextureUsages, wgc::api::Metal};
 
 use super::{FRAME_CACHE_SIZE, VideoDecoderMessage, pts_to_frame};
 
 #[derive(Clone)]
 struct ProcessedFrame {
     number: u32,
-    data: Arc<Vec<u8>>,
+    data: wgpu::Texture,
 }
 
 #[derive(Clone)]
@@ -31,149 +35,213 @@ enum CachedFrame {
 }
 
 impl CachedFrame {
-    fn process(&mut self) -> ProcessedFrame {
+    fn process(&mut self, device: &wgpu::Device) -> ProcessedFrame {
         match self {
             CachedFrame::Raw { image_buf, number } => {
-                let format = cap_video_decode::avassetreader::pixel_format_to_pixel(
-                    image_buf.pixel_format(),
-                );
+                let now = Instant::now();
+                let texture = {
+                    let metal_device = mtl::Device::sys_default().unwrap();
 
-                let data = if matches!(format, format::Pixel::RGBA) {
-                    unsafe {
-                        image_buf
-                            .lock_base_addr(LockFlags::READ_ONLY)
-                            .result()
-                            .unwrap()
-                    };
+                    let texture_cache =
+                        cv::metal::TextureCache::create(None, &metal_device, None).unwrap();
 
-                    let bytes_per_row = image_buf.plane_bytes_per_row(0);
                     let width = image_buf.width();
                     let height = image_buf.height();
 
-                    let slice = unsafe {
-                        std::slice::from_raw_parts::<'static, _>(
-                            image_buf.plane_base_address(0),
-                            bytes_per_row * height,
+                    let texture = texture_cache
+                        .texture(
+                            image_buf,
+                            None,
+                            mtl::PixelFormat::Bgra8UNorm,
+                            width,
+                            height,
+                            0,
                         )
+                        .unwrap();
+
+                    let size = wgpu::Extent3d {
+                        width: width as u32,
+                        height: height as u32,
+                        depth_or_array_layers: 1,
                     };
-
-                    let mut bytes = Vec::with_capacity(width * height * 4);
-
-                    let row_length = width * 4;
-
-                    for i in 0..height {
-                        bytes.as_mut_slice()[i * row_length..((i + 1) * row_length)]
-                            .copy_from_slice(
-                                &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
-                            )
-                    }
-
-                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
-
-                    bytes
-                } else {
-                    let mut ffmpeg_frame = ffmpeg::frame::Video::new(
-                        format,
-                        image_buf.width() as u32,
-                        image_buf.height() as u32,
-                    );
+                    let format = wgpu::TextureFormat::Bgra8Unorm;
 
                     unsafe {
-                        image_buf
-                            .lock_base_addr(LockFlags::READ_ONLY)
-                            .result()
-                            .unwrap()
-                    };
+                        let texture =
+                            <Metal as wgpu::hal::Api>::Device::texture_from_raw(
+                                metal::TextureRef::from_ptr(
+                                    texture.as_type_ptr() as *const _ as *mut _
+                                )
+                                .to_owned(),
+                                format,
+                                MTLTextureType::D2,
+                                1,
+                                1,
+                                wgpu::hal::CopyExtent {
+                                    width: width as u32,
+                                    height: height as u32,
+                                    depth: 1,
+                                },
+                            );
 
-                    match ffmpeg_frame.format() {
-                        format::Pixel::NV12 => {
-                            for plane_i in 0..image_buf.plane_count() {
-                                let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                                let height = image_buf.plane_height(plane_i);
-
-                                let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                                let row_length = bytes_per_row.min(ffmpeg_stride);
-
-                                let slice = unsafe {
-                                    std::slice::from_raw_parts::<'static, _>(
-                                        image_buf.plane_base_address(plane_i),
-                                        bytes_per_row * height,
-                                    )
-                                };
-
-                                for i in 0..height {
-                                    ffmpeg_frame.data_mut(plane_i)
-                                        [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                        .copy_from_slice(
-                                            &slice[i * bytes_per_row
-                                                ..(i * bytes_per_row + row_length)],
-                                        )
-                                }
-                            }
-                        }
-                        format::Pixel::YUV420P => {
-                            for plane_i in 0..image_buf.plane_count() {
-                                let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
-                                let height = image_buf.plane_height(plane_i);
-
-                                let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
-                                let row_length = bytes_per_row.min(ffmpeg_stride);
-
-                                let slice = unsafe {
-                                    std::slice::from_raw_parts::<'static, _>(
-                                        image_buf.plane_base_address(plane_i),
-                                        bytes_per_row * height,
-                                    )
-                                };
-
-                                for i in 0..height {
-                                    ffmpeg_frame.data_mut(plane_i)
-                                        [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
-                                        .copy_from_slice(
-                                            &slice[i * bytes_per_row
-                                                ..(i * bytes_per_row + row_length)],
-                                        )
-                                }
-                            }
-                        }
-                        format => todo!("implement {:?}", format),
+                        device.create_texture_from_hal::<Metal>(
+                            texture,
+                            &wgpu::TextureDescriptor {
+                                label: None,
+                                size,
+                                mip_level_count: 1,
+                                sample_count: 1,
+                                dimension: wgpu::TextureDimension::D2,
+                                format,
+                                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                                    | wgpu::TextureUsages::COPY_DST,
+                                view_formats: &[],
+                            },
+                        )
                     }
-
-                    unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
-
-                    let mut converter = ffmpeg::software::converter(
-                        (ffmpeg_frame.width(), ffmpeg_frame.height()),
-                        ffmpeg_frame.format(),
-                        format::Pixel::RGBA,
-                    )
-                    .unwrap();
-
-                    let mut rgb_frame = frame::Video::empty();
-                    converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
-
-                    let slice = rgb_frame.data(0);
-                    let width = rgb_frame.width();
-                    let height = rgb_frame.height();
-                    let bytes_per_row = rgb_frame.stride(0);
-                    let row_length = width * 4;
-
-                    let mut bytes = vec![0; (width * height * 4) as usize];
-
-                    // TODO: allow for decoded frames to have stride, handle stride in shaders
-                    for i in 0..height as usize {
-                        bytes.as_mut_slice()[i * row_length as usize..(i + 1) * row_length as usize]
-                            .copy_from_slice(
-                                &slice
-                                    [(i * bytes_per_row)..i * bytes_per_row + row_length as usize],
-                            )
-                    }
-
-                    bytes
                 };
+
+                // let format = cap_video_decode::avassetreader::pixel_format_to_pixel(
+                //     image_buf.pixel_format(),
+                // );
+
+                // let data = if matches!(format, format::Pixel::RGBA) {
+                //     unsafe {
+                //         image_buf
+                //             .lock_base_addr(LockFlags::READ_ONLY)
+                //             .result()
+                //             .unwrap()
+                //     };
+
+                //     let bytes_per_row = image_buf.plane_bytes_per_row(0);
+                //     let width = image_buf.width();
+                //     let height = image_buf.height();
+
+                //     let slice = unsafe {
+                //         std::slice::from_raw_parts::<'static, _>(
+                //             image_buf.plane_base_address(0),
+                //             bytes_per_row * height,
+                //         )
+                //     };
+
+                //     let mut bytes = Vec::with_capacity(width * height * 4);
+
+                //     let row_length = width * 4;
+
+                //     for i in 0..height {
+                //         bytes.as_mut_slice()[i * row_length..((i + 1) * row_length)]
+                //             .copy_from_slice(
+                //                 &slice[i * bytes_per_row..(i * bytes_per_row + row_length)],
+                //             )
+                //     }
+
+                //     unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
+
+                //     bytes
+                // } else {
+                //     let mut ffmpeg_frame = ffmpeg::frame::Video::new(
+                //         format,
+                //         image_buf.width() as u32,
+                //         image_buf.height() as u32,
+                //     );
+
+                //     unsafe {
+                //         image_buf
+                //             .lock_base_addr(LockFlags::READ_ONLY)
+                //             .result()
+                //             .unwrap()
+                //     };
+
+                //     match ffmpeg_frame.format() {
+                //         format::Pixel::NV12 => {
+                //             for plane_i in 0..image_buf.plane_count() {
+                //                 let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                //                 let height = image_buf.plane_height(plane_i);
+
+                //                 let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                //                 let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                //                 let slice = unsafe {
+                //                     std::slice::from_raw_parts::<'static, _>(
+                //                         image_buf.plane_base_address(plane_i),
+                //                         bytes_per_row * height,
+                //                     )
+                //                 };
+
+                //                 for i in 0..height {
+                //                     ffmpeg_frame.data_mut(plane_i)
+                //                         [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                //                         .copy_from_slice(
+                //                             &slice[i * bytes_per_row
+                //                                 ..(i * bytes_per_row + row_length)],
+                //                         )
+                //                 }
+                //             }
+                //         }
+                //         format::Pixel::YUV420P => {
+                //             for plane_i in 0..image_buf.plane_count() {
+                //                 let bytes_per_row = image_buf.plane_bytes_per_row(plane_i);
+                //                 let height = image_buf.plane_height(plane_i);
+
+                //                 let ffmpeg_stride = ffmpeg_frame.stride(plane_i);
+                //                 let row_length = bytes_per_row.min(ffmpeg_stride);
+
+                //                 let slice = unsafe {
+                //                     std::slice::from_raw_parts::<'static, _>(
+                //                         image_buf.plane_base_address(plane_i),
+                //                         bytes_per_row * height,
+                //                     )
+                //                 };
+
+                //                 for i in 0..height {
+                //                     ffmpeg_frame.data_mut(plane_i)
+                //                         [i * ffmpeg_stride..(i * ffmpeg_stride + row_length)]
+                //                         .copy_from_slice(
+                //                             &slice[i * bytes_per_row
+                //                                 ..(i * bytes_per_row + row_length)],
+                //                         )
+                //                 }
+                //             }
+                //         }
+                //         format => todo!("implement {:?}", format),
+                //     }
+
+                //     unsafe { image_buf.unlock_lock_base_addr(LockFlags::READ_ONLY) };
+
+                //     let mut converter = ffmpeg::software::converter(
+                //         (ffmpeg_frame.width(), ffmpeg_frame.height()),
+                //         ffmpeg_frame.format(),
+                //         format::Pixel::RGBA,
+                //     )
+                //     .unwrap();
+
+                //     let mut rgb_frame = frame::Video::empty();
+                //     converter.run(&ffmpeg_frame, &mut rgb_frame).unwrap();
+
+                //     let slice = rgb_frame.data(0);
+                //     let width = rgb_frame.width();
+                //     let height = rgb_frame.height();
+                //     let bytes_per_row = rgb_frame.stride(0);
+                //     let row_length = width * 4;
+
+                //     let mut bytes = vec![0; (width * height * 4) as usize];
+
+                //     // TODO: allow for decoded frames to have stride, handle stride in shaders
+                //     for i in 0..height as usize {
+                //         bytes.as_mut_slice()[i * row_length as usize..(i + 1) * row_length as usize]
+                //             .copy_from_slice(
+                //                 &slice
+                //                     [(i * bytes_per_row)..i * bytes_per_row + row_length as usize],
+                //             )
+                //     }
+
+                //     bytes
+                // };
 
                 let data = ProcessedFrame {
                     number: *number,
-                    data: Arc::new(data),
+                    data: texture,
                 };
 
                 *self = Self::Processed(data.clone());
@@ -187,14 +255,12 @@ impl CachedFrame {
 
 pub struct AVAssetReaderDecoder {
     inner: cap_video_decode::AVAssetReaderDecoder,
-    is_done: bool,
 }
 
 impl AVAssetReaderDecoder {
     fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
         Ok(Self {
             inner: cap_video_decode::AVAssetReaderDecoder::new(path, tokio_handle)?,
-            is_done: false,
         })
     }
 
@@ -208,10 +274,11 @@ impl AVAssetReaderDecoder {
         fps: u32,
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
+        device: wgpu::Device,
     ) {
         let handle = tokio::runtime::Handle::current();
 
-        std::thread::spawn(move || Self::run(name, path, fps, rx, ready_tx, handle));
+        std::thread::spawn(move || Self::run(name, path, fps, rx, ready_tx, handle, &device));
     }
 
     fn run(
@@ -221,6 +288,7 @@ impl AVAssetReaderDecoder {
         rx: mpsc::Receiver<VideoDecoderMessage>,
         ready_tx: oneshot::Sender<Result<(), String>>,
         tokio_handle: tokio::runtime::Handle,
+        device: &wgpu::Device,
     ) {
         let mut this = match AVAssetReaderDecoder::new(path, tokio_handle) {
             Ok(v) => {
@@ -244,19 +312,26 @@ impl AVAssetReaderDecoder {
         while let Ok(r) = rx.recv() {
             match r {
                 VideoDecoderMessage::GetFrame(requested_time, sender) => {
+                    let start = Instant::now();
                     let requested_frame = (requested_time * fps as f32).floor() as u32;
 
+                    let mut exit = Rc::new(Cell::new(false));
+
                     let mut sender = if let Some(cached) = cache.get_mut(&requested_frame) {
-                        let data = cached.process();
+                        let data = cached.process(device);
 
                         sender.send(data.data.clone()).ok();
+                        dbg!(start.elapsed());
                         *last_sent_frame.borrow_mut() = Some(data);
                         continue;
                     } else {
                         let last_sent_frame = last_sent_frame.clone();
+                        let exit = exit.clone();
                         Some(move |data: ProcessedFrame| {
                             *last_sent_frame.borrow_mut() = Some(data.clone());
+                            exit.set(true);
                             let _ = sender.send(data.data);
+                            dbg!(start.elapsed());
                         })
                     };
 
@@ -280,9 +355,10 @@ impl AVAssetReaderDecoder {
 
                     last_active_frame = Some(requested_frame);
 
-                    let mut exit = false;
-
+                    let a = Instant::now();
+                    let mut i = 0;
                     for frame in &mut frames {
+                        i += 1;
                         let Ok(frame) = frame.map_err(|e| format!("read frame / {e}")) else {
                             continue;
                         };
@@ -302,25 +378,27 @@ impl AVAssetReaderDecoder {
                             number: current_frame,
                         };
 
-                        this.is_done = false;
-
+                        let frame_skip_start = Instant::now();
                         // Handles frame skips.
                         // We use the cache instead of last_sent_frame as newer non-matching frames could have been decoded.
                         if let Some(most_recent_prev_frame) =
-                            cache.iter_mut().rev().find(|v| *v.0 < requested_frame)
+                            cache.range_mut(..requested_frame).next_back()
+                            // .rev().find(|v| *v.0 < requested_frame)
                             && let Some(sender) = sender.take()
                         {
-                            (sender)(most_recent_prev_frame.1.process());
+                            (sender)(most_recent_prev_frame.1.process(device));
                         }
+                        dbg!(frame_skip_start.elapsed());
 
                         let exceeds_cache_bounds = current_frame > cache_max;
                         let too_small_for_cache_bounds = current_frame < cache_min;
 
+                        let cache_start = Instant::now();
                         if !too_small_for_cache_bounds {
                             if current_frame == requested_frame
                                 && let Some(sender) = sender.take()
                             {
-                                let data = cache_frame.process();
+                                let data = cache_frame.process(device);
                                 // info!("sending frame {requested_frame}");
 
                                 (sender)(data);
@@ -349,7 +427,9 @@ impl AVAssetReaderDecoder {
 
                             cache.insert(current_frame, cache_frame.clone());
                         }
+                        dbg!(cache_start.elapsed());
 
+                        let last_start = Instant::now();
                         if current_frame > requested_frame && sender.is_some() {
                             // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                             let last_sent_frame = last_sent_frame.borrow().clone();
@@ -368,18 +448,20 @@ impl AVAssetReaderDecoder {
                                 //     "sending forward frame {current_frame} for {requested_frame}",
                                 // );
 
-                                (sender)(cache_frame.process());
+                                (sender)(cache_frame.process(device));
                             }
                         }
+                        dbg!(last_start.elapsed());
 
-                        exit = exit || exceeds_cache_bounds;
+                        if exceeds_cache_bounds {
+                            exit.set(true);
+                        }
 
-                        if exit {
+                        if exit.get() {
                             break;
                         }
                     }
-
-                    this.is_done = true;
+                    dbg!(a.elapsed(), i);
 
                     // not inlining this is important so that last_sent_frame is dropped before the sender is invoked
                     let last_sent_frame = last_sent_frame.borrow().clone();

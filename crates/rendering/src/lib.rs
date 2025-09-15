@@ -1,15 +1,17 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorEvents,
-    ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorClickEvent,
+    CursorEvents, ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
 use core::f64;
 use cursor_interpolation::{InterpolatedCursorPosition, interpolate_cursor};
 use decoder::{AsyncVideoDecoderHandle, spawn_decoder};
 use frame_pipeline::finish_encoder;
-use futures::FutureExt;
 use futures::future::OptionFuture;
+use futures::lock::Mutex;
+use futures::stream::FuturesOrdered;
+use futures::{FutureExt, SinkExt, StreamExt};
 use layers::{
     Background, BackgroundLayer, BlurLayer, CameraLayer, CaptionsLayer, CursorLayer, DisplayLayer,
 };
@@ -65,6 +67,7 @@ impl RecordingSegmentDecoders {
         meta: &StudioRecordingMeta,
         segment: SegmentVideoPaths,
         segment_i: usize,
+        device: &wgpu::Device,
     ) -> Result<Self, String> {
         let latest_start_time = match &meta {
             StudioRecordingMeta::SingleSegment { .. } => None,
@@ -93,6 +96,7 @@ impl RecordingSegmentDecoders {
                         .unwrap_or(0.0)
                 }
             },
+            device.clone(),
         )
         .await
         .map_err(|e| format!("Screen:{e}"))?;
@@ -119,6 +123,7 @@ impl RecordingSegmentDecoders {
                             .unwrap_or(0.0)
                     }
                 },
+                device.clone(),
             )
             .then(|r| async { r.map_err(|e| format!("Camera:{e}")) })
         }))
@@ -137,14 +142,18 @@ impl RecordingSegmentDecoders {
         segment_time: f32,
         needs_camera: bool,
     ) -> Option<DecodedSegmentFrames> {
-        let (screen, camera) = tokio::join!(
-            self.screen.get_frame(segment_time),
-            OptionFuture::from(
-                needs_camera
-                    .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
-                    .flatten()
-            )
-        );
+        let start = Instant::now();
+        let screen = self.screen.get_frame(segment_time).await;
+        let camera = None;
+        // let (screen, camera) = tokio::join!(
+        //     self.screen.get_frame(segment_time),
+        //     OptionFuture::from(
+        //         false
+        //             .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
+        //             .flatten()
+        //     )
+        // );
+        dbg!(start.elapsed());
 
         Some(DecodedSegmentFrames {
             screen_frame: screen?,
@@ -180,8 +189,8 @@ pub struct RenderSegment {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn render_video_to_channel(
-    constants: &RenderVideoConstants,
-    project: &ProjectConfiguration,
+    constants: Arc<RenderVideoConstants>,
+    project: ProjectConfiguration,
     sender: mpsc::Sender<(RenderedFrame, u32)>,
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
@@ -194,59 +203,94 @@ pub async fn render_video_to_channel(
 
     let start_time = Instant::now();
 
-    let duration = get_duration(recordings, recording_meta, meta, project);
+    let duration = get_duration(recordings, recording_meta, meta, &project);
 
     let total_frames = (fps as f64 * duration).ceil() as u32;
 
     let mut frame_number = 0;
 
-    let mut frame_renderer = FrameRenderer::new(constants);
+    // let mut frame_renderer = FrameRenderer::new(constants);
 
-    let mut layers = RendererLayers::new(&constants.device, &constants.queue);
+    let (mut tx, mut rx) = futures::channel::mpsc::channel(1);
 
-    loop {
-        if frame_number >= total_frames {
-            break;
-        }
-
-        let Some((segment_time, segment_i)) =
-            project.get_segment_time(frame_number as f64 / fps as f64)
-        else {
-            break;
-        };
-
-        let segment = &segments[segment_i as usize];
-
-        let frame_number = {
-            let prev = frame_number;
-            std::mem::replace(&mut frame_number, prev + 1)
-        };
-
-        if let Some(segment_frames) = segment
-            .decoders
-            .get_frames(segment_time as f32, !project.camera.hide)
-            .await
-        {
-            let uniforms = ProjectUniforms::new(
-                constants,
-                project,
-                frame_number,
-                fps,
-                resolution_base,
-                &segment.cursor,
-                &segment_frames,
-            );
-
-            let frame = frame_renderer
-                .render(segment_frames, uniforms, &segment.cursor, &mut layers)
-                .await?;
-
-            if frame.width == 0 || frame.height == 0 {
-                continue;
+    let _constants = constants.clone();
+    tokio::spawn(async move {
+        loop {
+            if frame_number >= total_frames {
+                break;
             }
 
-            sender.send((frame, frame_number)).await?;
+            let Some((segment_time, segment_i)) =
+                project.get_segment_time(frame_number as f64 / fps as f64)
+            else {
+                break;
+            };
+
+            let segment = &segments[segment_i as usize];
+
+            let frame_number = {
+                let prev = frame_number;
+                std::mem::replace(&mut frame_number, prev + 1)
+            };
+
+            if let Some(segment_frames) = segment
+                .decoders
+                .get_frames(segment_time as f32, !project.camera.hide)
+                .await
+            {
+                let uniforms = ProjectUniforms::new(
+                    &_constants,
+                    &project,
+                    frame_number,
+                    fps,
+                    resolution_base,
+                    &segment.cursor,
+                    &segment_frames,
+                );
+
+                tx.send((uniforms, segment_frames, frame_number))
+                    .await
+                    .unwrap();
+            }
         }
+    });
+
+    let session_count = 4;
+
+    let (session_tx, mut session_rx) = mpsc::channel(session_count);
+
+    for _ in 0..session_count {
+        let session = RenderSession::new(&constants.device, 1920, 1080);
+        let layers = RendererLayers::new(&constants.device, &constants.queue);
+
+        session_tx.send((session, layers)).await.unwrap();
+    }
+
+    while let Some((uniforms, segment_frames, frame_number)) = rx.next().await {
+        let (mut session, mut layers) = session_rx.recv().await.unwrap();
+
+        let session_tx = session_tx.clone();
+        let sender = sender.clone();
+        let constants = constants.clone();
+        tokio::spawn(async move {
+            // session.update_texture_size(uniforms.output_size.0, uniforms.output_size.1);
+
+            // layers
+            //     .prepare(&constants, &uniforms, &segment_frames)
+            //     .await
+            //     .unwrap();
+
+            // let frame = produce_frame(&constants, uniforms, &mut layers, &mut session)
+            //     .await
+            //     .unwrap();
+
+            // if frame.width == 0 || frame.height == 0 {
+            //     return;
+            // }
+
+            session_tx.send((session, layers)).await.unwrap();
+            // sender.send((frame, frame_number)).await.unwrap();
+        });
     }
 
     let total_time = start_time.elapsed();
@@ -347,6 +391,8 @@ pub struct ProjectUniforms {
     pub zoom: InterpolatedZoom,
     pub scene: InterpolatedScene,
     pub resolution_base: XY<u32>,
+    // 0 -> 1 indicating how much to shrink from click
+    pub click_t: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -848,6 +894,11 @@ impl ProjectUniforms {
                 }
             });
 
+        let click_t = get_click_t(
+            &cursor_events.clicks,
+            (segment_frames.recording_time as f64) * 1000.0,
+        );
+
         Self {
             output_size,
             cursor_size: project.cursor.size as f32,
@@ -859,6 +910,7 @@ impl ProjectUniforms {
             zoom,
             scene,
             interpolated_cursor,
+            click_t,
         }
     }
 }
@@ -887,7 +939,6 @@ impl<'a> FrameRenderer<'a> {
         &mut self,
         segment_frames: DecodedSegmentFrames,
         uniforms: ProjectUniforms,
-        cursor: &CursorEvents,
         layers: &mut RendererLayers,
     ) -> Result<RenderedFrame, RenderingError> {
         let session = self.session.get_or_insert_with(|| {
@@ -898,21 +949,13 @@ impl<'a> FrameRenderer<'a> {
             )
         });
 
-        session.update_texture_size(
-            &self.constants.device,
-            uniforms.output_size.0,
-            uniforms.output_size.1,
-        );
+        session.update_texture_size(uniforms.output_size.0, uniforms.output_size.1);
 
-        produce_frame(
-            self.constants,
-            segment_frames,
-            uniforms,
-            cursor,
-            layers,
-            session,
-        )
-        .await
+        layers
+            .prepare(&self.constants, &uniforms, &segment_frames)
+            .await?;
+
+        produce_frame(self.constants, uniforms, layers, session).await
     }
 }
 
@@ -945,7 +988,6 @@ impl RendererLayers {
         constants: &RenderVideoConstants,
         uniforms: &ProjectUniforms,
         segment_frames: &DecodedSegmentFrames,
-        cursor: &CursorEvents,
     ) -> Result<(), RenderingError> {
         self.background
             .prepare(
@@ -968,9 +1010,7 @@ impl RendererLayers {
         );
 
         self.cursor.prepare(
-            segment_frames,
             uniforms.resolution_base,
-            cursor,
             &uniforms.zoom,
             uniforms,
             constants,
@@ -1075,6 +1115,7 @@ pub struct RenderSession {
     textures: (wgpu::Texture, wgpu::Texture),
     texture_views: (wgpu::TextureView, wgpu::TextureView),
     current_is_left: bool,
+    device: wgpu::Device,
 }
 
 impl RenderSession {
@@ -1107,12 +1148,13 @@ impl RenderSession {
                 textures.1.create_view(&Default::default()),
             ),
             textures,
+            device: device.clone(),
         }
     }
 
-    pub fn update_texture_size(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn update_texture_size(&mut self, width: u32, height: u32) {
         let make_texture = || {
-            device.create_texture(&wgpu::TextureDescriptor {
+            self.device.create_texture(&wgpu::TextureDescriptor {
                 size: wgpu::Extent3d {
                     width,
                     height,
@@ -1168,16 +1210,10 @@ impl RenderSession {
 
 async fn produce_frame(
     constants: &RenderVideoConstants,
-    segment_frames: DecodedSegmentFrames,
     uniforms: ProjectUniforms,
-    cursor: &CursorEvents,
     layers: &mut RendererLayers,
     session: &mut RenderSession,
 ) -> Result<RenderedFrame, RenderingError> {
-    layers
-        .prepare(constants, &uniforms, &segment_frames, cursor)
-        .await?;
-
     let mut encoder = constants.device.create_command_encoder(
         &(wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
@@ -1279,4 +1315,58 @@ fn srgb_to_linear(c: u16) -> f32 {
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
     }
+}
+
+const CURSOR_CLICK_DURATION: f64 = 0.25;
+const CURSOR_CLICK_DURATION_MS: f64 = CURSOR_CLICK_DURATION * 1000.0;
+
+fn get_click_t(clicks: &[CursorClickEvent], time_ms: f64) -> f32 {
+    fn smoothstep(low: f32, high: f32, v: f32) -> f32 {
+        let t = f32::clamp((v - low) / (high - low), 0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    let mut prev_i = None;
+
+    for (i, clicks) in clicks.windows(2).enumerate() {
+        let left = &clicks[0];
+        let right = &clicks[1];
+
+        if left.time_ms <= time_ms && right.time_ms > time_ms {
+            prev_i = Some(i);
+            break;
+        }
+    }
+
+    let Some(prev_i) = prev_i else {
+        return 1.0;
+    };
+
+    let prev = &clicks[prev_i];
+
+    if prev.down {
+        return 0.0;
+    }
+
+    if !prev.down && time_ms - prev.time_ms <= CURSOR_CLICK_DURATION_MS {
+        return smoothstep(
+            0.0,
+            CURSOR_CLICK_DURATION_MS as f32,
+            (time_ms - prev.time_ms) as f32,
+        );
+    }
+
+    if let Some(next) = clicks.get(prev_i + 1)
+        && !prev.down
+        && next.down
+        && next.time_ms - time_ms <= CURSOR_CLICK_DURATION_MS
+    {
+        return smoothstep(
+            0.0,
+            CURSOR_CLICK_DURATION_MS as f32,
+            (time_ms - next.time_ms).abs() as f32,
+        );
+    }
+
+    1.0
 }

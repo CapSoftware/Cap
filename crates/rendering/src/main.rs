@@ -48,6 +48,7 @@ async fn main() {
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
+                    &render_constants.device,
                 )
                 .await
                 .unwrap();
@@ -61,12 +62,12 @@ async fn main() {
 
     let (tx_image_data, mut video_rx) = tokio::sync::mpsc::channel::<(RenderedFrame, u32)>(4);
 
-    tokio::spawn(async move { while let Some(_) = video_rx.recv().await {} });
+    tokio::spawn(async move { while let Some((_, i)) = video_rx.recv().await {} });
 
     let start = Instant::now();
     cap_rendering::render_video_to_channel(
-        &render_constants,
-        &project_config,
+        render_constants,
+        project_config,
         tx_image_data,
         &recording_meta,
         studio_meta,

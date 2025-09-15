@@ -131,7 +131,7 @@ impl AudioInfo {
                 for channel in 0..self.channels {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
-                    frame.plane_data_mut(channel)[start..end]
+                    frame.data_mut(channel)[start..end]
                         .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
                 }
             }

@@ -37,6 +37,16 @@ pub struct Mp4ExportSettings {
     pub compression: ExportCompression,
 }
 
+impl Default for Mp4ExportSettings {
+    fn default() -> Self {
+        Self {
+            fps: 30,
+            resolution_base: XY { x: 1920, y: 1080 },
+            compression: ExportCompression::Minimal,
+        }
+    }
+}
+
 impl Mp4ExportSettings {
     pub async fn export(
         self,
@@ -210,8 +220,8 @@ impl Mp4ExportSettings {
         });
 
         let render_video_task = cap_rendering::render_video_to_channel(
-            &base.render_constants,
-            &base.project_config,
+            base.render_constants,
+            base.project_config,
             tx_image_data,
             &base.recording_meta,
             meta,

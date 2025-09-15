@@ -1094,6 +1094,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]
@@ -1341,6 +1342,7 @@ dependencies = [
  "glyphon",
  "image 0.25.6",
  "log",
+ "metal 0.31.0",
  "pretty_assertions",
  "reactive_graph",
  "resvg",
@@ -1392,8 +1394,10 @@ dependencies = [
  "cidre 0.11.0",
  "ffmpeg-hw-device",
  "ffmpeg-next",
+ "metal 0.31.0",
  "tokio",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]

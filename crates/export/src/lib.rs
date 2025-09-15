@@ -91,9 +91,10 @@ impl ExporterBuilder {
             .unwrap(),
         );
 
-        let segments = cap_editor::create_segments(&recording_meta, studio_meta)
-            .await
-            .map_err(Error::MediaLoad)?;
+        let segments =
+            cap_editor::create_segments(&recording_meta, studio_meta, &render_constants.device)
+                .await
+                .map_err(Error::MediaLoad)?;
 
         let output_path = self
             .output_path

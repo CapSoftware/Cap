@@ -111,8 +111,8 @@ impl GifExportSettings {
         });
 
         let render_video_task = cap_rendering::render_video_to_channel(
-            &base.render_constants,
-            &base.project_config,
+            base.render_constants,
+            base.project_config,
             tx_image_data,
             &base.recording_meta,
             meta,

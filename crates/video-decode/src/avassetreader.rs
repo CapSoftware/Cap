@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use cidre::{
     arc::{self, R},
@@ -20,23 +20,24 @@ pub struct AVAssetReaderDecoder {
 
 impl AVAssetReaderDecoder {
     pub fn new(path: PathBuf, tokio_handle: TokioHandle) -> Result<Self, String> {
-        let pixel_format = {
-            let input = ffmpeg::format::input(&path).unwrap();
+        let pixel_format = cv::PixelFormat::_32_BGRA;
+        // {
+        //     let input = ffmpeg::format::input(&path).unwrap();
 
-            let input_stream = input
-                .streams()
-                .best(ffmpeg::media::Type::Video)
-                .ok_or("Could not find a video stream")
-                .unwrap();
+        //     let input_stream = input
+        //         .streams()
+        //         .best(ffmpeg::media::Type::Video)
+        //         .ok_or("Could not find a video stream")
+        //         .unwrap();
 
-            let decoder = avcodec::Context::from_parameters(input_stream.parameters())
-                .map_err(|e| format!("decoder context / {e}"))?
-                .decoder()
-                .video()
-                .map_err(|e| format!("video decoder / {e}"))?;
+        //     let decoder = avcodec::Context::from_parameters(input_stream.parameters())
+        //         .map_err(|e| format!("decoder context / {e}"))?
+        //         .decoder()
+        //         .video()
+        //         .map_err(|e| format!("video decoder / {e}"))?;
 
-            pixel_to_pixel_format(decoder.format())
-        };
+        //     pixel_to_pixel_format(decoder.format())
+        // };
 
         let (track_output, reader) =
             Self::get_reader_track_output(&path, 0.0, &tokio_handle, pixel_format)?;

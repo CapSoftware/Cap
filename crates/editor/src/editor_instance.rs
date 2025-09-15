@@ -55,13 +55,13 @@ impl EditorInstance {
             meta,
         )?);
 
-        let segments = create_segments(&recording_meta, meta).await?;
-
         let render_constants = Arc::new(
             RenderVideoConstants::new(&recordings.segments, recording_meta.clone(), meta.clone())
                 .await
                 .unwrap(),
         );
+
+        let segments = create_segments(&recording_meta, meta, &render_constants.device).await?;
 
         let renderer = Arc::new(editor::Renderer::spawn(
             render_constants.clone(),
@@ -283,6 +283,7 @@ pub struct Segment {
 pub async fn create_segments(
     recording_meta: &RecordingMeta,
     meta: &StudioRecordingMeta,
+    device: &wgpu::Device,
 ) -> Result<Vec<Segment>, String> {
     match &meta {
         cap_project::StudioRecordingMeta::SingleSegment { segment: s } => {
@@ -304,6 +305,7 @@ pub async fn create_segments(
                     camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                 },
                 0,
+                device,
             )
             .await
             .map_err(|e| format!("SingleSegment / {e}"))?;
@@ -349,6 +351,7 @@ pub async fn create_segments(
                         camera: s.camera.as_ref().map(|c| recording_meta.path(&c.path)),
                     },
                     i,
+                    device,
                 )
                 .await
                 .map_err(|e| format!("MultipleSegments {i} / {e}"))?;
