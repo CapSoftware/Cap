@@ -22,6 +22,7 @@ import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { Tooltip } from "@/components/Tooltip";
+import { usePublicEnv } from "@/utils/public-env";
 
 interface SharingDialogProps {
 	isOpen: boolean;
