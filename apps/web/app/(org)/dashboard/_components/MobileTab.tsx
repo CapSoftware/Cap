@@ -42,7 +42,7 @@ const MobileTab = () => {
 		) {
 			setOpen(false);
 		}
-	})
+	});
 	return (
 		<div className="flex sticky bottom-0 z-50 flex-1 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
 			<AnimatePresence>
@@ -110,7 +110,7 @@ const OrgsMenu = ({
 	menuRef,
 }: {
 	setOpen: Dispatch<SetStateAction<boolean>>;
-	menuRef:  MutableRefObject<HTMLDivElement | null>
+	menuRef: MutableRefObject<HTMLDivElement | null>;
 }) => {
 	const { activeOrganization: activeOrg, organizationData: orgData } =
 		useDashboardContext();
