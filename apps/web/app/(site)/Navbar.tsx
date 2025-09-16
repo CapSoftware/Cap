@@ -93,13 +93,6 @@ const Links = [
 	},
 ];
 
-const AuthLinks = [
-	{
-		label: "Log In",
-		href: "/login",
-	},
-];
-
 export const Navbar = () => {
 	const pathname = usePathname();
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -159,24 +152,6 @@ export const Navbar = () => {
 												)}
 											</NavigationMenuItem>
 										))}
-										{!auth &&
-											AuthLinks.map((link) => (
-												<NavigationMenuItem key={link.label}>
-													<Link href={link.href} legacyBehavior passHref>
-														<NavigationMenuLink
-															className={classNames(
-																navigationMenuTriggerStyle(),
-																pathname === link.href
-																	? "text-blue-9"
-																	: "text-gray-10",
-																"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
-															)}
-														>
-															{link.label}
-														</NavigationMenuLink>
-													</Link>
-												</NavigationMenuItem>
-											))}
 									</NavigationMenuList>
 								</NavigationMenu>
 							</div>
@@ -194,6 +169,16 @@ export const Navbar = () => {
 									</Button>
 								}
 							>
+								{!auth && (
+									<Button
+										variant="gray"
+										href="/login"
+										size="sm"
+										className="w-full font-medium sm:w-auto"
+									>
+										Login
+									</Button>
+								)}
 								<LoginOrDashboard />
 							</Suspense>
 						</div>
