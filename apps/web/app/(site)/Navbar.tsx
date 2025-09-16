@@ -13,8 +13,6 @@ import {
 	navigationMenuTriggerStyle,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { faGithub } from "@fortawesome/free-brands-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -95,6 +93,13 @@ const Links = [
 	},
 ];
 
+const AuthLinks = [
+	{
+		label: "Log In",
+		href: "/login",
+	},
+];
+
 export const Navbar = () => {
 	const pathname = usePathname();
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -154,20 +159,29 @@ export const Navbar = () => {
 												)}
 											</NavigationMenuItem>
 										))}
+										{!auth &&
+											AuthLinks.map((link) => (
+												<NavigationMenuItem key={link.label}>
+													<Link href={link.href} legacyBehavior passHref>
+														<NavigationMenuLink
+															className={classNames(
+																navigationMenuTriggerStyle(),
+																pathname === link.href
+																	? "text-blue-9"
+																	: "text-gray-10",
+																"px-2 py-0 text-sm font-medium hover:text-blue-9 focus:text-8",
+															)}
+														>
+															{link.label}
+														</NavigationMenuLink>
+													</Link>
+												</NavigationMenuItem>
+											))}
 									</NavigationMenuList>
 								</NavigationMenu>
 							</div>
 						</div>
 						<div className="hidden items-center space-x-2 md:flex">
-							<Button
-								variant="gray"
-								href="https://github.com/CapSoftware/Cap"
-								size="sm"
-								className="w-full font-medium sm:w-auto"
-								icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
-							>
-								Github
-							</Button>
 							<Suspense
 								fallback={
 									<Button
@@ -230,14 +244,15 @@ export const Navbar = () => {
 
 function LoginOrDashboard() {
 	const auth = use(useAuthContext().user);
+
 	return (
 		<Button
 			variant="dark"
-			href={auth ? "/dashboard" : "/login"}
+			href={auth ? "/dashboard" : "/signup"}
 			size="sm"
 			className="w-full font-medium sm:w-auto"
 		>
-			{auth ? "Dashboard" : "Login"}
+			{auth ? "Dashboard" : "Sign Up"}
 		</Button>
 	);
 }

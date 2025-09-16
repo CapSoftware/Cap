@@ -24,7 +24,7 @@ const MotionLogoBadge = motion(LogoBadge);
 const MotionLink = motion(Link);
 const MotionButton = motion(Button);
 
-export function LoginForm() {
+export function SignupForm() {
 	const searchParams = useSearchParams();
 	const router = useRouter();
 	const next = searchParams?.get("next");
@@ -168,7 +168,7 @@ export function LoginForm() {
 					layout="position"
 					className="text-2xl font-semibold text-gray-12"
 				>
-					Sign in to Cap
+					Sign up to Cap
 				</motion.h1>
 				<motion.p
 					key="subtitle"
@@ -213,7 +213,7 @@ export function LoginForm() {
 										exit={{ opacity: 0, y: -10, transition: { duration: 0.1 } }}
 										transition={{ duration: 0.2, ease: "easeInOut" }}
 									>
-										<LoginWithSSO
+										<SignupWithSSO
 											handleOrganizationLookup={handleOrganizationLookup}
 											organizationId={organizationId}
 											setOrganizationId={setOrganizationId}
@@ -263,7 +263,7 @@ export function LoginForm() {
 											setLoading(true);
 											trackEvent("auth_started", {
 												method: "email",
-												is_signup: !oauthError,
+												is_signup: true,
 											});
 											signIn("email", {
 												email,
@@ -305,7 +305,7 @@ export function LoginForm() {
 										}}
 										className="flex flex-col space-y-3"
 									>
-										<NormalLogin
+										<NormalSignup
 											setShowOrgInput={setShowOrgInput}
 											email={email}
 											emailSent={emailSent}
@@ -321,6 +321,18 @@ export function LoginForm() {
 						<motion.p
 							layout="position"
 							className="pt-3 text-xs text-center text-gray-9"
+						>
+							Already have an account?{" "}
+							<Link
+								href="/login"
+								className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+							>
+								Log in here
+							</Link>
+						</motion.p>
+						<motion.p
+							layout="position"
+							className="text-xs text-center text-gray-9"
 						>
 							By typing your email and clicking continue, you acknowledge that
 							you have both read and agree to Cap's{" "}
@@ -348,7 +360,7 @@ export function LoginForm() {
 	);
 }
 
-const LoginWithSSO = ({
+const SignupWithSSO = ({
 	handleOrganizationLookup,
 	organizationId,
 	setOrganizationId,
@@ -373,7 +385,9 @@ const LoginWithSSO = ({
 				className="w-full max-w-full"
 			/>
 			{organizationName && (
-				<p className="text-sm text-gray-1">Signing in to: {organizationName}</p>
+				<p className="text-sm text-gray-1">
+					Signing up with: {organizationName}
+				</p>
 			)}
 			<div>
 				<Button type="submit" variant="dark" className="w-full max-w-full">
@@ -384,7 +398,7 @@ const LoginWithSSO = ({
 	);
 };
 
-const NormalLogin = ({
+const NormalSignup = ({
 	setShowOrgInput,
 	email,
 	emailSent,
@@ -424,32 +438,10 @@ const NormalLogin = ({
 					disabled={loading || emailSent}
 					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
 				>
-					Login with email
+					Sign up with email
 				</MotionButton>
-				{/* {NODE_ENV === "development" && (
-                  <div className="flex justify-center items-center px-6 py-3 mt-3 bg-red-600 rounded-xl">
-                    <p className="text-lg text-white">
-                      <span className="font-medium text-white">
-                        Development mode:
-                      </span>{" "}
-                      Auth URL will be logged to your dev console.
-                    </p>
-                  </div>
-                )} */}
 			</motion.div>
-			<motion.p
-				layout="position"
-				className="mt-3 text-xs text-center text-gray-9"
-			>
-				Don't have an account?{" "}
-				<Link
-					href="/signup"
-					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
-				>
-					Sign up here
-				</Link>
-			</motion.p>
-			<div className="flex gap-4 items-center mt-4 mb-4">
+			<div className="flex gap-4 items-center my-4">
 				<span className="flex-1 h-px bg-gray-5" />
 				<p className="text-sm text-center text-gray-10">OR</p>
 				<span className="flex-1 h-px bg-gray-5" />
@@ -468,7 +460,7 @@ const NormalLogin = ({
 							disabled={loading}
 						>
 							<Image src="/google.svg" alt="Google" width={16} height={16} />
-							Login with Google
+							Sign up with Google
 						</MotionButton>
 					</>
 				)}
@@ -481,8 +473,7 @@ const NormalLogin = ({
 						/>
 						<p className="text-xs leading-5 text-gray-50">
 							It looks like you've previously used this email to sign up via
-							email login. Please enter your email below to receive a sign in
-							link.
+							email. Please enter your email below to receive a sign up link.
 						</p>
 					</div>
 				)}
@@ -495,7 +486,7 @@ const NormalLogin = ({
 					disabled={loading}
 				>
 					<LucideArrowUpRight size={20} />
-					Login with SAML SSO
+					Sign up with SAML SSO
 				</MotionButton>
 			</motion.div>
 		</motion.div>
