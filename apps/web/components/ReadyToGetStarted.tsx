@@ -3,6 +3,7 @@
 import { Button } from "@cap/ui";
 import Link from "next/link";
 import { homepageCopy } from "../data/homepage-copy";
+import UpgradeToPro from "./pages/_components/UpgradeToPro";
 
 export function ReadyToGetStarted() {
 	return (
@@ -20,30 +21,23 @@ export function ReadyToGetStarted() {
 						{homepageCopy.readyToGetStarted.title}
 					</h2>
 				</div>
-				<div className="flex flex-col justify-center items-center space-y-4 sm:flex-row sm:space-y-0 sm:space-x-2 mb-8">
+				<div className="flex flex-col justify-center items-center mb-8 space-y-4 w-full sm:flex-row sm:space-y-0 sm:space-x-2">
 					<Button
 						variant="gray"
 						href="/pricing"
 						size="lg"
-						className="w-full font-medium sm:w-auto"
+						className="w-full font-medium sm:w-fit"
 					>
 						{homepageCopy.readyToGetStarted.buttons.secondary}
 					</Button>
-					<Button
-						variant="blue"
-						href="/download"
-						size="lg"
-						className="w-full font-medium sm:w-auto"
-					>
-						{homepageCopy.readyToGetStarted.buttons.primary}
-					</Button>
+					<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
 				</div>
 				<div>
 					<p>
 						or,{" "}
 						<Link
 							href="/loom-alternative"
-							className="underline font-semibold hover:text-gray-12"
+							className="font-semibold underline hover:text-gray-12"
 						>
 							Switch from Loom
 						</Link>

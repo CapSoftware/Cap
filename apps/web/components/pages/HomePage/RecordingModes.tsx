@@ -11,6 +11,7 @@ import {
 	getPlatformIcon,
 } from "@/utils/platform";
 import { homepageCopy } from "../../../data/homepage-copy";
+import UpgradeToPro from "../_components/UpgradeToPro";
 
 interface Mode {
 	name: "Instant Mode" | "Studio Mode";
@@ -161,14 +162,7 @@ const RecordingModes = () => {
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}
 						</Button>
-						<Button
-							variant="blue"
-							href="/pricing"
-							size="lg"
-							className="w-full font-medium sm:w-auto"
-						>
-							{homepageCopy.header.cta.primaryButton}
-						</Button>
+						<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
 					</div>
 				</div>
 			</div>
