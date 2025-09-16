@@ -118,7 +118,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</div>
 
 					<motion.div
-						className="flex flex-col items-center mb-5 space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4"
+						className="flex flex-wrap gap-4 items-center mb-5"
 						initial="hidden"
 						animate="visible"
 						custom={3}
@@ -132,7 +132,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 									: getDownloadUrl(platform, isIntel)
 							}
 							size="lg"
-							className="flex justify-center items-center w-full font-medium sm:w-auto"
+							className="flex justify-center items-center font-medium max-w-fit"
 						>
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}

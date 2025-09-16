@@ -17,7 +17,7 @@ const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {
 					rive.play("items-coming-out");
 				}
 			}}
-			className="flex overflow-visible w-full sm:max-w-[220px] relative gap-3 justify-evenly items-center mx-auto cursor-pointer"
+			className="flex overflow-visible w-full max-w-[220px] relative gap-3 justify-evenly items-center cursor-pointer"
 			onMouseLeave={() => {
 				if (rive) {
 					rive.stop();
@@ -27,7 +27,7 @@ const UpgradeToPro = ({ text = "Upgrade To Cap Pro" }: { text?: string }) => {
 			size="lg"
 			variant="blue"
 		>
-			<ProRive className="w-[80px] scale-[0.9] h-[62px] bottom-[24%] left-[5%] xs:left-[12%] sm:-left-2 absolute inset-y-0 my-auto" />
+			<ProRive className="w-[80px] scale-[0.9] h-[62px] bottom-[22.5%] -left-2 absolute inset-y-0 my-auto" />
 			<p className="relative left-5 font-medium text-white">{text}</p>
 		</Button>
 	);
