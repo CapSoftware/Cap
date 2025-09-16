@@ -171,12 +171,10 @@ export default function DashboardInner({
 			{/*End of NavBar*/}
 			<main
 				className={
-					"flex overscroll-contain flex-col flex-1 flex-grow p-5 h-full border border-b-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex overscroll-contain flex-col flex-1 p-5 h-full border border-b-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
-				<div className="flex flex-col flex-1 flex-grow gap-4 min-h-fit">
-					{children}
-				</div>
+				<div className="flex flex-col flex-1 gap-4 min-h-fit">{children}</div>
 			</main>
 			{isSharedCapsPage && activeOrganization?.members && (
 				<MembersDialog

@@ -92,7 +92,7 @@ const Orgs = ({
 					name={activeOrg?.organization.name ?? "No organization found"}
 				/>
 			)}
-			<p className="text-xs mr-2 text-gray-12 truncate w-fit max-w-[90px]">
+			<p className="text-sm mr-2 text-gray-12 truncate w-fit max-w-[90px]">
 				{activeOrg?.organization.name}
 			</p>
 			<ChevronDown

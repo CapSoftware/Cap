@@ -26,45 +26,40 @@ export const DesktopNav = () => {
 				toggleSidebarCollapsed();
 			}
 		};
-
 		window.addEventListener("keydown", handleKeyDown);
-
-		return () => {
-			window.removeEventListener("keydown", handleKeyDown);
-		};
+		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [toggleSidebarCollapsed]);
 
 	return (
 		<motion.div
-			initial={{
-				width: sidebarCollapsed ? "70px" : "230px",
-			}}
+			initial={false}
 			animate={{
-				width: sidebarCollapsed ? "70px" : "230px",
+				width: sidebarCollapsed ? 70 : 230,
 				transition: {
 					duration: 0.6,
 					type: "spring",
 					bounce: 0.25,
 				},
 			}}
-			className={clsx("hidden z-50 h-full lg:flex group", "relative")}
+			className={clsx(
+				"hidden relative z-50 h-full will-change-[width] lg:flex group bg-gray-1",
+			)}
 		>
 			<div className="flex flex-col w-full max-w-[220px] mx-auto h-full">
 				<div className="flex justify-start items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
 					<Link href="/dashboard">
 						<Logo
 							hideLogoName={sidebarCollapsed}
+							viewBoxDimensions={sidebarCollapsed ? "0 0 40 40" : "0 0 120 40"}
 							className="mx-auto w-[120px] h-[40px]"
 						/>
 					</Link>
 				</div>
-
 				<div className="flex overflow-y-auto flex-col flex-grow">
 					<div className="flex flex-col px-3 h-full">
 						<AdminNavItems />
 					</div>
 				</div>
-
 				<Tooltip
 					kbd={[cmdSymbol, "Shift", "S"]}
 					position="right"
