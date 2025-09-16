@@ -1,11 +1,16 @@
 "use client";
 
 import { Button } from "@cap/ui";
+import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Link from "next/link";
+import { getPlatformIcon } from "@/utils/platform";
 import { homepageCopy } from "../data/homepage-copy";
 import UpgradeToPro from "./pages/_components/UpgradeToPro";
 
 export function ReadyToGetStarted() {
+	const { platform } = useDetectPlatform();
+	const loading = platform === null;
+
 	return (
 		<div
 			className="max-w-[1000px] md:bg-center w-[calc(100%-20px)] bg-white min-h-[300px] mx-auto border border-gray-5 my-[150px] md:my-[200px] lg:my-[250px] rounded-[20px] overflow-hidden relative flex flex-col justify-center p-8"
@@ -23,11 +28,12 @@ export function ReadyToGetStarted() {
 				</div>
 				<div className="flex flex-col justify-center items-center mb-8 space-y-4 w-full sm:flex-row sm:space-y-0 sm:space-x-2">
 					<Button
-						variant="gray"
+						variant="dark"
 						href="/pricing"
 						size="lg"
 						className="font-medium w-fit"
 					>
+						{!loading && getPlatformIcon(platform)}
 						{homepageCopy.readyToGetStarted.buttons.secondary}
 					</Button>
 					<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
