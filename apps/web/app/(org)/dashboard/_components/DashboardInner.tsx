@@ -45,9 +45,6 @@ import {
 import type { DownloadIconHandle } from "./AnimatedIcons/Download";
 import type { ReferIconHandle } from "./AnimatedIcons/Refer";
 
-export const navItemClass =
-	"flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
-
 export default function DashboardInner({
 	children,
 }: {
