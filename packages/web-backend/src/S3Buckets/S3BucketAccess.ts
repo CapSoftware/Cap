@@ -108,7 +108,7 @@ export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
 			putObject: (
 				key: string,
 				body: StreamingBlobPayloadInputTypes,
-				fields?: { contentType?: string },
+				fields?: { contentType?: string; contentLength?: number },
 			) =>
 				wrapS3Promise((provider) =>
 					provider.getInternal.pipe(
@@ -119,10 +119,13 @@ export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
 									Key: key,
 									Body: body,
 									ContentType: fields?.contentType,
+									ContentLength: fields?.contentLength,
 								}),
 							),
 						),
 					),
+				).pipe(
+					Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
 				),
 			/** Copy an object within the same bucket */
 			copyObject: (

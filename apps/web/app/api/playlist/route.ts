@@ -61,7 +61,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 						);
 
 						const [S3ProviderLayer, customBucket] =
-							yield* s3Buckets.getProviderLayer(video.bucketId);
+							yield* s3Buckets.getProviderById(video.bucketId);
 
 						return yield* getPlaylistResponse(
 							video,
