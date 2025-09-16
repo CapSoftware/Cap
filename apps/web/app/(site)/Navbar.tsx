@@ -13,10 +13,10 @@ import {
 	navigationMenuTriggerStyle,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { motion } from "framer-motion";
+import { motion } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Suspense, use, useState } from "react";
+import { Suspense, use, useEffect, useState } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
 import { useAuthContext } from "../Layout/AuthContext";
 
@@ -98,6 +98,18 @@ export const Navbar = () => {
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
 	const auth = use(useAuthContext().user);
 
+	const [hideLogoName, setHideLogoName] = useState(false);
+
+	useEffect(() => {
+		const onScroll = () => {
+			setHideLogoName(window.scrollY > 10);
+		};
+		document.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			document.removeEventListener("scroll", onScroll);
+		};
+	}, []);
+
 	return (
 		<>
 			<header className="fixed top-4 left-0 right-0 z-[51] md:top-10  animate-in fade-in slide-in-from-top-4 duration-500">
@@ -105,7 +117,15 @@ export const Navbar = () => {
 					<div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
 						<div className="flex items-center">
 							<Link passHref href="/home">
-								<Logo className="w-[90px]" />
+								<Logo
+									hideLogoName={hideLogoName}
+									className="transition-all duration-[0.2s] ease-out"
+									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
+									style={{
+										width: hideLogoName ? 45.5 : 90,
+										height: 40,
+									}}
+								/>
 							</Link>
 							<div className="hidden md:flex">
 								<NavigationMenu>
