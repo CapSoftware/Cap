@@ -12,7 +12,7 @@ export const Logo = ({
 	showBeta?: boolean;
 	white?: boolean;
 	hideLogoName?: boolean;
-	style: React.CSSProperties;
+	style?: React.CSSProperties;
 	viewBoxDimensions?: `${string} ${string} ${string} ${string}`;
 }) => {
 	return (
