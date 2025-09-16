@@ -80,11 +80,12 @@ export default function DashboardInner({
 	);
 	const isSharedCapsPage = pathname === "/dashboard/shared-caps";
 	return (
-		<div className="flex flex-col min-h-screen">
+		<div className="flex overflow-hidden w-full flex-col flex-1 md:mt-0 mt-[126px]">
+			{/* NavBar */}
 			<div
 				className={clsx(
-					"flex sticky z-40 justify-between items-center px-5 mt-10 w-full border-b",
-					"bg-gray-1 lg:bg-transparent min-h-16 lg:min-h-10 border-gray-3 lg:border-b-0 lg:pl-0 lg:pr-5 lg:top-0 lg:relative top-[64px] lg:mt-5 lg:h-8",
+					"flex fixed z-40 justify-between items-center py-3 pr-2 pl-5 w-full md:relative mt-[60px] md:mt-0 md:py-[19px] lg:pl-0 lg:pr-5",
+					"top-0 bg-gray-1 md:mt-0",
 				)}
 			>
 				<div className="flex flex-col gap-0.5">
@@ -170,12 +171,15 @@ export default function DashboardInner({
 					<User />
 				</div>
 			</div>
+			{/*End of NavBar*/}
 			<main
 				className={
-					"flex flex-col flex-1 p-5 pb-5 mt-5 border border-b-0 min-h-fit bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex overscroll-contain flex-col flex-1 flex-grow p-5 h-full border border-b-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
-				<div className="flex flex-col flex-1 gap-4">{children}</div>
+				<div className="flex flex-col flex-1 flex-grow gap-4 min-h-fit">
+					{children}
+				</div>
 			</main>
 			{isSharedCapsPage && activeOrganization?.members && (
 				<MembersDialog
@@ -300,7 +304,7 @@ const User = () => {
 								.filter((item) => item.showCondition)
 								.map((item, index) => (
 									<MenuItem
-										key={index}
+										key={index.toString()}
 										icon={item.icon}
 										name={item.name}
 										href={item.href ?? "#"}
