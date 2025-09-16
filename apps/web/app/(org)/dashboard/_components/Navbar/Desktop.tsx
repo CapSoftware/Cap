@@ -36,9 +36,7 @@ export const DesktopNav = () => {
 
 	return (
 		<motion.div
-			initial={{
-				width: sidebarCollapsed ? "70px" : "230px",
-			}}
+			initial={false}
 			animate={{
 				width: sidebarCollapsed ? "70px" : "230px",
 				transition: {
@@ -47,7 +45,10 @@ export const DesktopNav = () => {
 					bounce: 0.25,
 				},
 			}}
-			className={clsx("hidden z-50 h-full lg:flex group", "relative")}
+			className={clsx(
+				"hidden z-50 h-full will-change-[width] lg:flex group",
+				"relative",
+			)}
 		>
 			<div className="flex flex-col w-full max-w-[220px] mx-auto h-full">
 				<div className="flex justify-start items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
