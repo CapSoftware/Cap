@@ -110,7 +110,7 @@ const OrgsMenu = ({
 	menuRef,
 }: {
 	setOpen: Dispatch<SetStateAction<boolean>>;
-	menuRef: MutableRefObject<HTMLDivElement | null>;
+	menuRef: MutableRefObject<Element>;
 }) => {
 	const { activeOrganization: activeOrg, organizationData: orgData } =
 		useDashboardContext();
