@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { Check, ChevronDown } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type MutableRefObject, useRef, useState } from "react";
 import { useDashboardContext } from "../Contexts";
@@ -24,15 +25,21 @@ const MobileTab = () => {
 		}
 	});
 	return (
-		<div className="flex sticky bottom-0 z-50 justify-between items-center px-5 w-full h-16 border-t lg:hidden border-gray-6 bg-gray-1">
+		<div className="flex sticky bottom-0 z-50 flex-1 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
 			<AnimatePresence>
 				{open && <OrgsMenu setOpen={setOpen} menuRef={menuRef} />}
 			</AnimatePresence>
 			<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
 			<div className="flex gap-6 justify-between items-center h-full text-gray-11">
-				<LayersIcon size={19} />
-				<CapIcon size={24} />
-				<CogIcon size={21} />
+				<Link href="/dashboard/spaces/browse">
+					<LayersIcon size={20} />
+				</Link>
+				<Link href="/dashboard/caps">
+					<CapIcon size={25} />
+				</Link>
+				<Link href="/dashboard/settings/organization">
+					<CogIcon size={22} />
+				</Link>
 			</div>
 		</div>
 	);

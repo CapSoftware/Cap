@@ -80,7 +80,7 @@ export default function DashboardInner({
 	);
 	const isSharedCapsPage = pathname === "/dashboard/shared-caps";
 	return (
-		<div className="flex overflow-hidden flex-col flex-1 min-h-dvh">
+		<div className="flex overflow-hidden w-full flex-col flex-1 md:mt-0 mt-[126px]">
 			{/* NavBar */}
 			<div
 				className={clsx(
@@ -174,7 +174,7 @@ export default function DashboardInner({
 			{/*End of NavBar*/}
 			<main
 				className={
-					"flex overscroll-contain flex-col flex-1 flex-grow p-5 pb-8 h-full border border-b-0 pt-[28px] mb-[60px] mt-[126px] md:mb-0 md:mt-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
+					"flex overscroll-contain flex-col flex-1 flex-grow p-5 h-full border border-b-0 custom-scroll bg-gray-2 border-gray-3 lg:rounded-tl-2xl lg:p-8"
 				}
 			>
 				<div className="flex flex-col flex-1 flex-grow gap-4 min-h-fit">
@@ -304,7 +304,7 @@ const User = () => {
 								.filter((item) => item.showCondition)
 								.map((item, index) => (
 									<MenuItem
-										key={index}
+										key={index.toString()}
 										icon={item.icon}
 										name={item.name}
 										href={item.href ?? "#"}
