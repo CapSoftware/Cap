@@ -80,7 +80,7 @@ export default async function DashboardLayout({
 				userPreferences={userPreferences}
 			>
 				<div className="grid grid-cols-[auto,1fr] bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
-					<aside className="hidden z-10 col-span-1 row-span-2 lg:flex">
+					<aside className="hidden z-10 col-span-1 row-span-2 w-full lg:flex">
 						<DesktopNav />
 					</aside>
 					<div className="flex col-span-2 row-span-2 h-full md:col-span-1 focus:outline-none">

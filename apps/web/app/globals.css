@@ -598,6 +598,14 @@ slot:not(.dashboard-layout slot) {
 /* Custom scrollbar */
 .custom-scroll {
 	overflow-y: auto;
+	scrollbar-gutter: stable; 
+}
+
+/* Fallback for scrollbar-gutter */
+@supports not (scrollbar-gutter: stable) {
+  .custom-scroll {
+    padding-right: 3px; /* Reserve space for scrollbar */
+  }
 }
 
 .custom-scroll::-webkit-scrollbar {
