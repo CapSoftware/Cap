@@ -54,6 +54,7 @@ export const DesktopNav = () => {
 					<Link href="/dashboard">
 						<Logo
 							hideLogoName={sidebarCollapsed}
+							viewBoxDimensions={sidebarCollapsed ? "0 0 40 40" : "0 0 120 40"}
 							className="mx-auto w-[120px] h-[40px]"
 						/>
 					</Link>
