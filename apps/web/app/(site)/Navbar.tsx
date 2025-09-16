@@ -101,13 +101,12 @@ export const Navbar = () => {
 	const [hideLogoName, setHideLogoName] = useState(false);
 
 	useEffect(() => {
-		document.addEventListener("scroll", () => {
+		const onScroll = () => {
 			setHideLogoName(window.scrollY > 10);
-		});
+		};
+		document.addEventListener("scroll", onScroll, { passive: true });
 		return () => {
-			document.removeEventListener("scroll", () => {
-				setHideLogoName(false);
-			});
+			document.removeEventListener("scroll", onScroll);
 		};
 	}, []);
 
