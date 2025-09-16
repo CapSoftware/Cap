@@ -997,6 +997,21 @@ impl RendererLayers {
             })(),
         );
 
+        // Prepare camera_only layer when in camera-only mode or transitioning
+        if uniforms.scene.is_transitioning_camera_only() {
+            self.camera_only.prepare(
+                &constants.device,
+                &constants.queue,
+                (|| {
+                    Some((
+                        uniforms.camera_only?,
+                        constants.options.camera_size?,
+                        segment_frames.camera_frame.as_ref()?,
+                    ))
+                })(),
+            );
+        }
+
         if let Some(_captions) = &uniforms.project.captions {
             self.captions.prepare(
                 uniforms,
