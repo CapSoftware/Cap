@@ -26,7 +26,7 @@ export function ReadyToGetStarted() {
 						variant="gray"
 						href="/pricing"
 						size="lg"
-						className="w-full font-medium sm:w-fit"
+						className="font-medium w-fit"
 					>
 						{homepageCopy.readyToGetStarted.buttons.secondary}
 					</Button>

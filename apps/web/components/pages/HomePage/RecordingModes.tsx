@@ -148,7 +148,7 @@ const RecordingModes = () => {
 					</p>
 				</div>
 				<div className="p-6">
-					<div className="flex flex-col items-center space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4 sm:justify-center">
+					<div className="flex flex-col items-center space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4 sm:justify-center">
 						<Button
 							variant="gray"
 							href={
@@ -157,7 +157,7 @@ const RecordingModes = () => {
 									: getDownloadUrl(platform, isIntel)
 							}
 							size="lg"
-							className="flex justify-center items-center w-full font-medium sm:w-auto"
+							className="flex justify-center items-center w-fit font-medium"
 						>
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}
