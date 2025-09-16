@@ -26,6 +26,7 @@
 			"@/utils/*": ["utils/*"],
 			"@/lib/*": ["lib/*"],
 			"@/actions/*": ["actions/*"],
+			"@/data/*": ["data/*"],
 			"@/services": ["services"]
 		},
 		"types": ["node"]

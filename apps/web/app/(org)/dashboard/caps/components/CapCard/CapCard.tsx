@@ -144,6 +144,9 @@ export const CapCard = ({
 
 	const duplicateMutation = useEffectMutation({
 		mutationFn: () => withRpc((r) => r.VideoDuplicate(cap.id)),
+		onSuccess: () => {
+			router.refresh();
+		},
 	});
 
 	const handleSharingUpdated = () => {
@@ -336,13 +339,13 @@ export const CapCard = ({
 
 							<DropdownMenuContent align="end" sideOffset={5}>
 								<DropdownMenuItem
-									onClick={() =>
+									onClick={() => {
 										toast.promise(duplicateMutation.mutateAsync(), {
 											loading: "Duplicating cap...",
 											success: "Cap duplicated successfully",
 											error: "Failed to duplicate cap",
-										})
-									}
+										});
+									}}
 									disabled={duplicateMutation.isPending}
 									className="flex gap-2 items-center rounded-lg"
 								>

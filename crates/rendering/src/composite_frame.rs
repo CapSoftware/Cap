@@ -26,7 +26,13 @@ pub struct CompositeVideoFrameUniforms {
     pub shadow_opacity: f32,
     pub shadow_blur: f32,
     pub opacity: f32,
-    pub _padding: [f32; 3],
+    pub border_enabled: f32,
+    pub border_width: f32,
+    pub _padding0: f32,
+    pub _padding1: [f32; 2],
+    pub _padding1b: [f32; 2],
+    pub border_color: [f32; 4],
+    pub _padding2: [f32; 4],
 }
 
 impl Default for CompositeVideoFrameUniforms {
@@ -47,7 +53,13 @@ impl Default for CompositeVideoFrameUniforms {
             shadow_opacity: Default::default(),
             shadow_blur: Default::default(),
             opacity: 1.0,
-            _padding: Default::default(),
+            border_enabled: 0.0,
+            border_width: 5.0,
+            _padding0: 0.0,
+            _padding1: [0.0; 2],
+            _padding1b: [0.0; 2],
+            border_color: [1.0, 1.0, 1.0, 0.8],
+            _padding2: [0.0; 4],
         }
     }
 }
@@ -61,6 +73,10 @@ impl CompositeVideoFrameUniforms {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }),
         )
+    }
+
+    pub fn write_to_buffer(&self, queue: &wgpu::Queue, buffer: &wgpu::Buffer) {
+        queue.write_buffer(buffer, 0, bytemuck::bytes_of(self));
     }
 }
 
@@ -133,7 +149,7 @@ impl CompositeVideoFramePipeline {
                 address_mode_w: wgpu::AddressMode::ClampToEdge,
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::FilterMode::Linear,
                 ..Default::default()
             }),
         );

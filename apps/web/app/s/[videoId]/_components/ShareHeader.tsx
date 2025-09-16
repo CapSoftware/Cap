@@ -8,7 +8,7 @@ import { userIsPro } from "@cap/utils";
 import { faChevronDown, faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { Copy, Globe2 } from "lucide-react";
+import { Check, Copy, Globe2 } from "lucide-react";
 import moment from "moment";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -54,6 +54,7 @@ export const ShareHeader = ({
 	const [title, setTitle] = useState(data.name);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
+	const [linkCopied, setLinkCopied] = useState(false);
 
 	const contextData = useDashboardContext();
 	const contextSharedSpaces = contextData?.sharedSpaces || null;
@@ -126,6 +127,8 @@ export const ShareHeader = ({
 	};
 
 	const isUserPro = userIsPro(user);
+	const showUpgradeBanner =
+		user && data.ownerId === user.id && !userIsPro(user);
 
 	const handleSharingUpdated = () => {
 		refresh();
@@ -168,6 +171,21 @@ export const ShareHeader = ({
 
 	return (
 		<>
+			{showUpgradeBanner && (
+				<div className="flex sticky flex-col sm:flex-row inset-x-0 top-0 z-10 gap-4 justify-center items-center px-3 py-2 mx-auto w-[calc(100%-20px)] max-w-fit rounded-b-xl border bg-gray-4 border-gray-6">
+					<p className="text-center text-gray-12">
+						Shareable links are limited to 5 mins on the free plan.
+					</p>
+					<Button
+						type="button"
+						onClick={() => setUpgradeModalOpen(true)}
+						size="sm"
+						variant="blue"
+					>
+						Upgrade To Cap Pro
+					</Button>
+				</div>
+			)}
 			<SharingDialog
 				isOpen={isSharingDialogOpen}
 				onClose={() => setIsSharingDialogOpen(false)}
@@ -178,11 +196,11 @@ export const ShareHeader = ({
 				isPublic={data.public}
 				spacesData={spacesData}
 			/>
-			<div>
-				<div className="space-x-0 md:flex md:items-center md:justify-between md:space-x-6">
+			<div className={clsx(!showUpgradeBanner ? "mt-8" : "mt-0")}>
+				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
 					<div className="items-center md:flex md:justify-between md:space-x-6">
 						<div className="mb-3 md:mb-0">
-							<div className="flex items-center space-x-3  lg:min-w-[400px]">
+							<div className="flex items-center space-x-3 lg:min-w-[400px]">
 								{isEditing ? (
 									<input
 										value={title}
@@ -225,15 +243,23 @@ export const ShareHeader = ({
 										variant="white"
 										onClick={() => {
 											navigator.clipboard.writeText(getVideoLink());
-											toast.success("Link copied to clipboard!");
+											setLinkCopied(true);
+											setTimeout(() => {
+												setLinkCopied(false);
+											}, 2000);
 										}}
 									>
 										{getDisplayLink()}
-										<Copy className="ml-2 w-4 h-4" />
+										{linkCopied ? (
+											<Check className="ml-2 w-4 h-4 svgpathanimation" />
+										) : (
+											<Copy className="ml-2 w-4 h-4" />
+										)}
 									</Button>
 								</div>
 								{user !== null && !isUserPro && (
 									<button
+										type="button"
 										className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
 										onClick={() => setUpgradeModalOpen(true)}
 									>
@@ -246,7 +272,7 @@ export const ShareHeader = ({
 								<div className="hidden md:flex">
 									<Button
 										onClick={() => {
-											push("/dashboard");
+											push("/dashboard/caps?page=1");
 										}}
 									>
 										<span className="hidden text-sm text-white lg:block">

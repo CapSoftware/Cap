@@ -1,6 +1,14 @@
+use crate::{
+    ActorError, RecordingBaseInputs, RecordingError,
+    capture_pipeline::{MakeCapturePipeline, create_screen_capture},
+    feeds::microphone::MicrophoneFeedLock,
+    pipeline::RecordingPipeline,
+    sources::{ScreenCaptureSource, ScreenCaptureTarget},
+};
 use cap_media::MediaError;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
+use cap_timestamp::Timestamp;
 use cap_utils::{ensure_dir, spawn_actor};
 use flume::Receiver;
 use std::{
@@ -11,37 +19,29 @@ use std::{
 use tokio::sync::oneshot;
 use tracing::{Instrument, debug, error, info, trace};
 
-use crate::{
-    ActorError, RecordingBaseInputs, RecordingError,
-    capture_pipeline::{MakeCapturePipeline, create_screen_capture},
-    feeds::microphone::MicrophoneFeedLock,
-    pipeline::Pipeline,
-    sources::{ScreenCaptureSource, ScreenCaptureTarget},
-};
-
-struct InstantRecordingPipeline {
-    pub inner: Pipeline,
+struct Pipeline {
+    pub inner: RecordingPipeline,
     #[allow(unused)]
     pub output_path: PathBuf,
     pub pause_flag: Arc<AtomicBool>,
 }
 
-enum InstantRecordingActorState {
+enum ActorState {
     Recording {
-        pipeline: InstantRecordingPipeline,
+        pipeline: Pipeline,
         pipeline_done_rx: oneshot::Receiver<Result<(), String>>,
         segment_start_time: f64,
     },
     Paused {
-        pipeline: InstantRecordingPipeline,
+        pipeline: Pipeline,
         pipeline_done_rx: oneshot::Receiver<Result<(), String>>,
         segment_start_time: f64,
     },
 }
 
 #[derive(Clone)]
-pub struct InstantRecordingHandle {
-    ctrl_tx: flume::Sender<InstantRecordingActorControlMessage>,
+pub struct ActorHandle {
+    ctrl_tx: flume::Sender<ActorControlMessage>,
     pub capture_target: ScreenCaptureTarget,
     // pub bounds: Bounds,
 }
@@ -57,32 +57,32 @@ macro_rules! send_message {
     }};
 }
 
-impl InstantRecordingHandle {
-    pub async fn stop(&self) -> Result<CompletedInstantRecording, RecordingError> {
-        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Stop)
+impl ActorHandle {
+    pub async fn stop(&self) -> Result<CompletedRecording, RecordingError> {
+        send_message!(self.ctrl_tx, ActorControlMessage::Stop)
     }
 
     pub async fn pause(&self) -> Result<(), RecordingError> {
-        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Pause)
+        send_message!(self.ctrl_tx, ActorControlMessage::Pause)
     }
 
     pub async fn resume(&self) -> Result<(), RecordingError> {
-        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Resume)
+        send_message!(self.ctrl_tx, ActorControlMessage::Resume)
     }
 
     pub async fn cancel(&self) -> Result<(), RecordingError> {
-        send_message!(self.ctrl_tx, InstantRecordingActorControlMessage::Cancel)
+        send_message!(self.ctrl_tx, ActorControlMessage::Cancel)
     }
 }
 
-pub enum InstantRecordingActorControlMessage {
+pub enum ActorControlMessage {
     Pause(oneshot::Sender<Result<(), RecordingError>>),
     Resume(oneshot::Sender<Result<(), RecordingError>>),
-    Stop(oneshot::Sender<Result<CompletedInstantRecording, RecordingError>>),
+    Stop(oneshot::Sender<Result<CompletedRecording, RecordingError>>),
     Cancel(oneshot::Sender<Result<(), RecordingError>>),
 }
 
-impl std::fmt::Debug for InstantRecordingActorControlMessage {
+impl std::fmt::Debug for ActorControlMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pause(_) => write!(f, "Pause"),
@@ -93,15 +93,13 @@ impl std::fmt::Debug for InstantRecordingActorControlMessage {
     }
 }
 
-pub struct InstantRecordingActor {
-    id: String,
+pub struct Actor {
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
     video_info: VideoInfo,
 }
 
-pub struct CompletedInstantRecording {
-    pub id: String,
+pub struct CompletedRecording {
     pub project_path: PathBuf,
     pub display_source: ScreenCaptureTarget,
     pub meta: InstantRecordingMeta,
@@ -112,17 +110,11 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     output_path: PathBuf,
     screen_source: (
         ScreenCaptureSource<TCaptureFormat>,
-        flume::Receiver<(TCaptureFormat::VideoFormat, f64)>,
+        flume::Receiver<(TCaptureFormat::VideoFormat, Timestamp)>,
     ),
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    system_audio: Option<Receiver<(ffmpeg::frame::Audio, f64)>>,
-) -> Result<
-    (
-        InstantRecordingPipeline,
-        oneshot::Receiver<Result<(), String>>,
-    ),
-    MediaError,
-> {
+    system_audio: Option<Receiver<(ffmpeg::frame::Audio, Timestamp)>>,
+) -> Result<(Pipeline, oneshot::Receiver<Result<(), String>>), MediaError> {
     if let Some(mic_feed) = &mic_feed {
         debug!(
             "mic audio info: {:#?}",
@@ -130,7 +122,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         );
     };
 
-    let pipeline_builder = Pipeline::builder();
+    let pipeline_builder = RecordingPipeline::builder();
 
     let pause_flag = Arc::new(AtomicBool::new(false));
     let system_audio = system_audio.map(|v| (v, screen_source.0.audio_info()));
@@ -149,7 +141,7 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     pipeline.play().await?;
 
     Ok((
-        InstantRecordingPipeline {
+        Pipeline {
             inner: pipeline,
             output_path,
             pause_flag,
@@ -158,13 +150,61 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
     ))
 }
 
+impl Actor {
+    pub fn builder(output: PathBuf, capture_target: ScreenCaptureTarget) -> ActorBuilder {
+        ActorBuilder::new(output, capture_target)
+    }
+}
+
+pub struct ActorBuilder {
+    output_path: PathBuf,
+    capture_target: ScreenCaptureTarget,
+    system_audio: bool,
+    mic_feed: Option<Arc<MicrophoneFeedLock>>,
+}
+
+impl ActorBuilder {
+    pub fn new(output: PathBuf, capture_target: ScreenCaptureTarget) -> Self {
+        Self {
+            output_path: output,
+            capture_target,
+            system_audio: false,
+            mic_feed: None,
+        }
+    }
+
+    pub fn with_system_audio(mut self, system_audio: bool) -> Self {
+        self.system_audio = system_audio;
+        self
+    }
+
+    pub fn with_mic_feed(mut self, mic_feed: Arc<MicrophoneFeedLock>) -> Self {
+        self.mic_feed = Some(mic_feed);
+        self
+    }
+
+    pub async fn build(
+        self,
+    ) -> Result<(ActorHandle, oneshot::Receiver<Result<(), String>>), RecordingError> {
+        spawn_instant_recording_actor(
+            self.output_path,
+            RecordingBaseInputs {
+                capture_target: self.capture_target,
+                capture_system_audio: self.system_audio,
+                mic_feed: self.mic_feed,
+                camera_feed: None,
+            },
+        )
+        .await
+    }
+}
+
 pub async fn spawn_instant_recording_actor(
-    id: String,
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,
 ) -> Result<
     (
-        InstantRecordingHandle,
+        ActorHandle,
         tokio::sync::oneshot::Receiver<Result<(), String>>,
     ),
     RecordingError,
@@ -186,8 +226,20 @@ pub async fn spawn_instant_recording_actor(
         (None, None)
     };
 
-    let (screen_source, screen_rx) =
-        create_screen_capture(&inputs.capture_target, true, 30, system_audio.0, start_time).await?;
+    #[cfg(windows)]
+    let d3d_device = crate::capture_pipeline::create_d3d_device()
+        .map_err(|e| MediaError::Any(format!("CreateD3DDevice: {e}").into()))?;
+
+    let (screen_source, screen_rx) = create_screen_capture(
+        &inputs.capture_target,
+        true,
+        30,
+        system_audio.0,
+        start_time,
+        #[cfg(windows)]
+        d3d_device,
+    )
+    .await?;
 
     debug!("screen capture: {screen_source:#?}");
 
@@ -209,14 +261,13 @@ pub async fn spawn_instant_recording_actor(
         let inputs = inputs.clone();
         let video_info = screen_source.info();
         async move {
-            let mut actor = InstantRecordingActor {
-                id,
+            let mut actor = Actor {
                 recording_dir,
                 capture_target: inputs.capture_target,
                 video_info,
             };
 
-            let mut state = InstantRecordingActorState::Recording {
+            let mut state = ActorState::Recording {
                 pipeline,
                 pipeline_done_rx,
                 segment_start_time,
@@ -241,7 +292,7 @@ pub async fn spawn_instant_recording_actor(
     });
 
     Ok((
-        InstantRecordingHandle {
+        ActorHandle {
             ctrl_tx,
             capture_target: inputs.capture_target,
             // bounds: *screen_source.get_bounds(),
@@ -268,16 +319,15 @@ macro_rules! send_response {
 }
 
 async fn run_actor_iteration(
-    state: InstantRecordingActorState,
-    ctrl_rx: &Receiver<InstantRecordingActorControlMessage>,
-    actor: InstantRecordingActor,
-) -> Result<Option<(InstantRecordingActorState, InstantRecordingActor)>, InstantRecordingActorError>
-{
-    use InstantRecordingActorControlMessage as Msg;
-    use InstantRecordingActorState as State;
+    state: ActorState,
+    ctrl_rx: &Receiver<ActorControlMessage>,
+    actor: Actor,
+) -> Result<Option<(ActorState, Actor)>, InstantRecordingActorError> {
+    use ActorControlMessage as Msg;
+    use ActorState as State;
 
     // Helper function to shutdown pipeline
-    async fn shutdown(mut pipeline: InstantRecordingPipeline) -> Result<(), RecordingError> {
+    async fn shutdown(mut pipeline: Pipeline) -> Result<(), RecordingError> {
         pipeline.inner.shutdown().await?;
         Ok(())
     }
@@ -362,7 +412,7 @@ async fn run_actor_iteration(
 
             let res = shutdown(pipeline).await;
             let res = match res {
-                Ok(_) => stop_recording(actor).await,
+                Ok(_) => Ok(stop_recording(actor).await),
                 Err(e) => Err(e),
             };
 
@@ -419,20 +469,17 @@ async fn run_actor_iteration(
     })
 }
 
-async fn stop_recording(
-    actor: InstantRecordingActor,
-) -> Result<CompletedInstantRecording, RecordingError> {
+async fn stop_recording(actor: Actor) -> CompletedRecording {
     use cap_project::*;
 
-    Ok(CompletedInstantRecording {
-        id: actor.id,
+    CompletedRecording {
         project_path: actor.recording_dir.clone(),
         meta: InstantRecordingMeta {
             fps: actor.video_info.fps(),
             sample_rate: None,
         },
         display_source: actor.capture_target,
-    })
+    }
 }
 
 fn current_time_f64() -> f64 {

@@ -21,11 +21,13 @@ objc = "0.2.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
+	"Graphics_Capture",
 	"Win32_Foundation",
 	"Win32_System_Threading",
 	"Win32_UI_WindowsAndMessaging",
 	"Win32_UI_Shell",
 	"Win32_UI_HiDpi",
+	"Win32_Graphics_Dwm",
 	"Win32_Graphics_Gdi",
 	"Win32_Storage_FileSystem",
 ] }

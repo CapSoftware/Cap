@@ -2,7 +2,6 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
-import { userIsPro } from "@cap/utils";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -12,7 +11,6 @@ import {
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { usePublicEnv } from "@/utils/public-env";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
@@ -35,7 +33,9 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect;
+		data: typeof videos.$inferSelect & {
+			ownerIsPro?: boolean;
+		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
@@ -123,8 +123,6 @@ export const ShareVideo = forwardRef<
 		}
 	}, [chapters]);
 
-	const publicEnv = usePublicEnv();
-
 	let videoSrc: string;
 	let enableCrossOrigin = false;
 
@@ -139,9 +137,9 @@ export const ShareVideo = forwardRef<
 	) {
 		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
 	} else if (data.source.type === "MediaConvert") {
-		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 	} else {
-		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 	}
 
 	return (
@@ -167,7 +165,7 @@ export const ShareVideo = forwardRef<
 				)}
 			</div>
 
-			{!userIsPro(user) && (
+			{!data.ownerIsPro && (
 				<div className="absolute top-4 left-4 z-30">
 					<div
 						className="block cursor-pointer"

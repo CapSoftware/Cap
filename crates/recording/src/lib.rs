@@ -6,10 +6,8 @@ pub mod pipeline;
 pub mod sources;
 pub mod studio_recording;
 
+pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
 pub use sources::{camera, screen_capture};
-pub use studio_recording::{
-    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
-};
 
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;

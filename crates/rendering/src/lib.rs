@@ -1,6 +1,6 @@
 use anyhow::Result;
 use cap_project::{
-    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, Crop, CursorEvents,
+    AspectRatio, CameraShape, CameraXPosition, CameraYPosition, ClipOffsets, Crop, CursorEvents,
     ProjectConfiguration, RecordingMeta, StudioRecordingMeta, XY,
 };
 use composite_frame::CompositeVideoFrameUniforms;
@@ -136,12 +136,16 @@ impl RecordingSegmentDecoders {
         &self,
         segment_time: f32,
         needs_camera: bool,
+        offsets: ClipOffsets,
     ) -> Option<DecodedSegmentFrames> {
         let (screen, camera) = tokio::join!(
             self.screen.get_frame(segment_time),
             OptionFuture::from(
                 needs_camera
-                    .then(|| self.camera.as_ref().map(|d| d.get_frame(segment_time)))
+                    .then(|| self
+                        .camera
+                        .as_ref()
+                        .map(|d| d.get_frame(segment_time + offsets.camera)))
                     .flatten()
             )
         );
@@ -216,6 +220,7 @@ pub async fn render_video_to_channel(
         };
 
         let segment = &segments[segment_i as usize];
+        let clip_config = project.clips.iter().find(|v| v.index == segment_i);
 
         let frame_number = {
             let prev = frame_number;
@@ -224,7 +229,11 @@ pub async fn render_video_to_channel(
 
         if let Some(segment_frames) = segment
             .decoders
-            .get_frames(segment_time as f32, !project.camera.hide)
+            .get_frames(
+                segment_time as f32,
+                !project.camera.hide,
+                clip_config.map(|v| v.offsets).unwrap_or_default(),
+            )
             .await
         {
             let uniforms = ProjectUniforms::new(
@@ -636,7 +645,31 @@ impl ProjectUniforms {
                     .as_ref()
                     .map_or(50.0, |s| s.blur),
                 opacity: scene.screen_opacity as f32,
-                _padding: [0.0; 3],
+                border_enabled: if project
+                    .background
+                    .border
+                    .as_ref()
+                    .map_or(false, |b| b.enabled)
+                {
+                    1.0
+                } else {
+                    0.0
+                },
+                border_width: project.background.border.as_ref().map_or(5.0, |b| b.width),
+                _padding0: 0.0,
+                _padding1: [0.0; 2],
+                _padding1b: [0.0; 2],
+                border_color: if let Some(b) = project.background.border.as_ref() {
+                    [
+                        b.color[0] as f32 / 255.0,
+                        b.color[1] as f32 / 255.0,
+                        b.color[2] as f32 / 255.0,
+                        (b.opacity / 100.0).clamp(0.0, 1.0),
+                    ]
+                } else {
+                    [1.0, 1.0, 1.0, 0.8]
+                },
+                _padding2: [0.0; 4],
             }
         };
 
@@ -745,7 +778,13 @@ impl ProjectUniforms {
                         .as_ref()
                         .map_or(50.0, |s| s.blur),
                     opacity: scene.regular_camera_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
                 }
             });
 
@@ -808,7 +847,13 @@ impl ProjectUniforms {
                     shadow_opacity: 0.0,
                     shadow_blur: 0.0,
                     opacity: scene.camera_only_transition_opacity() as f32,
-                    _padding: [0.0; 3],
+                    border_enabled: 0.0,
+                    border_width: 0.0,
+                    _padding0: 0.0,
+                    _padding1: [0.0; 2],
+                    _padding1b: [0.0; 2],
+                    border_color: [0.0, 0.0, 0.0, 0.0],
+                    _padding2: [0.0; 4],
                 }
             });
 

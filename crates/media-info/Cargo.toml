@@ -8,5 +8,6 @@ ffmpeg.workspace = true
 thiserror.workspace = true
 cpal.workspace = true
 
+
 [lints]
 workspace = true

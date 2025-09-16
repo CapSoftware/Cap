@@ -1,3 +1,4 @@
+import { NumberField } from "@kobalte/core";
 import {
 	Collapsible,
 	Collapsible as KCollapsible,
@@ -31,7 +32,7 @@ import {
 	Suspense,
 	type ValidComponent,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { Dynamic } from "solid-js/web";
 import toast from "solid-toast";
 import colorBg from "~/assets/illustrations/color.webp";
@@ -43,6 +44,7 @@ import { generalSettingsStore } from "~/store";
 import {
 	type BackgroundSource,
 	type CameraShape,
+	type ClipOffsets,
 	commands,
 	type SceneSegment,
 	type StereoMode,
@@ -241,9 +243,9 @@ export function ConfigSidebar() {
 	return (
 		<KTabs
 			value={state.selectedTab}
-			class="flex flex-col shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 relative bg-gray-1 dark:bg-gray-2 border border-gray-3"
+			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 relative bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
-			<KTabs.List class="flex overflow-hidden relative z-40 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0">
+			<KTabs.List class="flex overflow-hidden sticky top-0 z-30 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
 				<For
 					each={[
 						{ id: TAB_IDS.background, icon: IconCapImage },
@@ -304,7 +306,7 @@ export function ConfigSidebar() {
 				style={{
 					"--margin-top-scroll": "5px",
 				}}
-				class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] h-full"
+				class="p-4 custom-scroll overflow-x-hidden overflow-y-scroll text-[0.875rem] flex-1 min-h-0"
 			>
 				<BackgroundConfig scrollRef={scrollRef} />
 				<CameraConfig scrollRef={scrollRef} />
@@ -1070,7 +1072,7 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 						<KTabs class="overflow-hidden relative" value={backgroundTab()}>
 							<KTabs.List
 								ref={setBackgroundRef}
-								class="flex overflow-x-auto overscroll-contain relative z-40 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
+								class="flex overflow-x-auto overscroll-contain relative z-10 flex-row gap-2 items-center mb-3 text-xs hide-scroll"
 								style={{
 									"-webkit-mask-image": `linear-gradient(to right, transparent, black ${
 										scrollX() > 0 ? "24px" : "0"
@@ -1510,6 +1512,86 @@ function BackgroundConfig(props: { scrollRef: HTMLDivElement }) {
 					formatTooltip="%"
 				/>
 			</Field>
+			<Field
+				name="Border"
+				icon={<IconCapSettings class="size-4" />}
+				value={
+					<Toggle
+						checked={project.background.border?.enabled ?? false}
+						onChange={(enabled) => {
+							const prev = project.background.border ?? {
+								enabled: false,
+								width: 5.0,
+								color: [0, 0, 0],
+								opacity: 50.0,
+							};
+
+							setProject("background", "border", {
+								...prev,
+								enabled,
+							});
+						}}
+					/>
+				}
+			/>
+			<Show when={project.background.border?.enabled}>
+				<Field name="Border Width" icon={<IconCapEnlarge class="size-4" />}>
+					<Slider
+						value={[project.background.border?.width ?? 5.0]}
+						onChange={(v) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								width: v[0],
+							})
+						}
+						minValue={1}
+						maxValue={20}
+						step={0.1}
+						formatTooltip="px"
+					/>
+				</Field>
+				<Field name="Border Color" icon={<IconCapImage class="size-4" />}>
+					<RgbInput
+						value={project.background.border?.color ?? [0, 0, 0]}
+						onChange={(color) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								color,
+							})
+						}
+					/>
+				</Field>
+				<Field name="Border Opacity" icon={<IconCapShadow class="size-4" />}>
+					<Slider
+						value={[project.background.border?.opacity ?? 50.0]}
+						onChange={(v) =>
+							setProject("background", "border", {
+								...(project.background.border ?? {
+									enabled: true,
+									width: 5.0,
+									color: [0, 0, 0],
+									opacity: 50.0,
+								}),
+								opacity: v[0],
+							})
+						}
+						minValue={0}
+						maxValue={100}
+						step={0.1}
+						formatTooltip="%"
+					/>
+				</Field>
+			</Show>
 			<Field name="Shadow" icon={<IconCapShadow class="size-4" />}>
 				<Slider
 					value={[project.background.shadow!]}
@@ -1839,9 +1921,7 @@ function ZoomSegmentPreview(props: {
 	const video = document.createElement("video");
 	createEffect(() => {
 		const path = convertFileSrc(
-			`${
-				editorInstance.path
-			}/content/segments/segment-${segmentIndex()}/display.mp4`,
+			`${editorInstance.path}/content/segments/segment-${segmentIndex()}/display.mp4`,
 		);
 		video.src = path;
 		video.preload = "auto";
@@ -2239,8 +2319,32 @@ function ClipSegmentConfig(props: {
 	segmentIndex: number;
 	segment: TimelineSegment;
 }) {
-	const { setProject, setEditorState, project, projectActions } =
+	const { setProject, setEditorState, project, projectActions, meta } =
 		useEditorContext();
+
+	// Get current clip configuration
+	const clipConfig = () =>
+		project.clips?.find((c) => c.index === props.segmentIndex);
+	const offsets = () => clipConfig()?.offsets || {};
+
+	function setOffset(type: keyof ClipOffsets, offset: number) {
+		if (Number.isNaN(offset)) return;
+
+		setProject(
+			produce((proj) => {
+				const clips = (proj.clips ??= []);
+				let clip = clips.find(
+					(clip) => clip.index === (props.segment.recordingSegment ?? 0),
+				);
+				if (!clip) {
+					clip = { index: 0, offsets: {} };
+					clips.push(clip);
+				}
+
+				clip.offsets[type] = offset / 1000;
+			}),
+		);
+	}
 
 	return (
 		<>
@@ -2270,17 +2374,108 @@ function ClipSegmentConfig(props: {
 					Delete
 				</EditorButton>
 			</div>
-			<ComingSoonTooltip>
-				<Field name="Hide Cursor" disabled value={<Toggle disabled />} />
-			</ComingSoonTooltip>
-			<ComingSoonTooltip>
-				<Field
-					name="Disable Smooth Cursor Movement"
-					disabled
-					value={<Toggle disabled />}
+
+			<div class="space-y-1">
+				<h3 class="font-medium text-gray-12">Clip Settings</h3>
+				<p class="text-gray-11">
+					These settings apply to all segments for the current clip
+				</p>
+			</div>
+
+			{meta().hasSystemAudio && (
+				<SourceOffsetField
+					name="System Audio Offset"
+					value={offsets().system_audio}
+					onChange={(offset) => {
+						setOffset("system_audio", offset);
+					}}
 				/>
-			</ComingSoonTooltip>
+			)}
+			{meta().hasMicrophone && (
+				<SourceOffsetField
+					name="Microphone Offset"
+					value={offsets().mic}
+					onChange={(offset) => {
+						setOffset("mic", offset);
+					}}
+				/>
+			)}
+			{meta().hasCamera && (
+				<SourceOffsetField
+					name="Camera Offset"
+					value={offsets().camera}
+					onChange={(offset) => {
+						setOffset("camera", offset);
+					}}
+				/>
+			)}
+
+			{/*<ComingSoonTooltip>
+			<Field name="Hide Cursor" disabled value={<Toggle disabled />} />
+		</ComingSoonTooltip>
+		<ComingSoonTooltip>
+			<Field
+				name="Disable Smooth Cursor Movement"
+				disabled
+				value={<Toggle disabled />}
+			/>
+		</ComingSoonTooltip>*/}
 		</>
+	);
+}
+
+function SourceOffsetField(props: {
+	name: string;
+	// seconds
+	value?: number;
+	onChange: (value: number) => void;
+}) {
+	const rawValue = () => Math.round((props.value ?? 0) * 1000);
+
+	const [value, setValue] = createSignal(rawValue().toString());
+
+	return (
+		<Field name={props.name}>
+			<div class="flex flex-row items-center justify-between w-full -mt-2">
+				<div class="flex flex-row space-x-1 items-end">
+					<NumberField.Root
+						value={value()}
+						onChange={setValue}
+						rawValue={rawValue()}
+						onRawValueChange={(v) => {
+							props.onChange(v);
+						}}
+					>
+						<NumberField.Input
+							onBlur={() => {
+								if (!rawValue() || value() === "" || Number.isNaN(rawValue())) {
+									setValue("0");
+									props.onChange(0);
+								}
+							}}
+							class="w-[5rem] p-[0.375rem] border rounded-[0.5rem] bg-gray-1 focus-visible:outline-none"
+						/>
+					</NumberField.Root>
+					<span class="text-gray-11">ms</span>
+				</div>
+				<div class="text-gray-11 flex flex-row space-x-1">
+					{[-100, -10, 10, 100].map((v) => (
+						<button
+							type="button"
+							onClick={() => {
+								const currentValue = rawValue() + v;
+								props.onChange(currentValue);
+								setValue(currentValue.toString());
+							}}
+							class="text-gray-11 hover:text-gray-12 text-xs px-1 py-0.5 bg-gray-1 border border-gray-3 rounded"
+						>
+							{Math.sign(v) > 0 ? "+" : "-"}
+							{Math.abs(v)}ms
+						</button>
+					))}
+				</div>
+			</div>
+		</Field>
 	);
 }
 
@@ -2413,6 +2608,7 @@ function RgbInput(props: {
 				ref={colorInput}
 				type="color"
 				class="absolute left-0 bottom-0 w-[3rem] opacity-0"
+				value={rgbToHex(props.value)}
 				onChange={(e) => {
 					const value = hexToRgb(e.target.value);
 					if (value) props.onChange(value);

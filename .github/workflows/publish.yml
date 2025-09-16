@@ -213,8 +213,11 @@ jobs:
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
         with:
+          working-directory: apps/desktop
           command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+        env:
+          TAURI_BUNDLE_PATH: ../..
 
       - name: Upload debug symbols to Sentry
         if: ${{ matrix.settings.runner == 'macos-latest' }}

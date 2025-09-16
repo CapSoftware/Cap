@@ -9,6 +9,7 @@ thiserror.workspace = true
 inquire = "0.7.5"
 
 [target.'cfg(windows)'.dependencies]
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
 cap-camera-mediafoundation = { path = "../camera-mediafoundation" }
 cap-camera-directshow = { path = "../camera-directshow" }
 

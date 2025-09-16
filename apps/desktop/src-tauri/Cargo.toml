@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.67"
+version = "0.3.68"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -57,7 +57,7 @@ mp4 = "0.14.0"
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = { workspace = true }
-axum = { version = "0.7.5", features = ["ws"] }
+axum = { version = "0.7.5", features = ["ws", "macros"] }
 tracing.workspace = true
 tempfile = "3.9.0"
 ffmpeg.workspace = true

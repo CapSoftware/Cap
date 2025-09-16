@@ -4,11 +4,11 @@ import type { Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useEffectMutation } from "@/lib/EffectRuntime";
-import { Rpc } from "@/lib/Rpcs";
+import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
@@ -27,13 +27,13 @@ export default function FolderVideosSection({
 	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
-	const { isUploading } = useUploadingContext();
-	const { activeOrganization, user } = useDashboardContext();
+	const { isUploading, uploadingCapId } = useUploadingContext();
+	const { user } = useDashboardContext();
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
 
-	const deleteCaps = useEffectMutation({
+	const { mutate: deleteCaps, isPending: isDeletingCaps } = useEffectMutation({
 		mutationFn: Effect.fn(function* (ids: Video.VideoId[]) {
 			if (ids.length === 0) return;
 
@@ -63,9 +63,7 @@ export default function FolderVideosSection({
 			}).pipe(Effect.fork);
 
 			toast.promise(Effect.runPromise(fiber.await.pipe(Effect.flatten)), {
-				loading: `Deleting ${selectedCaps.length} cap${
-					selectedCaps.length === 1 ? "" : "s"
-				}...`,
+				loading: `Deleting ${ids.length} cap${ids.length === 1 ? "" : "s"}...`,
 				success: (data) => {
 					if (data.error) {
 						return `Successfully deleted ${data.success} cap${
@@ -87,6 +85,17 @@ export default function FolderVideosSection({
 		onSuccess: () => {
 			setSelectedCaps([]);
 			router.refresh();
+		},
+	});
+
+	const { mutate: deleteCap, isPending: isDeletingCap } = useEffectMutation({
+		mutationFn: (id: Video.VideoId) => withRpc((r) => r.VideoDelete(id)),
+		onSuccess: () => {
+			toast.success("Cap deleted successfully");
+			router.refresh();
+		},
+		onError: () => {
+			toast.error("Failed to delete cap");
 		},
 	});
 
@@ -146,6 +155,14 @@ export default function FolderVideosSection({
 		refetchOnMount: true,
 	});
 
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? initialVideos.filter((video) => video.id !== uploadingCapId)
+				: initialVideos,
+		[initialVideos, isUploading, uploadingCapId],
+	);
+
 	const analytics = analyticsData || {};
 
 	return (
@@ -154,7 +171,7 @@ export default function FolderVideosSection({
 				<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
 			</div>
 			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-				{initialVideos.length === 0 && !isUploading ? (
+				{visibleVideos.length === 0 && !isUploading ? (
 					<p className="col-span-full text-gray-9">
 						No videos in this folder yet. Drag and drop into the folder or
 						upload.
@@ -164,7 +181,7 @@ export default function FolderVideosSection({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-						{initialVideos.map((video) => (
+						{visibleVideos.map((video) => (
 							<CapCard
 								key={video.id}
 								cap={video}
@@ -173,9 +190,15 @@ export default function FolderVideosSection({
 								isLoadingAnalytics={isLoadingAnalytics}
 								isSelected={selectedCaps.includes(video.id)}
 								anyCapSelected={selectedCaps.length > 0}
-								isDeleting={deleteCaps.isPending}
+								isDeleting={isDeletingCaps || isDeletingCap}
 								onSelectToggle={() => handleCapSelection(video.id)}
-								onDelete={() => deleteCaps.mutateAsync(selectedCaps)}
+								onDelete={() => {
+									if (selectedCaps.length > 0) {
+										deleteCaps(selectedCaps);
+									} else {
+										deleteCap(video.id);
+									}
+								}}
 							/>
 						))}
 					</>
@@ -184,8 +207,8 @@ export default function FolderVideosSection({
 			<SelectedCapsBar
 				selectedCaps={selectedCaps}
 				setSelectedCaps={setSelectedCaps}
-				deleteSelectedCaps={() => deleteCaps.mutateAsync(selectedCaps)}
-				isDeleting={deleteCaps.isPending}
+				deleteSelectedCaps={() => deleteCaps(selectedCaps)}
+				isDeleting={isDeletingCaps || isDeletingCap}
 			/>
 		</>
 	);

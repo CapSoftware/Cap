@@ -24,11 +24,8 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
 
 #[derive(Actor)]
 struct FrameHandler {
-    start_time_unix: f64,
-    start_cmtime: f64,
-    start_time_f64: f64,
-    video_tx: Sender<(arc::R<cm::SampleBuf>, f64)>,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+    video_tx: Sender<(arc::R<cm::SampleBuf>, Timestamp)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
 }
 
 impl Message<NewFrame> for FrameHandler {
@@ -42,9 +39,9 @@ impl Message<NewFrame> for FrameHandler {
         let frame = msg.0;
         let sample_buffer = frame.sample_buf();
 
-        let frame_time = sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
-        let unix_timestamp = self.start_time_unix + frame_time - self.start_cmtime;
-        let relative_time = unix_timestamp - self.start_time_f64;
+        let mach_timestamp = cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts());
+        let timestamp =
+            Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(mach_timestamp));
 
         match &frame {
             scap_screencapturekit::Frame::Screen(frame) => {
@@ -61,7 +58,7 @@ impl Message<NewFrame> for FrameHandler {
                 if check_skip_send().is_ok()
                     && self
                         .video_tx
-                        .send((sample_buffer.retained(), relative_time))
+                        .send((sample_buffer.retained(), timestamp))
                         .is_err()
                 {
                     warn!("Pipeline is unreachable");
@@ -93,16 +90,12 @@ impl Message<NewFrame> for FrameHandler {
                 frame.set_rate(48_000);
                 let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                 for i in 0..frame.planes() {
-                    use cap_media_info::PlanarData;
-
-                    frame.plane_data_mut(i).copy_from_slice(
+                    frame.data_mut(i).copy_from_slice(
                         &slice[i * data_bytes_size as usize..(i + 1) * data_bytes_size as usize],
                     );
                 }
 
-                frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
-
-                let _ = audio_tx.send((frame, relative_time));
+                let _ = audio_tx.send((frame, timestamp));
             }
             _ => {}
         }
@@ -129,20 +122,6 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        let start = std::time::SystemTime::now();
-        let start_time_unix = start
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs_f64();
-        let start_cmtime = cidre::cm::Clock::host_time_clock().time();
-        let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
-
-        let start_time_f64 = self
-            .start_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
-
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
         let config = self.config.clone();
@@ -150,13 +129,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         self.tokio_handle
             .block_on(async move {
                 let captures_audio = audio_tx.is_some();
-                let frame_handler = FrameHandler::spawn(FrameHandler {
-                    video_tx,
-                    audio_tx,
-                    start_time_unix,
-                    start_cmtime,
-                    start_time_f64,
-                });
+                let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx });
 
                 let display = Display::from_id(&config.display)
                     .ok_or_else(|| SourceError::NoDisplay(config.display))?;
@@ -191,6 +164,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .build();
 
                 settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+                settings.set_color_space_name(cg::color_space::names::srgb());
 
                 if let Some(crop_bounds) = config.crop_bounds {
                     tracing::info!("crop bounds: {:?}", crop_bounds);
