@@ -133,8 +133,45 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			),
 		);
 
+		const getProvider = Effect.fn("S3Buckets.getProviderLayer")(function* (
+			customBucket: Option.Option<S3Bucket.S3Bucket>,
+		) {
+			const layer = yield* Option.match(customBucket, {
+				onNone: () => {
+					const provider = Layer.succeed(S3BucketClientProvider, {
+						getInternal: Effect.succeed(createDefaultClient(true)),
+						getPublic: Effect.succeed(createDefaultClient(false)),
+						bucket: defaultConfigs.bucket,
+					});
+
+					return Option.match(cloudfrontBucketAccess, {
+						onSome: (access) => access,
+						onNone: () => defaultBucketAccess,
+					}).pipe(Layer.merge(provider), Effect.succeed);
+				},
+				onSome: (customBucket) =>
+					Effect.gen(function* () {
+						const bucket = yield* Effect.promise(() =>
+							decrypt(customBucket.name),
+						);
+
+						const provider = Layer.succeed(S3BucketClientProvider, {
+							getInternal: Effect.promise(() =>
+								createBucketClient(customBucket),
+							),
+							getPublic: Effect.promise(() => createBucketClient(customBucket)),
+							bucket,
+						});
+
+						return Layer.merge(defaultBucketAccess, provider);
+					}),
+			});
+
+			return [layer, customBucket] as const;
+		});
+
 		return {
-			getProviderLayer: Effect.fn("S3Buckets.getProviderLayer")(function* (
+			getProviderById: Effect.fn("S3Buckets.getProviderById")(function* (
 				bucketId: Option.Option<S3Bucket.S3BucketId>,
 			) {
 				const customBucket = yield* bucketId.pipe(
@@ -143,38 +180,16 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					Effect.map(Option.flatten),
 				);
 
-				let layer;
+				return yield* getProvider(customBucket);
+			}),
+			getProviderForUser: Effect.fn("S3Buckets.getProviderForUser")(function* (
+				userId: string,
+			) {
+				const customBucket = yield* repo
+					.getForUser(userId)
+					.pipe(Effect.option, Effect.map(Option.flatten));
 
-				if (Option.isNone(customBucket)) {
-					const provider = Layer.succeed(S3BucketClientProvider, {
-						getInternal: Effect.succeed(createDefaultClient(true)),
-						getPublic: Effect.succeed(createDefaultClient(false)),
-						bucket: defaultConfigs.bucket,
-					});
-
-					layer = Option.match(cloudfrontBucketAccess, {
-						onSome: (access) => access,
-						onNone: () => defaultBucketAccess,
-					}).pipe(Layer.merge(provider));
-				} else {
-					layer = defaultBucketAccess.pipe(
-						Layer.merge(
-							Layer.succeed(S3BucketClientProvider, {
-								getInternal: Effect.promise(() =>
-									createBucketClient(customBucket.value),
-								),
-								getPublic: Effect.promise(() =>
-									createBucketClient(customBucket.value),
-								),
-								bucket: yield* Effect.promise(() =>
-									decrypt(customBucket.value.name),
-								),
-							}),
-						),
-					);
-				}
-
-				return [layer, customBucket] as const;
+				return yield* getProvider(customBucket);
 			}),
 		};
 	}),

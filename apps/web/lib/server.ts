@@ -10,10 +10,21 @@ import {
 	S3Buckets,
 	Videos,
 	VideosPolicy,
+	WorkflowsLayer,
 } from "@cap/web-backend";
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
+import {
+	ClusterWorkflowEngine,
+	MessageStorage,
+	Runners,
+	Sharding,
+	ShardingConfig,
+	ShardManager,
+	ShardStorage,
+} from "@effect/cluster";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
+	FetchHttpClient,
 	type HttpApi,
 	HttpApiBuilder,
 	HttpMiddleware,
@@ -22,6 +33,7 @@ import {
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
 import { isNotFoundError } from "next/dist/client/components/not-found";
 import { cookies } from "next/headers";
+
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
 
@@ -48,13 +60,27 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
-export const Dependencies = Layer.mergeAll(
-	S3Buckets.Default,
-	Videos.Default,
-	VideosPolicy.Default,
-	Folders.Default,
-	TracingLayer,
-).pipe(Layer.provideMerge(DatabaseLive));
+const WorkflowEngine = ClusterWorkflowEngine.layer.pipe(
+	Layer.provideMerge(Sharding.layer),
+	Layer.provide(ShardManager.layerClientLocal),
+	Layer.provide(ShardStorage.layerNoop),
+	Layer.provide(Runners.layerNoop),
+	Layer.provideMerge(MessageStorage.layerMemory),
+	Layer.provide(ShardingConfig.layer()),
+);
+
+export const Dependencies = WorkflowsLayer.pipe(
+	Layer.provideMerge(
+		Layer.mergeAll(
+			S3Buckets.Default,
+			Videos.Default,
+			VideosPolicy.Default,
+			Folders.Default,
+			FetchHttpClient.layer,
+			WorkflowEngine,
+		).pipe(Layer.provideMerge(Layer.mergeAll(DatabaseLive, TracingLayer))),
+	),
+);
 
 // purposefully not exposed
 const EffectRuntime = ManagedRuntime.make(Dependencies);

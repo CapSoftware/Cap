@@ -6,7 +6,8 @@
 	"type": "module",
 	"dependencies": {
 		"@effect/platform": "^0.90.1",
-		"@effect/rpc": "^0.68.3",
-		"effect": "^3.17.7"
+		"@effect/rpc": "^0.69.2",
+		"@effect/workflow": "^0.9.5",
+		"effect": "^3.17.13"
 	}
 }

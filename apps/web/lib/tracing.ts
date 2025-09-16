@@ -22,7 +22,7 @@ export const getTracingConfig = Effect.gen(function* () {
 	return {
 		resource: { serviceName: "cap-web" },
 		spanProcessor: Option.match(axiomProcessor, {
-			onNone: () => [],
+			onNone: () => [new BatchSpanProcessor(new OTLPTraceExporter({}))],
 			onSome: (processor) => [processor],
 		}),
 	};

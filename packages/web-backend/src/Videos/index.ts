@@ -1,5 +1,6 @@
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import { Array, Effect, Option } from "effect";
+
 import { S3Buckets } from "../S3Buckets";
 import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
 import { VideosPolicy } from "./VideosPolicy";
@@ -35,7 +36,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderLayer(
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderById(
 					video.bucketId,
 				);
 
@@ -75,7 +76,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Policy.withPolicy(policy.isOwner(videoId)),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderLayer(
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderById(
 					video.bucketId,
 				);
 
