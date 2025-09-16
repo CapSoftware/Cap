@@ -42,9 +42,6 @@ interface Props {
 	toggleMobileNav?: () => void;
 }
 
-export const navItemClass =
-	"flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden";
-
 const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const pathname = usePathname();
 	const [open, setOpen] = useState(false);
@@ -191,7 +188,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 															? "pointer-events-none"
 															: "text-gray-10 hover:text-gray-12 hover:bg-gray-6",
 													)}
-													key={organization.organization.name + "-organization"}
+													key={`${organization.organization.name}-organization`}
 													onSelect={async () => {
 														await updateActiveOrganization(
 															organization.organization.id,
@@ -436,7 +433,7 @@ const NavItem = ({
 					isPathActive(href)
 						? "bg-transparent pointer-events-none"
 						: "hover:bg-gray-2",
-					navItemClass,
+					"flex overflow-hidden justify-start items-center tracking-tight rounded-xl outline-none",
 				)}
 			>
 				{cloneElement(icon, {
