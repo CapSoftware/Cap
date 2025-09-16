@@ -8,14 +8,33 @@ import { AnimatePresence, motion } from "motion/react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type MutableRefObject, useRef, useState } from "react";
+import {
+	Dispatch,
+	LegacyRef,
+	type MutableRefObject,
+	SetStateAction,
+	useRef,
+	useState,
+} from "react";
 import { useDashboardContext } from "../Contexts";
 import { CapIcon, CogIcon, LayersIcon } from "./AnimatedIcons";
 import { updateActiveOrganization } from "./Navbar/server";
 
+const Tabs = [
+	{ icon: <LayersIcon size={20} />, href: "/dashboard/spaces/browse" },
+	{ icon: <CapIcon size={25} />, href: "/dashboard/caps" },
+	{
+		icon: <CogIcon size={22} />,
+		href: "/dashboard/settings/organization",
+		ownerOnly: true,
+	},
+];
+
 const MobileTab = () => {
 	const [open, setOpen] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const { activeOrganization: activeOrg, user } = useDashboardContext();
+	const isOwner = activeOrg?.organization.ownerId === user.id;
 	const menuRef = useClickAway((e) => {
 		if (
 			containerRef.current &&
@@ -23,7 +42,7 @@ const MobileTab = () => {
 		) {
 			setOpen(false);
 		}
-	});
+	})
 	return (
 		<div className="flex sticky bottom-0 z-50 flex-1 justify-between items-center px-5 w-screen h-16 border-t lg:hidden border-gray-5 bg-gray-1">
 			<AnimatePresence>
@@ -31,15 +50,11 @@ const MobileTab = () => {
 			</AnimatePresence>
 			<Orgs open={open} setOpen={setOpen} containerRef={containerRef} />
 			<div className="flex gap-6 justify-between items-center h-full text-gray-11">
-				<Link href="/dashboard/spaces/browse">
-					<LayersIcon size={20} />
-				</Link>
-				<Link href="/dashboard/caps">
-					<CapIcon size={25} />
-				</Link>
-				<Link href="/dashboard/settings/organization">
-					<CogIcon size={22} />
-				</Link>
+				{Tabs.filter((i) => !i.ownerOnly || isOwner).map((tab) => (
+					<Link href={tab.href} key={tab.href}>
+						{tab.icon}
+					</Link>
+				))}
 			</div>
 		</div>
 	);
@@ -50,7 +65,7 @@ const Orgs = ({
 	open,
 	containerRef,
 }: {
-	setOpen: (open: boolean) => void;
+	setOpen: Dispatch<SetStateAction<boolean>>;
 	open: boolean;
 	containerRef: MutableRefObject<HTMLDivElement | null>;
 }) => {
@@ -94,8 +109,8 @@ const OrgsMenu = ({
 	setOpen,
 	menuRef,
 }: {
-	setOpen: (open: boolean) => void;
-	menuRef: MutableRefObject<Element>;
+	setOpen: Dispatch<SetStateAction<boolean>>;
+	menuRef:  MutableRefObject<HTMLDivElement | null>
 }) => {
 	const { activeOrganization: activeOrg, organizationData: orgData } =
 		useDashboardContext();
@@ -106,7 +121,7 @@ const OrgsMenu = ({
 			animate={{ scale: 1, opacity: 1 }}
 			exit={{ scale: 0.9, opacity: 0 }}
 			transition={{ duration: 0.15 }}
-			ref={menuRef}
+			ref={menuRef as LegacyRef<HTMLDivElement | undefined>}
 			className={
 				"isolate absolute overscroll-contain bottom-14 p-2 space-y-1.5 w-full rounded-xl h-fit border bg-gray-3 max-h-[325px] custom-scroll max-w-[200px] border-gray-4"
 			}
