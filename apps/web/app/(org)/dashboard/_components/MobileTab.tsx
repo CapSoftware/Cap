@@ -121,7 +121,7 @@ const OrgsMenu = ({
 			animate={{ scale: 1, opacity: 1 }}
 			exit={{ scale: 0.9, opacity: 0 }}
 			transition={{ duration: 0.15 }}
-			ref={menuRef as LegacyRef<HTMLDivElement | undefined>}
+			ref={menuRef as LegacyRef<HTMLDivElement>}
 			className={
 				"isolate absolute overscroll-contain bottom-14 p-2 space-y-1.5 w-full rounded-xl h-fit border bg-gray-3 max-h-[325px] custom-scroll max-w-[200px] border-gray-4"
 			}
