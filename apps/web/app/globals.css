@@ -62,6 +62,17 @@ body {
 	min-height: 100dvh;
 }
 
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
+}
+
 .left-perspective {
 	transform: scale(1.2) rotateX(47deg) rotateY(31deg) rotate(324deg);
 }
@@ -76,9 +87,8 @@ body {
 	border-radius: 10px;
 }
 
-/* Handle */
 ::-webkit-scrollbar-thumb {
-	background: rgb(116, 116, 116);
+	background: var(--gray-7);
 	border-radius: 10px;
 }
 
