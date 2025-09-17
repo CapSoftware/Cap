@@ -46,8 +46,8 @@ body {
 	overflow-x: hidden;
 }
 
-html, 
-body {
+body,
+html {
 	color: #000000;
 	background-color: #f2f2f2;
 }
