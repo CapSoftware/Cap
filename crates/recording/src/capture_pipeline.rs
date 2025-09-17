@@ -26,6 +26,7 @@ pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
             flume::Receiver<(Self::VideoFormat, Timestamp)>,
         ),
         output_path: PathBuf,
+        start_time: Timestamps,
     ) -> Result<(PipelineBuilder, flume::Receiver<Timestamp>), MediaError>
     where
         Self: Sized;
@@ -54,6 +55,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
             flume::Receiver<(Self::VideoFormat, Timestamp)>,
         ),
         output_path: PathBuf,
+        _start_time: Timestamps,
     ) -> Result<(PipelineBuilder, flume::Receiver<Timestamp>), MediaError> {
         let screen_config = source.0.info();
         tracing::info!("screen config: {:?}", screen_config);
@@ -234,6 +236,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
             flume::Receiver<(Self::VideoFormat, Timestamp)>,
         ),
         output_path: PathBuf,
+        start_time: Timestamps,
     ) -> Result<(PipelineBuilder, flume::Receiver<Timestamp>), MediaError>
     where
         Self: Sized,
@@ -279,10 +282,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     either::Left((encoder, muxer))
                 }
                 Err(e) => {
-                    use tracing::{error, info};
-
-                    error!("Failed to create native encoder: {e}");
-                    info!("Falling back to software H264 encoder");
+                    tracing::error!("Failed to create native encoder: {e}");
+                    tracing::info!("Falling back to software H264 encoder");
 
                     either::Right(
                         cap_enc_ffmpeg::H264Encoder::builder("screen", screen_config)
@@ -351,6 +352,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         .map_err(|e| format!("EncoderFinish: {e}"))?;
                 }
                 either::Right(mut encoder) => {
+                    let mut first_timestamp = None;
                     let mut timestamp_tx = Some(timestamp_tx);
                     let _ = ready.send(Ok(()));
 
@@ -361,9 +363,15 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                             let _ = timestamp_tx.send(timestamp);
                         }
 
-                        let ff_frame = frame
+                        let first_timestamp = first_timestamp.get_or_insert(timestamp);
+
+                        let mut ff_frame = frame
                             .as_ffmpeg()
                             .map_err(|e| format!("FrameAsFfmpeg: {e}"))?;
+
+                        let elapsed = timestamp.duration_since(start_time)
+                            - first_timestamp.duration_since(start_time);
+                        ff_frame.set_pts(Some(encoder.get_pts(elapsed)));
 
                         encoder.queue_frame(ff_frame, &mut output);
                     }

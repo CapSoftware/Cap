@@ -752,6 +752,7 @@ async fn create_segment_pipeline(
                 pipeline_builder,
                 (screen_source, screen_rx),
                 screen_output_path.clone(),
+                start_time,
             )
             .unwrap();
         pipeline_builder = pipeline_builder_;
