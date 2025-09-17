@@ -46,10 +46,19 @@ body {
 	overflow-x: hidden;
 }
 
-body,
-html {
+html, body {
 	color: #000000;
 	background-color: #f2f2f2;
+}
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
 }
 
 .left-perspective {
@@ -289,6 +298,16 @@ a.bg-primary:hover {
 		linear-gradient(#fff 0 0);
 	-webkit-mask-composite: xor;
 	mask-composite: exclude;
+}
+
+@media all and (max-width: 1024px) {
+	.dashboard-grid {
+		grid-template-columns: 1fr;
+		grid-template-rows: 1fr;
+		grid-template-areas:
+			"main"
+			"main";
+	}
 }
 
 @media (prefers-color-scheme: dark) {
