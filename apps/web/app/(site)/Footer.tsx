@@ -95,6 +95,7 @@ const footerLinks = {
 		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
 		{ label: "Screen Recording Software", href: "/screen-recording-software" },
 		{ label: "Cap vs Loom", href: "/loom-alternative" },
+		{ label: "Student Discount", href: "/student-discount" },
 	] as FooterLink[],
 };
 
