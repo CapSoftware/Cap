@@ -31,10 +31,10 @@ export const DesktopNav = () => {
 	}, [toggleSidebarCollapsed]);
 
 	return (
-		<motion.div
+		<motion.aside
 			initial={false}
 			animate={{
-				width: sidebarCollapsed ? 70 : 230,
+				width: sidebarCollapsed ? 70 : 220,
 				transition: {
 					duration: 0.6,
 					type: "spring",
@@ -42,10 +42,10 @@ export const DesktopNav = () => {
 				},
 			}}
 			className={clsx(
-				"hidden relative z-50 h-full will-change-[width] lg:flex group bg-gray-1",
+				"hidden relative z-50 flex-1 h-full [grid-area:sidebar] will-change-[width] lg:flex group bg-gray-1",
 			)}
 		>
-			<div className="flex flex-col w-full max-w-[220px] mx-auto h-full">
+			<div className="flex flex-col mx-auto w-full h-full">
 				<div className="flex justify-start items-center px-3 pt-5 mb-3.5 w-full truncate min-h-8">
 					<Link href="/dashboard">
 						<Logo
@@ -80,7 +80,7 @@ export const DesktopNav = () => {
 					</Button>
 				</Tooltip>
 			</div>
-		</motion.div>
+		</motion.aside>
 	);
 };
 
