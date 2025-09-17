@@ -80,7 +80,7 @@ export default async function DashboardLayout({
 				userPreferences={userPreferences}
 			>
 				<div className="dashboard-grid">
-						<DesktopNav />
+					<DesktopNav />
 					<div className="flex h-full [grid-area:main] focus:outline-none">
 						<MobileNav />
 						<DashboardInner>{children}</DashboardInner>

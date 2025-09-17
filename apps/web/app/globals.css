@@ -79,13 +79,7 @@ html {
 }
 
 ::-webkit-scrollbar-thumb {
-	background: rgb(178, 178, 178);
-	border-radius: 10px;
-}
-
-/* Handle */
-.dark ::-webkit-scrollbar-thumb {
-	background: rgb(61, 61, 61);
+	background: var(--gray-7);
 	border-radius: 10px;
 }
 

@@ -61,7 +61,11 @@ const Top = () => {
 		"/dashboard/spaces/browse": "Browse Spaces",
 	};
 
-	const title = activeSpace ? activeSpace.name : pathname.includes("/dashboard/folder") ? "Caps" : titles[pathname] || "";
+	const title = activeSpace
+		? activeSpace.name
+		: pathname.includes("/dashboard/folder")
+			? "Caps"
+			: titles[pathname] || "";
 
 	const notificationsRef: MutableRefObject<HTMLDivElement> = useClickAway(
 		(e) => {
