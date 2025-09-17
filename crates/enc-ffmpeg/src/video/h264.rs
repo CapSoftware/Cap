@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
     Dictionary,
@@ -103,7 +105,7 @@ impl H264EncoderBuilder {
         encoder.set_width(input_config.width);
         encoder.set_height(input_config.height);
         encoder.set_format(format);
-        encoder.set_time_base(input_config.frame_rate.invert());
+        encoder.set_time_base(input_config.time_base);
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
         // let target_bitrate = compression.bitrate();
@@ -121,7 +123,7 @@ impl H264EncoderBuilder {
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
-        output_stream.set_time_base(input_config.frame_rate.invert());
+        // output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&video_encoder);
 
@@ -147,6 +149,8 @@ pub struct H264Encoder {
 }
 
 impl H264Encoder {
+    const TIME_BASE: i32 = 15000;
+
     pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
         H264EncoderBuilder::new(name, input_config)
     }
@@ -202,6 +206,11 @@ impl H264Encoder {
             return;
         }
         self.process_frame(output);
+    }
+
+    pub fn get_pts(&self, duration: Duration) -> i64 {
+        (duration.as_secs_f32() * self.config.time_base.denominator() as f32
+            / self.config.time_base.numerator() as f32) as i64
     }
 }
 
