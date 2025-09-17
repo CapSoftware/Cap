@@ -2,9 +2,11 @@
 
 import { Button } from "@cap/ui";
 import MuxPlayer from "@mux/mux-player-react";
+import Image from "next/image";
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useId } from "react";
 import { formatDate } from "../../lib/utils";
+import { generateGradientFromSlug } from "../../utils/gradients";
 
 interface BlogPost {
 	title: string;
@@ -15,6 +17,8 @@ interface BlogPost {
 	author: string;
 	tags: string[];
 	heroTLDR: string;
+	slug: string;
+	gradientColors?: string[];
 	comparisonTable?: {
 		title: string;
 		headers: string[];
@@ -75,14 +79,22 @@ const renderHTML = (content: string) => {
 		'<a class="font-semibold text-blue-500 transition-colors hover:text-blue-600" ',
 	);
 
-	return <div dangerouslySetInnerHTML={{ __html: styledContent }} />;
+	return (
+		<div
+			className="prose prose-lg"
+			dangerouslySetInnerHTML={{ __html: styledContent }}
+		/>
+	);
 };
 
 export const BlogTemplate = ({ content }: { content: BlogPost }) => {
+	const cloud1Id = useId();
+	const cloud2Id = useId();
+
 	useEffect(() => {
 		const animateClouds = () => {
-			const cloud1 = document.getElementById("blog-cloud-1");
-			const cloud2 = document.getElementById("blog-cloud-2");
+			const cloud1 = document.getElementById(cloud1Id);
+			const cloud2 = document.getElementById(cloud2Id);
 
 			if (cloud1 && cloud2) {
 				cloud1.animate(
@@ -116,11 +128,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 		};
 
 		animateClouds();
-	}, []);
+	}, [cloud1Id, cloud2Id]);
 
 	return (
 		<article className="relative z-10 px-3 py-32 mx-auto max-w-3xl md:py-40">
-			{/* Header */}
 			<header className="mb-16 text-center">
 				<div className="mb-4 text-sm font-medium text-blue-600 fade-in-down">
 					{content.category}
@@ -140,19 +151,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</div>
 			</header>
 
-			{/* Featured Image */}
-			{content.image && (
-				<div className="overflow-hidden mb-12 rounded-xl shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-					<img
-						src={content.image}
-						alt={content.title}
-						className="object-cover w-full h-auto"
-					/>
-				</div>
-			)}
-
-			{/* Hero TL;DR */}
-			<div className="p-8 mb-12 bg-blue-50 rounded-xl border border-blue-100 shadow-md transition-all duration-300 transform hover:shadow-xl hover:-translate-y-1">
+			<div className="p-8 mb-12 bg-blue-50 rounded-xl border border-blue-100 shadow-md">
 				<h2 className="inline-block relative mb-4 text-2xl font-medium text-gray-900">
 					TL;DR
 					<span className="absolute left-0 -bottom-1 w-16 h-1 bg-blue-500 rounded-full"></span>
@@ -163,14 +162,13 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 						href={content.cta.buttonLink}
 						size="lg"
 						variant="blue"
-						className="px-6 py-3 shadow-lg transition-all duration-300 transform hover:shadow-xl hover:-translate-y-1"
+						className="px-6 py-3 shadow-lg"
 					>
 						{content.cta.buttonText}
 					</Button>
 				</div>
 			</div>
 
-			{/* Comparison Table */}
 			{content.comparisonTable && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-8 text-3xl font-medium text-gray-900">
@@ -179,28 +177,30 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 
 					<div className="overflow-x-auto">
-						<table className="overflow-hidden w-full rounded-lg shadow-md border-collapse transition-all duration-300 hover:shadow-lg">
+						<table className="overflow-hidden w-full rounded-lg shadow-md border-collapse">
 							<thead className="bg-blue-50">
 								<tr>
-									{content.comparisonTable.headers.map((header, index) => (
-										<th
-											key={index}
-											className="px-6 py-4 font-semibold text-left text-gray-700 border-b border-gray-200"
-										>
-											{header}
-										</th>
-									))}
+									{content.comparisonTable.headers.map(
+										(header, headerIndex) => (
+											<th
+												key={`header-${headerIndex}-${header}`}
+												className="px-6 py-4 font-semibold text-left text-gray-700 border-b border-gray-200"
+											>
+												{header}
+											</th>
+										),
+									)}
 								</tr>
 							</thead>
 							<tbody>
 								{content.comparisonTable.rows.map((row, rowIndex) => (
 									<tr
-										key={rowIndex}
+										key={`row-${rowIndex}`}
 										className={rowIndex % 2 === 0 ? "bg-gray-1" : "bg-gray-50"}
 									>
 										{row.map((cell, cellIndex) => (
 											<td
-												key={cellIndex}
+												key={`cell-${rowIndex}-${cellIndex}`}
 												className="px-6 py-4 border-b border-gray-200"
 												dangerouslySetInnerHTML={{ __html: cell }}
 											/>
@@ -213,35 +213,33 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* Methods */}
-			{content.methods &&
-				content.methods.map((method, index) => (
-					<section key={index} className="mb-16">
-						<h2 className="inline-block relative mb-6 text-3xl font-medium text-gray-900">
-							{method.title}
-							<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
-						</h2>
-						<p className="mb-8 text-xl text-gray-700">{method.description}</p>
+			{content.methods?.map((method, methodIndex) => (
+				<section
+					key={`method-${methodIndex}-${method.title}`}
+					className="mb-16"
+				>
+					<h2 className="inline-block relative mb-6 text-3xl font-medium text-gray-900">
+						{method.title}
+						<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
+					</h2>
+					<p className="mb-8 text-xl text-gray-700">{method.description}</p>
 
-						{method.steps.map((step, stepIndex) => (
-							<div
-								key={stepIndex}
-								className="p-6 mb-8 rounded-xl border border-gray-100 shadow-md transition-all duration-300 transform bg-gray-1 hover:shadow-xl hover:border-blue-100 hover:-translate-y-1"
-							>
-								{step.title && (
-									<h3 className="mb-4 text-2xl font-semibold text-gray-800">
-										{step.title}
-									</h3>
-								)}
-								<div className="max-w-none prose prose-lg">
-									{renderHTML(step.content)}
-								</div>
-							</div>
-						))}
-					</section>
-				))}
+					{method.steps.map((step, stepIndex) => (
+						<div
+							key={`step-${methodIndex}-${stepIndex}`}
+							className="p-6 mb-8 rounded-xl border border-gray-100 shadow-md bg-gray-1"
+						>
+							{step.title && (
+								<h3 className="mb-4 text-2xl font-semibold text-gray-800">
+									{step.title}
+								</h3>
+							)}
+							{renderHTML(step.content)}
+						</div>
+					))}
+				</section>
+			))}
 
-			{/* Troubleshooting */}
 			{content.troubleshooting && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-8 text-3xl font-medium text-gray-900">
@@ -250,10 +248,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 
 					<div className="space-y-4">
-						{content.troubleshooting.items.map((item, index) => (
+						{content.troubleshooting.items.map((item, itemIndex) => (
 							<details
-								key={index}
-								className="p-6 rounded-xl border border-gray-100 shadow-md transition-all duration-300 bg-gray-1 hover:shadow-xl hover:border-blue-100"
+								key={`trouble-${itemIndex}-${item.question.slice(0, 20)}`}
+								className="p-6 rounded-xl border border-gray-100 shadow-md bg-gray-1"
 							>
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{item.question}
@@ -265,7 +263,6 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* Pro Tips */}
 			{content.proTips && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-8 text-3xl font-medium text-gray-900">
@@ -274,10 +271,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-						{content.proTips.tips.map((tip, index) => (
+						{content.proTips.tips.map((tip, tipIndex) => (
 							<div
-								key={index}
-								className="p-6 bg-blue-50 rounded-xl border border-blue-100 shadow-md transition-all duration-300 transform hover:shadow-xl hover:-translate-y-1"
+								key={`tip-${tipIndex}-${tip.title}`}
+								className="p-6 bg-blue-50 rounded-xl border border-blue-100 shadow-md"
 							>
 								<h3 className="mb-3 text-xl font-semibold text-blue-800">
 									🔹 {tip.title}
@@ -289,7 +286,6 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* Video Demo */}
 			{content.videoDemo && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-6 text-3xl font-medium text-gray-900">
@@ -297,7 +293,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 						<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 					</h2>
 
-					<figure className="overflow-hidden rounded-xl shadow-lg transition-all duration-300 transform hover:shadow-xl hover:-translate-y-1">
+					<figure className="overflow-hidden rounded-xl shadow-lg">
 						<MuxPlayer
 							playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
 							metadataVideoTitle="Cap Demo"
@@ -308,7 +304,6 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* FAQs */}
 			{content.faqs && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-8 text-3xl font-medium text-gray-900">
@@ -317,10 +312,10 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					</h2>
 
 					<div className="space-y-4">
-						{content.faqs.map((faq, index) => (
+						{content.faqs.map((faq, faqIndex) => (
 							<details
-								key={index}
-								className="p-6 rounded-xl border border-gray-100 shadow-md transition-all duration-300 bg-gray-1 hover:shadow-xl hover:border-blue-100"
+								key={`faq-${faqIndex}-${faq.question.slice(0, 20)}`}
+								className="p-6 rounded-xl border border-gray-100 shadow-md bg-gray-1"
 							>
 								<summary className="text-xl font-semibold text-gray-800 cursor-pointer">
 									{faq.question}
@@ -332,7 +327,6 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* Testimonial */}
 			{content.testimonial && (
 				<section className="mb-16">
 					<h2 className="inline-block relative mb-8 text-3xl font-medium text-gray-900">
@@ -340,14 +334,16 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 						<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
 					</h2>
 
-					<blockquote className="p-8 rounded-xl border-l-4 border-blue-500 shadow-md transition-all duration-300 transform bg-gray-1 hover:shadow-xl hover:-translate-y-1">
+					<blockquote className="p-8 rounded-xl border-l-4 border-blue-500 shadow-md bg-gray-1">
 						<p className="mb-6 text-xl italic text-gray-700">
 							"{content.testimonial.quote}"
 						</p>
 						<footer className="flex items-center">
-							<img
+							<Image
 								src={content.testimonial.avatar}
 								alt={content.testimonial.author}
+								width={48}
+								height={48}
 								className="mr-4 w-12 h-12 rounded-full"
 							/>
 							<cite className="not-italic font-medium text-gray-900">
@@ -358,7 +354,6 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</section>
 			)}
 
-			{/* CTA Section */}
 			<section className="mb-16">
 				<div
 					className="overflow-hidden relative p-10 rounded-2xl shadow-lg"
@@ -368,23 +363,27 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 					}}
 				>
 					<div
-						id="blog-cloud-1"
+						id={cloud1Id}
 						className="absolute top-0 -right-20 z-0 opacity-30 transition-transform duration-700 ease-in-out pointer-events-none"
 					>
-						<img
+						<Image
 							className="max-w-[40vw] h-auto"
 							src="/illustrations/cloud-1.png"
 							alt="CTA Cloud One"
+							width={400}
+							height={300}
 						/>
 					</div>
 					<div
-						id="blog-cloud-2"
+						id={cloud2Id}
 						className="absolute bottom-0 left-0 z-0 opacity-30 transition-transform duration-700 ease-in-out pointer-events-none"
 					>
-						<img
+						<Image
 							className="max-w-[40vw] h-auto"
 							src="/illustrations/cloud-2.png"
 							alt="CTA Cloud Two"
+							width={400}
+							height={300}
 						/>
 					</div>
 					<div className="relative z-10">
@@ -399,7 +398,7 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 								href={content.cta.buttonLink}
 								variant="white"
 								size="lg"
-								className="px-8 py-3 text-blue-600 shadow-lg transition-all duration-300 transform hover:shadow-xl hover:-translate-y-1"
+								className="px-8 py-3 text-blue-600 shadow-lg"
 							>
 								{content.cta.buttonText}
 							</Button>
@@ -408,20 +407,19 @@ export const BlogTemplate = ({ content }: { content: BlogPost }) => {
 				</div>
 			</section>
 
-			{/* Related Links */}
 			{content.relatedLinks && content.relatedLinks.length > 0 && (
 				<div className="italic text-center text-gray-600">
 					Check out {(() => {
 						const links = content.relatedLinks;
-						return links.map((link, index) => (
-							<span key={index}>
+						return links.map((link, linkIndex) => (
+							<span key={`link-${linkIndex}-${link.url}`}>
 								<Link
 									href={link.url}
 									className="text-blue-600 transition-colors hover:underline"
 								>
 									{link.text}
 								</Link>
-								{index < links.length - 1 ? " or " : ""}
+								{linkIndex < links.length - 1 ? " or " : ""}
 							</span>
 						));
 					})()}.
