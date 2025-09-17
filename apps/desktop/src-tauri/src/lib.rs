@@ -17,6 +17,7 @@ mod permissions;
 mod platform;
 mod presets;
 mod recording;
+mod recording_settings;
 mod target_select_overlay;
 mod tray;
 mod upload;
@@ -55,7 +56,7 @@ use scap::{
     capturer::Capturer,
     frame::{Frame, VideoFrame},
 };
-use scap_targets::{DisplayId, WindowId, bounds::LogicalBounds};
+use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -84,8 +85,8 @@ use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
-use crate::camera::CameraPreviewManager;
-use crate::upload::build_video_meta;
+use crate::{camera::CameraPreviewManager, recording_settings::RecordingSettingsStore};
+use crate::{recording::start_recording, upload::build_video_meta};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -245,8 +246,7 @@ async fn set_camera_input(
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    let app = state.read().await;
-    let camera_feed = app.camera_feed.clone();
+    let camera_feed = state.read().await.camera_feed.clone();
 
     match id {
         None => {
@@ -300,7 +300,9 @@ pub struct RecordingStarted;
 pub struct RecordingStopped;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestStartRecording;
+pub struct RequestStartRecording {
+    pub mode: Option<RecordingMode>,
+}
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestNewScreenshot;
@@ -1918,6 +1920,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
+        .typ::<recording_settings::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>();
 
     #[cfg(debug_assertions)]
@@ -2117,6 +2120,35 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             audio_meter::spawn_event_emitter(app.clone(), mic_samples_rx);
 
             tray::create_tray(&app).unwrap();
+
+            RequestStartRecording::listen_any_spawn(&app, |event, app| async move {
+                if CapWindowId::Main.get(&app).is_some() {
+                    return;
+                };
+
+                let settings = dbg!(RecordingSettingsStore::get(&app))
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+
+                let _ = set_mic_input(app.state(), settings.mic_name).await;
+                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
+
+                let _ = start_recording(
+                    app.clone(),
+                    app.state(),
+                    recording::StartRecordingInputs {
+                        capture_target: settings.target.unwrap_or_else(|| {
+                            ScreenCaptureTarget::Display {
+                                id: Display::primary().id(),
+                            }
+                        }),
+                        capture_system_audio: settings.system_audio,
+                        mode: event.mode.or(settings.mode).unwrap_or_default(),
+                    },
+                )
+                .await;
+            });
 
             RequestNewScreenshot::listen_any_spawn(&app, |_, app| async move {
                 if let Err(e) = take_screenshot(app.clone(), app.state()).await {

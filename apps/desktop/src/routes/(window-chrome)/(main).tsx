@@ -246,6 +246,10 @@ function Page() {
 		},
 	}));
 
+	createTauriEventListener(events.requestStartRecording, () => {
+		if (!isRecording()) toggleRecording.mutate();
+	});
+
 	const setMicInput = createMutation(() => ({
 		mutationFn: async (name: string | null) => {
 			await commands.setMicInput(name);

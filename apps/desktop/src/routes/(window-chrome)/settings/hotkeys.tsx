@@ -21,7 +21,8 @@ import {
 } from "~/utils/tauri";
 
 const ACTION_TEXT: Record<HotkeyAction, string> = {
-	startRecording: "Start Recording",
+	startStudioRecording: "Start Studio Recording",
+	startInstantRecording: "Start Instant Recording",
 	stopRecording: "Stop Recording",
 	restartRecording: "Restart Recording",
 	// takeScreenshot: "Take Screenshot",
@@ -72,11 +73,12 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 	});
 
 	const actions = [
-		"startRecording",
+		"startStudioRecording",
+		"startInstantRecording",
 		"stopRecording",
 		"restartRecording",
 		// "takeScreenshot",
-	] as Array<HotkeyAction>;
+	] satisfies Array<HotkeyAction>;
 
 	return (
 		<div class="flex flex-col p-4 w-full h-fit">
