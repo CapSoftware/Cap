@@ -79,11 +79,9 @@ export default async function DashboardLayout({
 				anyNewNotifications={anyNewNotifications}
 				userPreferences={userPreferences}
 			>
-				<div className="grid grid-cols-[auto,1fr] bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
-					<aside className="hidden z-10 col-span-1 row-span-2 w-full lg:flex">
+				<div className="dashboard-grid">
 						<DesktopNav />
-					</aside>
-					<div className="flex col-span-2 row-span-2 h-full md:col-span-1 focus:outline-none">
+					<div className="flex h-full [grid-area:main] focus:outline-none">
 						<MobileNav />
 						<DashboardInner>{children}</DashboardInner>
 					</div>
