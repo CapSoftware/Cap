@@ -4,8 +4,13 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
+import { BlogTemplate } from "@/components/blog/BlogTemplate";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { getBlogPosts } from "@/utils/blog";
+import {
+	getInteractiveBlogContent,
+	isInteractiveBlogPost,
+} from "@/utils/blog-registry";
 import { calculateReadingTime } from "@/utils/readTime";
 import { Share } from "../_components/Share";
 
@@ -65,6 +70,11 @@ export default async function PostPage({ params }: PostProps) {
 
 	if (!post) {
 		notFound();
+	}
+
+	if (isInteractiveBlogPost(params.slug)) {
+		const interactiveContent = getInteractiveBlogContent(params.slug);
+		return <BlogTemplate content={interactiveContent} />;
 	}
 
 	const readingTime = calculateReadingTime(post.content);
