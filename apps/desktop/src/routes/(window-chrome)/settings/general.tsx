@@ -372,7 +372,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div class="flex flex-col w-full h-full custom-scroll">
+		<div class="flex flex-col h-full custom-scroll">
 			<div class="p-4 space-y-6">
 				<AppearanceSection
 					currentTheme={settings.theme ?? "system"}
