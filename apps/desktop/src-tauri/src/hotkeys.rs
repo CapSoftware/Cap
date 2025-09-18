@@ -1,4 +1,7 @@
-use crate::{RequestStartRecording, recording, windows::ShowCapWindow};
+use crate::{
+    RequestOpenRecordingPicker, RequestStartRecording, recording,
+    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
+};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -40,14 +43,22 @@ impl From<Hotkey> for Shortcut {
     }
 }
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::enum_variant_names)]
 pub enum HotkeyAction {
-    StartRecording,
+    StartStudioRecording,
+    StartInstantRecording,
     StopRecording,
     RestartRecording,
     // TakeScreenshot,
+    OpenRecordingPicker,
+    OpenRecordingPickerDisplay,
+    OpenRecordingPickerWindow,
+    OpenRecordingPickerArea,
+    // Needed for deserialization of deprecated actions
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -120,14 +131,50 @@ pub fn init(app: &AppHandle) {
 
 async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), String> {
     match action {
-        HotkeyAction::StartRecording => {
-            let _ = RequestStartRecording.emit(&app);
+        HotkeyAction::StartStudioRecording => {
+            let _ = RequestStartRecording {
+                mode: cap_recording::RecordingMode::Studio,
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::StartInstantRecording => {
+            let _ = RequestStartRecording {
+                mode: cap_recording::RecordingMode::Instant,
+            }
+            .emit(&app);
             Ok(())
         }
         HotkeyAction::StopRecording => recording::stop_recording(app.clone(), app.state()).await,
         HotkeyAction::RestartRecording => {
             recording::restart_recording(app.clone(), app.state()).await
         }
+        HotkeyAction::OpenRecordingPicker => {
+            let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerDisplay => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Display),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerWindow => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Window),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerArea => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Area),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::Other => Ok(()),
     }
 }
 

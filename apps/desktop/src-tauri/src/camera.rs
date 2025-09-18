@@ -123,7 +123,8 @@ impl CameraPreviewManager {
             LocalSet::new().block_on(
                 &rt,
                 renderer.run(window, default_state, reconfigure_rx, camera_rx),
-            )
+            );
+            info!("DONE");
         });
 
         self.preview = Some(InitializedCameraPreview { reconfigure });

@@ -120,7 +120,7 @@ function Page() {
 
 	onMount(async () => {
 		// We don't want the target select overlay on launch
-		setOptions({ targetMode: null });
+		setOptions({ targetMode: (window as any).__CAP__.initialTargetMode });
 
 		// Enforce window size with multiple safeguards
 		const currentWindow = getCurrentWindow();

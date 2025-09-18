@@ -19,9 +19,10 @@ use thiserror::Error;
 
 use crate::feeds::camera::CameraFeedLock;
 
-#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
+    #[default]
     Studio,
     Instant,
 }
