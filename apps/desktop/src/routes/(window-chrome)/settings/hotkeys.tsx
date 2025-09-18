@@ -94,7 +94,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
-		<div class="flex flex-col flex-1 p-4 w-full h-full custom-scroll">
+		<div class="flex flex-col flex-1 p-4 h-full custom-scroll">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">Shortcuts</h2>
 				<p class="text-sm text-gray-10 w-full max-w-[500px]">
