@@ -13,6 +13,7 @@ import {
 	navigationMenuTriggerStyle,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
+import { Clapperboard, Zap } from "lucide-react";
 import { motion } from "motion/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -24,6 +25,24 @@ const Links = [
 	{
 		label: "Product",
 		dropdown: [
+			{
+				label: "Instant Mode",
+				sub: "Quick recordings with instant shareable links",
+				href: "/features/instant-mode",
+				icon: <Zap fill="yellow" className="size-4" strokeWidth={1.5} />,
+			},
+			{
+				label: "Studio Mode",
+				sub: "Professional recordings with advanced editing",
+				href: "/features/studio-mode",
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="size-4"
+						strokeWidth={1.5}
+					/>
+				),
+			},
 			{
 				label: "Download App",
 				sub: "Downloads for macOS & Windows",
@@ -80,16 +99,16 @@ const Links = [
 		],
 	},
 	{
-		label: "Pricing",
-		href: "/pricing",
-	},
-	{
 		label: "About",
 		href: "/about",
 	},
 	{
 		label: "Blog",
 		href: "/blog",
+	},
+	{
+		label: "Pricing",
+		href: "/pricing",
 	},
 ];
 
@@ -144,13 +163,24 @@ export const Navbar = () => {
 														<NavigationMenuContent>
 															<ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
 																{link.dropdown.map((sublink) => (
-																	<ListItem
-																		key={sublink.href}
-																		href={sublink.href}
-																		title={sublink.label}
-																	>
-																		{sublink.sub}
-																	</ListItem>
+																	<li key={sublink.href}>
+																		<NavigationMenuLink asChild>
+																			<a
+																				href={sublink.href}
+																				className="block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+																			>
+																				<div className="flex items-center gap-2 text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
+																					{sublink.icon && sublink.icon}
+																					<span className="text-gray-12 font-semibold">
+																						{sublink.label}
+																					</span>
+																				</div>
+																				<p className="text-sm leading-snug transition-colors duration-200 line-clamp-2 text-zinc-500 group-hover:text-zinc-700">
+																					{sublink.sub}
+																				</p>
+																			</a>
+																		</NavigationMenuLink>
+																	</li>
 																))}
 															</ul>
 														</NavigationMenuContent>

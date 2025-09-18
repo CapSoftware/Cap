@@ -87,6 +87,10 @@ const footerLinks = {
 			label: "Online Classroom Tools",
 			href: "/solutions/online-classroom-tools",
 		},
+		{
+			label: "Agencies",
+			href: "/solutions/agencies",
+		},
 	] as FooterLink[],
 	additional: [
 		{ label: "Screen Recorder", href: "/screen-recorder" },

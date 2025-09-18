@@ -5,18 +5,18 @@ use ffmpeg::{format::Pixel, frame::Video as FFVideo};
 use crate::CapturedFrameExt;
 
 #[derive(thiserror::Error, Debug)]
-pub enum ToFfmpegError {
+pub enum AsFFmpegError {
     #[error("FailedToGetBytes: {0}")]
     FailedToGetBytes(windows_core::Error),
 }
 
 impl CapturedFrameExt for CapturedFrame {
-    fn to_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ToFfmpegError> {
+    fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
         let native = self.native();
         let width = native.width;
         let height = native.height;
 
-        let bytes = native.bytes().map_err(ToFfmpegError::FailedToGetBytes)?;
+        let bytes = native.bytes().map_err(AsFFmpegError::FailedToGetBytes)?;
 
         Ok(match native.pixel_format {
             PixelFormat::YUV420P => {
@@ -79,13 +79,18 @@ impl CapturedFrameExt for CapturedFrame {
                 ff_frame
             }
             PixelFormat::ARGB => {
-                let mut ff_frame = FFVideo::new(Pixel::ARGB, width as u32, height as u32);
+                let mut ff_frame = FFVideo::new(
+                    // ik it's weird but that's how windows works
+                    Pixel::BGRA,
+                    width as u32,
+                    height as u32,
+                );
 
                 let stride = ff_frame.stride(0);
 
                 for y in 0..height {
                     let row_width = width * 4;
-                    let src_row = &bytes[y * row_width..];
+                    let src_row = &bytes[(height - y - 1) * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
 
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);
@@ -115,7 +120,7 @@ impl CapturedFrameExt for CapturedFrame {
 
                 for y in 0..height {
                     let row_width = width * 4;
-                    let src_row = &bytes[y * row_width..];
+                    let src_row = &bytes[(height - y - 1) * row_width..];
                     let dest_row = &mut ff_frame.data_mut(0)[y * stride..];
 
                     dest_row[0..row_width].copy_from_slice(&src_row[0..row_width]);

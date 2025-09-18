@@ -25,34 +25,38 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    // let camera_feed = CameraFeed::spawn(CameraFeed::default());
+    let camera_info = cap_camera::list_cameras()
+        .find(|c| c.display_name().contains("NVIDIA"))
+        .unwrap();
 
-    // camera_feed
-    //     .ask(camera::SetInput {
-    //         id: DeviceOrModelID::from_info(&cap_camera::list_cameras().next().unwrap()),
-    //     })
-    //     .await
-    //     .unwrap()
-    //     .await
-    //     .unwrap();
+    let camera_feed = CameraFeed::spawn(CameraFeed::default());
 
-    let (error_tx, _) = flume::bounded(1);
-    let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
-
-    mic_feed
-        .ask(microphone::SetInput {
-            label:
-            // MicrophoneFeed::list()
-            //     .into_iter()
-            //     .find(|(k, _)| k.contains("Focusrite"))
-            MicrophoneFeed::default()
-                .map(|v| v.0)
-                .unwrap(),
+    camera_feed
+        .ask(feeds::camera::SetInput {
+            id: feeds::camera::DeviceOrModelID::from_info(&camera_info),
         })
         .await
         .unwrap()
         .await
         .unwrap();
+
+    // let (error_tx, _) = flume::bounded(1);
+    // let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+    // mic_feed
+    //     .ask(microphone::SetInput {
+    //         label:
+    //         // MicrophoneFeed::list()
+    //         //     .into_iter()
+    //         //     .find(|(k, _)| k.contains("Focusrite"))
+    //         MicrophoneFeed::default()
+    //             .map(|v| v.0)
+    //             .unwrap(),
+    //     })
+    //     .await
+    //     .unwrap()
+    //     .await
+    //     .unwrap();
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -63,9 +67,9 @@ pub async fn main() {
         },
     )
     .with_system_audio(true)
-    // .with_mic_feed(std::sync::Arc::new(
-    //     mic_feed.ask(microphone::Lock).await.unwrap(),
-    // ))
+    .with_camera_feed(std::sync::Arc::new(
+        camera_feed.ask(feeds::camera::Lock).await.unwrap(),
+    ))
     .build()
     .await
     .unwrap();

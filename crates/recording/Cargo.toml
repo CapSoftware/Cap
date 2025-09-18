@@ -61,6 +61,7 @@ cap-enc-avfoundation = { path = "../enc-avfoundation" }
 cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
 cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
 cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+cap-camera-windows = { path = "../camera-windows" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
