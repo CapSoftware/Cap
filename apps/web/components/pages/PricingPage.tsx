@@ -1,9 +1,18 @@
 "use client";
 
-import { faHeart } from "@fortawesome/free-solid-svg-icons";
+import { Button } from "@cap/ui";
+import {
+	faDownload,
+	faHandshake,
+	faHeart,
+	faServer,
+	faShield,
+	faUsers,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import { Testimonials } from "../ui/Testimonials";
+import ComparePlans from "./_components/ComparePlans";
 import Faq from "./HomePage/Faq";
 import { CommercialCard, ProCard } from "./HomePage/Pricing";
 
@@ -62,7 +71,7 @@ export const PricingPage = () => {
 
 	return (
 		<motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-			<div className="py-32 space-y-24 md:py-40 wrapper">
+			<div className="py-32 space-y-[100px] md:py-40 wrapper">
 				<div>
 					<motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
 						<motion.h1
@@ -109,42 +118,110 @@ export const PricingPage = () => {
 					</motion.div>
 				</div>
 
+				{/* Comparison Table (Cap Pro vs Desktop License) */}
+				<div>
+					<ComparePlans />
+				</div>
+
+				{/* Enterprise Card */}
 				<motion.div
-					variants={fadeIn}
-					custom={4}
-					initial="hidden"
-					whileInView="visible"
-					viewport={{ once: true, margin: "-100px" }}
+					className="mx-auto w-full wrapper"
+					variants={fadeInFromBottom}
+					custom={1}
 				>
-					<Faq />
+					<div className="relative p-8 text-white rounded-2xl shadow-2xl md:p-12 bg-gray-12">
+						<div className="w-full">
+							<div className="md:flex md:justify-between">
+								<div>
+									<h2 className="mb-4 text-3xl font-semibold md:text-4xl">
+										Cap for Enterprise
+									</h2>
+									<p className="mb-8 max-w-xl text-lg text-gray-4">
+										Deploy Cap across your organization with enterprise-grade
+										features, dedicated support, and custom integrations.
+									</p>
+								</div>
+								<div>
+									<Button
+										variant="gray"
+										size="lg"
+										className="px-8 font-medium"
+										onClick={() =>
+											window.open("https://cal.com/cap.so/15min", "_blank")
+										}
+									>
+										Book a Call
+									</Button>
+								</div>
+							</div>
+
+							<div className="grid grid-cols-1 gap-6 mb-10 max-w-3xl md:grid-cols-2 lg:grid-cols-3">
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faShield}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">SLAs & Priority Support</span>
+								</div>
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faDownload}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">Loom Video Importer</span>
+								</div>
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faHandshake}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">Bulk Discounts</span>
+								</div>
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faServer}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">Self-hosting Support</span>
+								</div>
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faUsers}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">SAML SSO Login</span>
+								</div>
+								<div className="flex gap-3 items-center">
+									<FontAwesomeIcon
+										icon={faShield}
+										className="flex-shrink-0 text-blue-400"
+										style={{ fontSize: "20px" }}
+									/>
+									<span className="text-gray-3">
+										Advanced Security Controls
+									</span>
+								</div>
+							</div>
+						</div>
+					</div>
 				</motion.div>
 
-				<motion.div
-					className="mb-32 wrapper"
-					id="testimonials"
-					variants={fadeIn}
-					custom={5}
-				>
+				<div>
+					<Faq />
+				</div>
+
+				<div className="mb-32 wrapper" id="testimonials">
 					<Testimonials
 						amount={24}
 						title="What our users say about Cap after hitting record"
 						subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
 					/>
-				</motion.div>
-
-				<motion.div
-					variants={fadeIn}
-					custom={6}
-					initial="hidden"
-					whileInView="visible"
-					viewport={{ once: true, margin: "-100px" }}
-				>
-					<img
-						className="mx-auto w-full h-auto rounded-xl shadow-lg"
-						src="/illustrations/comparison.png"
-						alt="Cap vs Competitors Table"
-					/>
-				</motion.div>
+				</div>
 			</div>
 		</motion.div>
 	);

@@ -1,11 +1,18 @@
 import { Button, Switch } from "@cap/ui";
-import { faCheck, faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
+import {
+	faBriefcase,
+	faDownload,
+	faMinus,
+	faPlus,
+	faVideo,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
+import { QuestionMarkIcon } from "../../../icons/QuestionMarkIcon";
 import { CommercialArt, type CommercialArtRef } from "./CommercialArt";
 
 export const CommercialCard = () => {
@@ -64,18 +71,18 @@ export const CommercialCard = () => {
 			className="flex flex-col flex-1 justify-between p-8 rounded-2xl border shadow-lg bg-gray-1 border-gray-5"
 		>
 			<div>
-				<div className="md:h-[300px]">
+				<div>
 					<CommercialArt ref={commercialArtRef} />
-					<h3 className="mb-2 text-2xl text-center text-gray-12">
+					<h3 className="mb-2 text-xl font-semibold text-center text-gray-12">
 						{homepageCopy.pricing.commercial.title}
 					</h3>
-					<p className="mb-2 text-base text-center text-gray-10 w-full max-w-[285px] mx-auto">
+					<p className="mb-3 text-sm text-center text-gray-11 w-full max-w-[285px] mx-auto font-medium">
 						{homepageCopy.pricing.commercial.description}
 					</p>
-					<div className="text-center">
+					<div className="mb-6 text-center">
 						<a
 							href="/docs/commercial-license"
-							className="text-sm underline text-gray-10 hover:text-gray-12"
+							className="text-xs underline text-gray-10 hover:text-gray-12"
 						>
 							Learn more about the commercial license here
 						</a>
@@ -83,15 +90,15 @@ export const CommercialCard = () => {
 				</div>
 
 				<div className="mb-6 text-center">
-					<span className="text-5xl tabular-nums text-gray-12">
+					<span className="text-3xl tabular-nums text-gray-12">
 						$<NumberFlow value={currentPrice} />
 					</span>
-					<span className="text-lg tabular-nums text-gray-10">
+					<span className="text-base tabular-nums text-gray-10">
 						{" "}
 						/ {billingCycleText}
 					</span>
 					{isYearly ? (
-						<p className="text-lg tabular-nums text-gray-10">
+						<p className="text-sm tabular-nums text-gray-10">
 							or, $
 							<NumberFlow
 								value={licenses * COMMERCIAL_LICENSE_LIFETIME_PRICE}
@@ -99,7 +106,7 @@ export const CommercialCard = () => {
 							one-time payment
 						</p>
 					) : (
-						<p className="text-lg tabular-nums text-gray-10">
+						<p className="text-sm tabular-nums text-gray-10">
 							or, $
 							<NumberFlow value={licenses * COMMERCIAL_LICENSE_YEARLY_PRICE} />{" "}
 							/ year
@@ -163,21 +170,43 @@ export const CommercialCard = () => {
 						</div>
 					</div>
 				</div>
+			</div>
 
-				<ul className="mb-8 space-y-4">
-					{homepageCopy.pricing.commercial.features.map((feature) => (
-						<li
-							key={feature}
-							className="flex items-start text-base text-gray-12"
+			<div className="mb-6">
+				<ul className="space-y-3">
+					<li className="flex items-center text-sm text-gray-12">
+						<FontAwesomeIcon
+							icon={faBriefcase}
+							className="flex-shrink-0 mr-3 text-gray-12"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span>Commercial usage</span>
+						<a
+							href="/docs/commercial-license"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="ml-1.5 text-gray-10 hover:text-gray-12 transition-colors"
+							aria-label="Learn more about commercial license"
 						>
-							<FontAwesomeIcon
-								icon={faCheck}
-								className="mr-3 mt-0.5 text-gray-12 flex-shrink-0"
-								style={{ fontSize: "18px", minWidth: "18px" }}
-							/>
-							<span className="leading-6">{feature}</span>
-						</li>
-					))}
+							<QuestionMarkIcon className="size-3.5" />
+						</a>
+					</li>
+					<li className="flex items-center text-sm text-gray-12">
+						<FontAwesomeIcon
+							icon={faVideo}
+							className="flex-shrink-0 mr-3 text-gray-12"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span>Unlimited local recordings</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-12">
+						<FontAwesomeIcon
+							icon={faDownload}
+							className="flex-shrink-0 mr-3 text-gray-12"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span>Export to MP4 or GIF</span>
+					</li>
 				</ul>
 			</div>
 

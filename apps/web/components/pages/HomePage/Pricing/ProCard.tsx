@@ -1,10 +1,16 @@
 import { Button, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
-import { faCheck, faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
+import {
+	faCloud,
+	faLink,
+	faMagic,
+	faMinus,
+	faPlus,
+	faUsers,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
-import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
@@ -16,7 +22,6 @@ export const ProCard = () => {
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
-	const { push } = useRouter();
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
@@ -109,30 +114,30 @@ export const ProCard = () => {
 						{homepageCopy.pricing.pro.badge}
 					</span>
 				</div>
-				<div className="md:h-[300px]">
+				<div className="md:h-[180px]">
 					<ProArt ref={proArtRef} />
-					<h3 className="mb-2 text-2xl text-center">
+					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-6 text-base text-center text-gray-8">
+					<p className="mb-4 text-sm font-medium text-center text-gray-9">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
 
 				<div className="mb-6 text-center">
-					<span className="mr-2 text-5xl tabular-nums text-gray-1">
+					<span className="mr-2 text-3xl tabular-nums text-gray-1">
 						$<NumberFlow suffix="/mo" value={currentTotalPricePro} />
 					</span>
-					<span className="text-lg tabular-nums text-gray-8">
+					<span className="text-base tabular-nums text-gray-8">
 						{" "}
 						{billingCycleTextPro}
 					</span>
 					{isAnnually ? (
-						<p className="text-lg text-gray-8">
+						<p className="text-sm text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
-								className="text-lg tabular-nums"
+								className="text-sm tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -145,18 +150,18 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
 									users,{" "}
 								</>
 							)}
 							billed monthly
 						</p>
 					) : (
-						<p className="text-lg text-gray-8">
+						<p className="text-sm text-gray-8">
 							or,{" "}
 							<NumberFlow
 								value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
-								className="text-lg tabular-nums"
+								className="text-sm tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -169,7 +174,7 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
 									users,{" "}
 								</>
 							)}
@@ -237,14 +242,48 @@ export const ProCard = () => {
 						</div>
 					</div>
 				</div>
+			</div>
 
-				<ul className="mb-8 space-y-3 text-base">
-					{homepageCopy.pricing.pro.features.map((feature) => (
-						<li key={feature} className="flex items-center text-gray-1">
-							<FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-1" />
-							{feature}
-						</li>
-					))}
+			<div className="mb-6">
+				<ul className="space-y-3">
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faCloud}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Unlimited cloud storage & shareable links
+						</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faMagic}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Automatic AI title, transcription, summary, and chapter generation
+						</span>
+					</li>
+					<li className="flex items-center text-sm">
+						<FontAwesomeIcon
+							icon={faLink}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Connect a custom domain, e.g. cap.yourdomain.com
+						</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faUsers}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Shared team spaces</span>
+					</li>
 				</ul>
 			</div>
 
