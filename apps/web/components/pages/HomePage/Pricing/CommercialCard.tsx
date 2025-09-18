@@ -1,9 +1,9 @@
 import { Button, Switch } from "@cap/ui";
 import {
-	faMinus,
-	faPlus,
 	faBriefcase,
 	faDownload,
+	faMinus,
+	faPlus,
 	faVideo,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
