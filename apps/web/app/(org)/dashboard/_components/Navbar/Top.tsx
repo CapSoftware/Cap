@@ -40,8 +40,8 @@ import {
 	ReferIcon,
 	SettingsGearIcon,
 } from "../AnimatedIcons";
-import { type DownloadIconHandle } from "../AnimatedIcons/Download";
-import { type ReferIconHandle } from "../AnimatedIcons/Refer";
+import type { DownloadIconHandle } from "../AnimatedIcons/Download";
+import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
 	const { activeSpace, anyNewNotifications } = useDashboardContext();

@@ -76,11 +76,13 @@ export const SeoPageTemplate = ({
 	showLogosInHeader,
 	showLoomComparisonSlider,
 	showVideo = true,
+	skipHero = false,
 }: {
 	content: SeoPageContent;
 	showVideo?: boolean;
 	showLogosInHeader?: boolean;
 	showLoomComparisonSlider?: boolean;
+	skipHero?: boolean;
 }) => {
 	const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
@@ -101,7 +103,6 @@ export const SeoPageTemplate = ({
 						height={500}
 						className="absolute top-[200px] hidden md:flex md:size-[300px] lg:size-[400px] xl:size-[500px]"
 						style={{
-							// Fade LEFT edge -> opaque towards center
 							WebkitMaskImage:
 								"linear-gradient(to right, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
 							maskImage:
@@ -123,7 +124,6 @@ export const SeoPageTemplate = ({
 						height={500}
 						className="absolute hidden md:flex top-[200px] md:size-[300px] lg:size-[400px] xl:size-[500px]"
 						style={{
-							// Fade RIGHT edge -> opaque towards center
 							WebkitMaskImage:
 								"linear-gradient(to left, rgba(0,0,0,0) 50%, rgba(0,0,0,1) 120%, rgba(0,0,0,1) 100%)",
 							maskImage:
@@ -138,48 +138,50 @@ export const SeoPageTemplate = ({
 				</>
 			)}
 
-			<div className="relative mt-12">
-				<div className="flex relative z-10 flex-col md:mt-[20vh] mt-[12vh] px-5 w-full h-full">
-					<div className="mx-auto text-center wrapper wrapper-sm">
-						<motion.h1
+			{!skipHero && (
+				<div className="relative mt-12">
+					<div className="flex relative z-10 flex-col md:mt-[20vh] mt-[12vh] px-5 w-full h-full">
+						<div className="mx-auto text-center wrapper wrapper-sm">
+							<motion.h1
+								initial={{ opacity: 0, y: 20 }}
+								animate={{ opacity: 1, y: 0 }}
+								transition={{ duration: 0.3 }}
+								className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6"
+							>
+								{content.title}
+							</motion.h1>
+							<motion.p
+								initial={{ opacity: 0, y: 20 }}
+								animate={{ opacity: 1, y: 0 }}
+								transition={{ duration: 0.3, delay: 0.2 }}
+								className="mx-auto mb-10 max-w-3xl text-md sm:text-xl text-gray-10"
+							>
+								{content.description}
+							</motion.p>
+						</div>
+						<motion.div
 							initial={{ opacity: 0, y: 20 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.3 }}
-							className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6"
+							animate={{
+								opacity: 1,
+								y: 0,
+								transition: {
+									duration: 0.3,
+									delay: 0.3,
+								},
+							}}
 						>
-							{content.title}
-						</motion.h1>
-						<motion.p
-							initial={{ opacity: 0, y: 20 }}
-							animate={{ opacity: 1, y: 0 }}
-							transition={{ duration: 0.3, delay: 0.2 }}
-							className="mx-auto mb-10 max-w-3xl text-md sm:text-xl text-gray-10"
-						>
-							{content.description}
-						</motion.p>
+							<MotionButton
+								variant="blue"
+								href="/download"
+								size="lg"
+								className="relative z-[20] w-full md:max-w-fit mx-auto font-medium text-md sm:w-auto"
+							>
+								{content.cta.buttonText}
+							</MotionButton>
+						</motion.div>
 					</div>
-					<motion.div
-						initial={{ opacity: 0, y: 20 }}
-						animate={{
-							opacity: 1,
-							y: 0,
-							transition: {
-								duration: 0.3,
-								delay: 0.3,
-							},
-						}}
-					>
-						<MotionButton
-							variant="blue"
-							href="/download"
-							size="lg"
-							className="relative z-[20] w-full md:max-w-fit mx-auto font-medium text-md sm:w-auto"
-						>
-							{content.cta.buttonText}
-						</MotionButton>
-					</motion.div>
 				</div>
-			</div>
+			)}
 
 			{showLoomComparisonSlider && (
 				<ComparisonSlider
@@ -192,9 +194,7 @@ export const SeoPageTemplate = ({
 				/>
 			)}
 
-			{/* Main Content */}
 			<div className="relative z-10 space-y-[120px] md:space-y-[240px] mt-32 mb-[260px] wrapper">
-				{/* Features Section */}
 				<div className="mb-28">
 					<div className="text-center max-w-[800px] mx-auto mb-16">
 						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
@@ -226,7 +226,6 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 
-				{/* Video Demonstration */}
 				{showVideo && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-10">
@@ -255,7 +254,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* Comparison Section */}
 				{content.comparison && content.comparisonTitle && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-8">
@@ -292,7 +290,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* Recording Modes Section */}
 				{content.recordingModes && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-12">
@@ -322,7 +319,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* Comparison Table Section */}
 				{content.comparisonTable && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-12">
@@ -371,7 +367,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* Use Cases Section */}
 				<div>
 					<div className="text-center max-w-[800px] mx-auto mb-12">
 						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
@@ -404,7 +399,6 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 
-				{/* Testimonials Section */}
 				{content.testimonials && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-8">
@@ -440,7 +434,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* Migration Guide Section */}
 				{content.migrationGuide && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-8">
@@ -466,7 +459,6 @@ export const SeoPageTemplate = ({
 					</div>
 				)}
 
-				{/* FAQ Section */}
 				<div>
 					<div className="text-center max-w-[800px] mx-auto mb-8">
 						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
@@ -533,7 +525,6 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 
-				{/* Final CTA Section */}
 				<div
 					className="max-w-[1000px] mx-auto rounded-3xl overflow-hidden relative flex flex-col justify-center border border-gray-5 p-12 bg-white"
 					style={{
