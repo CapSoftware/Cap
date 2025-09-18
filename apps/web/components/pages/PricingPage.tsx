@@ -4,6 +4,7 @@ import { faHeart } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import { Testimonials } from "../ui/Testimonials";
+import ComparePlans from "./_components/ComparePlans";
 import Faq from "./HomePage/Faq";
 import { CommercialCard, ProCard } from "./HomePage/Pricing";
 
@@ -62,7 +63,7 @@ export const PricingPage = () => {
 
 	return (
 		<motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-			<div className="py-32 space-y-24 md:py-40 wrapper">
+			<div className="py-32 space-y-[200px] md:py-40 wrapper">
 				<div>
 					<motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
 						<motion.h1
@@ -109,6 +110,11 @@ export const PricingPage = () => {
 					</motion.div>
 				</div>
 
+				{/* Comparison Table (Cap Pro vs Desktop License) */}
+				<motion.div variants={fadeInFromBottom} custom={1}>
+					<ComparePlans />
+				</motion.div>
+
 				<motion.div
 					variants={fadeIn}
 					custom={4}
@@ -129,20 +135,6 @@ export const PricingPage = () => {
 						amount={24}
 						title="What our users say about Cap after hitting record"
 						subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
-					/>
-				</motion.div>
-
-				<motion.div
-					variants={fadeIn}
-					custom={6}
-					initial="hidden"
-					whileInView="visible"
-					viewport={{ once: true, margin: "-100px" }}
-				>
-					<img
-						className="mx-auto w-full h-auto rounded-xl shadow-lg"
-						src="/illustrations/comparison.png"
-						alt="Cap vs Competitors Table"
 					/>
 				</motion.div>
 			</div>
