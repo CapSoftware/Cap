@@ -51,6 +51,7 @@ export interface FeaturePageFaq {
 }
 
 export interface FeaturePageVideo {
+	title?: string;
 	iframe?: {
 		src: string;
 		title?: string;

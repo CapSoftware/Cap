@@ -253,7 +253,7 @@ export const SeoPageTemplate = ({
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-10">
 							<h2 className="inline-block relative mb-2 text-3xl font-medium text-gray-800 md:text-4xl">
-								See Studio Mode in Action
+								{content.video.title ?? "See Cap in Action"}
 							</h2>
 							<p className="text-xl leading-relaxed text-gray-10">
 								Watch how Cap makes screen recording simple, powerful, and

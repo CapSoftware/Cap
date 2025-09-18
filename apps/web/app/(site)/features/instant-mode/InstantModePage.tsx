@@ -264,6 +264,7 @@ const instantModeConfig: FeaturePageConfig = {
 			],
 		},
 		video: {
+			title: "See Instant Mode in Action",
 			iframe: {
 				src: "https://cap.so/embed/8cq21vmz12tm1zf",
 				title: "See Instant Mode in Action - Cap Screen Recording",

@@ -26,6 +26,7 @@ export interface SeoPageContent {
 		answer: string;
 	}[];
 	video: {
+		title?: string;
 		url?: string;
 		thumbnail?: string;
 		alt?: string;
