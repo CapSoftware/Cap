@@ -433,32 +433,34 @@ export const AgenciesPage = () => {
 				</div>
 
 				{/* Recording Modes Section */}
-				<div>
-					<div className="text-center max-w-[800px] mx-auto mb-12">
-						<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
-							{agenciesContent.recordingModes.title}
-						</h2>
-						<p className="text-lg leading-relaxed w-full max-w-[600px] mx-auto text-gray-10">
-							{agenciesContent.recordingModes.description}
-						</p>
+				{agenciesContent.recordingModes && (
+					<div>
+						<div className="text-center max-w-[800px] mx-auto mb-12">
+							<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
+								{agenciesContent.recordingModes.title}
+							</h2>
+							<p className="text-lg leading-relaxed w-full max-w-[600px] mx-auto text-gray-10">
+								{agenciesContent.recordingModes.description}
+							</p>
+						</div>
+						<div className="grid grid-cols-1 gap-8 mx-auto max-w-4xl md:grid-cols-2">
+							{agenciesContent.recordingModes.modes.map((mode, index) => (
+								<div
+									key={index.toString()}
+									className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform hover:shadow-xl bg-gray-1 hover:-translate-y-1"
+								>
+									{mode.icon}
+									<h3 className="mb-4 text-xl font-semibold text-gray-12">
+										{mode.title}
+									</h3>
+									<p className="leading-relaxed text-gray-600">
+										{mode.description}
+									</p>
+								</div>
+							))}
+						</div>
 					</div>
-					<div className="grid grid-cols-1 gap-8 mx-auto max-w-4xl md:grid-cols-2">
-						{agenciesContent.recordingModes.modes.map((mode, index) => (
-							<div
-								key={index.toString()}
-								className="p-8 rounded-2xl border shadow-sm transition-all duration-300 transform hover:shadow-xl bg-gray-1 hover:-translate-y-1"
-							>
-								{mode.icon}
-								<h3 className="mb-4 text-xl font-semibold text-gray-12">
-									{mode.title}
-								</h3>
-								<p className="leading-relaxed text-gray-600">
-									{mode.description}
-								</p>
-							</div>
-						))}
-					</div>
-				</div>
+				)}
 
 				{/* Use Cases Section */}
 				<div>

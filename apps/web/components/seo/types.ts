@@ -7,6 +7,7 @@ export interface ComparisonCell {
 export interface SeoPageContent {
 	title: string;
 	description: string;
+	badge?: string;
 	featuresTitle: string;
 	featuresDescription: string;
 	features: {
@@ -25,13 +26,18 @@ export interface SeoPageContent {
 		answer: string;
 	}[];
 	video: {
-		url: string;
-		thumbnail: string;
+		url?: string;
+		thumbnail?: string;
 		alt?: string;
+		iframe?: {
+			src: string;
+			title?: string;
+		};
 	};
 	cta: {
 		title: string;
 		buttonText: string;
+		secondaryButtonText?: string;
 	};
 	comparisonTitle?: string;
 	comparisonDescription?: string;
