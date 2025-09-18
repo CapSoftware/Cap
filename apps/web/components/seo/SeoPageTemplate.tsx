@@ -142,10 +142,22 @@ export const SeoPageTemplate = ({
 				<div className="relative mt-12">
 					<div className="flex relative z-10 flex-col md:mt-[20vh] mt-[12vh] px-5 w-full h-full">
 						<div className="mx-auto text-center wrapper wrapper-sm">
+							{content.badge && (
+								<motion.div
+									initial={{ opacity: 0, y: 20 }}
+									animate={{ opacity: 1, y: 0 }}
+									transition={{ duration: 0.3, delay: 0.1 }}
+									className="mb-4"
+								>
+									<span className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-700 bg-blue-100 rounded-full border border-blue-200">
+										{content.badge}
+									</span>
+								</motion.div>
+							)}
 							<motion.h1
 								initial={{ opacity: 0, y: 20 }}
 								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.3 }}
+								transition={{ duration: 0.3, delay: content.badge ? 0.2 : 0 }}
 								className="text-[2.25rem] leading-[2.75rem] md:text-[3.5rem] md:leading-[4rem] relative z-10 text-black mb-6"
 							>
 								{content.title}
@@ -153,7 +165,7 @@ export const SeoPageTemplate = ({
 							<motion.p
 								initial={{ opacity: 0, y: 20 }}
 								animate={{ opacity: 1, y: 0 }}
-								transition={{ duration: 0.3, delay: 0.2 }}
+								transition={{ duration: 0.3, delay: content.badge ? 0.3 : 0.2 }}
 								className="mx-auto mb-10 max-w-3xl text-md sm:text-xl text-gray-10"
 							>
 								{content.description}
@@ -169,15 +181,26 @@ export const SeoPageTemplate = ({
 									delay: 0.3,
 								},
 							}}
+							className="flex flex-col justify-center items-center space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4"
 						>
 							<MotionButton
 								variant="blue"
 								href="/download"
 								size="lg"
-								className="relative z-[20] w-full md:max-w-fit mx-auto font-medium text-md sm:w-auto"
+								className="relative z-[20] w-full font-medium text-md sm:w-auto"
 							>
 								{content.cta.buttonText}
 							</MotionButton>
+							{content.cta.secondaryButtonText && (
+								<MotionButton
+									variant="white"
+									href="/pricing"
+									size="lg"
+									className="relative z-[20] w-full font-medium text-md sm:w-auto"
+								>
+									{content.cta.secondaryButtonText}
+								</MotionButton>
+							)}
 						</motion.div>
 					</div>
 				</div>
@@ -230,7 +253,7 @@ export const SeoPageTemplate = ({
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-10">
 							<h2 className="inline-block relative mb-2 text-3xl font-medium text-gray-800 md:text-4xl">
-								See Cap In Action
+								See Studio Mode in Action
 							</h2>
 							<p className="text-xl leading-relaxed text-gray-10">
 								Watch how Cap makes screen recording simple, powerful, and
@@ -238,18 +261,44 @@ export const SeoPageTemplate = ({
 							</p>
 						</div>
 						<div className="mx-auto max-w-2xl">
-							<div className="overflow-hidden rounded-xl shadow-md">
-								<MuxPlayer
-									playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
-									playerInitTime={0}
-									metadataVideoTitle="Cap Demo"
-									accentColor="#5C9FFF"
+							{content.video.iframe ? (
+								<div
+									className="overflow-hidden w-full rounded-xl shadow-md"
 									style={{
-										aspectRatio: "16/9",
-										width: "100%",
+										position: "relative",
+										paddingBottom: "56.25%",
+										height: 0,
 									}}
-								/>
-							</div>
+								>
+									<iframe
+										src={content.video.iframe.src}
+										title={content.video.iframe.title || "Cap Demo"}
+										frameBorder="0"
+										allowFullScreen
+										style={{
+											position: "absolute",
+											top: 0,
+											left: 0,
+											width: "100%",
+											height: "100%",
+											borderRadius: "0.75rem",
+										}}
+									/>
+								</div>
+							) : (
+								<div className="overflow-hidden rounded-xl shadow-md">
+									<MuxPlayer
+										playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
+										playerInitTime={0}
+										metadataVideoTitle="Cap Demo"
+										accentColor="#5C9FFF"
+										style={{
+											aspectRatio: "16/9",
+											width: "100%",
+										}}
+									/>
+								</div>
+							)}
 						</div>
 					</div>
 				)}
@@ -399,41 +448,6 @@ export const SeoPageTemplate = ({
 					</div>
 				</div>
 
-				{content.testimonials && (
-					<div>
-						<div className="text-center max-w-[800px] mx-auto mb-8">
-							<h2 className="inline-block relative mb-2 text-3xl font-medium md:text-4xl text-gray-12">
-								{content.testimonials.title}
-							</h2>
-						</div>
-						<div className="grid grid-cols-1 gap-8 md:grid-cols-3">
-							{content.testimonials.items.map((testimonial, index) => (
-								<div
-									key={index.toString()}
-									className="p-8 rounded-2xl border border-gray-100 shadow-md transition-all duration-300 bg-gray-1 hover:shadow-xl"
-								>
-									<div className="mb-4 text-blue-500">
-										<svg
-											className="w-10 h-10"
-											fill="currentColor"
-											viewBox="0 0 24 24"
-										>
-											<title>Quote</title>
-											<path d="M3.691 6.292C5.094 4.771 7.217 4 10.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569zm16 0C21.094 4.771 23.217 4 26.066 4h.141c.297 0 .54.24.54.531v5.297c0 .297-.243.531-.54.531h-3.908c-.297 0-.54.244-.54.543v3.2c0 1.793 1.464 3.2 3.277 3.2h.544c.296 0 .54.234.54.531v5.297c0 .297-.244.531-.54.531h-.544c-5.847 0-10-4.153-10-10v-6.4c0-.936.174-1.791.594-2.569z"></path>
-										</svg>
-									</div>
-									<p className="mb-4 italic leading-relaxed text-gray-700">
-										"{testimonial.quote}"
-									</p>
-									<p className="font-semibold text-gray-600">
-										{testimonial.author}
-									</p>
-								</div>
-							))}
-						</div>
-					</div>
-				)}
-
 				{content.migrationGuide && (
 					<div>
 						<div className="text-center max-w-[800px] mx-auto mb-8">
@@ -546,12 +560,22 @@ export const SeoPageTemplate = ({
 						<div className="flex flex-col justify-center items-center space-y-3 sm:flex-row sm:space-y-0 sm:space-x-4">
 							<Button
 								variant="blue"
-								href="/pricing"
+								href="/download"
 								size="lg"
-								className="px-8 py-3 w-full font-medium transition-all duration-300 sm:w-auto"
+								className="px-8 py-3 w-full font-medium transition-all duration-300 sm:w-auto sm:max-w-fit"
 							>
 								{content.cta.buttonText}
 							</Button>
+							{content.cta.secondaryButtonText && (
+								<Button
+									variant="white"
+									href="/pricing"
+									size="lg"
+									className="px-8 py-3 w-full font-medium transition-all duration-300 sm:w-auto sm:max-w-fit"
+								>
+									{content.cta.secondaryButtonText}
+								</Button>
+							)}
 						</div>
 					</div>
 				</div>
