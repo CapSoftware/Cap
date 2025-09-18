@@ -94,7 +94,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
-		<div class="flex flex-col p-4 w-full h-fit">
+		<div class="flex flex-col flex-1 p-4 w-full h-full custom-scroll">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">Shortcuts</h2>
 				<p class="text-sm text-gray-10 w-full max-w-[500px]">
@@ -104,7 +104,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 					</span>
 				</p>
 			</div>
-			<div class="flex flex-col flex-1 gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">
+			<div class="flex flex-col gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">
 				<Index each={actions()}>
 					{(item, idx) => {
 						createEventListener(window, "click", () => {
