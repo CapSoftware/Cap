@@ -22,8 +22,8 @@ use tauri_specta::Event;
 use tracing::{error, info};
 
 use crate::{
-    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStopped,
-    VideoUploadInfo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
+    RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -209,6 +209,10 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<(), String> {
+    if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
+        return Err("Recording already in progress".to_string());
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
