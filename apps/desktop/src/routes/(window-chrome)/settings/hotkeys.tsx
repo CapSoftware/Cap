@@ -11,7 +11,6 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { type as ostype } from "@tauri-apps/plugin-os";
 import { generalSettingsStore, hotkeysStore } from "~/store";
 
 import {
