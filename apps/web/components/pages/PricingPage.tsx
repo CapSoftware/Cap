@@ -111,12 +111,18 @@ export const PricingPage = () => {
 				</div>
 
 				{/* Comparison Table (Cap Pro vs Desktop License) */}
-				<motion.div variants={fadeInFromBottom} custom={1}>
+				<motion.div
+					initial="hidden"
+					whileInView="visible"
+					variants={fadeInFromBottom}
+					viewport={{ once: true, margin: "-100px" }}
+					custom={1}
+				>
 					<ComparePlans />
 				</motion.div>
 
 				<motion.div
-					variants={fadeIn}
+					variants={fadeInFromBottom}
 					custom={4}
 					initial="hidden"
 					whileInView="visible"
