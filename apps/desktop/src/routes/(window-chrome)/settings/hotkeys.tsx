@@ -96,9 +96,12 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 	return (
 		<div class="flex flex-col p-4 w-full h-fit">
 			<div class="flex flex-col pb-4 border-b border-gray-2">
-				<h2 class="text-lg font-medium text-gray-12">Hotkeys</h2>
-				<p class="text-sm text-gray-10">
-					Configure keyboard shortcuts for common actions.
+				<h2 class="text-lg font-medium text-gray-12">Shortcuts</h2>
+				<p class="text-sm text-gray-10 w-full max-w-[500px]">
+					Configure keyboard shortcuts for common actions.{" "}
+					<span class="font-medium text-gray-12">
+						Note: for now the app needs to be closed for shortcuts to work.
+					</span>
 				</p>
 			</div>
 			<div class="flex flex-col flex-1 gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">
