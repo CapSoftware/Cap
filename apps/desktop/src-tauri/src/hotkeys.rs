@@ -133,14 +133,14 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
     match action {
         HotkeyAction::StartStudioRecording => {
             let _ = RequestStartRecording {
-                mode: Some(cap_recording::RecordingMode::Studio),
+                mode: cap_recording::RecordingMode::Studio,
             }
             .emit(&app);
             Ok(())
         }
         HotkeyAction::StartInstantRecording => {
             let _ = RequestStartRecording {
-                mode: Some(cap_recording::RecordingMode::Instant),
+                mode: cap_recording::RecordingMode::Instant,
             }
             .emit(&app);
             Ok(())

@@ -304,7 +304,7 @@ pub struct RecordingStopped;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestStartRecording {
-    pub mode: Option<RecordingMode>,
+    pub mode: RecordingMode,
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -2163,7 +2163,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                             }
                         }),
                         capture_system_audio: settings.system_audio,
-                        mode: event.mode.or(settings.mode).unwrap_or_default(),
+                        mode: event.mode,
                     },
                 )
                 .await;

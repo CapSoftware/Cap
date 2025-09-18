@@ -18,7 +18,7 @@ import {
 } from "@/utils/platform";
 import { homepageCopy } from "../../../data/homepage-copy";
 import UpgradeToPro from "../_components/UpgradeToPro";
-import { ProArtRef } from "./Pricing/ProArt";
+import type { ProArtRef } from "./Pricing/ProArt";
 import VideoModal from "./VideoModal";
 
 interface HeaderProps {

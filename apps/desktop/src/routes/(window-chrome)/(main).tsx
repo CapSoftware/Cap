@@ -40,6 +40,7 @@ import {
 	type CaptureWindow,
 	commands,
 	events,
+	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 
@@ -196,7 +197,7 @@ function Page() {
 	});
 
 	const toggleRecording = createMutation(() => ({
-		mutationFn: async () => {
+		mutationFn: async (payload: { mode: RecordingMode }) => {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
@@ -239,15 +240,15 @@ function Page() {
 
 				await commands.startRecording({
 					capture_target,
-					mode: rawOptions.mode,
+					mode: payload.mode,
 					capture_system_audio: rawOptions.captureSystemAudio,
 				});
 			} else await commands.stopRecording();
 		},
 	}));
 
-	createTauriEventListener(events.requestStartRecording, () => {
-		if (!isRecording()) toggleRecording.mutate();
+	createTauriEventListener(events.requestStartRecording, (payload) => {
+		if (!isRecording()) toggleRecording.mutate({ mode: payload.mode });
 	});
 
 	const setMicInput = createMutation(() => ({
@@ -518,7 +519,7 @@ function Page() {
 							disabled={toggleRecording.isPending}
 							variant="blue"
 							size="md"
-							onClick={() => toggleRecording.mutate()}
+							onClick={() => toggleRecording.mutate({ mode: rawOptions.mode })}
 							class="flex flex-grow justify-center items-center"
 						>
 							{isRecording() ? (
