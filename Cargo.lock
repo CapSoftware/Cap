@@ -1259,6 +1259,7 @@ dependencies = [
  "cap-audio",
  "cap-camera",
  "cap-camera-ffmpeg",
+ "cap-camera-windows",
  "cap-cursor-capture",
  "cap-cursor-info",
  "cap-enc-avfoundation",

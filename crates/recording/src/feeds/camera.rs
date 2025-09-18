@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
@@ -59,6 +59,12 @@ impl OpenState {
         if let Some(connecting) = &self.connecting
             && id == connecting.id
         {
+            if let Some(attached) = self.attached.take() {
+                let _ = attached.done_tx.send(());
+            }
+
+            trace!("Attaching new camera");
+
             self.attached = Some(AttachedState {
                 id,
                 camera_info: data.camera_info,
@@ -256,6 +262,7 @@ async fn setup_camera(
     });
 
     let format = ideal_formats.swap_remove(0);
+
     let frame_rate = format.frame_rate() as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -263,7 +270,7 @@ async fn setup_camera(
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
-            let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
                 return;
             };
 
@@ -375,9 +382,15 @@ impl Message<SetInput> for CameraFeed {
                     }
                 };
 
+                trace!("Waiting for camera to be done");
+
                 let _ = done_rx.recv();
 
+                trace!("Stoppping capture of {:?}", &id);
+
                 let _ = handle.stop_capturing();
+
+                info!("Stopped capture of {:?}", &id);
             })
         });
 

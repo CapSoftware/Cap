@@ -53,7 +53,7 @@ declare global {
   const IconCapSettings: typeof import('~icons/cap/settings.jsx')['default']
   const IconCapShadow: typeof import('~icons/cap/shadow.jsx')['default']
   const IconCapSquare: typeof import('~icons/cap/square.jsx')['default']
-  const IconCapStopCircle: typeof import("~icons/cap/stop-circle.jsx")["default"]
+  const IconCapStopCircle: typeof import('~icons/cap/stop-circle.jsx')['default']
   const IconCapTrash: typeof import('~icons/cap/trash.jsx')['default']
   const IconCapUndo: typeof import('~icons/cap/undo.jsx')['default']
   const IconCapUpload: typeof import("~icons/cap/upload.jsx")["default"]
