@@ -262,6 +262,9 @@ async displayInformation(displayId: string) : Promise<DisplayInformation> {
 },
 async getWindowIcon(windowId: string) : Promise<string | null> {
     return await TAURI_INVOKE("get_window_icon", { windowId });
+},
+async editorDeleteProject() : Promise<void> {
+    await TAURI_INVOKE("editor_delete_project");
 }
 }
 

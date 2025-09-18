@@ -72,15 +72,10 @@ export function Header() {
 				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
 				<EditorButton
 					onClick={async () => {
-						const currentWindow = getCurrentWindow();
-						if (!editorInstance.path) return;
 						if (!(await ask("Are you sure you want to delete this recording?")))
 							return;
-						await remove(editorInstance.path, {
-							recursive: true,
-						});
-						events.recordingDeleted.emit({ path: editorInstance.path });
-						await currentWindow.close();
+
+						await commands.editorDeleteProject();
 					}}
 					tooltipText="Delete recording"
 					leftIcon={<IconCapTrash class="w-5" />}
