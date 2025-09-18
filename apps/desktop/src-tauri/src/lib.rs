@@ -285,7 +285,7 @@ pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
-#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone, Serialize)]
 pub struct RecordingDeleted {
     #[allow(unused)]
     path: PathBuf,
@@ -1690,10 +1690,23 @@ async fn get_system_audio_waveforms(
 
 #[tauri::command]
 #[specta::specta]
-async fn editor_delete_project(editor_instance: WindowEditorInstance, window: tauri::Window) {
+async fn editor_delete_project(
+    app: tauri::AppHandle,
+    editor_instance: WindowEditorInstance,
+    window: tauri::Window,
+) -> Result<(), String> {
     let _ = window.close();
 
-    let _ = tokio::fs::remove_dir_all(&editor_instance.0.project_path).await;
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let path = editor_instance.0.project_path.clone();
+    drop(editor_instance);
+
+    let _ = tokio::fs::remove_dir_all(&path).await;
+
+    RecordingDeleted { path }.emit(&app);
+
+    Ok(())
 }
 
 // keep this async otherwise opening windows may hang on windows
