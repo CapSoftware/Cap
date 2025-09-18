@@ -43,7 +43,7 @@ impl From<Hotkey> for Shortcut {
     }
 }
 
-#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy)]
+#[derive(Serialize, Deserialize, Type, PartialEq, Eq, Hash, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 #[allow(clippy::enum_variant_names)]
 pub enum HotkeyAction {

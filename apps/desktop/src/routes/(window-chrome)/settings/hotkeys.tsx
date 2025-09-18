@@ -11,6 +11,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import { generalSettingsStore, hotkeysStore } from "~/store";
 
 import {
@@ -98,10 +99,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 			<div class="flex flex-col pb-4 border-b border-gray-2">
 				<h2 class="text-lg font-medium text-gray-12">Shortcuts</h2>
 				<p class="text-sm text-gray-10 w-full max-w-[500px]">
-					Configure keyboard shortcuts for common actions.{" "}
-					<span class="font-medium text-gray-12">
-						Note: for now the app needs to be closed for shortcuts to work.
-					</span>
+					Configure system-wide keyboard shortcuts to control Cap
 				</p>
 			</div>
 			<div class="flex flex-col gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">

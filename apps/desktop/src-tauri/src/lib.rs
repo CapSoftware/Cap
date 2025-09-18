@@ -2141,10 +2141,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             tray::create_tray(&app).unwrap();
 
             RequestStartRecording::listen_any_spawn(&app, async |event, app| {
-                if CapWindowId::Main.get(&app).is_some() {
-                    return;
-                };
-
                 let settings = RecordingSettingsStore::get(&app)
                     .ok()
                     .flatten()
