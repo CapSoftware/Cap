@@ -4,7 +4,6 @@ import { faCheck, faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
-import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
@@ -16,7 +15,6 @@ export const ProCard = () => {
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
-	const { push } = useRouter();
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
