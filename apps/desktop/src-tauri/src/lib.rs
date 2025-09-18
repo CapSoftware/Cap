@@ -2145,7 +2145,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     return;
                 };
 
-                let settings = dbg!(RecordingSettingsStore::get(&app))
+                let settings = RecordingSettingsStore::get(&app)
                     .ok()
                     .flatten()
                     .unwrap_or_default();
