@@ -634,7 +634,11 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
-                let _ = ShowCapWindow::Main.show(&app).await;
+                let _ = ShowCapWindow::Main {
+                    init_target_mode: None,
+                }
+                .show(&app)
+                .await;
             }
         }
     }

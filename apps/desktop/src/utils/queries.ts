@@ -124,10 +124,6 @@ export function createOptionsQuery() {
 		name: PERSIST_KEY,
 	});
 
-	createEventListener(window, "storage", (e) => {
-		if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
-	});
-
 	return { rawOptions: state, setOptions: setState };
 }
 

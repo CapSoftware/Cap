@@ -85,7 +85,10 @@ use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
-use crate::{camera::CameraPreviewManager, recording_settings::RecordingSettingsStore};
+use crate::{
+    camera::CameraPreviewManager,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+};
 use crate::{recording::start_recording, upload::build_video_meta};
 
 #[allow(clippy::large_enum_variant)]
@@ -306,6 +309,11 @@ pub struct RequestStartRecording {
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestNewScreenshot;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestOpenRecordingPicker {
+    pub target_mode: Option<RecordingTargetMode>,
+}
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
@@ -1902,6 +1910,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingStarted,
             RecordingStopped,
             RequestStartRecording,
+            RequestOpenRecordingPicker,
             RequestNewScreenshot,
             RequestOpenSettings,
             NewNotification,
@@ -1912,7 +1921,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::RecordingEvent,
             RecordingDeleted,
             target_select_overlay::TargetUnderCursor,
-            hotkeys::OnEscapePress
+            hotkeys::OnEscapePress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -1973,7 +1982,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .map(PathBuf::from)
             else {
                 let app = app.clone();
-                tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
+                tokio::spawn(async move {
+                    ShowCapWindow::Main {
+                        init_target_mode: None,
+                    }
+                    .show(&app)
+                    .await
+                });
                 return;
             };
 
@@ -2112,7 +2127,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     } else {
                         println!("Permissions granted, showing main window");
 
-                        let _ = ShowCapWindow::Main.show(&app).await;
+                        let _ = ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&app)
+                        .await;
                     }
                 }
             });
@@ -2121,7 +2140,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             tray::create_tray(&app).unwrap();
 
-            RequestStartRecording::listen_any_spawn(&app, |event, app| async move {
+            RequestStartRecording::listen_any_spawn(&app, async |event, app| {
                 if CapWindowId::Main.get(&app).is_some() {
                     return;
                 };
@@ -2150,13 +2169,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .await;
             });
 
-            RequestNewScreenshot::listen_any_spawn(&app, |_, app| async move {
-                if let Err(e) = take_screenshot(app.clone(), app.state()).await {
-                    eprintln!("Failed to take screenshot: {e}");
+            RequestOpenRecordingPicker::listen_any_spawn(&app, async |event, app| {
+                let _ = ShowCapWindow::Main {
+                    init_target_mode: event.target_mode,
                 }
+                .show(&app)
+                .await;
             });
 
-            RequestOpenSettings::listen_any_spawn(&app, |payload, app| async move {
+            RequestOpenSettings::listen_any_spawn(&app, async |payload, app| {
                 let _ = ShowCapWindow::Settings {
                     page: Some(payload.page),
                 }
@@ -2181,6 +2202,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         match window_id {
                             CapWindowId::Main => {
                                 let app = app.clone();
+
+                                for (id, window) in app.webview_windows() {
+                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                        CapWindowId::from_str(&id)
+                                    {
+                                        let _ = window.close();
+                                    }
+                                }
+
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
@@ -2306,7 +2336,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 } else {
                     let handle = _handle.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Main.show(&handle).await;
+                        let _ = ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&handle)
+                        .await;
                     });
                 }
             }

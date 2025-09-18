@@ -11,7 +11,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore } from "solid-js/store";
-import { hotkeysStore } from "~/store";
+import { generalSettingsStore, hotkeysStore } from "~/store";
 
 import {
 	commands,
@@ -20,13 +20,17 @@ import {
 	type HotkeysStore,
 } from "~/utils/tauri";
 
-const ACTION_TEXT: Record<HotkeyAction, string> = {
-	startStudioRecording: "Start Studio Recording",
-	startInstantRecording: "Start Instant Recording",
-	stopRecording: "Stop Recording",
-	restartRecording: "Restart Recording",
+const ACTION_TEXT = {
+	startStudioRecording: "Start studio recording",
+	startInstantRecording: "Start instant recording",
+	restartRecording: "Restart recording",
+	stopRecording: "Stop recording",
 	// takeScreenshot: "Take Screenshot",
-};
+	openRecordingPicker: "Open recording picker",
+	openRecordingPickerDisplay: "Record display",
+	openRecordingPickerWindow: "Record window",
+	openRecordingPickerArea: "Record area",
+} satisfies { [K in HotkeyAction]?: string };
 
 export default function () {
 	const [store] = createResource(() => hotkeysStore.get());
@@ -40,6 +44,7 @@ export default function () {
 
 const MODIFIER_KEYS = new Set(["Meta", "Shift", "Control", "Alt"]);
 function Inner(props: { initialStore: HotkeysStore | null }) {
+	const generalSettings = generalSettingsStore.createQuery();
 	const [hotkeys, setHotkeys] = createStore<{
 		[K in HotkeyAction]?: Hotkey;
 	}>(props.initialStore?.hotkeys ?? {});
@@ -72,13 +77,21 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 		}
 	});
 
-	const actions = [
-		"startStudioRecording",
-		"startInstantRecording",
-		"stopRecording",
-		"restartRecording",
-		// "takeScreenshot",
-	] satisfies Array<HotkeyAction>;
+	const actions = () =>
+		[
+			...(generalSettings.data?.enableNewRecordingFlow
+				? (["openRecordingPicker"] as const)
+				: (["startStudioRecording", "startInstantRecording"] as const)),
+			"stopRecording",
+			"restartRecording",
+			...(generalSettings.data?.enableNewRecordingFlow
+				? ([
+						"openRecordingPickerDisplay",
+						"openRecordingPickerWindow",
+						"openRecordingPickerArea",
+					] as const)
+				: []),
+		] satisfies Array<keyof typeof ACTION_TEXT>;
 
 	return (
 		<div class="flex flex-col p-4 w-full h-fit">
@@ -89,7 +102,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 				</p>
 			</div>
 			<div class="flex flex-col flex-1 gap-3 p-4 mt-4 w-full rounded-xl border bg-gray-2 border-gray-3">
-				<Index each={actions}>
+				<Index each={actions()}>
 					{(item, idx) => {
 						createEventListener(window, "click", () => {
 							if (listening()?.action !== item()) return;
@@ -184,7 +197,7 @@ function Inner(props: { initialStore: HotkeysStore | null }) {
 										</Match>
 									</Switch>
 								</div>
-								{idx !== actions.length - 1 && (
+								{idx !== actions().length - 1 && (
 									<div class="w-full h-px bg-gray-3" />
 								)}
 							</>

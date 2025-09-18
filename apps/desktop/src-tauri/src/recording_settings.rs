@@ -3,7 +3,8 @@ use serde_json::json;
 use tauri::{AppHandle, Wry};
 use tauri_plugin_store::StoreExt;
 
-#[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, specta::Type, Debug, Clone, Copy)]
+#[serde(rename_all = "camelCase")]
 pub enum RecordingTargetMode {
     Display,
     Window,

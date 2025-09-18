@@ -1,4 +1,7 @@
-use crate::{RequestStartRecording, recording, windows::ShowCapWindow};
+use crate::{
+    RequestOpenRecordingPicker, RequestStartRecording, recording,
+    recording_settings::RecordingTargetMode, windows::ShowCapWindow,
+};
 use global_hotkey::HotKeyState;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -49,6 +52,13 @@ pub enum HotkeyAction {
     StopRecording,
     RestartRecording,
     // TakeScreenshot,
+    OpenRecordingPicker,
+    OpenRecordingPickerDisplay,
+    OpenRecordingPickerWindow,
+    OpenRecordingPickerArea,
+    // Needed for deserialization of deprecated actions
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Serialize, Deserialize, Type, Default)]
@@ -139,6 +149,32 @@ async fn handle_hotkey(app: AppHandle, action: HotkeyAction) -> Result<(), Strin
         HotkeyAction::RestartRecording => {
             recording::restart_recording(app.clone(), app.state()).await
         }
+        HotkeyAction::OpenRecordingPicker => {
+            let _ = RequestOpenRecordingPicker { target_mode: None }.emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerDisplay => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Display),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerWindow => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Window),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::OpenRecordingPickerArea => {
+            let _ = RequestOpenRecordingPicker {
+                target_mode: Some(RecordingTargetMode::Area),
+            }
+            .emit(&app);
+            Ok(())
+        }
+        HotkeyAction::Other => Ok(()),
     }
 }
 
