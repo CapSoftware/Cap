@@ -336,6 +336,8 @@ export const UploadCapButton = ({
 
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
+						setUploadProgress(100);
+						onProgress?.(uploadId, 100, 100);
 						sendProgressUpdate(uploadId, uploadState.total, uploadState.total);
 						resolve();
 					} else {
@@ -369,13 +371,14 @@ export const UploadCapButton = ({
 					xhr.upload.onprogress = (event) => {
 						if (event.lengthComputable) {
 							const percent = (event.loaded / event.total) * 100;
-							const thumbnailProgress = 90 + percent * 0.1;
-							onProgress?.(uploadId, 100, thumbnailProgress);
+							// Thumbnail upload is a small additional step, keep at 100%
+							onProgress?.(uploadId, 100, 100);
 						}
 					};
 
 					xhr.onload = () => {
 						if (xhr.status >= 200 && xhr.status < 300) {
+							onProgress?.(uploadId, 100, 100);
 							resolve();
 						} else {
 							reject(
@@ -387,9 +390,10 @@ export const UploadCapButton = ({
 
 					xhr.send(screenshotFormData);
 				});
-			} else {
 			}
 
+			// Final progress update to ensure we're at 100%
+			setUploadProgress(100);
 			onProgress?.(uploadId, 100, 100);
 			onComplete?.(uploadId);
 			router.refresh();
