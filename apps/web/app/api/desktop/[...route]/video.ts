@@ -125,9 +125,15 @@ app.get(
 					fps,
 				});
 
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
+			const clientSupportsUploadProgress = xCapVersion
+				? isGreaterThanSemver(xCapVersion, 0, 3, 68)
+				: false;
+
+			if (clientSupportsUploadProgress)
+				await db().insert(videoUploads).values({
+					videoId: idToUse,
+				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
@@ -291,14 +297,13 @@ app.post(
 					),
 				);
 
-			if (result.rowsAffected === 0) {
-				const result2 = await db().insert(videoUploads).values({
+			if (result.rowsAffected === 0)
+				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
-			}
 
 			if (uploaded === total)
 				await db()
@@ -312,3 +317,32 @@ app.post(
 		}
 	},
 );
+
+function isGreaterThanSemver(
+	versionString: string,
+	major: number,
+	minor: number,
+	patch: number,
+): boolean {
+	// Parse version string, remove 'v' prefix if present
+	const match = versionString
+		.replace(/^v/, "")
+		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
+
+	if (!match) {
+		throw new Error(`Invalid semver version: ${versionString}`);
+	}
+
+	const [, vMajor, vMinor, vPatch, prerelease] = match;
+	const parsedMajor = parseInt(vMajor, 10);
+	const parsedMinor = parseInt(vMinor, 10);
+	const parsedPatch = parseInt(vPatch, 10);
+
+	// Compare major.minor.patch
+	if (parsedMajor !== major) return parsedMajor > major;
+	if (parsedMinor !== minor) return parsedMinor > minor;
+	if (parsedPatch !== patch) return parsedPatch > patch;
+
+	// If versions are equal, prerelease versions have lower precedence
+	return !prerelease; // true if no prerelease (1.0.0 > 1.0.0-alpha), false if prerelease
+}
