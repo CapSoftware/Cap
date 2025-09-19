@@ -6,13 +6,8 @@ pub mod pipeline;
 pub mod sources;
 pub mod studio_recording;
 
-pub use instant_recording::{
-    CompletedInstantRecording, InstantRecordingActor, spawn_instant_recording_actor,
-};
+pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
 pub use sources::{camera, screen_capture};
-pub use studio_recording::{
-    CompletedStudioRecording, StudioRecordingHandle, spawn_studio_recording_actor,
-};
 
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;
@@ -24,9 +19,10 @@ use thiserror::Error;
 
 use crate::feeds::camera::CameraFeedLock;
 
-#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy)]
+#[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum RecordingMode {
+    #[default]
     Studio,
     Instant,
 }

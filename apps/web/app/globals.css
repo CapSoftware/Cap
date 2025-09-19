@@ -51,6 +51,27 @@ html {
 	color: #000000;
 	background-color: #f2f2f2;
 }
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
+}
+
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
+}
 
 .left-perspective {
 	transform: scale(1.2) rotateX(47deg) rotateY(31deg) rotate(324deg);
@@ -66,9 +87,8 @@ html {
 	border-radius: 10px;
 }
 
-/* Handle */
 ::-webkit-scrollbar-thumb {
-	background: rgb(116, 116, 116);
+	background: var(--gray-7);
 	border-radius: 10px;
 }
 
@@ -289,6 +309,16 @@ a.bg-primary:hover {
 		linear-gradient(#fff 0 0);
 	-webkit-mask-composite: xor;
 	mask-composite: exclude;
+}
+
+@media all and (max-width: 1024px) {
+	.dashboard-grid {
+		grid-template-columns: 1fr;
+		grid-template-rows: 1fr;
+		grid-template-areas:
+			"main"
+			"main";
+	}
 }
 
 @media (prefers-color-scheme: dark) {
@@ -594,12 +624,18 @@ slot:not(.dashboard-layout slot) {
 .hide-scroll::-webkit-scrollbar {
 	display: none;
 }
-
 /* Custom scrollbar */
 .custom-scroll {
 	overflow-y: auto;
+	scrollbar-gutter: stable;
 }
 
+/* Fallback for scrollbar-gutter */
+@supports not (scrollbar-gutter: stable) {
+	.custom-scroll {
+		padding-right: 3px; /* Reserve space for scrollbar */
+	}
+}
 .custom-scroll::-webkit-scrollbar {
 	width: 3px;
 	background-color: transparent;
@@ -857,6 +893,12 @@ footer a {
 		--chart-3: 30 80% 55%;
 		--chart-4: 280 65% 60%;
 		--chart-5: 340 75% 55%;
+	}
+}
+
+@media (max-width: 768px) {
+	.intercom-lightweight-app-launcher {
+		bottom: 90px !important;
 	}
 }
 

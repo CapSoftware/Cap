@@ -7,6 +7,7 @@ export const recordScreenMacContent = {
 	category: "Tutorials",
 	author: "Richie McIlroy",
 	tags: ["Screen Recording", "Mac", "System Audio", "Tutorials"],
+	gradientColors: ["#fed7aa", "#fdba74", "#fb923c"], // pastel oranges/yellows for macOS Big Sur
 
 	heroTLDR:
 		"Want to record your Mac screen with internal audio without expensive software? Here's how to do it in 2 clicks with Cap—completely free, no audio routing hacks needed.",

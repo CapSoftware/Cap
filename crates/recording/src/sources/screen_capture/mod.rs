@@ -1,14 +1,13 @@
+use crate::pipeline::{control::Control, task::PipelineSourceTask};
 use cap_cursor_capture::CursorCropBounds;
 use cap_media_info::{AudioInfo, VideoInfo};
-use ffmpeg::sys::AV_TIME_BASE_Q;
+use cap_timestamp::Timestamp;
 use flume::Sender;
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
 use tracing::{error, warn};
-
-use crate::pipeline::{control::Control, task::PipelineSourceTask};
 
 #[cfg(windows)]
 mod windows;
@@ -194,8 +193,8 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
     video_info: VideoInfo,
     tokio_handle: tokio::runtime::Handle,
-    video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+    video_tx: Sender<(TCaptureFormat::VideoFormat, Timestamp)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
     start_time: SystemTime,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     #[cfg(windows)]
@@ -277,8 +276,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         target: &ScreenCaptureTarget,
         show_cursor: bool,
         max_fps: u32,
-        video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
-        audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+        video_tx: Sender<(TCaptureFormat::VideoFormat, Timestamp)>,
+        audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
         start_time: SystemTime,
         tokio_handle: tokio::runtime::Handle,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,

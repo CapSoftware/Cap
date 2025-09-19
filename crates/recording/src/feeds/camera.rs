@@ -1,6 +1,10 @@
 use cap_camera::CameraInfo;
+use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
+#[cfg(windows)]
+use cap_timestamp::PerformanceCounterTimestamp;
+use cap_timestamp::Timestamp;
 use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};
 use kameo::prelude::*;
@@ -9,20 +13,17 @@ use std::{
     cmp::Ordering,
     ops::Deref,
     sync::mpsc::{self, SyncSender},
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
-use tracing::{debug, error, trace, warn};
-
-use cap_camera_ffmpeg::*;
+use tracing::{debug, error, info, trace, warn};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
 pub struct RawCameraFrame {
     pub frame: frame::Video,
-    pub timestamp: Duration,
-    pub reference_time: Instant,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Actor)]
@@ -58,6 +59,12 @@ impl OpenState {
         if let Some(connecting) = &self.connecting
             && id == connecting.id
         {
+            if let Some(attached) = self.attached.take() {
+                let _ = attached.done_tx.send(());
+            }
+
+            trace!("Attaching new camera");
+
             self.attached = Some(AttachedState {
                 id,
                 camera_info: data.camera_info,
@@ -255,6 +262,7 @@ async fn setup_camera(
     });
 
     let format = ideal_formats.swap_remove(0);
+
     let frame_rate = format.frame_rate() as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -262,7 +270,7 @@ async fn setup_camera(
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
-            let Ok(mut ff_frame) = frame.to_ffmpeg() else {
+            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
                 return;
             };
 
@@ -282,8 +290,18 @@ async fn setup_camera(
             let _ = recipient
                 .tell(NewFrame(RawCameraFrame {
                     frame: ff_frame,
-                    timestamp: frame.timestamp,
-                    reference_time: frame.reference_time,
+                    #[cfg(windows)]
+                    timestamp: Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
+                        frame.native().perf_counter,
+                    )),
+                    #[cfg(target_os = "macos")]
+                    timestamp: Timestamp::MachAbsoluteTime(
+                        cap_timestamp::MachAbsoluteTimestamp::new(
+                            cidre::cm::Clock::convert_host_time_to_sys_units(
+                                frame.native().sample_buf().pts(),
+                            ),
+                        ),
+                    ),
                 }))
                 .try_send();
         })
@@ -364,9 +382,15 @@ impl Message<SetInput> for CameraFeed {
                     }
                 };
 
+                trace!("Waiting for camera to be done");
+
                 let _ = done_rx.recv();
 
+                trace!("Stoppping capture of {:?}", &id);
+
                 let _ = handle.stop_capturing();
+
+                info!("Stopped capture of {:?}", &id);
             })
         });
 

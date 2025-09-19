@@ -11,7 +11,6 @@ import {
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { usePublicEnv } from "@/utils/public-env";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
@@ -124,8 +123,6 @@ export const ShareVideo = forwardRef<
 		}
 	}, [chapters]);
 
-	const publicEnv = usePublicEnv();
-
 	let videoSrc: string;
 	let enableCrossOrigin = false;
 
@@ -140,9 +137,9 @@ export const ShareVideo = forwardRef<
 	) {
 		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
 	} else if (data.source.type === "MediaConvert") {
-		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
+		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 	} else {
-		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
+		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
 	}
 
 	return (

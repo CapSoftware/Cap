@@ -2,6 +2,7 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import DashboardInner from "./_components/DashboardInner";
+import MobileTab from "./_components/MobileTab";
 import DesktopNav from "./_components/Navbar/Desktop";
 import MobileNav from "./_components/Navbar/Mobile";
 import { DashboardContexts } from "./Contexts";
@@ -78,16 +79,13 @@ export default async function DashboardLayout({
 				anyNewNotifications={anyNewNotifications}
 				userPreferences={userPreferences}
 			>
-				<div className="grid grid-cols-[auto,1fr] overflow-y-auto bg-gray-1 grid-rows-[auto,1fr] h-dvh min-h-dvh">
-					<aside className="z-10 col-span-1 row-span-2">
-						<DesktopNav />
-					</aside>
-					<div className="flex col-span-1 row-span-2 h-full custom-scroll focus:outline-none">
+				<div className="dashboard-grid">
+					<DesktopNav />
+					<div className="flex h-full [grid-area:main] focus:outline-none">
 						<MobileNav />
-						<div className="dashboard-page">
-							<DashboardInner>{children}</DashboardInner>
-						</div>
+						<DashboardInner>{children}</DashboardInner>
 					</div>
+					<MobileTab />
 				</div>
 			</DashboardContexts>
 		</UploadingProvider>

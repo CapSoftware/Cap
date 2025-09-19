@@ -87,6 +87,10 @@ const footerLinks = {
 			label: "Online Classroom Tools",
 			href: "/solutions/online-classroom-tools",
 		},
+		{
+			label: "Agencies",
+			href: "/solutions/agencies",
+		},
 	] as FooterLink[],
 	additional: [
 		{ label: "Screen Recorder", href: "/screen-recorder" },
@@ -95,6 +99,7 @@ const footerLinks = {
 		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
 		{ label: "Screen Recording Software", href: "/screen-recording-software" },
 		{ label: "Cap vs Loom", href: "/loom-alternative" },
+		{ label: "Student Discount", href: "/student-discount" },
 	] as FooterLink[],
 };
 

@@ -152,7 +152,12 @@ export default function Recordings() {
 					</For>
 				</div>
 
-				<div class="flex flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+					<Show when={filteredRecordings().length === 0}>
+						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+							No {activeTab()} recordings
+						</p>
+					</Show>
 					<ul class="p-4 flex flex-col gap-5 w-full text-[--text-primary]">
 						<For each={filteredRecordings()}>
 							{(recording) => (

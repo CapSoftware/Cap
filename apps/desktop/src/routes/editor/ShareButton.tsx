@@ -21,7 +21,8 @@ import {
 } from "./ui";
 
 function ShareButton() {
-	const { editorInstance, meta, customDomain } = useEditorContext();
+	const { editorInstance, meta, customDomain, editorState, setEditorState } =
+		useEditorContext();
 	const projectPath = editorInstance.path;
 
 	const upload = createMutation(() => ({
@@ -194,7 +195,13 @@ function ShareButton() {
 							>
 								<Button
 									disabled={upload.isPending}
-									onClick={() => upload.mutate()}
+									onClick={() => {
+										if (editorState.timeline.selection) {
+											setEditorState("timeline", "selection", null);
+											return;
+										}
+										upload.mutate();
+									}}
 									variant="dark"
 									class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1"
 								>

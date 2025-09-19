@@ -7,10 +7,14 @@ import {
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createMemo } from "solid-js";
+import { createEffect, createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
-import { authStore, generalSettingsStore } from "~/store";
+import {
+	authStore,
+	generalSettingsStore,
+	recordingSettingsStore,
+} from "~/store";
 import { createQueryInvalidate } from "./events";
 import {
 	type CameraInfo,
@@ -106,12 +110,18 @@ export function createOptionsQuery() {
 		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
 	});
 
-	const [state, setState] = makePersisted([_state, _setState], {
-		name: PERSIST_KEY,
+	createEffect(() => {
+		recordingSettingsStore.set({
+			target: _state.captureTarget,
+			micName: _state.micName,
+			cameraId: _state.cameraID,
+			mode: _state.mode,
+			systemAudio: _state.captureSystemAudio,
+		});
 	});
 
-	createEventListener(window, "storage", (e) => {
-		if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
+	const [state, setState] = makePersisted([_state, _setState], {
+		name: PERSIST_KEY,
 	});
 
 	return { rawOptions: state, setOptions: setState };

@@ -120,7 +120,7 @@ function Page() {
 
 	onMount(async () => {
 		// We don't want the target select overlay on launch
-		setOptions({ targetMode: null });
+		setOptions({ targetMode: (window as any).__CAP__.initialTargetMode });
 
 		// Enforce window size with multiple safeguards
 		const currentWindow = getCurrentWindow();
@@ -423,28 +423,30 @@ function Page() {
 					name="Area"
 				/>
 			</div>
-			<div class="space-y-2">
-				<CameraSelect
-					disabled={cameras.isPending}
-					options={cameras.data ?? []}
-					value={options.camera() ?? null}
-					onChange={(c) => {
-						if (!c) setCamera.mutate(null);
-						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-						else setCamera.mutate({ DeviceID: c.device_id });
-					}}
-				/>
-				<MicrophoneSelect
-					disabled={mics.isPending}
-					options={mics.isPending ? [] : (mics.data ?? [])}
-					// this prevents options.micName() from suspending on initial load
-					value={
-						mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-					}
-					onChange={(v) => setMicInput.mutate(v)}
-				/>
-				<SystemAudio />
-			</div>
+			<Show when={!signIn.isPending}>
+				<div class="space-y-2">
+					<CameraSelect
+						disabled={cameras.isPending}
+						options={cameras.data ?? []}
+						value={options.camera() ?? null}
+						onChange={(c) => {
+							if (!c) setCamera.mutate(null);
+							else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+							else setCamera.mutate({ DeviceID: c.device_id });
+						}}
+					/>
+					<MicrophoneSelect
+						disabled={mics.isPending}
+						options={mics.isPending ? [] : (mics.data ?? [])}
+						// this prevents options.micName() from suspending on initial load
+						value={
+							mics.isPending ? rawOptions.micName : (options.micName() ?? null)
+						}
+						onChange={(v) => setMicInput.mutate(v)}
+					/>
+					<SystemAudio />
+				</div>
+			</Show>
 		</div>
 	);
 }
