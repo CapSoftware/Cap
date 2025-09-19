@@ -176,8 +176,8 @@ export async function getVideosByFolderId(folderId: string) {
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
-			hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
+			hasPassword: sql`${videos.password} IS NULL`.mapWith(Boolean),
+			hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(Boolean),
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
@@ -231,8 +231,8 @@ export async function getVideosByFolderId(folderId: string) {
 						[key: string]: unknown;
 				  }
 				| undefined,
-			hasPassword: video.hasPassword === 1,
-			hasActiveUpload: video.hasActiveUpload === 1,
+			hasPassword: video.hasPassword,
+			hasActiveUpload: video.hasActiveUpload,
 			foldersData: [], // Empty array since videos in a folder don't need folder data
 		};
 	});

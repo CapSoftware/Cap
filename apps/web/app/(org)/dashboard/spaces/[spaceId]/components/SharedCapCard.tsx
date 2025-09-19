@@ -14,6 +14,7 @@ interface SharedCapCardProps {
 		totalReactions: number;
 		ownerName: string | null;
 		metadata?: VideoMetadata;
+		hasActiveUpload: boolean | undefined;
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;

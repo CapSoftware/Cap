@@ -43,7 +43,9 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: Omit<typeof videos.$inferSelect, "password">;
+		data: Omit<typeof videos.$inferSelect, "password"> & {
+			hasActiveUpload: boolean | undefined;
+		};
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
@@ -202,6 +204,7 @@ export const EmbedVideo = forwardRef<
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
 							enableCrossOrigin={enableCrossOrigin}
+							hasActiveUpload={data.hasActiveUpload}
 						/>
 					) : (
 						<HLSVideoPlayer
@@ -211,6 +214,7 @@ export const EmbedVideo = forwardRef<
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
+							hasActiveUpload={data.hasActiveUpload}
 						/>
 					)}
 				</div>

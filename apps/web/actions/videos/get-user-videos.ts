@@ -31,7 +31,7 @@ export async function getUserVideos(limit?: number) {
             ${videos.createdAt}
           )
         `,
-				hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
+				hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(Boolean),
 			})
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))
@@ -62,7 +62,6 @@ export async function getUserVideos(limit?: number) {
 				metadata: video.metadata as
 					| { customCreatedAt?: string; [key: string]: any }
 					| undefined,
-				hasActiveUpload: video.hasActiveUpload === 1,
 			};
 		});
 

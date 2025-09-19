@@ -22,7 +22,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
-use tracing::{error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
@@ -664,14 +664,12 @@ impl InstantMultipartUpload {
         let mut uploaded_parts = Vec::new();
         let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
-        let mut progress = UploadProgressUpdater::new(app.clone(), video_id.clone());
-
-        println!("Starting multipart upload for {video_id}...");
+        let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
 
         // --------------------------------------------
         // initiate the multipart upload
         // --------------------------------------------
-        println!("Initiating multipart upload for {video_id}...");
+        debug!("Initiating multipart upload for {video_id}...");
         let initiate_response = match app
             .authed_api_request("/api/upload/multipart/initiate", |c, url| {
                 c.post(url)

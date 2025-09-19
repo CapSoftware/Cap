@@ -62,7 +62,7 @@ export interface CapCardProps extends PropsWithChildren {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
-		hasActiveUpload?: boolean;
+		hasActiveUpload: boolean | undefined;
 		duration?: number;
 	};
 	analytics: number;
@@ -164,7 +164,10 @@ export const CapCard = ({
 
 	const isOwner = userId === cap.ownerId;
 
-	const uploadProgress = useUploadProgress(cap.id, cap.hasActiveUpload);
+	const uploadProgress = useUploadProgress(
+		cap.id,
+		cap.hasActiveUpload || false,
+	);
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {

@@ -38,6 +38,7 @@ interface Props {
 	videoRef: React.RefObject<HTMLVideoElement>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
+	hasActiveUpload?: boolean;
 }
 
 export function HLSVideoPlayer({
@@ -48,6 +49,7 @@ export function HLSVideoPlayer({
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
+	hasActiveUpload,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -249,7 +251,7 @@ export function HLSVideoPlayer({
 		};
 	}, [captionsSrc]);
 
-	const uploadProgress = useUploadProgress(videoId);
+	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 

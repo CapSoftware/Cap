@@ -38,6 +38,7 @@ interface Props {
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
+	hasActiveUpload: boolean | undefined;
 }
 
 export function CapVideoPlayer({
@@ -49,6 +50,7 @@ export function CapVideoPlayer({
 	mediaPlayerClassName,
 	autoplay = false,
 	enableCrossOrigin = false,
+	hasActiveUpload,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -384,7 +386,7 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
-	const uploadProgress = useUploadProgress(videoId);
+	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
 	const isUploading = uploadProgress?.status === "uploading";
 	const isUploadFailed = uploadProgress?.status === "failed";
 

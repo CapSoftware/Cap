@@ -203,7 +203,9 @@ export default async function SharedCapsPage({
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
+						hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+							Boolean,
+						),
 					})
 					.from(spaceVideos)
 					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
@@ -256,7 +258,6 @@ export default async function SharedCapsPage({
 				metadata: video.metadata as
 					| { customCreatedAt?: string; [key: string]: any }
 					| undefined,
-				hasActiveUpload: video.hasActiveUpload === 1,
 			};
 		});
 
@@ -312,7 +313,9 @@ export default async function SharedCapsPage({
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						hasActiveUpload: sql<number>`IF(${videoUploads.videoId} IS NULL, 0, 1)`,
+						hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+							Boolean,
+						),
 					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
@@ -377,7 +380,6 @@ export default async function SharedCapsPage({
 				metadata: video.metadata as
 					| { customCreatedAt?: string; [key: string]: any }
 					| undefined,
-				hasActiveUpload: video.hasActiveUpload === 1,
 			};
 		});
 
