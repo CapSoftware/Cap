@@ -14,23 +14,21 @@ import {
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
 
-const FolderPage = async (
-    props: {
-        params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
-    }
-) => {
-    const params = await props.params;
-    const user = await getCurrentUser();
-    if (!user) return;
+const FolderPage = async (props: {
+	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
+}) => {
+	const params = await props.params;
+	const user = await getCurrentUser();
+	if (!user) return;
 
-    const [childFolders, breadcrumb, videosData] = await Promise.all([
+	const [childFolders, breadcrumb, videosData] = await Promise.all([
 		getChildFolders(params.folderId),
 		getFolderBreadcrumb(params.folderId),
 		getVideosByFolderId(params.folderId),
 	]);
-    const userId = user?.id as string;
+	const userId = user?.id as string;
 
-    return (
+	return (
 		<div>
 			<div className="flex gap-2 items-center mb-10">
 				<NewSubfolderButton parentFolderId={params.folderId} />

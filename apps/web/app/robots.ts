@@ -6,7 +6,7 @@ export const revalidate = 0;
 
 export default function robots(): MetadataRoute.Robots {
 	const seoPageSlugs = Object.keys(seoPages);
-	const headersList = (headers() as unknown as UnsafeUnwrappedHeaders);
+	const headersList = headers() as unknown as UnsafeUnwrappedHeaders;
 	const referrer = headersList.get("x-referrer") || "";
 
 	const allowedReferrers = [

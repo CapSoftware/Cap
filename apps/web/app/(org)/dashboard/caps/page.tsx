@@ -95,32 +95,30 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage(
-    props: {
-        searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-    }
-) {
-    const searchParams = await props.searchParams;
-    const user = await getCurrentUser();
+export default async function CapsPage(props: {
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
+	const searchParams = await props.searchParams;
+	const user = await getCurrentUser();
 
-    if (!user || !user.id) {
+	if (!user || !user.id) {
 		redirect("/login");
 	}
 
-    const userId = user.id;
-    const page = Number(searchParams.page) || 1;
-    const limit = Number(searchParams.limit) || 15;
-    const offset = (page - 1) * limit;
+	const userId = user.id;
+	const page = Number(searchParams.page) || 1;
+	const limit = Number(searchParams.limit) || 15;
+	const offset = (page - 1) * limit;
 
-    const totalCountResult = await db()
+	const totalCountResult = await db()
 		.select({ count: count() })
 		.from(videos)
 		.where(eq(videos.ownerId, userId));
 
-    const totalCount = totalCountResult[0]?.count || 0;
+	const totalCount = totalCountResult[0]?.count || 0;
 
-    // Get custom domain and verification status for the user's organization
-    const organizationData = await db()
+	// Get custom domain and verification status for the user's organization
+	const organizationData = await db()
 		.select({
 			customDomain: organizations.customDomain,
 			domainVerified: organizations.domainVerified,
@@ -129,10 +127,10 @@ export default async function CapsPage(
 		.where(eq(organizations.id, user.activeOrganizationId))
 		.limit(1);
 
-    let customDomain: string | null = null;
-    let domainVerified = false;
+	let customDomain: string | null = null;
+	let domainVerified = false;
 
-    if (
+	if (
 		organizationData.length > 0 &&
 		organizationData[0] &&
 		organizationData[0].customDomain
@@ -143,7 +141,7 @@ export default async function CapsPage(
 		}
 	}
 
-    const videoData = await db()
+	const videoData = await db()
 		.select({
 			id: videos.id,
 			ownerId: videos.ownerId,
@@ -198,7 +196,7 @@ export default async function CapsPage(
 		.limit(limit)
 		.offset(offset);
 
-    const foldersData = await db()
+	const foldersData = await db()
 		.select({
 			id: folders.id,
 			name: folders.name,
@@ -217,11 +215,11 @@ export default async function CapsPage(
 			),
 		);
 
-    // Fetch shared spaces data for all videos
-    const videoIds = videoData.map((video) => video.id);
-    const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
+	// Fetch shared spaces data for all videos
+	const videoIds = videoData.map((video) => video.id);
+	const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
 
-    const processedVideoData = videoData.map((video) => {
+	const processedVideoData = videoData.map((video) => {
 		const { effectiveDate, ...videoWithoutEffectiveDate } = video;
 
 		return {
@@ -247,7 +245,7 @@ export default async function CapsPage(
 		};
 	});
 
-    return (
+	return (
 		<Caps
 			data={processedVideoData}
 			folders={foldersData}

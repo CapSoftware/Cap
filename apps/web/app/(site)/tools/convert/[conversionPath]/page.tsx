@@ -14,11 +14,13 @@ interface ConversionPageProps {
 	}>;
 }
 
-export async function generateMetadata(props: ConversionPageProps): Promise<Metadata> {
-    const params = await props.params;
-    const { conversionPath } = params;
+export async function generateMetadata(
+	props: ConversionPageProps,
+): Promise<Metadata> {
+	const params = await props.params;
+	const { conversionPath } = params;
 
-    if (!CONVERSION_CONFIGS[conversionPath]) {
+	if (!CONVERSION_CONFIGS[conversionPath]) {
 		return {
 			title: "Conversion Not Supported | Cap",
 			description:
@@ -26,12 +28,12 @@ export async function generateMetadata(props: ConversionPageProps): Promise<Meta
 		};
 	}
 
-    const { sourceFormat, targetFormat } = parseFormats(conversionPath);
-    const config = CONVERSION_CONFIGS[conversionPath];
-    const sourceUpper = sourceFormat.toUpperCase();
-    const targetUpper = targetFormat.toUpperCase();
+	const { sourceFormat, targetFormat } = parseFormats(conversionPath);
+	const config = CONVERSION_CONFIGS[conversionPath];
+	const sourceUpper = sourceFormat.toUpperCase();
+	const targetUpper = targetFormat.toUpperCase();
 
-    return {
+	return {
 		title: `${sourceUpper} to ${targetUpper} Converter | Free Online Tool | Cap`,
 		description: `${config.description(
 			sourceFormat,
@@ -59,17 +61,17 @@ export async function generateStaticParams() {
 }
 
 export default async function ConversionPage(props: ConversionPageProps) {
-    const params = await props.params;
-    const { conversionPath } = params;
+	const params = await props.params;
+	const { conversionPath } = params;
 
-    if (!CONVERSION_CONFIGS[conversionPath]) {
+	if (!CONVERSION_CONFIGS[conversionPath]) {
 		notFound();
 	}
 
-    const { sourceFormat, targetFormat } = parseFormats(conversionPath);
-    const config = CONVERSION_CONFIGS[conversionPath];
+	const { sourceFormat, targetFormat } = parseFormats(conversionPath);
+	const config = CONVERSION_CONFIGS[conversionPath];
 
-    const pageContent: ToolPageContent = {
+	const pageContent: ToolPageContent = {
 		title: config.title(sourceFormat, targetFormat),
 		description: config.description(sourceFormat, targetFormat),
 		featuresTitle: "Features",
@@ -116,7 +118,7 @@ export default async function ConversionPage(props: ConversionPageProps) {
 		},
 	};
 
-    return (
+	return (
 		<ToolsPageTemplate
 			content={pageContent}
 			toolComponent={

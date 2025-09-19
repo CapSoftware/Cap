@@ -5,12 +5,15 @@ export const runtime = "edge";
 // Disable caching to ensure users always get the latest download URL
 export const revalidate = 0;
 
-export async function GET(request: NextRequest, props: { params: Promise<{ platform: string }> }) {
-    const params = await props.params;
-    const platform = params.platform.toLowerCase();
+export async function GET(
+	request: NextRequest,
+	props: { params: Promise<{ platform: string }> },
+) {
+	const params = await props.params;
+	const platform = params.platform.toLowerCase();
 
-    // Define download URLs for different platforms
-    const downloadUrls: Record<string, string> = {
+	// Define download URLs for different platforms
+	const downloadUrls: Record<string, string> = {
 		"apple-intel":
 			"https://cdn.crabnebula.app/download/cap/cap/latest/platform/dmg-x86_64",
 		intel:
@@ -29,14 +32,14 @@ export async function GET(request: NextRequest, props: { params: Promise<{ platf
 		win: "https://cdn.crabnebula.app/download/cap/cap/latest/platform/nsis-x86_64",
 	};
 
-    // Get the download URL for the requested platform
-    const downloadUrl = downloadUrls[platform];
+	// Get the download URL for the requested platform
+	const downloadUrl = downloadUrls[platform];
 
-    // If the platform is not supported, redirect to the main download page
-    if (!downloadUrl) {
+	// If the platform is not supported, redirect to the main download page
+	if (!downloadUrl) {
 		return NextResponse.redirect(new URL("/download", request.url));
 	}
 
-    // Redirect to the appropriate download URL
-    return NextResponse.redirect(downloadUrl);
+	// Redirect to the appropriate download URL
+	return NextResponse.redirect(downloadUrl);
 }

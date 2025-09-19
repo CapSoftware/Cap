@@ -32,10 +32,10 @@ type Props = {
 };
 
 export async function generateMetadata(props: Props): Promise<Metadata> {
-    const params = await props.params;
-    const videoId = params.videoId as Video.VideoId;
+	const params = await props.params;
+	const videoId = params.videoId as Video.VideoId;
 
-    return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
+	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
 		Effect.map(
 			Option.match({
 				onNone: () => notFound(),
@@ -112,8 +112,8 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
 }
 
 export default async function EmbedVideoPage(props: Props) {
-	const params = (await props.params);
-	const searchParams = (await props.searchParams);
+	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
 
@@ -160,10 +160,13 @@ export default async function EmbedVideoPage(props: Props) {
 		return Option.fromNullable(video);
 	}).pipe(
 		Effect.flatten,
-		Effect.map((video) => (({
-            needsPassword: false,
-            video
-        }) as const)),
+		Effect.map(
+			(video) =>
+				({
+					needsPassword: false,
+					video,
+				}) as const,
+		),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),

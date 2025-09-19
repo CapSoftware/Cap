@@ -7,17 +7,17 @@ export const runtime = "edge";
 export const revalidate = 0;
 
 export async function GET(
-    req: Request,
-    props: {
+	req: Request,
+	props: {
 		params: Promise<{
 			version: string;
 			target: string;
 			arch: string;
 		}>;
-	}
+	},
 ) {
-    const params = await props.params;
-    try {
+	const params = await props.params;
+	try {
 		params.arch = "arch";
 
 		const { data: release } = await octokit.repos.getLatestRelease({

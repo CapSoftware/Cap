@@ -18,15 +18,15 @@ type Props = {
 };
 
 export async function generateMetadata(props: Props): Promise<Metadata> {
-    const params = await props.params;
-    const inviteId = params.inviteId;
-    const invite = await getInviteDetails(inviteId);
+	const params = await props.params;
+	const inviteId = params.inviteId;
+	const invite = await getInviteDetails(inviteId);
 
-    if (!invite) {
+	if (!invite) {
 		return notFound();
 	}
 
-    return {
+	return {
 		title: `Join ${invite.organizationName} on Cap`,
 		description: `You've been invited to join ${invite.organizationName} on Cap.`,
 	};
@@ -51,20 +51,20 @@ async function getInviteDetails(inviteId: string) {
 }
 
 export default async function InvitePage(props: Props) {
-    const params = await props.params;
-    const inviteId = params.inviteId;
-    const user = await getCurrentUser();
-    const inviteDetails = await getInviteDetails(inviteId);
+	const params = await props.params;
+	const inviteId = params.inviteId;
+	const user = await getCurrentUser();
+	const inviteDetails = await getInviteDetails(inviteId);
 
-    if (!inviteDetails) {
+	if (!inviteDetails) {
 		return notFound();
 	}
 
-    if (!inviteDetails.organizationName || !inviteDetails.inviterName) {
+	if (!inviteDetails.organizationName || !inviteDetails.inviterName) {
 		return notFound();
 	}
 
-    return (
+	return (
 		<InviteAccept
 			inviteId={inviteId}
 			organizationName={inviteDetails.organizationName}
