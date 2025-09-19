@@ -334,8 +334,7 @@ export default async function ShareVideoPage(props: Props) {
 					</div>,
 				),
 			NoSuchElementException: () => {
-				console.log("[ShareVideoPage] No video found for videoId:", videoId);
-				return Effect.succeed(<p>No video found</p>);
+				throw notFound();
 			},
 		}),
 		provideOptionalAuth,

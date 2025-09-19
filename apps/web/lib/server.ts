@@ -20,7 +20,6 @@ import {
 	HttpServer,
 } from "@effect/platform";
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
-import { isNotFoundError } from "next/dist/client/components/not-found";
 import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
@@ -66,10 +65,7 @@ export const runPromise = <A, E>(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
 		if (Exit.isFailure(res)) {
-			if (Cause.isDieType(res.cause) && isNotFoundError(res.cause.defect)) {
-				throw res.cause.defect;
-			}
-
+			if (Cause.isDieType(res.cause)) throw res.cause.defect;
 			throw res;
 		}
 
@@ -82,14 +78,8 @@ export const runPromiseExit = <A, E>(
 	EffectRuntime.runPromiseExit(
 		effect.pipe(Effect.provide(CookiePasswordAttachmentLive)),
 	).then((res) => {
-		if (
-			Exit.isFailure(res) &&
-			Cause.isDieType(res.cause) &&
-			isNotFoundError(res.cause.defect)
-		) {
+		if (Exit.isFailure(res) && Cause.isDieType(res.cause))
 			throw res.cause.defect;
-		}
-
 		return res;
 	});
 

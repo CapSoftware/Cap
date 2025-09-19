@@ -100,7 +100,7 @@
 		"posthog-node": "^4.11.2",
 		"react": "19.1.1",
 		"react-dom": "19.1.1",
-		"react-email": "^4.0.16",
+		"react-email": "^4.2.11",
 		"react-hls-player": "^3.0.7",
 		"react-hook-form": "^7.49.2",
 		"react-hot-toast": "^2.4.1",
