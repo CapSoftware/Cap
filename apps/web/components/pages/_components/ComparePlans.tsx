@@ -10,9 +10,9 @@ import { toast } from "sonner";
 import { useAuthContext } from "@/app/Layout/AuthContext";
 import {
 	CommercialArt,
-	CommercialArtRef,
+	type CommercialArtRef,
 } from "../HomePage/Pricing/CommercialArt";
-import { ProArt, ProArtRef } from "../HomePage/Pricing/ProArt";
+import { ProArt, type ProArtRef } from "../HomePage/Pricing/ProArt";
 
 const COLUMN_WIDTH = "min-w-[200px]";
 

@@ -7,8 +7,9 @@ export const revalidate = 0;
 
 export async function GET(
 	request: NextRequest,
-	{ params }: { params: { platform: string } },
+	props: { params: Promise<{ platform: string }> },
 ) {
+	const params = await props.params;
 	const platform = params.platform.toLowerCase();
 
 	// Define download URLs for different platforms

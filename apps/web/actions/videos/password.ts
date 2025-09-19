@@ -91,7 +91,7 @@ export async function verifyVideoPassword(videoId: string, password: string) {
 
 		if (!valid) throw new Error("Invalid password");
 
-		cookies().set("x-cap-password", await encrypt(video.password));
+		(await cookies()).set("x-cap-password", await encrypt(video.password));
 
 		return { success: true, value: "Password verified" };
 	} catch (error) {

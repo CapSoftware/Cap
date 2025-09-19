@@ -14,7 +14,10 @@ import {
 import FolderVideosSection from "./components/FolderVideosSection";
 import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
 
-const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
+const FolderPage = async (props: {
+	params: Promise<{ id: Folder.FolderId }>;
+}) => {
+	const params = await props.params;
 	const [childFolders, breadcrumb, videosData] = await Promise.all([
 		getChildFolders(params.id),
 		getFolderBreadcrumb(params.id),

@@ -15,14 +15,15 @@ import { calculateReadingTime } from "@/utils/readTime";
 import { Share } from "../_components/Share";
 
 interface PostProps {
-	params: {
+	params: Promise<{
 		slug: string;
-	};
+	}>;
 }
 
-export async function generateMetadata({
-	params,
-}: PostProps): Promise<Metadata | undefined> {
+export async function generateMetadata(
+	props: PostProps,
+): Promise<Metadata | undefined> {
+	const params = await props.params;
 	const post = getBlogPosts().find((post) => post.slug === params.slug);
 	if (!post) {
 		return;
@@ -65,7 +66,8 @@ export async function generateMetadata({
 	};
 }
 
-export default async function PostPage({ params }: PostProps) {
+export default async function PostPage(props: PostProps) {
+	const params = await props.params;
 	const post = getBlogPosts().find((post) => post.slug === params.slug);
 
 	if (!post) {

@@ -14,9 +14,9 @@ type Doc = {
 };
 
 interface DocProps {
-	params: {
+	params: Promise<{
 		slug: string[];
-	};
+	}>;
 }
 
 export async function generateMetadata(

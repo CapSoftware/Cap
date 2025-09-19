@@ -118,13 +118,12 @@ async function fetchOrganizationMembers(orgId: string) {
 		.where(eq(organizationMembers.organizationId, orgId));
 }
 
-export default async function SharedCapsPage({
-	params,
-	searchParams,
-}: {
-	params: { spaceId: string };
-	searchParams: { [key: string]: string | string[] | undefined };
+export default async function SharedCapsPage(props: {
+	params: Promise<{ spaceId: string }>;
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+	const searchParams = await props.searchParams;
+	const params = await props.params;
 	const page = Number(searchParams.page) || 1;
 	const limit = Number(searchParams.limit) || 15;
 	const user = await getCurrentUser();

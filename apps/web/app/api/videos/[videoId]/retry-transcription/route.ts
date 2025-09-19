@@ -6,8 +6,9 @@ import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
-	{ params }: { params: { videoId: string } },
+	props: { params: Promise<{ videoId: string }> },
 ) {
+	const params = await props.params;
 	try {
 		const user = await getCurrentUser();
 		if (!user) {

@@ -96,11 +96,10 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage({
-	searchParams,
-}: {
-	searchParams: { [key: string]: string | string[] | undefined };
+export default async function CapsPage(props: {
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
+	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
 
 	if (!user || !user.id) {

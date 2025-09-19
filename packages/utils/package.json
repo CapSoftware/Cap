@@ -10,8 +10,8 @@
 		"typecheck": "tsc -b"
 	},
 	"devDependencies": {
-		"react": "^19.1.0",
-		"react-dom": "^19.1.0",
+		"react": "^19.1.1",
+		"react-dom": "^19.1.1",
 		"react-router-dom": "^6.18.0",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3"

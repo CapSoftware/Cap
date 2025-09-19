@@ -8,16 +8,15 @@ export const revalidate = 0;
 
 export async function GET(
 	req: Request,
-	{
-		params,
-	}: {
-		params: {
+	props: {
+		params: Promise<{
 			version: string;
 			target: string;
 			arch: string;
-		};
+		}>;
 	},
 ) {
+	const params = await props.params;
 	try {
 		if (params.arch === "x86_64") {
 			params.arch = "x64";
