@@ -176,7 +176,7 @@ export async function getVideosByFolderId(folderId: string) {
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql`${videos.password} IS NULL`.mapWith(Boolean),
+			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),

@@ -363,11 +363,8 @@ export const CapCard = ({
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
-										if (!isSubscribed) {
-											setUpgradeModalOpen(true);
-										} else {
-											setIsPasswordDialogOpen(true);
-										}
+										if (!isSubscribed) setUpgradeModalOpen(true);
+										else setIsPasswordDialogOpen(true);
 									}}
 									className="flex gap-2 items-center rounded-lg"
 								>
