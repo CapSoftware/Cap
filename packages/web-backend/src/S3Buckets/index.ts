@@ -4,9 +4,11 @@ import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
 import { Config, Context, Effect, Layer, Option } from "effect";
-import { S3BucketAccess } from "./S3BucketAccess";
-import { S3BucketClientProvider } from "./S3BucketClientProvider";
-import { S3BucketsRepo } from "./S3BucketsRepo";
+
+import { Database } from "../Database.ts";
+import { S3BucketAccess } from "./S3BucketAccess.ts";
+import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
+import { S3BucketsRepo } from "./S3BucketsRepo.ts";
 
 export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 	effect: Effect.gen(function* () {
@@ -171,7 +173,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		});
 
 		return {
-			getProviderById: Effect.fn("S3Buckets.getProviderById")(function* (
+			getProviderForBucket: Effect.fn("S3Buckets.getProviderById")(function* (
 				bucketId: Option.Option<S3Bucket.S3BucketId>,
 			) {
 				const customBucket = yield* bucketId.pipe(
@@ -193,5 +195,5 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			}),
 		};
 	}),
-	dependencies: [S3BucketsRepo.Default],
+	dependencies: [S3BucketsRepo.Default, Database.Default],
 }) {}

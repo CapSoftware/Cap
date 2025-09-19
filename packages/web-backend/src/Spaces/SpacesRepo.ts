@@ -3,7 +3,7 @@ import type { Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
-import { Database } from "../Database";
+import { Database } from "../Database.ts";
 
 export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 	effect: Effect.gen(function* () {
@@ -28,4 +28,5 @@ export class SpacesRepo extends Effect.Service<SpacesRepo>()("SpacesRepo", {
 				),
 		};
 	}),
+	dependencies: [Database.Default],
 }) {}

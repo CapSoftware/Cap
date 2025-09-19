@@ -5,7 +5,7 @@
 		"dev": "pnpm -w cap-setup && dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri dev",
 		"build:tauri": "dotenv -e ../../.env -- pnpm run preparescript && dotenv -e ../../.env -- pnpm tauri build",
 		"preparescript": "node scripts/prepare.js",
-		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3001",
+		"localdev": "dotenv -e ../../.env -- vinxi dev --port 3002",
 		"build": "vinxi build",
 		"tauri": "tauri"
 	},

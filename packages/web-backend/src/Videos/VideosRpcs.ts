@@ -1,7 +1,7 @@
 import { InternalError, Video } from "@cap/web-domain";
 import { Effect } from "effect";
 
-import { Videos } from ".";
+import { Videos } from "./index.ts";
 
 export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 	Effect.gen(function* () {

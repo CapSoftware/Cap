@@ -4,7 +4,7 @@ export const S3BucketId = Schema.String.pipe(Schema.brand("S3BucketId"));
 export type S3BucketId = typeof S3BucketId.Type;
 
 export class S3Bucket extends Schema.Class<S3Bucket>("S3Bucket")({
-	id: Schema.String,
+	id: S3BucketId,
 	ownerId: Schema.String,
 	region: Schema.String,
 	endpoint: Schema.OptionFromNullOr(Schema.String),

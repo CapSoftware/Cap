@@ -2,7 +2,7 @@ import { HttpApiError, HttpApiMiddleware } from "@effect/platform";
 import { RpcMiddleware } from "@effect/rpc";
 import { Context, Schema } from "effect";
 
-import { InternalError } from "./Errors";
+import { InternalError } from "./Errors.ts";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
 	CurrentUser,
@@ -16,6 +16,7 @@ export class HttpAuthMiddleware extends HttpApiMiddleware.Tag<HttpAuthMiddleware
 		failure: Schema.Union(
 			HttpApiError.Unauthorized,
 			HttpApiError.InternalServerError,
+			HttpApiError.BadRequest,
 		),
 	},
 ) {}

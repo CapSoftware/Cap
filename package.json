@@ -37,5 +37,11 @@
 	"name": "cap",
 	"engines": {
 		"node": "20"
+	},
+"pnpm": {
+		"overrides": {
+			"undici": "5.28.4"
+		}
 	}
+
 }

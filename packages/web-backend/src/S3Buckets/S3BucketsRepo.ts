@@ -3,7 +3,7 @@ import { S3Bucket, type Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
-import { Database } from "../Database";
+import { Database } from "../Database.ts";
 
 export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 	"S3BucketsRepo",
@@ -68,5 +68,6 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 
 			return { getForVideo, getById, getForUser };
 		}),
+		dependencies: [Database.Default],
 	},
 ) {}

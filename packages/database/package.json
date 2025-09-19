@@ -1,6 +1,7 @@
 {
 	"name": "@cap/database",
 	"private": true,
+	"type": "module",
 	"types": "./index.ts",
 	"main": "index.js",
 	"scripts": {
@@ -16,6 +17,7 @@
 	"dependencies": {
 		"@cap/env": "workspace:*",
 		"@cap/web-domain": "workspace:*",
+		"@effect/sql-mysql2": "^0.45.1",
 		"@mattrax/mysql-planetscale": "^0.0.3",
 		"@paralleldrive/cuid2": "^2.2.2",
 		"@planetscale/database": "^1.13.0",
@@ -24,6 +26,7 @@
 		"@react-email/tailwind": "^1.0.5",
 		"drizzle-orm": "0.43.1",
 		"dub": "^0.64.0",
+		"effect": "^3.17.13",
 		"nanoid": "^5.0.4",
 		"next": "14.2.9",
 		"next-auth": "^4.24.5",
@@ -48,5 +51,15 @@
 	},
 	"engines": {
 		"node": "20"
+	},
+	"exports": {
+		".": "./index.ts",
+		"./auth/auth-options": "./auth/auth-options.ts",
+		"./auth/session": "./auth/session.ts",
+		"./emails/config": "./emails/config.ts",
+		"./emails/*": "./emails/*.tsx",
+		"./schema": "./schema.ts",
+		"./crypto": "./crypto.ts",
+		"./helpers": "./helpers.ts"
 	}
 }

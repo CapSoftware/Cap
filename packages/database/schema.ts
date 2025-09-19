@@ -8,14 +8,16 @@ import {
 	int,
 	json,
 	mysqlTable,
+	primaryKey,
 	text,
 	timestamp,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
-import { nanoIdLength } from "./helpers";
-import type { VideoMetadata } from "./types";
+
+import { nanoIdLength } from "./helpers.ts";
+import type { VideoMetadata } from "./types/index.ts";
 
 const nanoId = customType<{ data: string; notNull: true }>({
 	dataType() {
@@ -239,6 +241,8 @@ export const videos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
+		// TODO: make this non-null
+		orgId: nanoIdNullable("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket"),
 		// in seconds
@@ -639,3 +643,16 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
 	childFolders: many(folders, { relationName: "parentChild" }),
 	videos: many(videos),
 }));
+
+export const importedVideos = mysqlTable(
+	"imported_videos",
+	{
+		id: nanoId("id").notNull(),
+		orgId: nanoIdNullable("orgId").notNull(),
+		source: varchar("source", { length: 255, enum: ["loom"] }).notNull(),
+		sourceId: varchar("source_id", { length: 255 }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
+	],
+);

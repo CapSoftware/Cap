@@ -1,7 +1,7 @@
 import { Folder, InternalError } from "@cap/web-domain";
 import { Effect } from "effect";
 
-import { Folders } from ".";
+import { Folders } from "./index.ts";
 
 export const FolderRpcsLive = Folder.FolderRpcs.toLayer(
 	Effect.gen(function* () {
