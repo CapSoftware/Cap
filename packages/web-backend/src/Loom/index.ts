@@ -1,1 +1,1 @@
-export * from "./ImportVideo";
+export * from "./ImportVideo.ts";

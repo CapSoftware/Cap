@@ -3,7 +3,7 @@ import type { Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
 
-import { Database } from "../Database";
+import { Database } from "../Database.ts";
 
 export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 	"OrganisationsRepo",
@@ -33,5 +33,6 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 					),
 			};
 		}),
+		dependencies: [Database.Default],
 	},
 ) {}

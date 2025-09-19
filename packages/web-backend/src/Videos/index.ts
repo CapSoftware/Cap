@@ -3,11 +3,11 @@ import { CurrentUser, Policy, Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Array, Effect, Option, pipe } from "effect";
 
-import { Database } from "../Database";
-import { S3Buckets } from "../S3Buckets";
-import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
-import { VideosPolicy } from "./VideosPolicy";
-import { VideosRepo } from "./VideosRepo";
+import { Database } from "../Database.ts";
+import { S3Buckets } from "../S3Buckets/index.ts";
+import { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
+import { VideosPolicy } from "./VideosPolicy.ts";
+import { type CreateVideoInput, VideosRepo } from "./VideosRepo.ts";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
@@ -39,7 +39,7 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderById(
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
 					video.bucketId,
 				);
 
@@ -79,12 +79,12 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Policy.withPolicy(policy.isOwner(videoId)),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderById(
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
 					video.bucketId,
 				);
 
 				// Don't duplicate password or sharing data
-				const newVideoId = yield* repo.create(yield* video.toJS());
+				const newVideoId = yield* repo.create(video);
 
 				yield* Effect.gen(function* () {
 					const s3 = yield* S3BucketAccess;
@@ -136,7 +136,14 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 					Option.map((r) => new Video.UploadProgress(r)),
 				);
 			}),
+
+			create: Effect.fn("Videos.create")(repo.create),
 		};
 	}),
-	dependencies: [VideosPolicy.Default, VideosRepo.Default, S3Buckets.Default],
+	dependencies: [
+		VideosPolicy.Default,
+		VideosRepo.Default,
+		Database.Default,
+		S3Buckets.Default,
+	],
 }) {}

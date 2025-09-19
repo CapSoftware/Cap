@@ -1,10 +1,11 @@
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Context, Effect, Option, Schema } from "effect";
-import { RpcAuthMiddleware } from "./Authentication";
-import { InternalError } from "./Errors";
-import { FolderId } from "./Folder";
-import { PolicyDeniedError } from "./Policy";
-import { S3BucketId } from "./S3Bucket";
+
+import { RpcAuthMiddleware } from "./Authentication.ts";
+import { InternalError } from "./Errors.ts";
+import { FolderId } from "./Folder.ts";
+import { PolicyDeniedError } from "./Policy.ts";
+import { S3BucketId } from "./S3Bucket.ts";
 
 export const VideoId = Schema.String.pipe(Schema.brand("VideoId"));
 export type VideoId = typeof VideoId.Type;
@@ -13,25 +14,48 @@ export type VideoId = typeof VideoId.Type;
 export class Video extends Schema.Class<Video>("Video")({
 	id: VideoId,
 	ownerId: Schema.String,
+	orgId: Schema.OptionFromNullOr(Schema.String),
 	name: Schema.String,
 	public: Schema.Boolean,
-	metadata: Schema.OptionFromNullOr(
-		Schema.Record({ key: Schema.String, value: Schema.Any }),
-	),
 	source: Schema.Struct({
 		type: Schema.Literal("MediaConvert", "local", "desktopMP4"),
 	}),
+	metadata: Schema.OptionFromNullOr(
+		Schema.Record({ key: Schema.String, value: Schema.Any }),
+	),
 	bucketId: Schema.OptionFromNullOr(S3BucketId),
 	folderId: Schema.OptionFromNullOr(FolderId),
 	transcriptionStatus: Schema.OptionFromNullOr(
 		Schema.Literal("PROCESSING", "COMPLETE", "ERROR"),
 	),
+	width: Schema.OptionFromNullOr(Schema.Number),
+	height: Schema.OptionFromNullOr(Schema.Number),
+	duration: Schema.OptionFromNullOr(Schema.Number),
 	createdAt: Schema.Date,
 	updatedAt: Schema.Date,
 }) {
 	static decodeSync = Schema.decodeSync(Video);
 
-	toJS = () => Schema.encode(Video)(this).pipe(Effect.orDie);
+	static toJS = (self: Video) => Schema.encode(Video)(self).pipe(Effect.orDie);
+
+	static getSource(self: Video) {
+		if (self.source.type === "MediaConvert")
+			return new M3U8Source({
+				videoId: self.id,
+				ownerId: self.ownerId,
+				subpath: "output/video_recording_000.m3u8",
+			});
+
+		if (self.source.type === "local")
+			return new M3U8Source({
+				videoId: self.id,
+				ownerId: self.ownerId,
+				subpath: "combined-source/stream.m3u8",
+			});
+
+		if (self.source.type === "desktopMP4")
+			return new Mp4Source({ videoId: self.id, ownerId: self.ownerId });
+	}
 }
 
 export class UploadProgress extends Schema.Class<UploadProgress>(
@@ -43,7 +67,31 @@ export class UploadProgress extends Schema.Class<UploadProgress>(
 	updatedAt: Schema.Date,
 }) {}
 
-/**
+export class ImportSource extends Schema.Class<ImportSource>("ImportSource")({
+	source: Schema.Literal("loom"),
+	id: Schema.String,
+}) {}
+
+export class Mp4Source extends Schema.TaggedClass<Mp4Source>()("Mp4Source", {
+	videoId: Schema.String,
+	ownerId: Schema.String,
+}) {
+	getFileKey() {
+		return `${this.ownerId}/${this.videoId}/result.mp4`;
+	}
+}
+
+export class M3U8Source extends Schema.TaggedClass<M3U8Source>()("M3U8Source", {
+	videoId: Schema.String,
+	ownerId: Schema.String,
+	subpath: Schema.String,
+}) {
+	getPlaylistFileKey() {
+		return `${this.ownerId}/${this.videoId}/${this.subpath}`;
+	}
+}
+
+/*
  * Used to specify a video password provided by a user,
  * whether via cookies in the case of the website,
  * or via query params for the API.

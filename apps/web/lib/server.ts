@@ -1,51 +1,35 @@
 import "server-only";
 
-import { db } from "@cap/database";
 import { decrypt } from "@cap/database/crypto";
+import { serverEnv } from "@cap/env";
 import {
 	Database,
-	DatabaseError,
 	Folders,
 	HttpAuthMiddlewareLive,
 	S3Buckets,
 	Videos,
 	VideosPolicy,
-	WorkflowsLayer,
 } from "@cap/web-backend";
-import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
-import {
-	ClusterWorkflowEngine,
-	MessageStorage,
-	Runners,
-	Sharding,
-	ShardingConfig,
-	ShardManager,
-	ShardStorage,
-} from "@effect/cluster";
+import { type HttpAuthMiddleware, Video, Workflows } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,
 	type HttpApi,
 	HttpApiBuilder,
+	HttpApiClient,
+	HttpClient,
+	HttpClientRequest,
 	HttpMiddleware,
 	HttpServer,
 } from "@effect/platform";
+import { RpcClient } from "@effect/rpc";
 import { Cause, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
 import { isNotFoundError } from "next/dist/client/components/not-found";
 import { cookies } from "next/headers";
-
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
 
-const DatabaseLive = Layer.sync(Database, () => ({
-	execute: (cb) =>
-		Effect.tryPromise({
-			try: () => cb(db()),
-			catch: (error) => new DatabaseError({ message: String(error) }),
-		}),
-}));
-
-const TracingLayer = NodeSdk.layer(getTracingConfig);
+export const TracingLayer = NodeSdk.layer(getTracingConfig);
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
@@ -60,27 +44,58 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	}),
 );
 
-const WorkflowEngine = ClusterWorkflowEngine.layer.pipe(
-	Layer.provideMerge(Sharding.layer),
-	Layer.provide(ShardManager.layerClientLocal),
-	Layer.provide(ShardStorage.layerNoop),
-	Layer.provide(Runners.layerNoop),
-	Layer.provideMerge(MessageStorage.layerMemory),
-	Layer.provide(ShardingConfig.layer()),
+const WorkflowRpcClient = Layer.scoped(
+	Workflows.RpcClient,
+	Effect.gen(function* () {
+		const envs = Option.zipWith(
+			Option.fromNullable(serverEnv().REMOTE_WORKFLOW_URL),
+			Option.fromNullable(serverEnv().REMOTE_WORKFLOW_SECRET),
+			(l, r) => [l, r] as const,
+		);
+
+		return yield* Option.match(envs, {
+			onNone: () =>
+				RpcClient.make(Workflows.RpcGroup).pipe(
+					Effect.provide(
+						RpcClient.layerProtocolHttp({
+							url: "http://localhost:42169/rpc",
+						}).pipe(Layer.provide(Workflows.RpcSerialization)),
+					),
+				),
+			onSome: ([url, secret]) =>
+				RpcClient.make(Workflows.RpcGroup).pipe(
+					Effect.provide(
+						RpcClient.layerProtocolHttp({
+							url,
+							transformClient: HttpClient.mapRequest(
+								HttpClientRequest.setHeader("Authorization", `Token ${secret}`),
+							),
+						}).pipe(Layer.provide(Workflows.RpcSerialization)),
+					),
+				),
+		});
+	}),
 );
 
-export const Dependencies = WorkflowsLayer.pipe(
-	Layer.provideMerge(
-		Layer.mergeAll(
-			S3Buckets.Default,
-			Videos.Default,
-			VideosPolicy.Default,
-			Folders.Default,
-			FetchHttpClient.layer,
-			WorkflowEngine,
-		).pipe(Layer.provideMerge(Layer.mergeAll(DatabaseLive, TracingLayer))),
-	),
+const WorkflowHttpClient = Layer.scoped(
+	Workflows.HttpClient,
+	Effect.gen(function* () {
+		const a = yield* HttpApiClient.make(Workflows.Api, {
+			baseUrl: "http://localhost:42169",
+		});
+		return a;
+	}),
 );
+
+export const Dependencies = Layer.mergeAll(
+	S3Buckets.Default,
+	Videos.Default,
+	VideosPolicy.Default,
+	Folders.Default,
+	Database.Default,
+	WorkflowRpcClient,
+	WorkflowHttpClient,
+).pipe(Layer.provideMerge(Layer.mergeAll(TracingLayer, FetchHttpClient.layer)));
 
 // purposefully not exposed
 const EffectRuntime = ManagedRuntime.make(Dependencies);

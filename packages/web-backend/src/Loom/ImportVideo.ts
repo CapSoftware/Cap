@@ -1,61 +1,162 @@
-import { Readable } from "node:stream";
-import * as Db from "@cap/database/schema";
-import { CurrentUser, Loom, S3Bucket } from "@cap/web-domain";
-import { ClusterWorkflowEngine } from "@effect/cluster";
-import { Headers, HttpClient, HttpServerResponse } from "@effect/platform";
-import { Activity, Workflow, WorkflowProxy } from "@effect/workflow";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { S3Bucket, Video } from "@cap/web-domain";
+import { Headers, HttpClient } from "@effect/platform";
+import { Activity, Workflow } from "@effect/workflow";
+import { Effect, Option, Schedule, Schema, Stream } from "effect";
 
-import { Database, DatabaseError } from "../Database";
-import { S3Buckets } from "../S3Buckets";
-import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
+import { DatabaseError } from "../Database.ts";
+import { S3Buckets } from "../S3Buckets/index.ts";
+import { S3BucketAccess, S3Error } from "../S3Buckets/S3BucketAccess.ts";
+import { Videos } from "../Videos/index.ts";
 
-export const LoomImportVideoLive = Loom.ImportVideo.toLayer(
+class LoomApiError extends Schema.TaggedError<LoomApiError>("LoomApiError")(
+	"LoomApiError",
+	{ cause: Schema.Unknown },
+) {}
+
+const LoomImportVideoError = Schema.Union(
+	DatabaseError,
+	Video.NotFoundError,
+	S3Error,
+	LoomApiError,
+);
+
+export const LoomImportVideo = Workflow.make({
+	name: "LoomImportVideo",
+	payload: {
+		cap: Schema.Struct({
+			userId: Schema.String,
+			orgId: Schema.String,
+		}),
+		loom: Schema.Struct({
+			userId: Schema.String,
+			orgId: Schema.String,
+			video: Schema.Struct({
+				id: Schema.String,
+				name: Schema.String,
+				downloadUrl: Schema.String,
+				width: Schema.OptionFromNullOr(Schema.Number),
+				height: Schema.OptionFromNullOr(Schema.Number),
+				fps: Schema.OptionFromNullOr(Schema.Number),
+				durationSecs: Schema.OptionFromNullOr(Schema.Number),
+			}),
+		}),
+		attempt: Schema.optional(Schema.Number),
+	},
+	error: LoomImportVideoError,
+	idempotencyKey: (p) =>
+		`${p.cap.userId}-${p.loom.orgId}-${p.loom.video.id}-${p.attempt ?? 0}`,
+});
+
+export const LoomImportVideoLive = LoomImportVideo.toLayer(
 	Effect.fn(function* (payload) {
+		const videos = yield* Videos;
 		const s3Buckets = yield* S3Buckets;
 		const http = yield* HttpClient.HttpClient;
 
-		yield* Activity.make({
+		const { videoId, customBucketId } = yield* Activity.make({
 			name: "CreateVideoRecord",
+			error: LoomImportVideoError,
+			success: Schema.Struct({
+				videoId: Video.VideoId,
+				customBucketId: Schema.Option(S3Bucket.S3BucketId),
+			}),
 			execute: Effect.gen(function* () {
-				// db.execute((db) => db.insert(Db.videos).values([])).pipe(
-				// 	Effect.catchAll(() => Effect.die(undefined)),
-				// );
+				const loomVideo = payload.loom.video;
+
+				const [_, customBucket] = yield* s3Buckets
+					.getProviderForUser(payload.cap.userId)
+					.pipe(Effect.catchAll(() => Effect.die(null)));
+
+				const customBucketId = Option.map(customBucket, (b) => b.id);
+
+				const videoId = yield* videos.create({
+					ownerId: payload.cap.userId,
+					orgId: payload.cap.orgId,
+					bucketId: customBucketId,
+					source: { type: "desktopMP4" as const },
+					name: payload.loom.video.name,
+					duration: loomVideo.durationSecs,
+					width: loomVideo.width,
+					height: loomVideo.height,
+					public: true,
+					metadata: Option.none(),
+					folderId: Option.none(),
+					transcriptionStatus: Option.none(),
+					importSource: new Video.ImportSource({
+						source: "loom",
+						id: loomVideo.id,
+					}),
+				});
+
+				return { videoId, customBucketId };
 			}),
 		});
 
-		const [bucketProvider, customBucket] = yield* s3Buckets.getProviderForUser(
-			payload.userId,
-		);
+		const source = new Video.Mp4Source({
+			videoId: videoId,
+			ownerId: payload.cap.userId,
+		});
 
-		yield* Activity.make({
+		const { fileKey } = yield* Activity.make({
 			name: "DownloadVideo",
+			error: LoomImportVideoError,
+			success: Schema.Struct({ fileKey: Schema.String }),
 			execute: Effect.gen(function* () {
-				const s3Bucket = yield* S3BucketAccess;
+				const [bucketProvider] =
+					yield* s3Buckets.getProviderForBucket(customBucketId);
 
-				const key = `/loom/${payload.loomOrgId}/${payload.loomVideoId}`;
+				return yield* Effect.gen(function* () {
+					const s3Bucket = yield* S3BucketAccess;
 
-				const resp = yield* http.get(payload.downloadUrl);
-				yield* s3Bucket
-					.putObject(
-						key,
-						resp.stream.pipe(
-							Stream.tap((buffer) =>
-								Effect.log(`Downloaded ${buffer.length} bytes`),
+					const resp = yield* http
+						.get(payload.loom.video.downloadUrl)
+						.pipe(Effect.catchAll((cause) => new LoomApiError({ cause })));
+					const contentLength = Headers.get(
+						resp.headers,
+						"content-length",
+					).pipe(
+						Option.map((v) => Number(v)),
+						Option.getOrUndefined,
+					);
+					yield* Effect.log(`Downloading ${contentLength} bytes`);
+
+					let downloadedBytes = 0;
+
+					const key = source.getFileKey();
+
+					yield* s3Bucket
+						.putObject(
+							key,
+							resp.stream.pipe(
+								Stream.tap((bytes) => {
+									downloadedBytes += bytes.length;
+									return Effect.void;
+								}),
 							),
-							Stream.toReadableStreamRuntime(yield* Effect.runtime()),
-							(s) => Readable.fromWeb(s as any),
-						),
-						{
-							contentLength: Headers.get(resp.headers, "content-length").pipe(
-								Option.map((v) => Number(v)),
-								Option.getOrUndefined,
+							{ contentLength },
+						)
+						.pipe(
+							Effect.race(
+								// TODO: Connect this with upload progress
+								Effect.repeat(
+									Effect.gen(function* () {
+										const bytes = yield* Effect.succeed(downloadedBytes);
+										yield* Effect.log(`Downloaded ${bytes} bytes`);
+									}),
+									Schedule.forever.pipe(Schedule.delayed(() => "2 seconds")),
+								).pipe(Effect.delay("100 millis")),
 							),
-						},
+						);
+
+					yield* Effect.log(
+						`Uploaded video for user '${payload.cap.userId}' at key '${key}'`,
 					);
 
-				yield* Effect.log(`Uploaded video for user '${payload.userId}' at key '${key}'`);
-			}).pipe(Effect.provide(bucketProvider)),
+					return { fileKey: key };
+				}).pipe(Effect.provide(bucketProvider));
+			}),
 		});
+
+		return { fileKey, videoId };
 	}),
 );
