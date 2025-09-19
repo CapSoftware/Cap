@@ -151,7 +151,7 @@ export default async function EmbedVideoPage(props: Props) {
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
 				})

@@ -31,7 +31,9 @@ export async function getUserVideos(limit?: number) {
             ${videos.createdAt}
           )
         `,
-				hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(Boolean),
+				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+					Boolean,
+				),
 			})
 			.from(videos)
 			.leftJoin(comments, eq(videos.id, comments.videoId))

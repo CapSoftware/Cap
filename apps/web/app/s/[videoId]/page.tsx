@@ -294,7 +294,7 @@ export default async function ShareVideoPage(props: Props) {
 						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
 							Boolean,
 						),
-					hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 						Boolean,
 					),
 				})

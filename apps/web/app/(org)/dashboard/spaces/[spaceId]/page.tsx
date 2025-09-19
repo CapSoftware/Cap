@@ -203,7 +203,7 @@ export default async function SharedCapsPage({
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 							Boolean,
 						),
 					})
@@ -313,7 +313,7 @@ export default async function SharedCapsPage({
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
-						hasActiveUpload: sql`${videoUploads.videoId} IS NULL`.mapWith(
+						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 							Boolean,
 						),
 					})
