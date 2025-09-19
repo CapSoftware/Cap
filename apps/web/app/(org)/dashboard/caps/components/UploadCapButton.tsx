@@ -338,7 +338,7 @@ export const UploadCapButton = ({
 					if (xhr.status >= 200 && xhr.status < 300) {
 						setUploadProgress(100);
 						onProgress?.(uploadId, 100, 100);
-						sendProgressUpdate(uploadId, uploadState.total, uploadState.total);
+						sendProgressUpdate(uploadId, 100, 100);
 						resolve();
 					} else {
 						reject(new Error(`Upload failed with status ${xhr.status}`));

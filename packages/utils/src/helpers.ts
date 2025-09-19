@@ -75,9 +75,7 @@ export const calculateStrokeDashoffset = (
 };
 
 export const getUploadStatus = (uploadProgress?: number) => {
-	if (uploadProgress !== undefined) {
-		return "Uploading";
-	}
+	if (uploadProgress !== undefined) return "Uploading";
 	return "Processing";
 };
 

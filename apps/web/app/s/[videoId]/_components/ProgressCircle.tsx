@@ -66,11 +66,13 @@ const ProgressCircle = ({
 	className,
 	progressTextClassName,
 	subTextClassName,
+	subText,
 }: {
 	progress: number;
 	className?: string;
 	progressTextClassName?: string;
 	subTextClassName?: string;
+	subText?: string;
 }) => {
 	return (
 		<div
@@ -118,7 +120,7 @@ const ProgressCircle = ({
 						subTextClassName,
 					)}
 				>
-					Uploading...
+					{subText || "Uploading..."}
 				</p>
 			</div>
 		</div>
