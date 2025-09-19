@@ -7,18 +7,17 @@ export const runtime = "edge";
 export const revalidate = 0;
 
 export async function GET(
-	req: Request,
-	{
-		params,
-	}: {
-		params: {
+    req: Request,
+    props: {
+		params: Promise<{
 			version: string;
 			target: string;
 			arch: string;
-		};
-	},
+		}>;
+	}
 ) {
-	try {
+    const params = await props.params;
+    try {
 		if (params.arch === "x86_64") {
 			params.arch = "x64";
 		}

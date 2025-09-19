@@ -15,20 +15,19 @@ import { calculateReadingTime } from "@/utils/readTime";
 import { Share } from "../_components/Share";
 
 interface PostProps {
-	params: {
+	params: Promise<{
 		slug: string;
-	};
+	}>;
 }
 
-export async function generateMetadata({
-	params,
-}: PostProps): Promise<Metadata | undefined> {
-	const post = getBlogPosts().find((post) => post.slug === params.slug);
-	if (!post) {
+export async function generateMetadata(props: PostProps): Promise<Metadata | undefined> {
+    const params = await props.params;
+    const post = getBlogPosts().find((post) => post.slug === params.slug);
+    if (!post) {
 		return;
 	}
 
-	const {
+    const {
 		title,
 		publishedAt: publishedTime,
 		description,
@@ -39,9 +38,9 @@ export async function generateMetadata({
 		description: string;
 		image: string;
 	};
-	const ogImage = `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`;
+    const ogImage = `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}`;
 
-	return {
+    return {
 		title,
 		description,
 		openGraph: {
@@ -65,21 +64,22 @@ export async function generateMetadata({
 	};
 }
 
-export default async function PostPage({ params }: PostProps) {
-	const post = getBlogPosts().find((post) => post.slug === params.slug);
+export default async function PostPage(props: PostProps) {
+    const params = await props.params;
+    const post = getBlogPosts().find((post) => post.slug === params.slug);
 
-	if (!post) {
+    if (!post) {
 		notFound();
 	}
 
-	if (isInteractiveBlogPost(params.slug)) {
+    if (isInteractiveBlogPost(params.slug)) {
 		const interactiveContent = getInteractiveBlogContent(params.slug);
 		return <BlogTemplate content={interactiveContent} />;
 	}
 
-	const readingTime = calculateReadingTime(post.content);
+    const readingTime = calculateReadingTime(post.content);
 
-	return (
+    return (
 		<>
 			<article className="px-5 py-32 mx-auto md:py-40 prose">
 				{post.metadata.image && (

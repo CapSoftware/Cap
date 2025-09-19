@@ -40,7 +40,7 @@ const CookiePasswordAttachmentLive = Layer.effect(
 	Effect.gen(function* () {
 		const password = Option.fromNullable(
 			yield* Effect.promise(async () => {
-				const pw = cookies().get("x-cap-password")?.value;
+				const pw = (await cookies()).get("x-cap-password")?.value;
 				if (pw) return decrypt(pw);
 			}),
 		);

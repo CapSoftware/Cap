@@ -14,18 +14,19 @@ import { notFound } from "next/navigation";
 import { InviteAccept } from ".//InviteAccept";
 
 type Props = {
-	params: { inviteId: string };
+	params: Promise<{ inviteId: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-	const inviteId = params.inviteId;
-	const invite = await getInviteDetails(inviteId);
+export async function generateMetadata(props: Props): Promise<Metadata> {
+    const params = await props.params;
+    const inviteId = params.inviteId;
+    const invite = await getInviteDetails(inviteId);
 
-	if (!invite) {
+    if (!invite) {
 		return notFound();
 	}
 
-	return {
+    return {
 		title: `Join ${invite.organizationName} on Cap`,
 		description: `You've been invited to join ${invite.organizationName} on Cap.`,
 	};
@@ -49,20 +50,21 @@ async function getInviteDetails(inviteId: string) {
 	return query[0];
 }
 
-export default async function InvitePage({ params }: Props) {
-	const inviteId = params.inviteId;
-	const user = await getCurrentUser();
-	const inviteDetails = await getInviteDetails(inviteId);
+export default async function InvitePage(props: Props) {
+    const params = await props.params;
+    const inviteId = params.inviteId;
+    const user = await getCurrentUser();
+    const inviteDetails = await getInviteDetails(inviteId);
 
-	if (!inviteDetails) {
+    if (!inviteDetails) {
 		return notFound();
 	}
 
-	if (!inviteDetails.organizationName || !inviteDetails.inviterName) {
+    if (!inviteDetails.organizationName || !inviteDetails.inviterName) {
 		return notFound();
 	}
 
-	return (
+    return (
 		<InviteAccept
 			inviteId={inviteId}
 			organizationName={inviteDetails.organizationName}

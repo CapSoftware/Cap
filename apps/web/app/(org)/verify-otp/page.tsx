@@ -7,22 +7,23 @@ export const metadata = {
 	title: "Verify Code | Cap",
 };
 
-export default async function VerifyOTPPage({
-	searchParams,
-}: {
-	searchParams: { email?: string; next?: string; lastSent?: string };
-}) {
-	const session = await getSession();
+export default async function VerifyOTPPage(
+    props: {
+        searchParams: Promise<{ email?: string; next?: string; lastSent?: string }>;
+    }
+) {
+    const searchParams = await props.searchParams;
+    const session = await getSession();
 
-	if (session?.user) {
+    if (session?.user) {
 		redirect(searchParams.next || "/dashboard");
 	}
 
-	if (!searchParams.email) {
+    if (!searchParams.email) {
 		redirect("/login");
 	}
 
-	return (
+    return (
 		<div className="flex h-screen w-full items-center justify-center">
 			<Suspense fallback={null}>
 				<VerifyOTPForm

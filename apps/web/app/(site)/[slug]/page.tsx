@@ -4,13 +4,14 @@ import { getMetadataBySlug } from "@/lib/seo-metadata";
 import { getPageBySlug } from "@/lib/seo-pages";
 
 type Props = {
-	params: { slug: string };
+	params: Promise<{ slug: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
-	const metadata = getMetadataBySlug(params.slug);
+export async function generateMetadata(props: Props): Promise<Metadata> {
+    const params = await props.params;
+    const metadata = getMetadataBySlug(params.slug);
 
-	if (!metadata) {
+    if (!metadata) {
 		return {
 			title: "Cap — Beautiful screen recordings, owned by you.",
 			description:
@@ -18,7 +19,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 		};
 	}
 
-	return {
+    return {
 		title: metadata.title,
 		description: metadata.description,
 		keywords: metadata.keywords,
@@ -30,13 +31,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 	};
 }
 
-export default function SeoPage({ params }: Props) {
-	const page = getPageBySlug(params.slug);
+export default async function SeoPage(props: Props) {
+    const params = await props.params;
+    const page = getPageBySlug(params.slug);
 
-	if (!page) {
+    if (!page) {
 		notFound();
 	}
 
-	const PageComponent = page.component;
-	return <PageComponent />;
+    const PageComponent = page.component;
+    return <PageComponent />;
 }

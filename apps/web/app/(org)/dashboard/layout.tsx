@@ -63,8 +63,8 @@ export default async function DashboardLayout({
 			user.stripeSubscriptionStatus !== "cancelled") ||
 		!!user.thirdPartyStripeSubscriptionId;
 
-	const theme = cookies().get("theme")?.value ?? "light";
-	const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
+	const theme = (await cookies()).get("theme")?.value ?? "light";
+	const sidebar = (await cookies()).get("sidebarCollapsed")?.value ?? "false";
 
 	return (
 		<UploadingProvider>

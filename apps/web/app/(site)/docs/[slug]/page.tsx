@@ -6,23 +6,22 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
 
 interface DocProps {
-	params: {
+	params: Promise<{
 		slug: string;
-	};
+	}>;
 }
 
-export async function generateMetadata({
-	params,
-}: DocProps): Promise<Metadata | undefined> {
-	const doc = getDocs().find((doc) => doc.slug === params.slug);
-	if (!doc) {
+export async function generateMetadata(props: DocProps): Promise<Metadata | undefined> {
+    const params = await props.params;
+    const doc = getDocs().find((doc) => doc.slug === params.slug);
+    if (!doc) {
 		return;
 	}
 
-	const { title, summary: description, image } = doc.metadata;
-	const ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
+    const { title, summary: description, image } = doc.metadata;
+    const ogImage = image ? `${buildEnv.NEXT_PUBLIC_WEB_URL}${image}` : undefined;
 
-	return {
+    return {
 		title,
 		description,
 		openGraph: {
@@ -47,14 +46,15 @@ export async function generateMetadata({
 	};
 }
 
-export default async function DocPage({ params }: DocProps) {
-	const doc = getDocs().find((doc) => doc.slug === params.slug);
+export default async function DocPage(props: DocProps) {
+    const params = await props.params;
+    const doc = getDocs().find((doc) => doc.slug === params.slug);
 
-	if (!doc) {
+    if (!doc) {
 		notFound();
 	}
 
-	return (
+    return (
 		<article className="py-32 mx-auto md:py-40 prose">
 			{doc.metadata.image && (
 				<div className="relative mb-12 h-[345px] w-full">

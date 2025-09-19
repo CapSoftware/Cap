@@ -4,11 +4,9 @@ import { videos } from "@cap/database/schema";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function POST(
-	_request: Request,
-	{ params }: { params: { videoId: string } },
-) {
-	try {
+export async function POST(_request: Request, props: { params: Promise<{ videoId: string }> }) {
+    const params = await props.params;
+    try {
 		const user = await getCurrentUser();
 		if (!user) {
 			return Response.json({ error: "Unauthorized" }, { status: 401 });

@@ -14,14 +14,15 @@ import {
 import FolderVideosSection from "./components/FolderVideosSection";
 import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
 
-const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
-	const [childFolders, breadcrumb, videosData] = await Promise.all([
+const FolderPage = async (props: { params: Promise<{ id: Folder.FolderId }> }) => {
+    const params = await props.params;
+    const [childFolders, breadcrumb, videosData] = await Promise.all([
 		getChildFolders(params.id),
 		getFolderBreadcrumb(params.id),
 		getVideosByFolderId(params.id),
 	]);
 
-	return (
+    return (
 		<div>
 			<div className="flex gap-2 items-center mb-10">
 				<NewSubfolderButton parentFolderId={params.id} />
