@@ -334,9 +334,9 @@ function isGreaterThanSemver(
 	}
 
 	const [, vMajor, vMinor, vPatch, prerelease] = match;
-	const parsedMajor = parseInt(vMajor, 10);
-	const parsedMinor = parseInt(vMinor, 10);
-	const parsedPatch = parseInt(vPatch, 10);
+	const parsedMajor = vMajor ? parseInt(vMajor, 10) : 0;
+	const parsedMinor = vMinor ? parseInt(vMinor, 10) : 0;
+	const parsedPatch = vPatch ? parseInt(vPatch, 10) : 0;
 
 	// Compare major.minor.patch
 	if (parsedMajor !== major) return parsedMajor > major;
