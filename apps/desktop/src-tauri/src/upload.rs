@@ -11,20 +11,27 @@ use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
 use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use specta::Type;
-use std::path::PathBuf;
-use std::time::Duration;
-use tauri::AppHandle;
+use std::{
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tauri_specta::Event;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio::task;
+use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
     id: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct CreateErrorResponse {
+    error: String,
 }
 
 // fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -105,6 +112,99 @@ pub struct UploadedImage {
 //     pub config: S3UploadMeta,
 // }
 
+pub struct UploadProgressUpdater {
+    video_state: Option<VideoProgressState>,
+    app: AppHandle,
+    video_id: String,
+}
+
+struct VideoProgressState {
+    uploaded: u64,
+    total: u64,
+    pending_task: Option<JoinHandle<()>>,
+    last_update_time: Instant,
+}
+
+impl UploadProgressUpdater {
+    pub fn new(app: AppHandle, video_id: String) -> Self {
+        Self {
+            video_state: None,
+            app,
+            video_id,
+        }
+    }
+
+    pub fn update(&mut self, uploaded: u64, total: u64) {
+        let should_send_immediately = {
+            let state = self.video_state.get_or_insert_with(|| VideoProgressState {
+                uploaded,
+                total,
+                pending_task: None,
+                last_update_time: Instant::now(),
+            });
+
+            // Cancel any pending task
+            if let Some(handle) = state.pending_task.take() {
+                handle.abort();
+            }
+
+            state.uploaded = uploaded;
+            state.total = total;
+            state.last_update_time = Instant::now();
+
+            // Send immediately if upload is complete
+            uploaded >= total
+        };
+
+        let app = self.app.clone();
+        if should_send_immediately {
+            tokio::spawn({
+                let video_id = self.video_id.clone();
+                async move {
+                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                }
+            });
+
+            // Clear state since upload is complete
+            self.video_state = None;
+        } else {
+            // Schedule delayed update
+            let handle = {
+                let video_id = self.video_id.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                })
+            };
+
+            if let Some(state) = &mut self.video_state {
+                state.pending_task = Some(handle);
+            }
+        }
+    }
+
+    async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
+        let response = app
+            .authed_api_request("/api/desktop/video/progress", |client, url| {
+                client.post(url).json(&json!({
+                    "videoId": video_id,
+                    "uploaded": uploaded,
+                    "total": total,
+                    "updatedAt": chrono::Utc::now().to_rfc3339()
+                }))
+            })
+            .await;
+
+        match response {
+            Ok(resp) if resp.status().is_success() => {
+                trace!("Progress update sent successfully");
+            }
+            Ok(resp) => error!("Failed to send progress update: {}", resp.status()),
+            Err(err) => error!("Failed to send progress update: {err}"),
+        }
+    }
+}
+
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -112,6 +212,7 @@ pub async fn upload_video(
     existing_config: Option<S3UploadMeta>,
     screenshot_path: Option<PathBuf>,
     meta: Option<S3VideoMeta>,
+    channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedVideo, String> {
     println!("Uploading video {video_id}...");
 
@@ -145,20 +246,24 @@ pub async fn upload_video(
 
     let reader_stream = tokio_util::io::ReaderStream::new(file);
 
-    let mut bytes_uploaded = 0;
-    let progress_stream = reader_stream.inspect({
-        let app = app.clone();
-        move |chunk| {
-            if bytes_uploaded > 0 {
-                let _ = UploadProgress {
-                    progress: bytes_uploaded as f64 / total_size as f64,
-                }
-                .emit(&app);
+    let mut bytes_uploaded = 0u64;
+    let mut progress = UploadProgressUpdater::new(app.clone(), video_id);
+
+    let progress_stream = reader_stream.inspect(move |chunk| {
+        if let Ok(chunk) = chunk {
+            bytes_uploaded += chunk.len() as u64;
+        }
+
+        if bytes_uploaded > 0 {
+            if let Some(channel) = &channel {
+                channel
+                    .send(UploadProgress {
+                        progress: bytes_uploaded as f64 / total_size as f64,
+                    })
+                    .ok();
             }
 
-            if let Ok(chunk) = chunk {
-                bytes_uploaded += chunk.len();
-            }
+            progress.update(bytes_uploaded, total_size);
         }
     });
 
@@ -314,6 +419,21 @@ pub async fn create_or_get_video(
 
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err("Failed to authenticate request; please log in again".into());
+    }
+
+    if response.status() != StatusCode::OK {
+        if let Ok(error) = response.json::<CreateErrorResponse>().await {
+            if error.error == "upgrade_required" {
+                return Err(
+                    "You must upgrade to Cap Pro to upload recordings over 5 minutes in length"
+                        .into(),
+                );
+            }
+
+            return Err(format!("server error: {}", error.error));
+        }
+
+        return Err("Unknown error uploading video".into());
     }
 
     let response_text = response
@@ -544,13 +664,12 @@ impl InstantMultipartUpload {
         let mut uploaded_parts = Vec::new();
         let mut part_number = 1;
         let mut last_uploaded_position: u64 = 0;
-
-        println!("Starting multipart upload for {video_id}...");
+        let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
 
         // --------------------------------------------
         // initiate the multipart upload
         // --------------------------------------------
-        println!("Initiating multipart upload for {video_id}...");
+        debug!("Initiating multipart upload for {video_id}...");
         let initiate_response = match app
             .authed_api_request("/api/upload/multipart/initiate", |c, url| {
                 c.post(url)
@@ -654,6 +773,7 @@ impl InstantMultipartUpload {
                     &mut part_number,
                     &mut last_uploaded_position,
                     new_data_size.min(CHUNK_SIZE),
+                    &mut progress,
                 )
                 .await
                 {
@@ -680,6 +800,7 @@ impl InstantMultipartUpload {
                         &mut 1,
                         &mut 0,
                         uploaded_parts[0].size as u64,
+                        &mut progress,
                     )
                     .await
                     .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
@@ -726,6 +847,7 @@ impl InstantMultipartUpload {
         part_number: &mut i32,
         last_uploaded_position: &mut u64,
         chunk_size: u64,
+        progress: &mut UploadProgressUpdater,
     ) -> Result<UploadedPart, String> {
         let file_size = match tokio::fs::metadata(file_path).await {
             Ok(metadata) => metadata.len(),
@@ -837,6 +959,8 @@ impl InstantMultipartUpload {
                 ));
             }
         };
+
+        progress.update(expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();

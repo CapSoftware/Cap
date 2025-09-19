@@ -35,6 +35,7 @@ export const ShareVideo = forwardRef<
 	{
 		data: typeof videos.$inferSelect & {
 			ownerIsPro?: boolean;
+			hasActiveUpload?: boolean;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
@@ -147,20 +148,24 @@ export const ShareVideo = forwardRef<
 			<div className="relative h-full">
 				{data.source.type === "desktopMP4" ? (
 					<CapVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
 						enableCrossOrigin={enableCrossOrigin}
+						hasActiveUpload={data.hasActiveUpload}
 					/>
 				) : (
 					<HLSVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
+						hasActiveUpload={data.hasActiveUpload}
 					/>
 				)}
 			</div>

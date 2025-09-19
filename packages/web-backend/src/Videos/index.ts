@@ -1,5 +1,8 @@
+import * as Db from "@cap/database/schema";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
-import { Array, Effect, Option } from "effect";
+import * as Dz from "drizzle-orm";
+import { Array, Effect, Option, pipe } from "effect";
+import { Database } from "../Database";
 import { S3Buckets } from "../S3Buckets";
 import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
 import { VideosPolicy } from "./VideosPolicy";
@@ -102,6 +105,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 							{ concurrency: 1 },
 						);
 				}).pipe(Effect.provide(S3ProviderLayer));
+			}),
+
+			/*
+			 * Gets the progress of a video upload.
+			 */
+			getUploadProgress: Effect.fn("Videos.getUploadProgress")(function* (
+				videoId: Video.VideoId,
+			) {
+				const db = yield* Database;
+
+				const [result] = yield* db
+					.execute((db) =>
+						db
+							.select({
+								uploaded: Db.videoUploads.uploaded,
+								total: Db.videoUploads.total,
+								startedAt: Db.videoUploads.startedAt,
+								updatedAt: Db.videoUploads.updatedAt,
+							})
+							.from(Db.videoUploads)
+							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
+					)
+					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
+
+				return pipe(
+					result,
+					Option.fromNullable,
+					Option.map((r) => new Video.UploadProgress(r)),
+				);
 			}),
 		};
 	}),

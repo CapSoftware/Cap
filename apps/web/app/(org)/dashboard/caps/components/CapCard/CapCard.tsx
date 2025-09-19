@@ -26,6 +26,9 @@ import { toast } from "sonner";
 import { downloadVideo } from "@/actions/videos/download";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import ProgressCircle, {
+	useUploadProgress,
+} from "@/app/s/[videoId]/_components/ProgressCircle";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -59,6 +62,7 @@ export interface CapCardProps extends PropsWithChildren {
 		ownerName: string | null;
 		metadata?: VideoMetadata;
 		hasPassword?: boolean;
+		hasActiveUpload: boolean | undefined;
 		duration?: number;
 	};
 	analytics: number;
@@ -159,6 +163,11 @@ export const CapCard = ({
 	};
 
 	const isOwner = userId === cap.ownerId;
+
+	const uploadProgress = useUploadProgress(
+		cap.id,
+		cap.hasActiveUpload || false,
+	);
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {
@@ -354,11 +363,8 @@ export const CapCard = ({
 								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
-										if (!isSubscribed) {
-											setUpgradeModalOpen(true);
-										} else {
-											setIsPasswordDialogOpen(true);
-										}
+										if (!isSubscribed) setUpgradeModalOpen(true);
+										else setIsPasswordDialogOpen(true);
 									}}
 									className="flex gap-2 items-center rounded-lg"
 								>
@@ -422,33 +428,62 @@ export const CapCard = ({
 						</div>
 					</div>
 				)}
-				<Link
-					className={clsx(
-						"block group",
-						anyCapSelected && "cursor-pointer pointer-events-none",
-					)}
-					onClick={(e) => {
-						if (isDeleting) {
-							e.preventDefault();
-						}
-					}}
-					href={`/s/${cap.id}`}
-				>
-					<VideoThumbnail
-						videoDuration={cap.duration}
-						imageClass={clsx(
-							anyCapSelected
-								? "opacity-50"
-								: isDropdownOpen
-									? "opacity-30"
-									: "group-hover:opacity-30",
-							"transition-opacity duration-200",
+				<div className="relative">
+					<Link
+						className={clsx(
+							"block group",
+							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
-						userId={cap.ownerId}
-						videoId={cap.id}
-						alt={`${cap.name} Thumbnail`}
-					/>
-				</Link>
+						onClick={(e) => {
+							if (isDeleting) {
+								e.preventDefault();
+							}
+						}}
+						href={`/s/${cap.id}`}
+					>
+						<VideoThumbnail
+							videoDuration={cap.duration}
+							imageClass={clsx(
+								anyCapSelected
+									? "opacity-50"
+									: isDropdownOpen
+										? "opacity-30"
+										: "group-hover:opacity-30",
+								"transition-opacity duration-200",
+								uploadProgress && "opacity-30",
+							)}
+							userId={cap.ownerId}
+							videoId={cap.id}
+							alt={`${cap.name} Thumbnail`}
+						/>
+					</Link>
+					{uploadProgress && (
+						<div className="flex absolute inset-0 z-50 justify-center items-center bg-black rounded-t-xl">
+							{uploadProgress.status === "failed" ? (
+								<div className="flex flex-col items-center">
+									<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
+										<FontAwesomeIcon
+											icon={faVideo}
+											className="text-white size-3"
+										/>
+									</div>
+									<p className="text-xs text-center text-white">
+										Upload failed
+									</p>
+								</div>
+							) : (
+								<div className="relative size-20 md:size-16">
+									<ProgressCircle
+										progressTextClassName="md:!text-[11px]"
+										subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
+										className="md:scale-[1.5] scale-[1.2]"
+										progress={uploadProgress.progress}
+									/>
+								</div>
+							)}
+						</div>
+					)}
+				</div>
 				<div
 					className={clsx(
 						"flex flex-col flex-grow gap-3 px-4 pb-4 w-full",

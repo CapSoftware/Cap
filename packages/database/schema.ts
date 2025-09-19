@@ -10,6 +10,7 @@ import {
 	mysqlTable,
 	text,
 	timestamp,
+	tinyint,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
@@ -639,3 +640,11 @@ export const foldersRelations = relations(folders, ({ one, many }) => ({
 	childFolders: many(folders, { relationName: "parentChild" }),
 	videos: many(videos),
 }));
+
+export const videoUploads = mysqlTable("video_uploads", {
+	videoId: nanoId("video_id").primaryKey().notNull(),
+	uploaded: int("uploaded").notNull().default(0),
+	total: int("total").notNull().default(0),
+	startedAt: timestamp("started_at").notNull().defaultNow(),
+	updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

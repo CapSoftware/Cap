@@ -1,5 +1,6 @@
 import { db, updateIfDefined } from "@cap/database";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -275,10 +276,9 @@ app.post(
 
 					const videoIdFromFileKey = fileKey.split("/")[1];
 
-					const videoIdToUse =
-						"videoId" in body ? body.videoId : videoIdFromFileKey;
-					if (videoIdToUse)
-						await db()
+					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (videoId) {
+						const result = await db()
 							.update(videos)
 							.set({
 								duration: updateIfDefined(body.durationInSecs, videos.duration),
@@ -286,9 +286,14 @@ app.post(
 								height: updateIfDefined(body.height, videos.height),
 								fps: updateIfDefined(body.fps, videos.fps),
 							})
-							.where(
-								and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)),
-							);
+							.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+						// This proves authentication
+						if (result.rowsAffected > 0)
+							await db()
+								.delete(videoUploads)
+								.where(eq(videoUploads.videoId, videoId));
+					}
 
 					if (videoIdFromFileKey) {
 						try {
