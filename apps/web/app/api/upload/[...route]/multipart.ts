@@ -276,10 +276,9 @@ app.post(
 
 					const videoIdFromFileKey = fileKey.split("/")[1];
 
-					const videoIdToUse =
-						"videoId" in body ? body.videoId : videoIdFromFileKey;
-					if (videoIdToUse)
-						await db()
+					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
+					if (videoId) {
+						const result = await db()
 							.update(videos)
 							.set({
 								duration: updateIfDefined(body.durationInSecs, videos.duration),
@@ -287,9 +286,14 @@ app.post(
 								height: updateIfDefined(body.height, videos.height),
 								fps: updateIfDefined(body.fps, videos.fps),
 							})
-							.where(
-								and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)),
-							);
+							.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+
+						// This proves authentication
+						if (result.rowsAffected > 0)
+							await db()
+								.delete(videoUploads)
+								.where(eq(videoUploads.videoId, videoId));
+					}
 
 					if (videoIdFromFileKey) {
 						try {
@@ -307,12 +311,6 @@ app.post(
 							console.error("Failed to revalidate page:", revalidateError);
 						}
 					}
-
-					const videoId = "videoId" in body ? body.videoId : videoIdFromFileKey;
-					if (videoId)
-						await db()
-							.delete(videoUploads)
-							.where(eq(videoUploads.videoId, videoId));
 
 					return c.json({
 						location: result.Location,

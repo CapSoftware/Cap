@@ -477,7 +477,7 @@ export const CapCard = ({
 										progressTextClassName="md:!text-[11px]"
 										subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
 										className="md:scale-[1.5] scale-[1.2]"
-										progress={50}
+										progress={uploadProgress.progress}
 									/>
 								</div>
 							)}

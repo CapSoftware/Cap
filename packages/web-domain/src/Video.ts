@@ -37,8 +37,8 @@ export class Video extends Schema.Class<Video>("Video")({
 export class UploadProgress extends Schema.Class<UploadProgress>(
 	"UploadProgress",
 )({
-	uploaded: Schema.Number,
-	total: Schema.Number,
+	uploaded: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
+	total: Schema.Int.pipe(Schema.greaterThanOrEqualTo(0)),
 	startedAt: Schema.Date,
 	updatedAt: Schema.Date,
 }) {}

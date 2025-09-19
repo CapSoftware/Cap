@@ -24,7 +24,7 @@ const DAY = 24 * HOUR;
 
 export function useUploadProgress(
 	videoId: Video.VideoId,
-	enabled: boolean = true,
+	enabled: boolean = false,
 ) {
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],

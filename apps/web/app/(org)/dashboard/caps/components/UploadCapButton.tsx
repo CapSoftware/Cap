@@ -16,7 +16,7 @@ type UploadState = {
 	videoId?: string;
 	uploaded: number;
 	total: number;
-	pendingTask?: NodeJS.Timeout;
+	pendingTask?: ReturnType<typeof setTimeout>;
 	lastUpdateTime: number;
 };
 
@@ -336,13 +336,7 @@ export const UploadCapButton = ({
 
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
-						if (uploadState.videoId) {
-							sendProgressUpdate(
-								uploadState.videoId,
-								uploadState.total,
-								uploadState.total,
-							);
-						}
+						sendProgressUpdate(uploadId, uploadState.total, uploadState.total);
 						resolve();
 					} else {
 						reject(new Error(`Upload failed with status ${xhr.status}`));

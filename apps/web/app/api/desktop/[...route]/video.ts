@@ -256,15 +256,18 @@ app.post(
 	async (c) => {
 		const {
 			videoId: videoIdRaw,
-			uploaded,
+			uploaded: uploadedRaw,
 			total,
 			updatedAt,
 		} = c.req.valid("json");
 		const user = c.get("user");
 		const videoId = Video.VideoId.make(videoIdRaw);
 
+		// Prevent it maths breaking
+		const uploaded = Math.min(uploadedRaw, total);
+
 		try {
-			const video = await db()
+			const [video] = await db()
 				.select({ id: videos.id })
 				.from(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
