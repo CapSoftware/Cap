@@ -30,6 +30,8 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
 };
 
+const SQUIRCLE_POWER: f32 = 4.5;
+
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var positions = array<vec2<f32>, 3>(
@@ -45,8 +47,20 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 }
 
 fn sdf_rounded_rect(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
-    let q = abs(p) - b + vec2<f32>(r);
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    let clamped_r = clamp(r, 0.0, min(b.x, b.y));
+    let q = abs(p) - b + vec2<f32>(clamped_r);
+    let outside = max(q, vec2<f32>(0.0));
+    let inside = min(max(q.x, q.y), 0.0);
+
+    if clamped_r <= 0.0 {
+        return length(outside) + inside;
+    }
+
+    let normalized = outside / vec2<f32>(clamped_r);
+    let super_len = pow(pow(normalized.x, SQUIRCLE_POWER) + pow(normalized.y, SQUIRCLE_POWER), 1.0 / SQUIRCLE_POWER);
+    let metric = super_len * clamped_r;
+
+    return metric + inside - clamped_r;
 }
 
 @fragment
@@ -223,20 +237,18 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
 }
 
 fn apply_rounded_corners(current_color: vec4<f32>, target_uv: vec2<f32>) -> vec4<f32> {
-    let target_coord = abs(target_uv * uniforms.target_size - uniforms.target_size / 2.0);
-    let rounding_point = uniforms.target_size / 2.0 - uniforms.rounding_px;
-    let target_rounding_coord = target_coord - rounding_point;
-
-    let distance = abs(length(target_rounding_coord)) - uniforms.rounding_px;
-
-    let distance_blur = 1.0;
-
-    if target_rounding_coord.x >= 0.0 && target_rounding_coord.y >= 0.0 && distance >= -distance_blur/2.0 {
-    		return vec4<f32>(0.0);
-        // return mix(current_color, vec4<f32>(0.0), min(distance / distance_blur + 0.5, 1.0));
+    if uniforms.rounding_px <= 0.0 {
+        return current_color;
     }
 
-    return current_color;
+    let half_size = uniforms.target_size * 0.5;
+    let frag_pos = target_uv * uniforms.target_size - half_size;
+    let dist = sdf_rounded_rect(frag_pos, half_size, uniforms.rounding_px);
+
+    let edge_softness = max(fwidth(dist), 0.75);
+    let mask = 1.0 - smoothstep(0.0, edge_softness, dist);
+
+    return vec4<f32>(current_color.rgb * mask, current_color.a * mask);
 }
 
 fn rand(co: vec2<f32>) -> f32 {
