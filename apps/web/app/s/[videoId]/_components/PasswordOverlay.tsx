@@ -6,10 +6,11 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { verifyVideoPassword } from "@/actions/videos/password";
+import { Video } from "@cap/web-domain";
 
 interface PasswordOverlayProps {
 	isOpen: boolean;
-	videoId: string;
+	videoId: Video.VideoId;
 }
 
 export const PasswordOverlay: React.FC<PasswordOverlayProps> = ({

@@ -262,7 +262,7 @@ export const videos = mysqlTable(
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
-		folderId: nanoIdNullable("folderId"),
+		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		// PRIVATE
@@ -279,19 +279,19 @@ export const videos = mysqlTable(
 		jobStatus: varchar("jobStatus", { length: 255 }),
 		skipProcessing: boolean("skipProcessing").notNull().default(false),
 	},
-	(table) => ({
-		idIndex: index("id_idx").on(table.id),
-		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
-		publicIndex: index("is_public_idx").on(table.public),
-		folderIdIndex: index("folder_id_idx").on(table.folderId),
-	}),
+	(table) => [
+		index("id_idx").on(table.id),
+		index("owner_id_idx").on(table.ownerId),
+		index("is_public_idx").on(table.public),
+		index("folder_id_idx").on(table.folderId),
+	],
 );
 
 export const sharedVideos = mysqlTable(
 	"shared_videos",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		organizationId: nanoId("organizationId").notNull(),
 		sharedByUserId: nanoId("sharedByUserId").notNull(),
 		sharedAt: timestamp("sharedAt").notNull().defaultNow(),
@@ -317,7 +317,7 @@ export const comments = mysqlTable(
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
 		authorId: nanoId("authorId").notNull(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		parentCommentId: nanoId("parentCommentId"),

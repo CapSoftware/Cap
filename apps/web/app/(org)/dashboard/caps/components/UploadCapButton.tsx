@@ -14,6 +14,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { Folder } from "@cap/web-domain";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -21,7 +22,7 @@ export const UploadCapButton = ({
 }: {
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
-	folderId?: string;
+	folderId?: Folder.FolderId;
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);

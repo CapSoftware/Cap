@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
+import { Video } from "@cap/web-domain";
 
 export function ClientMyCapsLink() {
 	const [isDragOver, setIsDragOver] = useState(false);
@@ -48,7 +49,7 @@ export function ClientMyCapsLink() {
 	};
 
 	const handleDrop = async (
-		e: React.DragEvent<HTMLAnchorElement> | { id: string; name: string },
+		e: React.DragEvent<HTMLAnchorElement> | { id: Video.VideoId; name: string },
 	) => {
 		if ("preventDefault" in e) {
 			e.preventDefault();
@@ -74,7 +75,7 @@ export function ClientMyCapsLink() {
 	};
 
 	// Common function to process the drop for both desktop and mobile
-	const processDrop = async (capData: { id: string; name: string }) => {
+	const processDrop = async (capData: { id: Video.VideoId; name: string }) => {
 		setIsDragOver(false);
 
 		try {

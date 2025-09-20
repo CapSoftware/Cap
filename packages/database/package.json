@@ -24,11 +24,11 @@
 		"@react-email/components": "^0.1.0",
 		"@react-email/render": "1.1.2",
 		"@react-email/tailwind": "^1.0.5",
-		"drizzle-orm": "0.43.1",
+		"drizzle-orm": "0.44.5",
 		"dub": "^0.64.0",
 		"effect": "^3.17.13",
 		"nanoid": "^5.0.4",
-		"next": "14.2.9",
+		"next": "^14",
 		"next-auth": "^4.24.5",
 		"react-email": "^4.0.16",
 		"resend": "4.6.0",
@@ -60,6 +60,7 @@
 		"./emails/*": "./emails/*.tsx",
 		"./schema": "./schema.ts",
 		"./crypto": "./crypto.ts",
-		"./helpers": "./helpers.ts"
+		"./helpers": "./helpers.ts",
+		"./types": "./types/index.ts"
 	}
 }

@@ -83,7 +83,7 @@ app.get(
 				const [video] = await db()
 					.select()
 					.from(videos)
-					.where(eq(videos.id, videoId));
+					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 				if (video) {
 					return c.json({
@@ -96,7 +96,7 @@ app.get(
 				}
 			}
 
-			const idToUse = nanoId();
+			const idToUse = Video.VideoId.make(nanoId());
 
 			const videoName =
 				name ??
@@ -203,7 +203,7 @@ app.delete(
 	"/delete",
 	zValidator("query", z.object({ videoId: z.string() })),
 	async (c) => {
-		const { videoId } = c.req.valid("query");
+		const videoId = Video.VideoId.make(c.req.valid("query").videoId);
 		const user = c.get("user");
 
 		try {

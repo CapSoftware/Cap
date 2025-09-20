@@ -1,6 +1,5 @@
 import { createServer } from "node:http";
-import { Database, S3Buckets, Videos, WorkflowsLayer } from "@cap/web-backend";
-import { Workflows } from "@cap/web-domain";
+import { Database, S3Buckets, Videos, Workflows } from "@cap/web-backend";
 import { ClusterWorkflowEngine, RunnerAddress } from "@effect/cluster";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import { FetchHttpClient, HttpApiBuilder, HttpServer } from "@effect/platform";
@@ -44,7 +43,7 @@ const WorkflowApiLive = HttpApiBuilder.api(Workflows.Api).pipe(
 			Workflows.Workflows,
 		),
 	),
-	Layer.provide(WorkflowsLayer),
+	Layer.provide(Workflows.WorkflowsLayer),
 	Layer.provide(ClusterWorkflowLive),
 	HttpServer.withLogAddress,
 );

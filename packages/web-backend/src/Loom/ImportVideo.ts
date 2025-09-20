@@ -8,12 +8,11 @@ import { S3Buckets } from "../S3Buckets/index.ts";
 import { S3BucketAccess, S3Error } from "../S3Buckets/S3BucketAccess.ts";
 import { Videos } from "../Videos/index.ts";
 
-class LoomApiError extends Schema.TaggedError<LoomApiError>("LoomApiError")(
+export class LoomApiError extends Schema.TaggedError<LoomApiError>(
 	"LoomApiError",
-	{ cause: Schema.Unknown },
-) {}
+)("LoomApiError", { cause: Schema.Unknown }) {}
 
-const LoomImportVideoError = Schema.Union(
+export const LoomImportVideoError = Schema.Union(
 	DatabaseError,
 	Video.NotFoundError,
 	S3Error,
@@ -71,7 +70,7 @@ export const LoomImportVideoLive = LoomImportVideo.toLayer(
 
 				const videoId = yield* videos.create({
 					ownerId: payload.cap.userId,
-					orgId: payload.cap.orgId,
+					orgId: Option.some(payload.cap.orgId),
 					bucketId: customBucketId,
 					source: { type: "desktopMP4" as const },
 					name: payload.loom.video.name,

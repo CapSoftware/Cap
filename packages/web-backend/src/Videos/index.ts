@@ -7,7 +7,7 @@ import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
 import { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
-import { type CreateVideoInput, VideosRepo } from "./VideosRepo.ts";
+import { VideosRepo } from "./VideosRepo.ts";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
