@@ -312,8 +312,8 @@ export function ExportDialog() {
 			const metadata = await commands.getVideoMetadata(projectPath);
 			const plan = await commands.checkUpgradedAndUpdate();
 			const canShare = {
-				allowed: plan || metadata.duration < 300,
-				reason: !plan && metadata.duration >= 300 ? "upgrade_required" : null,
+			allowed: plan || (exportEstimates.data?.duration_seconds ?? metadata.duration < 300),
+        reason: !plan && (exportEstimates.data?.duration_seconds ?? metadata.duration >= 300) ? "upgrade_required" : null,
 			};
 
 			if (!canShare.allowed) {
