@@ -2,6 +2,7 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
+import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { getHeaders } from "@/utils/helpers";
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
 		})
 		.from(videos)
 		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-		.where(eq(videos.id, videoId));
+		.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 	if (query.length === 0) {
 		return new Response(

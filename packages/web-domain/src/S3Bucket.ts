@@ -13,4 +13,6 @@ export class S3Bucket extends Schema.Class<S3Bucket>("S3Bucket")({
 	secretAccessKey: Schema.String,
 }) {}
 
+export const Workflows = [S3Bucket] as const;
+
 export const decodeSync = Schema.decodeSync(S3Bucket);

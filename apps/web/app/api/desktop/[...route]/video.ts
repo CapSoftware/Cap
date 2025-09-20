@@ -4,6 +4,7 @@ import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
@@ -81,7 +82,7 @@ app.get(
 				const [video] = await db()
 					.select()
 					.from(videos)
-					.where(eq(videos.id, videoId));
+					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
 				if (video) {
 					return c.json({
@@ -94,7 +95,7 @@ app.get(
 				}
 			}
 
-			const idToUse = nanoId();
+			const idToUse = Video.VideoId.make(nanoId());
 
 			const videoName =
 				name ??
@@ -191,7 +192,7 @@ app.delete(
 	"/delete",
 	zValidator("query", z.object({ videoId: z.string() })),
 	async (c) => {
-		const { videoId } = c.req.valid("query");
+		const videoId = Video.VideoId.make(c.req.valid("query").videoId);
 		const user = c.get("user");
 
 		try {

@@ -7,6 +7,7 @@ import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
 import { Transcript } from "./tabs/Transcript";
+import { Video } from "@cap/web-domain";
 
 type TabType = "activity" | "transcript" | "summary" | "settings";
 
@@ -29,7 +30,7 @@ interface SidebarProps {
 	setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	aiData?: {
 		title?: string | null;
 		summary?: string | null;

@@ -5,6 +5,7 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
+import { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
@@ -41,7 +42,7 @@ export async function createNotification(
 			})
 			.from(videos)
 			.innerJoin(users, eq(users.id, videos.ownerId))
-			.where(eq(videos.id, notification.videoId))
+			.where(eq(videos.id, Video.VideoId.make(notification.videoId)))
 			.limit(1);
 
 		if (!videoResult) {

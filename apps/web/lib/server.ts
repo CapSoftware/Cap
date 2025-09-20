@@ -9,8 +9,9 @@ import {
 	S3Buckets,
 	Videos,
 	VideosPolicy,
+	Workflows,
 } from "@cap/web-backend";
-import { type HttpAuthMiddleware, Video, Workflows } from "@cap/web-domain";
+import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
 	FetchHttpClient,

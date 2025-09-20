@@ -1,9 +1,15 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { Folder } from "@cap/web-domain";
 import { UploadCapButton } from "../../../caps/components/UploadCapButton";
 import { useUploadingContext } from "../../../caps/UploadingContext";
-export function UploadCapButtonWithFolder({ folderId }: { folderId: string }) {
+
+export function UploadCapButtonWithFolder({
+	folderId,
+}: {
+	folderId: Folder.FolderId;
+}) {
 	const router = useRouter();
 	const {
 		setIsUploading,

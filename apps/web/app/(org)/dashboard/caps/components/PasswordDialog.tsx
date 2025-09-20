@@ -18,11 +18,12 @@ import {
 	removeVideoPassword,
 	setVideoPassword,
 } from "@/actions/videos/password";
+import { Video } from "@cap/web-domain";
 
 interface PasswordDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	hasPassword: boolean;
 	onPasswordUpdated: (protectedStatus: boolean) => void;
 }

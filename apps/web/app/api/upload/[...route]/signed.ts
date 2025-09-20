@@ -5,11 +5,11 @@ import {
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
-
 import { createBucketProvider } from "@/utils/s3";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
@@ -154,7 +154,12 @@ app.post(
 						height: updateIfDefined(height, videos.height),
 						fps: updateIfDefined(fps, videos.fps),
 					})
-					.where(and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)));
+					.where(
+						and(
+							eq(videos.id, Video.VideoId.make(videoIdToUse)),
+							eq(videos.ownerId, user.id),
+						),
+					);
 
 			if (videoIdFromKey) {
 				try {

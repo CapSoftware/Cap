@@ -8,6 +8,7 @@ import type { CommentType } from "../../../Share";
 import { AuthOverlay } from "../../AuthOverlay";
 import Analytics from "./Analytics";
 import { Comments } from "./Comments";
+import { Video } from "@cap/web-domain";
 
 interface ActivityProps {
 	views: MaybePromise<number>;
@@ -16,7 +17,7 @@ interface ActivityProps {
 	user: typeof userSelectProps | null;
 	onSeek?: (time: number) => void;
 	handleCommentSuccess: (comment: CommentType) => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;

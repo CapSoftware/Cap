@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import { Folder } from "@cap/web-domain";
+
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";
 import { AllFolders } from "../../../caps/components/Folders";
 
 interface BreadcrumbItemProps {
-	id: string;
+	id: Folder.FolderId;
 	name: string;
 	color: "normal" | "blue" | "red" | "yellow";
 	isLast: boolean;

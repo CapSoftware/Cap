@@ -1,5 +1,6 @@
 import { db } from "@cap/database";
 import { organizations, sharedVideos, videos } from "@cap/database/schema";
+import { Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 
@@ -13,21 +14,20 @@ export async function GET(request: NextRequest) {
 
 	try {
 		// First, get the video to find the owner or shared space
-		const video = await db()
+		const [video] = await db()
 			.select({
 				id: videos.id,
 				ownerId: videos.ownerId,
 			})
 			.from(videos)
-			.where(eq(videos.id, videoId))
+			.where(eq(videos.id, Video.VideoId.make(videoId)))
 			.limit(1);
 
-		if (video.length === 0) {
+		if (!video) {
 			return Response.json({ error: "Video not found" }, { status: 404 });
 		}
 
-		const videoData = video[0];
-		if (!videoData || !videoData.ownerId) {
+		if (!video.ownerId) {
 			return Response.json({ error: "Invalid video data" }, { status: 500 });
 		}
 
@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
 				organizationId: sharedVideos.organizationId,
 			})
 			.from(sharedVideos)
-			.where(eq(sharedVideos.videoId, videoId))
+			.where(eq(sharedVideos.videoId, Video.VideoId.make(videoId)))
 			.limit(1);
 
 		let organizationId = null;
@@ -77,7 +77,7 @@ export async function GET(request: NextRequest) {
 				domainVerified: organizations.domainVerified,
 			})
 			.from(organizations)
-			.where(eq(organizations.ownerId, videoData.ownerId))
+			.where(eq(organizations.ownerId, video.ownerId))
 			.limit(1);
 
 		if (

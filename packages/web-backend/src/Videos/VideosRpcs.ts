@@ -10,10 +10,10 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 		return {
 			VideoDelete: (videoId) =>
 				videos.delete(videoId).pipe(
+					(v) => v,
 					Effect.catchTags({
 						DatabaseError: () => new InternalError({ type: "database" }),
 						S3Error: () => new InternalError({ type: "s3" }),
-						UnknownException: () => new InternalError({ type: "s3" }),
 					}),
 				),
 			VideoDuplicate: (videoId) =>
@@ -21,7 +21,6 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 					Effect.catchTags({
 						DatabaseError: () => new InternalError({ type: "database" }),
 						S3Error: () => new InternalError({ type: "s3" }),
-						UnknownException: () => new InternalError({ type: "s3" }),
 					}),
 				),
 		};

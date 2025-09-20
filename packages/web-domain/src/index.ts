@@ -6,4 +6,3 @@ export * as Policy from "./Policy.ts";
 export { Rpcs } from "./Rpcs.ts";
 export * as S3Bucket from "./S3Bucket.ts";
 export * as Video from "./Video.ts";
-export * as Workflows from "./Workflows.ts";

@@ -4,10 +4,14 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { spaces, spaceVideos, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function addVideosToSpace(spaceId: string, videoIds: string[]) {
+export async function addVideosToSpace(
+	spaceId: string,
+	videoIds: Video.VideoId[],
+) {
 	try {
 		const user = await getCurrentUser();
 

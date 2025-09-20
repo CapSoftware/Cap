@@ -1,13 +1,14 @@
 import { Grid, useGrid } from "@virtual-grid/react";
 import React, { useEffect, useRef, useState } from "react";
-import type { Video } from "./AddVideosDialogBase";
+import type { VideoData } from "./AddVideosDialogBase";
 import VideoCard from "./VideoCard";
+import { Video } from "@cap/web-domain";
 
 interface VirtualizedVideoGridProps {
-	videos: Video[];
+	videos: VideoData[];
 	selectedVideos: string[];
-	handleVideoToggle: (id: string) => void;
-	entityVideoIds: string[];
+	handleVideoToggle: (id: Video.VideoId) => void;
+	entityVideoIds: Video.VideoId[];
 	height?: number;
 	columnCount?: number;
 	rowHeight?: number;

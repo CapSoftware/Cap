@@ -11,11 +11,12 @@ import {
 	spaceVideos,
 	videos,
 } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 interface ShareCapParams {
-	capId: string;
+	capId: Video.VideoId;
 	spaceIds: string[];
 	public?: boolean;
 }

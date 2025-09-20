@@ -9,8 +9,8 @@ import { Database } from "../Database.ts";
 
 export type CreateVideoInput = Omit<
 	Schema.Type<typeof Video.Video>,
-	"id" | "createdAt" | "updatedAt" | "orgId"
-> & { password?: string; importSource?: Video.ImportSource; orgId: string };
+	"id" | "createdAt" | "updatedAt"
+> & { password?: string; importSource?: Video.ImportSource };
 
 export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 	effect: Effect.gen(function* () {
@@ -72,12 +72,12 @@ export class VideosRepo extends Effect.Service<VideosRepo>()("VideosRepo", {
 							]),
 						];
 
-						if (data.importSource)
+						if (data.importSource && Option.isSome(data.orgId))
 							promises.push(
 								db.insert(Db.importedVideos).values([
 									{
 										id,
-										orgId: data.orgId,
+										orgId: data.orgId.value,
 										source: data.importSource.source,
 										sourceId: data.importSource.id,
 									},

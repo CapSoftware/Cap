@@ -1,6 +1,7 @@
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -287,7 +288,10 @@ app.post(
 								fps: updateIfDefined(body.fps, videos.fps),
 							})
 							.where(
-								and(eq(videos.id, videoIdToUse), eq(videos.ownerId, user.id)),
+								and(
+									eq(videos.id, Video.VideoId.make(videoIdToUse)),
+									eq(videos.ownerId, user.id),
+								),
 							);
 
 					if (videoIdFromFileKey) {

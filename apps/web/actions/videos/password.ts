@@ -4,11 +4,15 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { encrypt, hashPassword, verifyPassword } from "@cap/database/crypto";
 import { videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 
-export async function setVideoPassword(videoId: string, password: string) {
+export async function setVideoPassword(
+	videoId: Video.VideoId,
+	password: string,
+) {
 	try {
 		const user = await getCurrentUser();
 
@@ -42,7 +46,7 @@ export async function setVideoPassword(videoId: string, password: string) {
 	}
 }
 
-export async function removeVideoPassword(videoId: string) {
+export async function removeVideoPassword(videoId: Video.VideoId) {
 	try {
 		const user = await getCurrentUser();
 
@@ -75,7 +79,10 @@ export async function removeVideoPassword(videoId: string) {
 	}
 }
 
-export async function verifyVideoPassword(videoId: string, password: string) {
+export async function verifyVideoPassword(
+	videoId: Video.VideoId,
+	password: string,
+) {
 	try {
 		if (!videoId || typeof password !== "string")
 			throw new Error("Missing data");

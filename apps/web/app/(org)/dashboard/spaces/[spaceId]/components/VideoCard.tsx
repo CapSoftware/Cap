@@ -6,10 +6,10 @@ import type React from "react";
 import { memo } from "react";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import type { Video } from "./AddVideosDialogBase";
+import type { VideoData } from "./AddVideosDialogBase";
 
 interface VideoCardProps {
-	video: Video;
+	video: VideoData;
 	isSelected: boolean;
 	onToggle: () => void;
 	isAlreadyInEntity: boolean;

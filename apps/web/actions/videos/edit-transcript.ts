@@ -1,15 +1,15 @@
 "use server";
 
-import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { createBucketProvider } from "@/utils/s3";
 
 export async function editTranscriptEntry(
-	videoId: string,
+	videoId: Video.VideoId,
 	entryId: number,
 	newText: string,
 ): Promise<{ success: boolean; message: string }> {

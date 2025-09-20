@@ -17,6 +17,7 @@ import type { CommentType } from "../../../Share";
 import Comment from "./Comment";
 import CommentInput from "./CommentInput";
 import EmptyState from "./EmptyState";
+import { Video } from "@cap/web-domain";
 
 export const Comments = Object.assign(
 	forwardRef<
@@ -24,7 +25,7 @@ export const Comments = Object.assign(
 		{
 			setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
 			user: typeof userSelectProps | null;
-			videoId: string;
+			videoId: Video.VideoId;
 			optimisticComments: CommentType[];
 			setOptimisticComments: (newComment: CommentType) => void;
 			handleCommentSuccess: (comment: CommentType) => void;
@@ -63,13 +64,7 @@ export const Comments = Object.assign(
 			}
 		};
 
-		useImperativeHandle(
-			ref,
-			() => ({
-				scrollToBottom,
-			}),
-			[],
-		);
+		useImperativeHandle(ref, () => ({ scrollToBottom }), []);
 
 		const rootComments = optimisticComments.filter(
 			(comment) => !comment.parentCommentId || comment.parentCommentId === "",

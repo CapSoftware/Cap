@@ -11,6 +11,7 @@ import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { Folder } from "@cap/web-domain";
 
 export const UploadCapButton = ({
 	onStart,
@@ -24,7 +25,7 @@ export const UploadCapButton = ({
 	onComplete?: (id: string) => void;
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
-	folderId?: string;
+	folderId?: Folder.FolderId;
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
