@@ -21,23 +21,16 @@ type UploadState = {
 };
 
 export const UploadCapButton = ({
-	onStart,
-	onProgress,
-	onComplete,
 	size = "md",
 	folderId,
 }: {
-	onStart?: (id: string, thumbnail?: string) => void;
-	onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
-	onComplete?: (id: string) => void;
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
 	folderId?: string;
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
-	const { isUploading, setIsUploading, setUploadProgress } =
-		useUploadingContext();
+	const { state, setState } = useUploadingContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
 
@@ -64,12 +57,11 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
-		setIsUploading(true);
-		setUploadProgress(0);
-		try {
-			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
+		const parser = await import("@remotion/media-parser");
+		const webcodecs = await import("@remotion/webcodecs");
 
+		setState({ status: "parsing" });
+		try {
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -102,7 +94,6 @@ export const UploadCapButton = ({
 			onStart?.(uploadId);
 			onProgress?.(uploadId, 10);
 
-			const fileSizeMB = file.size / (1024 * 1024);
 			onProgress?.(uploadId, 15);
 
 			let optimizedBlob: Blob;
@@ -396,8 +387,7 @@ export const UploadCapButton = ({
 		} catch (err) {
 			console.error("Video upload failed", err);
 		} finally {
-			setIsUploading(false);
-			setUploadProgress(0);
+			setState(undefined);
 			setUploadState({
 				uploaded: 0,
 				total: 0,
@@ -433,69 +423,57 @@ export const UploadCapButton = ({
 		}
 	};
 
-	// Prevent the user closing the tab while uploading
-	useEffect(() => {
-		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-			if (isUploading) {
-				e.preventDefault();
-				// Chrome requires returnValue to be set
-				e.returnValue = "";
-				return "";
-			}
-		};
+	// TODO: Bring this back
+	// useEffect(() => {
+	// 	if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading)
+	// 		return;
 
-		window.addEventListener("beforeunload", handleBeforeUnload);
-		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [isUploading]);
+	// 	// Clear any existing pending task
+	// 	if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
 
-	useEffect(() => {
-		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading)
-			return;
+	// 	const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
 
-		// Clear any existing pending task
-		if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
+	// 	if (shouldSendImmediately) {
+	// 		// Send completion update immediately and clear state
+	// 		sendProgressUpdate(
+	// 			uploadState.videoId,
+	// 			uploadState.uploaded,
+	// 			uploadState.total,
+	// 		);
 
-		const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
+	// 		setUploadState((prev) => ({
+	// 			...prev,
+	// 			pendingTask: undefined,
+	// 		}));
+	// 	} else {
+	// 		// Schedule delayed update (after 2 seconds)
+	// 		const newPendingTask = setTimeout(() => {
+	// 			if (uploadState.videoId) {
+	// 				sendProgressUpdate(
+	// 					uploadState.videoId,
+	// 					uploadState.uploaded,
+	// 					uploadState.total,
+	// 				);
+	// 			}
+	// 		}, 2000);
 
-		if (shouldSendImmediately) {
-			// Send completion update immediately and clear state
-			sendProgressUpdate(
-				uploadState.videoId,
-				uploadState.uploaded,
-				uploadState.total,
-			);
+	// 		setUploadState((prev) => ({
+	// 			...prev,
+	// 			pendingTask: newPendingTask,
+	// 		}));
+	// 	}
 
-			setUploadState((prev) => ({
-				...prev,
-				pendingTask: undefined,
-			}));
-		} else {
-			// Schedule delayed update (after 2 seconds)
-			const newPendingTask = setTimeout(() => {
-				if (uploadState.videoId) {
-					sendProgressUpdate(
-						uploadState.videoId,
-						uploadState.uploaded,
-						uploadState.total,
-					);
-				}
-			}, 2000);
+	// 	return () => {
+	// 		if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
+	// 	};
+	// }, [
+	// 	uploadState.videoId,
+	// 	uploadState.uploaded,
+	// 	uploadState.total,
+	// 	isUploading,
+	// ]);
 
-			setUploadState((prev) => ({
-				...prev,
-				pendingTask: newPendingTask,
-			}));
-		}
-
-		return () => {
-			if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
-		};
-	}, [
-		uploadState.videoId,
-		uploadState.uploaded,
-		uploadState.total,
-		isUploading,
-	]);
+	const isUploading = !!state; // TODO
 
 	return (
 		<>

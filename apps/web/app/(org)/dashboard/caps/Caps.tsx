@@ -76,8 +76,6 @@ export const Caps = ({
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const {
 		isUploading,
-		setIsUploading,
-		setUploadingCapId,
 		setUploadProgress,
 		uploadingCapId,
 		setUploadingThumbnailUrl,
@@ -293,21 +291,7 @@ export const Caps = ({
 					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
 					New Folder
 				</Button>
-				<UploadCapButton
-					onStart={(id, thumbnailUrl) => {
-						setIsUploading(true);
-						setUploadingCapId(id);
-						setUploadingThumbnailUrl(thumbnailUrl);
-						setUploadProgress(0);
-					}}
-					size="sm"
-					onComplete={() => {
-						setIsUploading(false);
-						setUploadingCapId(null);
-						setUploadingThumbnailUrl(undefined);
-						setUploadProgress(0);
-					}}
-				/>
+				<UploadCapButton size="sm" />
 			</div>
 			{folders.length > 0 && (
 				<>

@@ -6,8 +6,8 @@ import { useUploadingContext } from "../../../caps/UploadingContext";
 export function UploadCapButtonWithFolder({ folderId }: { folderId: string }) {
 	const router = useRouter();
 	const {
-		setIsUploading,
-		setUploadingCapId,
+		// setIsUploading,
+		// setUploadingCapId,
 		setUploadingThumbnailUrl,
 		setUploadProgress,
 	} = useUploadingContext();
