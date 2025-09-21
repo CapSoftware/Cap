@@ -78,7 +78,6 @@ export const UploadCapButton = ({
 				: undefined;
 
 			setState({ status: "creating" });
-
 			const videoData = await createVideoAndGetUploadUrl({
 				duration,
 				resolution: metadata.dimensions
@@ -302,6 +301,12 @@ export const UploadCapButton = ({
 			);
 			formData.append("file", optimizedBlob);
 
+			setState({
+				status: "uploadingVideo",
+				capId: uploadId,
+				progress: 0,
+				thumbnailUrl,
+			});
 			await new Promise<void>((resolve, reject) => {
 				const xhr = new XMLHttpRequest();
 				xhr.open("POST", videoData.presignedPostData.url);
@@ -313,7 +318,7 @@ export const UploadCapButton = ({
 							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
-							thumbnailUrl: thumbnailUrl,
+							thumbnailUrl,
 						});
 
 						setUploadState({
@@ -354,6 +359,12 @@ export const UploadCapButton = ({
 				);
 				screenshotFormData.append("file", thumbnailBlob);
 
+				setState({
+					status: "uploadingThumbnail",
+					capId: uploadId,
+					progress: 0,
+					thumbnailUrl,
+				});
 				await new Promise<void>((resolve, reject) => {
 					const xhr = new XMLHttpRequest();
 					xhr.open("POST", screenshotData.presignedPostData.url);
