@@ -22,7 +22,16 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
+// TODO: Remove this once we are more confident in the feature
+// localStorage.setItem("betaUploadProgress", "true");
+const enableBetaUploadProgress =
+	"localStorage" in globalThis
+		? localStorage.getItem("betaUploadProgress") === "true"
+		: false;
+
+export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
+	const enabled = enableBetaUploadProgress ? enabledRaw : false;
+
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>

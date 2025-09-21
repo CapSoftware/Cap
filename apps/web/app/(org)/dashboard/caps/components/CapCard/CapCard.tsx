@@ -81,12 +81,6 @@ export interface CapCardProps extends PropsWithChildren {
 	onDragEnd?: () => void;
 }
 
-// localStorage.setItem("betaUploadProgress", "true");
-const enableBetaUploadProgress =
-	"localStorage" in globalThis
-		? localStorage.getItem("betaUploadProgress") === "true"
-		: false;
-
 export const CapCard = ({
 	cap,
 	analytics,
@@ -172,7 +166,7 @@ export const CapCard = ({
 
 	const uploadProgress = useUploadProgress(
 		cap.id,
-		enableBetaUploadProgress && (cap.hasActiveUpload || false),
+		cap.hasActiveUpload || false,
 	);
 
 	// Helper function to create a drag preview element
