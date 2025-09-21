@@ -74,12 +74,7 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
-	const {
-		isUploading,
-		setUploadProgress,
-		uploadingCapId,
-		setUploadingThumbnailUrl,
-	} = useUploadingContext();
+	const { state } = useUploadingContext();
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -264,6 +259,9 @@ export const Caps = ({
 			toast.error("Failed to delete cap");
 		},
 	});
+
+	const isUploading = state !== undefined;
+	const uploadingCapId = state && "capId" in state ? state.capId : undefined;
 
 	const visibleVideos = useMemo(
 		() =>

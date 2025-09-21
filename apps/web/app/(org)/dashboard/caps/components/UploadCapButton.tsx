@@ -5,7 +5,7 @@ import { userIsPro } from "@cap/utils";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
@@ -60,8 +60,8 @@ export const UploadCapButton = ({
 		const parser = await import("@remotion/media-parser");
 		const webcodecs = await import("@remotion/webcodecs");
 
-		setState({ status: "parsing" });
 		try {
+			setState({ status: "parsing" });
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -77,6 +77,8 @@ export const UploadCapButton = ({
 				? Math.round(metadata.durationInSeconds)
 				: undefined;
 
+			setState({ status: "creating" });
+
 			const videoData = await createVideoAndGetUploadUrl({
 				duration,
 				resolution: metadata.dimensions
@@ -90,11 +92,8 @@ export const UploadCapButton = ({
 			});
 
 			const uploadId = videoData.id;
-			// Initial start with thumbnail as undefined
-			onStart?.(uploadId);
-			onProgress?.(uploadId, 10);
 
-			onProgress?.(uploadId, 15);
+			setState({ status: "converting", capId: uploadId, progress: 0 });
 
 			let optimizedBlob: Blob;
 
@@ -128,7 +127,11 @@ export const UploadCapButton = ({
 					onProgress: ({ overallProgress }) => {
 						if (overallProgress !== null) {
 							const progressValue = overallProgress * 100;
-							onProgress?.(uploadId, progressValue);
+							setState({
+								status: "converting",
+								capId: uploadId,
+								progress: progressValue,
+							});
 						}
 					},
 				});
@@ -291,10 +294,6 @@ export const UploadCapButton = ({
 				? URL.createObjectURL(thumbnailBlob)
 				: undefined;
 
-			// Pass the thumbnail URL to the parent component
-			onStart?.(uploadId, thumbnailUrl);
-			onProgress?.(uploadId, 100);
-
 			const formData = new FormData();
 			Object.entries(videoData.presignedPostData.fields).forEach(
 				([key, value]) => {
@@ -303,8 +302,6 @@ export const UploadCapButton = ({
 			);
 			formData.append("file", optimizedBlob);
 
-			setUploadProgress(0);
-
 			await new Promise<void>((resolve, reject) => {
 				const xhr = new XMLHttpRequest();
 				xhr.open("POST", videoData.presignedPostData.url);
@@ -312,8 +309,11 @@ export const UploadCapButton = ({
 				xhr.upload.onprogress = (event) => {
 					if (event.lengthComputable) {
 						const percent = (event.loaded / event.total) * 100;
-						setUploadProgress(percent);
-						onProgress?.(uploadId, 100, percent);
+						setState({
+							status: "uploadingThumbnail",
+							capId: uploadId,
+							progress: percent,
+						});
 
 						setUploadState({
 							videoId: uploadId,
@@ -361,7 +361,11 @@ export const UploadCapButton = ({
 						if (event.lengthComputable) {
 							const percent = (event.loaded / event.total) * 100;
 							const thumbnailProgress = 90 + percent * 0.1;
-							onProgress?.(uploadId, 100, thumbnailProgress);
+							setState({
+								status: "uploadingThumbnail",
+								capId: uploadId,
+								progress: thumbnailProgress,
+							});
 						}
 					};
 
@@ -381,8 +385,8 @@ export const UploadCapButton = ({
 			} else {
 			}
 
-			onProgress?.(uploadId, 100, 100);
-			onComplete?.(uploadId);
+			setState(undefined);
+
 			router.refresh();
 		} catch (err) {
 			console.error("Video upload failed", err);

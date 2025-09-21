@@ -4,20 +4,15 @@ import type React from "react";
 import { createContext, useContext, useEffect, useState } from "react";
 
 interface UploadingContextType {
-	isUploading: boolean;
-	// setIsUploading: (value: boolean) => void;
-	uploadingCapId: string | null;
-	// setUploadingCapId: (id: string | null) => void;
-	uploadingThumbnailUrl: string | undefined;
-	setUploadingThumbnailUrl: (url: string | undefined) => void;
-	uploadProgress: number;
-	setUploadProgress: (progress: number) => void;
-
+	// TODO: Rename these
 	state: UploadState | undefined;
 	setState: (state: UploadState | undefined) => void;
+
+	isUploading: boolean;
+	uploadingCapId: string | null;
 }
 
-type UploadState =
+export type UploadState =
 	| {
 			status: "parsing";
 	  }
@@ -30,7 +25,12 @@ type UploadState =
 			progress: number;
 	  }
 	| {
-			status: "uploading";
+			status: "uploadingThumbnail";
+			capId: string;
+			progress: number;
+	  }
+	| {
+			status: "uploadingVideo";
 			capId: string;
 			progress: number;
 	  };
@@ -41,21 +41,15 @@ const UploadingContext = createContext<UploadingContextType | undefined>(
 
 export function useUploadingContext() {
 	const context = useContext(UploadingContext);
-	if (!context) {
+	if (!context)
 		throw new Error(
 			"useUploadingContext must be used within an UploadingProvider",
 		);
-	}
 	return context;
 }
 
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
 	const [state, setState] = useState<UploadState>();
-
-	const [uploadingThumbnailUrl, setUploadingThumbnailUrl] = useState<
-		string | undefined
-	>(undefined);
-	const [uploadProgress, setUploadProgress] = useState(0);
 
 	// Prevent the user closing the tab while uploading
 	useEffect(() => {
@@ -75,14 +69,10 @@ export function UploadingProvider({ children }: { children: React.ReactNode }) {
 	return (
 		<UploadingContext.Provider
 			value={{
-				isUploading: state !== undefined,
-				uploadingCapId: state?.capId ?? null,
 				state,
 				setState,
-				uploadingThumbnailUrl,
-				setUploadingThumbnailUrl,
-				uploadProgress,
-				setUploadProgress,
+				isUploading: state !== undefined,
+				uploadingCapId: state && "capId" in state ? state.capId : null,
 			}}
 		>
 			{children}
