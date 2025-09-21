@@ -22,7 +22,7 @@ export const UploadPlaceholderCard = () => {
 	return (
 		<div className="flex flex-col gap-4 w-full h-full rounded-xl bg-gray-1 border-gray-3 border-[1px]">
 			<div className="overflow-hidden relative w-full bg-black rounded-t-xl border-b border-gray-3 aspect-video group">
-				{state.status === "uploading" ? (
+				{state.status === "uploadingVideo" ? (
 					<img
 						src={state.thumbnailUrl}
 						alt="Uploading thumbnail"
