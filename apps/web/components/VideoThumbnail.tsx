@@ -70,11 +70,11 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		});
 		const imageRef = useRef<HTMLImageElement>(null);
 
-		const { uploadingCapId } = useUploadingContext();
+		// const { uploadingCapId } = useUploadingContext();
 
-		useEffect(() => {
-			imageUrl.refetch();
-		}, [imageUrl.refetch, uploadingCapId]);
+		// useEffect(() => {
+		// 	imageUrl.refetch();
+		// }, [imageUrl.refetch, uploadingCapId]);
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
 
