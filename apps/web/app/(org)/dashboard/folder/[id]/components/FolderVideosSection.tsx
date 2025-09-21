@@ -12,7 +12,7 @@ import { Rpc, withRpc } from "@/lib/Rpcs";
 import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
-// import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
+import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
 import { useUploadingContext } from "../../../caps/UploadingContext";
 
 interface FolderVideosSectionProps {
@@ -27,9 +27,7 @@ export default function FolderVideosSection({
 	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
-	const {
-		// isUploading, uploadingCapId
-	} = useUploadingContext();
+	const { isUploading, uploadingCapId } = useUploadingContext();
 	const { user } = useDashboardContext();
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
@@ -157,14 +155,13 @@ export default function FolderVideosSection({
 		refetchOnMount: true,
 	});
 
-	const visibleVideos = initialVideos;
-	// const visibleVideos = useMemo(
-	// 	() =>
-	// 		isUploading && uploadingCapId
-	// 			? initialVideos.filter((video) => video.id !== uploadingCapId)
-	// 			: initialVideos,
-	// 	[initialVideos, isUploading, uploadingCapId],
-	// );
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? initialVideos.filter((video) => video.id !== uploadingCapId)
+				: initialVideos,
+		[initialVideos, isUploading, uploadingCapId],
+	);
 
 	const analytics = analyticsData || {};
 
@@ -174,16 +171,16 @@ export default function FolderVideosSection({
 				<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
 			</div>
 			<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-				{visibleVideos.length === 0 ? (
+				{visibleVideos.length === 0 && !isUploading ? (
 					<p className="col-span-full text-gray-9">
 						No videos in this folder yet. Drag and drop into the folder or
 						upload.
 					</p>
 				) : (
 					<>
-						{/*{isUploading && (
+						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
-						)}*/}
+						)}
 						{visibleVideos.map((video) => (
 							<CapCard
 								key={video.id}

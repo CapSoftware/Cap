@@ -75,12 +75,12 @@ export const Caps = ({
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
 	const {
-		// isUploading,
-		// setIsUploading,
-		// setUploadingCapId,
-		// setUploadProgress,
-		// uploadingCapId,
-		// setUploadingThumbnailUrl,
+		isUploading,
+		setIsUploading,
+		setUploadingCapId,
+		setUploadProgress,
+		uploadingCapId,
+		setUploadingThumbnailUrl,
 	} = useUploadingContext();
 
 	const anyCapSelected = selectedCaps.length > 0;
@@ -267,15 +267,13 @@ export const Caps = ({
 		},
 	});
 
-	const visibleVideos = data; // TODO: Remove this
-
-	// const visibleVideos = useMemo(
-	// 	() =>
-	// 		isUploading && uploadingCapId
-	// 			? data.filter((video) => video.id !== uploadingCapId)
-	// 			: data,
-	// 	[data, isUploading, uploadingCapId],
-	// );
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? data.filter((video) => video.id !== uploadingCapId)
+				: data,
+		[data, isUploading, uploadingCapId],
+	);
 
 	if (count === 0) return <EmptyCapState />;
 
@@ -296,19 +294,19 @@ export const Caps = ({
 					New Folder
 				</Button>
 				<UploadCapButton
-					// onStart={(id, thumbnailUrl) => {
-					// 	setIsUploading(true);
-					// 	setUploadingCapId(id);
-					// 	setUploadingThumbnailUrl(thumbnailUrl);
-					// 	setUploadProgress(0);
-					// }}
+					onStart={(id, thumbnailUrl) => {
+						setIsUploading(true);
+						setUploadingCapId(id);
+						setUploadingThumbnailUrl(thumbnailUrl);
+						setUploadProgress(0);
+					}}
 					size="sm"
-					// onComplete={() => {
-					// 	setIsUploading(false);
-					// 	setUploadingCapId(null);
-					// 	setUploadingThumbnailUrl(undefined);
-					// 	setUploadProgress(0);
-					// }}
+					onComplete={() => {
+						setIsUploading(false);
+						setUploadingCapId(null);
+						setUploadingThumbnailUrl(undefined);
+						setUploadProgress(0);
+					}}
 				/>
 			</div>
 			{folders.length > 0 && (
@@ -330,9 +328,9 @@ export const Caps = ({
 					</div>
 
 					<div className="grid grid-cols-1 gap-4 sm:gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-						{/*{isUploading && (
+						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
-						)}*/}
+						)}
 						{visibleVideos.map((video) => {
 							return (
 								<CapCard
