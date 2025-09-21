@@ -296,7 +296,7 @@ export const UploadCapButton = ({
 
 			// Create progress tracking state outside React
 			const createProgressTracker = () => {
-				let uploadState = {
+				const uploadState = {
 					videoId: uploadId,
 					uploaded: 0,
 					total: 0,

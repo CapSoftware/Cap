@@ -5,6 +5,7 @@ import {
 	getFolderBreadcrumb,
 	getVideosByFolderId,
 } from "@/lib/folder";
+import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
 import {
 	BreadcrumbItem,
@@ -12,7 +13,6 @@ import {
 	NewSubfolderButton,
 } from "./components";
 import FolderVideosSection from "./components/FolderVideosSection";
-import { UploadCapButton } from "../../caps/components";
 
 const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 	const [childFolders, breadcrumb, videosData] = await Promise.all([
