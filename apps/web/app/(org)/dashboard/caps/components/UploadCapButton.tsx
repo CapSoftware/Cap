@@ -12,14 +12,6 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
 
-type UploadState = {
-	videoId?: string;
-	uploaded: number;
-	total: number;
-	pendingTask?: ReturnType<typeof setTimeout>;
-	lastUpdateTime: number;
-};
-
 export const UploadCapButton = ({
 	size = "md",
 	folderId,
@@ -33,12 +25,6 @@ export const UploadCapButton = ({
 	const { uploadStatus, setUploadStatus } = useUploadingContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
-
-	const [uploadState, setUploadState] = useState<UploadState>({
-		uploaded: 0,
-		total: 0,
-		lastUpdateTime: Date.now(),
-	});
 
 	const handleClick = () => {
 		if (!user) return;
@@ -307,42 +293,105 @@ export const UploadCapButton = ({
 				progress: 0,
 				thumbnailUrl,
 			});
-			await new Promise<void>((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.open("POST", videoData.presignedPostData.url);
 
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						const percent = (event.loaded / event.total) * 100;
-						setUploadStatus({
-							status: "uploadingVideo",
-							capId: uploadId,
-							progress: percent,
-							thumbnailUrl,
-						});
-
-						setUploadState({
-							videoId: uploadId,
-							uploaded: event.loaded,
-							total: event.total,
-							lastUpdateTime: Date.now(),
-							pendingTask: uploadState.pendingTask,
-						});
-					}
+			// Create progress tracking state outside React
+			const createProgressTracker = () => {
+				let uploadState = {
+					videoId: uploadId,
+					uploaded: 0,
+					total: 0,
+					pendingTask: undefined as ReturnType<typeof setTimeout> | undefined,
+					lastUpdateTime: Date.now(),
 				};
 
-				xhr.onload = () => {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						sendProgressUpdate(uploadId, uploadState.total, uploadState.total);
-						resolve();
+				const scheduleProgressUpdate = (uploaded: number, total: number) => {
+					uploadState.uploaded = uploaded;
+					uploadState.total = total;
+					uploadState.lastUpdateTime = Date.now();
+
+					// Clear any existing pending task
+					if (uploadState.pendingTask) {
+						clearTimeout(uploadState.pendingTask);
+						uploadState.pendingTask = undefined;
+					}
+
+					const shouldSendImmediately = uploaded >= total;
+
+					if (shouldSendImmediately) {
+						// Don't send completion update immediately - let xhr.onload handle it
+						// to avoid double progress updates
+						return;
 					} else {
-						reject(new Error(`Upload failed with status ${xhr.status}`));
+						// Schedule delayed update (after 2 seconds)
+						uploadState.pendingTask = setTimeout(() => {
+							if (uploadState.videoId) {
+								sendProgressUpdate(
+									uploadState.videoId,
+									uploadState.uploaded,
+									uploadState.total,
+								);
+							}
+							uploadState.pendingTask = undefined;
+						}, 2000);
 					}
 				};
-				xhr.onerror = () => reject(new Error("Upload failed"));
 
-				xhr.send(formData);
-			});
+				const cleanup = () => {
+					if (uploadState.pendingTask) {
+						clearTimeout(uploadState.pendingTask);
+						uploadState.pendingTask = undefined;
+					}
+				};
+
+				const getTotal = () => uploadState.total;
+
+				return { scheduleProgressUpdate, cleanup, getTotal };
+			};
+
+			const progressTracker = createProgressTracker();
+
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const xhr = new XMLHttpRequest();
+					xhr.open("POST", videoData.presignedPostData.url);
+
+					xhr.upload.onprogress = (event) => {
+						if (event.lengthComputable) {
+							const percent = (event.loaded / event.total) * 100;
+							setUploadStatus({
+								status: "uploadingVideo",
+								capId: uploadId,
+								progress: percent,
+								thumbnailUrl,
+							});
+
+							progressTracker.scheduleProgressUpdate(event.loaded, event.total);
+						}
+					};
+
+					xhr.onload = () => {
+						if (xhr.status >= 200 && xhr.status < 300) {
+							progressTracker.cleanup();
+							// Guarantee final 100% progress update
+							const total = progressTracker.getTotal() || 1;
+							sendProgressUpdate(uploadId, total, total);
+							resolve();
+						} else {
+							progressTracker.cleanup();
+							reject(new Error(`Upload failed with status ${xhr.status}`));
+						}
+					};
+					xhr.onerror = () => {
+						progressTracker.cleanup();
+						reject(new Error("Upload failed"));
+					};
+
+					xhr.send(formData);
+				});
+			} catch (uploadError) {
+				progressTracker.cleanup();
+				throw uploadError;
+			}
 
 			if (thumbnailBlob) {
 				const screenshotData = await createVideoAndGetUploadUrl({
@@ -393,21 +442,13 @@ export const UploadCapButton = ({
 
 					xhr.send(screenshotFormData);
 				});
-			} else {
 			}
-
-			setUploadStatus(undefined);
 
 			router.refresh();
 		} catch (err) {
 			console.error("Video upload failed", err);
 		} finally {
 			setUploadStatus(undefined);
-			setUploadState({
-				uploaded: 0,
-				total: 0,
-				lastUpdateTime: Date.now(),
-			});
 			if (inputRef.current) inputRef.current.value = "";
 		}
 	};
@@ -437,56 +478,6 @@ export const UploadCapButton = ({
 			console.error("Error sending progress update:", err);
 		}
 	};
-
-	// TODO: Bring this back
-	// useEffect(() => {
-	// 	if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading)
-	// 		return;
-
-	// 	// Clear any existing pending task
-	// 	if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
-
-	// 	const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
-
-	// 	if (shouldSendImmediately) {
-	// 		// Send completion update immediately and clear state
-	// 		sendProgressUpdate(
-	// 			uploadState.videoId,
-	// 			uploadState.uploaded,
-	// 			uploadState.total,
-	// 		);
-
-	// 		setUploadState((prev) => ({
-	// 			...prev,
-	// 			pendingTask: undefined,
-	// 		}));
-	// 	} else {
-	// 		// Schedule delayed update (after 2 seconds)
-	// 		const newPendingTask = setTimeout(() => {
-	// 			if (uploadState.videoId) {
-	// 				sendProgressUpdate(
-	// 					uploadState.videoId,
-	// 					uploadState.uploaded,
-	// 					uploadState.total,
-	// 				);
-	// 			}
-	// 		}, 2000);
-
-	// 		setUploadState((prev) => ({
-	// 			...prev,
-	// 			pendingTask: newPendingTask,
-	// 		}));
-	// 	}
-
-	// 	return () => {
-	// 		if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
-	// 	};
-	// }, [
-	// 	uploadState.videoId,
-	// 	uploadState.uploaded,
-	// 	uploadState.total,
-	// 	isUploading,
-	// ]);
 
 	const isUploading = !!uploadStatus;
 
