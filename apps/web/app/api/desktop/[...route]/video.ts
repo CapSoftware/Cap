@@ -127,7 +127,7 @@ app.get(
 
 			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
 			const clientSupportsUploadProgress = xCapVersion
-				? isGreaterThanSemver(xCapVersion, 0, 3, 68)
+				? isAtLeastSemver(xCapVersion, 0, 3, 68)
 				: false;
 
 			if (clientSupportsUploadProgress)
@@ -318,31 +318,26 @@ app.post(
 	},
 );
 
-function isGreaterThanSemver(
+function isAtLeastSemver(
 	versionString: string,
 	major: number,
 	minor: number,
 	patch: number,
 ): boolean {
-	// Parse version string, remove 'v' prefix if present
 	const match = versionString
 		.replace(/^v/, "")
 		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
-
-	if (!match) {
-		throw new Error(`Invalid semver version: ${versionString}`);
-	}
-
+	if (!match) return false;
 	const [, vMajor, vMinor, vPatch, prerelease] = match;
-	const parsedMajor = vMajor ? parseInt(vMajor, 10) : 0;
-	const parsedMinor = vMinor ? parseInt(vMinor, 10) : 0;
-	const parsedPatch = vPatch ? parseInt(vPatch, 10) : 0;
-
-	// Compare major.minor.patch
-	if (parsedMajor !== major) return parsedMajor > major;
-	if (parsedMinor !== minor) return parsedMinor > minor;
-	if (parsedPatch !== patch) return parsedPatch > patch;
-
-	// If versions are equal, prerelease versions have lower precedence
-	return !prerelease; // true if no prerelease (1.0.0 > 1.0.0-alpha), false if prerelease
+	const M = vMajor ? parseInt(vMajor, 10) || 0 : 0;
+	const m = vMinor ? parseInt(vMinor, 10) || 0 : 0;
+	const p = vPatch ? parseInt(vPatch, 10) || 0 : 0;
+	if (M > major) return true;
+	if (M < major) return false;
+	if (m > minor) return true;
+	if (m < minor) return false;
+	if (p > patch) return true;
+	if (p < patch) return false;
+	// Equal triplet: accept only non-prerelease
+	return !prerelease;
 }
