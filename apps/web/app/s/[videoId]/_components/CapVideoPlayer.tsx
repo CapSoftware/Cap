@@ -338,9 +338,7 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
-				if (retryTimeout.current) {
-					clearTimeout(retryTimeout.current);
-				}
+				if (retryTimeout.current) clearTimeout(retryTimeout.current);
 			};
 		}
 
