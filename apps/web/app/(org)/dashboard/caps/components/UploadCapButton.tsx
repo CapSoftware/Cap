@@ -30,7 +30,7 @@ export const UploadCapButton = ({
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
-	const { state, setState } = useUploadingContext();
+	const { uploadStatus, setUploadStatus } = useUploadingContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
 
@@ -61,7 +61,7 @@ export const UploadCapButton = ({
 		const webcodecs = await import("@remotion/webcodecs");
 
 		try {
-			setState({ status: "parsing" });
+			setUploadStatus({ status: "parsing" });
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -77,7 +77,7 @@ export const UploadCapButton = ({
 				? Math.round(metadata.durationInSeconds)
 				: undefined;
 
-			setState({ status: "creating" });
+			setUploadStatus({ status: "creating" });
 			const videoData = await createVideoAndGetUploadUrl({
 				duration,
 				resolution: metadata.dimensions
@@ -92,7 +92,7 @@ export const UploadCapButton = ({
 
 			const uploadId = videoData.id;
 
-			setState({ status: "converting", capId: uploadId, progress: 0 });
+			setUploadStatus({ status: "converting", capId: uploadId, progress: 0 });
 
 			let optimizedBlob: Blob;
 
@@ -126,7 +126,7 @@ export const UploadCapButton = ({
 					onProgress: ({ overallProgress }) => {
 						if (overallProgress !== null) {
 							const progressValue = overallProgress * 100;
-							setState({
+							setUploadStatus({
 								status: "converting",
 								capId: uploadId,
 								progress: progressValue,
@@ -301,7 +301,7 @@ export const UploadCapButton = ({
 			);
 			formData.append("file", optimizedBlob);
 
-			setState({
+			setUploadStatus({
 				status: "uploadingVideo",
 				capId: uploadId,
 				progress: 0,
@@ -314,7 +314,7 @@ export const UploadCapButton = ({
 				xhr.upload.onprogress = (event) => {
 					if (event.lengthComputable) {
 						const percent = (event.loaded / event.total) * 100;
-						setState({
+						setUploadStatus({
 							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
@@ -359,11 +359,10 @@ export const UploadCapButton = ({
 				);
 				screenshotFormData.append("file", thumbnailBlob);
 
-				setState({
+				setUploadStatus({
 					status: "uploadingThumbnail",
 					capId: uploadId,
 					progress: 0,
-					thumbnailUrl,
 				});
 				await new Promise<void>((resolve, reject) => {
 					const xhr = new XMLHttpRequest();
@@ -373,7 +372,7 @@ export const UploadCapButton = ({
 						if (event.lengthComputable) {
 							const percent = (event.loaded / event.total) * 100;
 							const thumbnailProgress = 90 + percent * 0.1;
-							setState({
+							setUploadStatus({
 								status: "uploadingThumbnail",
 								capId: uploadId,
 								progress: thumbnailProgress,
@@ -397,13 +396,13 @@ export const UploadCapButton = ({
 			} else {
 			}
 
-			setState(undefined);
+			setUploadStatus(undefined);
 
 			router.refresh();
 		} catch (err) {
 			console.error("Video upload failed", err);
 		} finally {
-			setState(undefined);
+			setUploadStatus(undefined);
 			setUploadState({
 				uploaded: 0,
 				total: 0,
@@ -489,7 +488,7 @@ export const UploadCapButton = ({
 	// 	isUploading,
 	// ]);
 
-	const isUploading = !!state; // TODO
+	const isUploading = !!uploadStatus;
 
 	return (
 		<>

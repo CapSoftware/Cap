@@ -4,15 +4,11 @@ import type React from "react";
 import { createContext, useContext, useEffect, useState } from "react";
 
 interface UploadingContextType {
-	// TODO: Rename these
-	state: UploadState | undefined;
-	setState: (state: UploadState | undefined) => void;
-
-	isUploading: boolean;
-	uploadingCapId: string | null;
+	uploadStatus: UploadStatus | undefined;
+	setUploadStatus: (state: UploadStatus | undefined) => void;
 }
 
-export type UploadState =
+export type UploadStatus =
 	| {
 			status: "parsing";
 	  }
@@ -50,7 +46,7 @@ export function useUploadingContext() {
 }
 
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const [state, setState] = useState<UploadState>();
+	const [state, setState] = useState<UploadStatus>();
 
 	// Prevent the user closing the tab while uploading
 	useEffect(() => {
@@ -70,10 +66,8 @@ export function UploadingProvider({ children }: { children: React.ReactNode }) {
 	return (
 		<UploadingContext.Provider
 			value={{
-				state,
-				setState,
-				isUploading: state !== undefined,
-				uploadingCapId: state && "capId" in state ? state.capId : null,
+				uploadStatus: state,
+				setUploadStatus: setState,
 			}}
 		>
 			{children}

@@ -2,29 +2,29 @@
 
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
-import { UploadState, useUploadingContext } from "../UploadingContext";
+import { type UploadStatus, useUploadingContext } from "../UploadingContext";
 
 const { circumference } = getProgressCircleConfig();
 
 export const UploadPlaceholderCard = () => {
-	const { state } = useUploadingContext();
+	const { uploadStatus } = useUploadingContext();
 	const strokeDashoffset = calculateStrokeDashoffset(
-		state &&
-			(state.status === "converting" ||
-				state.status === "uploadingThumbnail" ||
-				state.status === "uploadingVideo")
-			? state.progress
+		uploadStatus &&
+			(uploadStatus.status === "converting" ||
+				uploadStatus.status === "uploadingThumbnail" ||
+				uploadStatus.status === "uploadingVideo")
+			? uploadStatus.progress
 			: 0,
 		circumference,
 	);
 
-	if (!state) return null;
+	if (!uploadStatus) return null;
 	return (
 		<div className="flex flex-col gap-4 w-full h-full rounded-xl bg-gray-1 border-gray-3 border-[1px]">
 			<div className="overflow-hidden relative w-full bg-black rounded-t-xl border-b border-gray-3 aspect-video group">
-				{state.status === "uploadingVideo" ? (
+				{uploadStatus.status === "uploadingVideo" ? (
 					<img
-						src={state.thumbnailUrl}
+						src={uploadStatus.thumbnailUrl}
 						alt="Uploading thumbnail"
 						className="object-cover w-full h-full"
 					/>
@@ -38,7 +38,7 @@ export const UploadPlaceholderCard = () => {
 
 				<div className="flex absolute bottom-3 left-3 gap-2 items-center">
 					<span className="text-sm font-semibold text-white">
-						{getFriendlyStatus(state.status)}
+						{getFriendlyStatus(uploadStatus.status)}
 					</span>
 					<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
 						<circle
@@ -87,7 +87,7 @@ export const UploadPlaceholderCard = () => {
 	);
 };
 
-function getFriendlyStatus(status: UploadState["status"]) {
+function getFriendlyStatus(status: UploadStatus["status"]) {
 	switch (status) {
 		case "parsing":
 			return "Parsing";
