@@ -22,9 +22,9 @@ export const UploadPlaceholderCard = () => {
 	return (
 		<div className="flex flex-col gap-4 w-full h-full rounded-xl bg-gray-1 border-gray-3 border-[1px]">
 			<div className="overflow-hidden relative w-full bg-black rounded-t-xl border-b border-gray-3 aspect-video group">
-				{/*{uploadingThumbnailUrl ? (
+				{state.status === "uploading" ? (
 					<img
-						src={uploadingThumbnailUrl}
+						src={state.thumbnailUrl}
 						alt="Uploading thumbnail"
 						className="object-cover w-full h-full"
 					/>
@@ -32,7 +32,7 @@ export const UploadPlaceholderCard = () => {
 					<div className="flex justify-center items-center w-full h-full">
 						<LogoSpinner className="w-8 h-8 animate-spin" />
 					</div>
-				)}*/}
+				)}
 
 				<div className="absolute inset-0 transition-all duration-300 bg-black/60"></div>
 

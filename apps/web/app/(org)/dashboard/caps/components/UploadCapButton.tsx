@@ -310,9 +310,10 @@ export const UploadCapButton = ({
 					if (event.lengthComputable) {
 						const percent = (event.loaded / event.total) * 100;
 						setState({
-							status: "uploadingThumbnail",
+							status: "uploadingVideo",
 							capId: uploadId,
 							progress: percent,
+							thumbnailUrl: thumbnailUrl,
 						});
 
 						setUploadState({

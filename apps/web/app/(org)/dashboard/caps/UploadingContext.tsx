@@ -33,6 +33,7 @@ export type UploadState =
 			status: "uploadingVideo";
 			capId: string;
 			progress: number;
+			thumbnailUrl: string | undefined;
 	  };
 
 const UploadingContext = createContext<UploadingContextType | undefined>(
