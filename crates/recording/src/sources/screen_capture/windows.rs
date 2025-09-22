@@ -249,7 +249,6 @@ impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
                             back: 1,
                         }
                     }),
-                    min_update_interval: Some(Duration::from_millis(16)),
                     ..Default::default()
                 };
 
