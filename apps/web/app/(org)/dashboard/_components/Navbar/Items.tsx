@@ -130,7 +130,12 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 								>
 									<div className="flex items-center">
 										{activeOrg?.organization.iconUrl ? (
-											<div className="overflow-hidden relative flex-shrink-0 rounded-full size-[18px]">
+											<div
+												className={clsx(
+													"overflow-hidden relative flex-shrink-0 rounded-full",
+													sidebarCollapsed ? "size-6" : "size-7",
+												)}
+											>
 												<Image
 													src={activeOrg.organization.iconUrl}
 													alt={
