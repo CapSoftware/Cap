@@ -12,6 +12,7 @@ use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
 use cap_utils::spawn_actor;
 use flume::Receiver;
+use kameo::prelude::Message;
 use relative_path::RelativePathBuf;
 use std::{
     collections::HashMap,
@@ -21,6 +22,282 @@ use std::{
 };
 use tokio::sync::oneshot;
 use tracing::{debug, info, trace};
+
+#[derive(kameo::Actor)]
+struct KameoActor {
+    state: Option<KameoActorState>,
+    recording_dir: PathBuf,
+    fps: u32,
+    segment_pipeline_factory: SegmentPipelineFactory,
+}
+
+enum KameoActorState {
+    Recording {
+        pipeline: Pipeline,
+        pipeline_done_rx: oneshot::Receiver<Result<(), String>>,
+        index: u32,
+        segment_start_time: f64,
+        segment_start_instant: Instant,
+        segments: Vec<RecordingSegment>,
+    },
+    Paused {
+        next_index: u32,
+        cursors: Cursors,
+        next_cursor_id: u32,
+        segments: Vec<RecordingSegment>,
+    },
+}
+
+impl KameoActor {}
+
+struct Pause;
+
+impl Message<Pause> for KameoActor {
+    type Reply = Result<(), RecordingError>;
+
+    async fn handle(
+        &mut self,
+        _: Pause,
+        _: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| RecordingError::Media(MediaError::Any("Not recording".into())))?;
+
+        if let KameoActorState::Recording {
+            segment_start_instant,
+            segment_start_time,
+            mut pipeline,
+            mut segments,
+            index,
+            ..
+        } = state
+        {
+            tokio::time::sleep_until((segment_start_instant + Duration::from_secs(1)).into()).await;
+
+            tracing::info!("pipeline shuting down");
+
+            pipeline.inner.shutdown().await?;
+
+            tracing::info!("pipeline shutdown");
+
+            let segment_stop_time = current_time_f64();
+
+            let cursors = if let Some(cursor) = &mut pipeline.cursor {
+                if let Some(actor) = cursor.actor.take() {
+                    let res = actor.stop().await;
+
+                    std::fs::write(
+                        &cursor.output_path,
+                        serde_json::to_string_pretty(&CursorEvents {
+                            clicks: res.clicks,
+                            moves: res.moves,
+                        })?,
+                    )?;
+
+                    (res.cursors, res.next_cursor_id)
+                } else {
+                    (Default::default(), 0)
+                }
+            } else {
+                (Default::default(), 0)
+            };
+
+            segments.push(RecordingSegment {
+                start: segment_start_time,
+                end: segment_stop_time,
+                pipeline,
+            });
+
+            self.state = Some(KameoActorState::Paused {
+                next_index: index + 1,
+                cursors: cursors.0,
+                next_cursor_id: cursors.1,
+                segments,
+            });
+
+            Ok(())
+        } else {
+            self.state = Some(state);
+            Err(RecordingError::Media(MediaError::Any(
+                "Unexpected state".into(),
+            )))
+        }
+    }
+}
+
+struct Resume;
+
+impl Message<Resume> for KameoActor {
+    type Reply = Result<(), CreateSegmentPipelineError>;
+
+    async fn handle(
+        &mut self,
+        _: Resume,
+        _: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| RecordingError::Media(MediaError::Any("Not recording".into())))?;
+
+        if let KameoActorState::Paused {
+            next_index,
+            cursors,
+            next_cursor_id,
+            segments,
+        } = state
+        {
+            match self
+                .segment_pipeline_factory
+                .create_next(cursors, next_cursor_id)
+                .await
+            {
+                Ok((pipeline, pipeline_done_rx)) => {
+                    self.state = Some(KameoActorState::Recording {
+                        pipeline,
+                        pipeline_done_rx,
+                        index: next_index,
+                        segment_start_time: current_time_f64(),
+                        segment_start_instant: Instant::now(),
+                        segments,
+                    });
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.state = Some(state);
+        }
+
+        Ok(())
+    }
+}
+
+struct Stop;
+
+impl Message<Stop> for KameoActor {
+    type Reply = Result<CompletedStudioRecording, RecordingError>;
+
+    async fn handle(
+        &mut self,
+        _: Stop,
+        ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let _ = ctx.actor_ref().stop_gracefully().await;
+
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| RecordingError::Media(MediaError::Any("Not recording".into())))?;
+
+        let _ = ctx.actor_ref().stop_gracefully().await;
+
+        match state {
+            KameoActorState::Recording {
+                segment_start_instant,
+                segment_start_time,
+                mut pipeline,
+                mut segments,
+                ..
+            } => {
+                tokio::time::sleep_until((segment_start_instant + Duration::from_secs(1)).into())
+                    .await;
+
+                tracing::info!("pipeline shuting down");
+
+                pipeline.inner.shutdown().await?;
+
+                tracing::info!("pipeline shutdown");
+
+                let segment_stop_time = current_time_f64();
+
+                let cursors = if let Some(cursor) = &mut pipeline.cursor {
+                    if let Some(actor) = cursor.actor.take() {
+                        let res = actor.stop().await;
+
+                        std::fs::write(
+                            &cursor.output_path,
+                            serde_json::to_string_pretty(&CursorEvents {
+                                clicks: res.clicks,
+                                moves: res.moves,
+                            })?,
+                        )?;
+
+                        (res.cursors, res.next_cursor_id)
+                    } else {
+                        (Default::default(), 0)
+                    }
+                } else {
+                    (Default::default(), 0)
+                };
+
+                segments.push(RecordingSegment {
+                    start: segment_start_time,
+                    end: segment_stop_time,
+                    pipeline,
+                });
+
+                stop_recording(
+                    Actor {
+                        recording_dir: self.recording_dir.clone(),
+                        fps: self.fps,
+                        segments,
+                    },
+                    cursors.0,
+                )
+                .await
+            }
+            KameoActorState::Paused {
+                cursors, segments, ..
+            } => {
+                stop_recording(
+                    Actor {
+                        recording_dir: self.recording_dir.clone(),
+                        fps: self.fps,
+                        segments,
+                    },
+                    cursors,
+                )
+                .await
+            }
+        }
+    }
+}
+
+struct Cancel;
+
+impl Message<Cancel> for KameoActor {
+    type Reply = Result<(), RecordingError>;
+
+    async fn handle(
+        &mut self,
+        _: Cancel,
+        ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let _ = ctx.actor_ref().stop_gracefully().await;
+
+        let state = self
+            .state
+            .take()
+            .ok_or_else(|| RecordingError::Media(MediaError::Any("Not recording".into())))?;
+
+        match state {
+            KameoActorState::Recording { mut pipeline, .. } => {
+                if let Some(cursor) = &mut pipeline.cursor
+                    && let Some(actor) = cursor.actor.take()
+                {
+                    actor.stop().await;
+                }
+
+                pipeline.inner.shutdown().await?;
+            }
+            KameoActorState::Paused { .. } => {}
+        }
+
+        Ok(())
+    }
+}
 
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
