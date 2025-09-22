@@ -55,17 +55,6 @@ export const EnterpriseCard = () => {
 						</p>
 					</div>
 
-					<div className="mb-6 text-center">
-						<span className="text-3xl tabular-nums text-gray-12">Custom</span>
-						<span className="text-base tabular-nums text-gray-10">
-							{" "}
-							pricing
-						</span>
-						<p className="text-sm text-gray-10">
-							Contact us for volume discounts and custom solutions
-						</p>
-					</div>
-
 					<div className="mb-6">
 						<ul className="space-y-3">
 							{enterpriseFeatures.slice(0, 4).map((feature) => (
