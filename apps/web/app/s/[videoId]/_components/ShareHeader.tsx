@@ -196,7 +196,7 @@ export const ShareHeader = ({
 				isPublic={data.public}
 				spacesData={spacesData}
 			/>
-			<div className={clsx(!showUpgradeBanner ? "mt-8" : "mt-0")}>
+			<div className="mt-8">
 				<div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between lg:gap-0">
 					<div className="items-center md:flex md:justify-between md:space-x-6">
 						<div className="mb-3 md:mb-0">
@@ -260,7 +260,7 @@ export const ShareHeader = ({
 								{user !== null && !isUserPro && (
 									<button
 										type="button"
-										className="flex items-center mt-1 text-sm text-gray-400 cursor-pointer hover:text-blue-500"
+										className="flex items-center mt-2 mb-3 text-sm text-gray-400 duration-200 cursor-pointer hover:text-blue-500"
 										onClick={() => setUpgradeModalOpen(true)}
 									>
 										<Globe2 className="mr-1 w-4 h-4" />
