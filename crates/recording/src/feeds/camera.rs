@@ -359,14 +359,14 @@ impl Message<SetInput> for CameraFeed {
                     Ok(r) => {
                         let _ = ready_tx.send(Ok(InputConnected {
                             camera_info: r.camera_info.clone(),
-                            video_info: r.video_info.clone(),
+                            video_info: r.video_info,
                             done_tx: done_tx.clone(),
                         }));
 
                         let _ = actor_ref
                             .ask(InputConnected {
                                 camera_info: r.camera_info.clone(),
-                                video_info: r.video_info.clone(),
+                                video_info: r.video_info,
                                 done_tx: done_tx.clone(),
                             })
                             .await;

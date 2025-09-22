@@ -2,10 +2,12 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos } from "@cap/database/schema";
+import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
+import { userIsPro } from "@cap/utils";
+import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, sql } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { dub } from "@/utils/dub";
@@ -46,9 +48,9 @@ app.get(
 			} = c.req.valid("query");
 			const user = c.get("user");
 
-			const isUpgraded = user.stripeSubscriptionStatus === "active";
+			const isCapPro = userIsPro(user);
 
-			if (!isUpgraded && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
+			if (!isCapPro && durationInSecs && durationInSecs > /* 5 min */ 5 * 60)
 				return c.json({ error: "upgrade_required" }, { status: 403 });
 
 			console.log("Video create request:", {
@@ -122,6 +124,10 @@ app.get(
 					height,
 					fps,
 				});
+
+			await db().insert(videoUploads).values({
+				videoId: idToUse,
+			});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
@@ -207,6 +213,8 @@ app.delete(
 					{ status: 404 },
 				);
 
+			await db().delete(videoUploads).where(eq(videoUploads.videoId, videoId));
+
 			await db()
 				.delete(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
@@ -227,6 +235,79 @@ app.delete(
 			return c.json(true);
 		} catch (error) {
 			console.error("Error in video delete endpoint:", error);
+			return c.json({ error: "Internal server error" }, { status: 500 });
+		}
+	},
+);
+
+app.post(
+	"/progress",
+	zValidator(
+		"json",
+		z.object({
+			videoId: z.string(),
+			uploaded: z.number(),
+			total: z.number(),
+			// We get this from the client so we can avoid race conditions.
+			// Eg. If this value is older than the value in the DB, we ignore it.
+			updatedAt: z.string().pipe(z.coerce.date()),
+		}),
+	),
+	async (c) => {
+		const {
+			videoId: videoIdRaw,
+			uploaded: uploadedRaw,
+			total,
+			updatedAt,
+		} = c.req.valid("json");
+		const user = c.get("user");
+		const videoId = Video.VideoId.make(videoIdRaw);
+
+		// Prevent it maths breaking
+		const uploaded = Math.min(uploadedRaw, total);
+
+		try {
+			const [video] = await db()
+				.select({ id: videos.id })
+				.from(videos)
+				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
+			if (!video)
+				return c.json(
+					{ error: true, message: "Video not found" },
+					{ status: 404 },
+				);
+
+			const result = await db()
+				.update(videoUploads)
+				.set({
+					uploaded,
+					total,
+					updatedAt,
+				})
+				.where(
+					and(
+						eq(videoUploads.videoId, videoId),
+						lte(videoUploads.updatedAt, updatedAt),
+					),
+				);
+
+			if (result.rowsAffected === 0) {
+				const result2 = await db().insert(videoUploads).values({
+					videoId,
+					uploaded,
+					total,
+					updatedAt,
+				});
+			}
+
+			if (uploaded === total)
+				await db()
+					.delete(videoUploads)
+					.where(eq(videoUploads.videoId, videoId));
+
+			return c.json(true);
+		} catch (error) {
+			console.error("Error in progress update endpoint:", error);
 			return c.json({ error: "Internal server error" }, { status: 500 });
 		}
 	},

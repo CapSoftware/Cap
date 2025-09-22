@@ -242,10 +242,10 @@ export function ConfigSidebar() {
 
 	return (
 		<KTabs
-			value={state.selectedTab}
+			value={editorState.timeline.selection ? undefined : state.selectedTab}
 			class="flex flex-col min-h-0 shrink-0 flex-1 max-w-[26rem] overflow-hidden rounded-xl z-10 relative bg-gray-1 dark:bg-gray-2 border border-gray-3"
 		>
-			<KTabs.List class="flex overflow-hidden sticky top-0 z-30 flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
+			<KTabs.List class="flex overflow-hidden sticky top-0 z-[60] flex-row items-center h-16 text-lg border-b border-gray-3 shrink-0 bg-gray-1 dark:bg-gray-2">
 				<For
 					each={[
 						{ id: TAB_IDS.background, icon: IconCapImage },
@@ -274,8 +274,17 @@ export function ConfigSidebar() {
 					{(item) => (
 						<KTabs.Trigger
 							value={item.id}
-							class="flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors text-gray-11 group ui-selected:text-gray-12 disabled:opacity-50 focus:outline-none"
+							class={cx(
+								"flex relative z-10 flex-1 justify-center items-center px-4 py-2 transition-colors group disabled:opacity-50 focus:outline-none",
+								editorState.timeline.selection
+									? "text-gray-11"
+									: "text-gray-11 ui-selected:text-gray-12",
+							)}
 							onClick={() => {
+								// Clear any active selection first
+								if (editorState.timeline.selection) {
+									setEditorState("timeline", "selection", null);
+								}
 								setState("selectedTab", item.id);
 								scrollRef.scrollTo({
 									top: 0,
@@ -297,9 +306,11 @@ export function ConfigSidebar() {
 				</For>
 
 				{/** Center the indicator with the icon */}
-				<KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-200 ease-in-out pointer-events-none will-change-transform">
-					<div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
-				</KTabs.Indicator>
+				<Show when={!editorState.timeline.selection}>
+					<KTabs.Indicator class="absolute top-0 left-0 w-full h-full transition-transform duration-200 ease-in-out pointer-events-none will-change-transform">
+						<div class="absolute top-1/2 left-1/2 rounded-lg transform -translate-x-1/2 -translate-y-1/2 bg-gray-3 will-change-transform size-9" />
+					</KTabs.Indicator>
+				</Show>
 			</KTabs.List>
 			<div
 				ref={scrollRef}
@@ -583,7 +594,7 @@ export function ConfigSidebar() {
 						style={{
 							"--margin-top-scroll": "5px",
 						}}
-						class="absolute custom-scroll p-5 inset-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
+						class="absolute custom-scroll p-5 top-16 left-0 right-0 bottom-0 text-[0.875rem] space-y-4 bg-gray-1 dark:bg-gray-2 z-50 animate-in slide-in-from-bottom-2 fade-in"
 					>
 						<Suspense>
 							<Show

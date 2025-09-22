@@ -9,6 +9,7 @@ import {
 	spaceVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
@@ -172,13 +173,17 @@ export default async function CapsPage({
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
+			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+				Boolean,
+			),
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
+		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
 		.groupBy(
 			videos.id,
@@ -242,7 +247,6 @@ export default async function CapsPage({
 						[key: string]: any;
 				  }
 				| undefined,
-			hasPassword: video.hasPassword === 1,
 		};
 	});
 

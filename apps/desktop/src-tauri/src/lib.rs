@@ -71,7 +71,7 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tauri::{AppHandle, Manager, State, Window, WindowEvent};
+use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -285,7 +285,7 @@ pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
-#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone, Serialize)]
 pub struct RecordingDeleted {
     #[allow(unused)]
     path: PathBuf,
@@ -1034,7 +1034,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(MicrophoneFeed::list().keys().cloned().collect())
 }
 
-#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+#[derive(Serialize, Type, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
 }
@@ -1053,6 +1053,7 @@ async fn upload_exported_video(
     app: AppHandle,
     path: PathBuf,
     mode: UploadMode,
+    channel: Channel<UploadProgress>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1074,7 +1075,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::UpgradeRequired);
     }
 
-    UploadProgress { progress: 0.0 }.emit(&app).ok();
+    channel.send(UploadProgress { progress: 0.0 }).ok();
 
     let s3_config = async {
         let video_id = match mode {
@@ -1113,11 +1114,12 @@ async fn upload_exported_video(
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
         Some(metadata),
+        Some(channel.clone()),
     )
     .await
     {
         Ok(uploaded_video) => {
-            UploadProgress { progress: 1.0 }.emit(&app).ok();
+            channel.send(UploadProgress { progress: 1.0 }).ok();
 
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
@@ -1688,6 +1690,27 @@ async fn get_system_audio_waveforms(
     Ok(out)
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn editor_delete_project(
+    app: tauri::AppHandle,
+    editor_instance: WindowEditorInstance,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let _ = window.close();
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let path = editor_instance.0.project_path.clone();
+    drop(editor_instance);
+
+    let _ = tokio::fs::remove_dir_all(&path).await;
+
+    RecordingDeleted { path }.emit(&app);
+
+    Ok(())
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
@@ -1899,6 +1922,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::close_target_select_overlays,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
+            editor_delete_project
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1916,7 +1940,6 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
-            UploadProgress,
             captions::DownloadProgress,
             recording::RecordingEvent,
             RecordingDeleted,
@@ -2288,13 +2311,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }
                     }
 
-                    if *focused {
-                        if let Ok(window_id) = window_id
-                            && window_id.activates_dock()
-                        {
-                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                                .ok();
-                        }
+                    if *focused
+                        && let Ok(window_id) = window_id
+                        && window_id.activates_dock()
+                    {
+                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .ok();
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
