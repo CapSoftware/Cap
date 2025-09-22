@@ -178,6 +178,11 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 														? `https://${activeOrg.organization.customDomain}`
 														: "/dashboard/settings/organization"
 												}
+												rel={
+													activeOrg?.organization.customDomain
+														? "noopener noreferrer"
+														: undefined
+												}
 												target={
 													activeOrg?.organization.customDomain
 														? "_blank"
