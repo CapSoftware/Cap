@@ -23,6 +23,8 @@ type SharedContext = {
 	sidebarCollapsed: boolean;
 	upgradeModalOpen: boolean;
 	setUpgradeModalOpen: (open: boolean) => void;
+	referClickedState: boolean;
+	setReferClickedStateHandler: (referClicked: boolean) => void;
 };
 
 type ITheme = "light" | "dark";
@@ -52,6 +54,7 @@ export function DashboardContexts({
 	anyNewNotifications,
 	initialTheme,
 	initialSidebarCollapsed,
+	referClicked,
 }: {
 	children: React.ReactNode;
 	organizationData: SharedContext["organizationData"];
@@ -63,12 +66,14 @@ export function DashboardContexts({
 	anyNewNotifications: boolean;
 	initialTheme: ITheme;
 	initialSidebarCollapsed: boolean;
+	referClicked: boolean;
 }) {
 	const [theme, setTheme] = useState<ITheme>(initialTheme);
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(
 		initialSidebarCollapsed,
 	);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+	const [referClickedState, setReferClickedState] = useState(referClicked);
 	const pathname = usePathname();
 
 	// Calculate user's spaces (both owned and member of)
@@ -125,9 +130,17 @@ export function DashboardContexts({
 			document.body.className = "light";
 		};
 	}, [theme]);
+
 	const toggleSidebarCollapsed = () => {
 		setSidebarCollapsed(!sidebarCollapsed);
 		Cookies.set("sidebarCollapsed", !sidebarCollapsed ? "true" : "false", {
+			expires: 365,
+		});
+	};
+
+	const setReferClickedStateHandler = (referClicked: boolean) => {
+		setReferClickedState(referClicked);
+		Cookies.set("referClicked", referClicked ? "true" : "false", {
 			expires: 365,
 		});
 	};
@@ -150,6 +163,8 @@ export function DashboardContexts({
 					sidebarCollapsed,
 					upgradeModalOpen,
 					setUpgradeModalOpen,
+					referClickedState,
+					setReferClickedStateHandler,
 				}}
 			>
 				{children}
