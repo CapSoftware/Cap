@@ -65,6 +65,7 @@ export default async function DashboardLayout({
 
 	const theme = cookies().get("theme")?.value ?? "light";
 	const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
+	const referClicked = cookies().get("referClicked")?.value ?? "false";
 
 	return (
 		<UploadingProvider>
@@ -78,6 +79,7 @@ export default async function DashboardLayout({
 				initialSidebarCollapsed={sidebar === "true"}
 				anyNewNotifications={anyNewNotifications}
 				userPreferences={userPreferences}
+				referClicked={referClicked === "true"}
 			>
 				<div className="dashboard-grid">
 					<DesktopNav />

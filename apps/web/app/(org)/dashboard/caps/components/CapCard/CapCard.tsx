@@ -404,7 +404,7 @@ export const CapCard = ({
 				{!sharedCapCard && onSelectToggle && (
 					<div
 						className={clsx(
-							"absolute top-2 left-2 z-[20] duration-200",
+							"absolute top-2 left-2 z-[51] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
 								? "opacity-100"
 								: "group-hover:opacity-100 opacity-0",
@@ -467,7 +467,7 @@ export const CapCard = ({
 											className="text-white size-3"
 										/>
 									</div>
-									<p className="text-xs text-center text-white">
+									<p className="text-[13px] text-center text-white">
 										Upload failed
 									</p>
 								</div>

@@ -12,6 +12,7 @@ import {
 } from "@cap/ui";
 import { faBell, faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useClickAway } from "@uidotdev/usehooks";
 import clsx from "clsx";
 import { AnimatePresence } from "framer-motion";
@@ -28,6 +29,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useDashboardContext, useTheme } from "../../Contexts";
@@ -44,10 +46,12 @@ import type { DownloadIconHandle } from "../AnimatedIcons/Download";
 import type { ReferIconHandle } from "../AnimatedIcons/Refer";
 
 const Top = () => {
-	const { activeSpace, anyNewNotifications } = useDashboardContext();
+	const { activeSpace, anyNewNotifications, activeOrganization } =
+		useDashboardContext();
 	const [toggleNotifications, setToggleNotifications] = useState(false);
 	const bellRef = useRef<HTMLDivElement>(null);
 	const { theme, setThemeHandler } = useTheme();
+	const queryClient = useQueryClient();
 
 	const pathname = usePathname();
 
@@ -74,6 +78,18 @@ const Top = () => {
 			}
 		},
 	);
+
+	const markAllAsread = useMutation({
+		mutationFn: () => markAsRead(),
+		onSuccess: () => {
+			queryClient.invalidateQueries({
+				queryKey: ["notifications"],
+			});
+		},
+		onError: (error) => {
+			console.error("Error marking notifications as read:", error);
+		},
+	});
 
 	return (
 		<div
@@ -112,11 +128,17 @@ const Top = () => {
 					data-state={toggleNotifications ? "open" : "closed"}
 					ref={bellRef}
 					onClick={() => {
+						if (anyNewNotifications) {
+							markAllAsread.mutate();
+						}
 						setToggleNotifications(!toggleNotifications);
 					}}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" || e.key === " ") {
 							e.preventDefault();
+							if (anyNewNotifications) {
+								markAllAsread.mutate();
+							}
 							setToggleNotifications(!toggleNotifications);
 						}
 					}}
@@ -337,18 +359,24 @@ const MenuItem = memo(({ icon, name, href, onClick, iconClassName }: Props) => {
 
 const ReferButton = () => {
 	const iconRef = useRef<ReferIconHandle>(null);
+	const { setReferClickedStateHandler, referClickedState } =
+		useDashboardContext();
 
 	return (
 		<Link href="/dashboard/refer" className="hidden relative lg:block">
-			{/* Red notification dot with pulse animation */}
-			<div className="absolute right-0 top-1 z-10">
-				<div className="relative">
-					<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
-					<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+			{!referClickedState && (
+				<div className="absolute right-0 top-1 z-10">
+					<div className="relative">
+						<div className="absolute inset-0 w-2 h-2 bg-red-400 rounded-full opacity-75 animate-ping" />
+						<div className="relative w-2 h-2 bg-red-400 rounded-full" />
+					</div>
 				</div>
-			</div>
+			)}
 
 			<div
+				onClick={() => {
+					setReferClickedStateHandler(true);
+				}}
 				onMouseEnter={() => {
 					iconRef.current?.startAnimation();
 				}}
