@@ -338,9 +338,7 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
-				if (retryTimeout.current) {
-					clearTimeout(retryTimeout.current);
-				}
+				if (retryTimeout.current) clearTimeout(retryTimeout.current);
 			};
 		}
 
@@ -426,7 +424,7 @@ export function CapVideoPlayer({
 			<div
 				className={clsx(
 					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					isUploading || videoLoaded || !isUploadFailed
+					videoLoaded || !!uploadProgress
 						? "opacity-0 pointer-events-none"
 						: "opacity-100",
 				)}

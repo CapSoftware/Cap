@@ -74,14 +74,7 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
-	const {
-		isUploading,
-		setIsUploading,
-		setUploadingCapId,
-		setUploadProgress,
-		uploadingCapId,
-		setUploadingThumbnailUrl,
-	} = useUploadingContext();
+	const { uploadStatus } = useUploadingContext();
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -262,10 +255,12 @@ export const Caps = ({
 			toast.success("Cap deleted successfully");
 			router.refresh();
 		},
-		onError: () => {
-			toast.error("Failed to delete cap");
-		},
+		onError: () => toast.error("Failed to delete cap"),
 	});
+
+	const isUploading = uploadStatus !== undefined;
+	const uploadingCapId =
+		uploadStatus && "capId" in uploadStatus ? uploadStatus.capId : undefined;
 
 	const visibleVideos = useMemo(
 		() =>
@@ -293,21 +288,7 @@ export const Caps = ({
 					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
 					New Folder
 				</Button>
-				<UploadCapButton
-					onStart={(id, thumbnailUrl) => {
-						setIsUploading(true);
-						setUploadingCapId(id);
-						setUploadingThumbnailUrl(thumbnailUrl);
-						setUploadProgress(0);
-					}}
-					size="sm"
-					onComplete={() => {
-						setIsUploading(false);
-						setUploadingCapId(null);
-						setUploadingThumbnailUrl(undefined);
-						setUploadProgress(0);
-					}}
-				/>
+				<UploadCapButton size="sm" />
 			</div>
 			{folders.length > 0 && (
 				<>

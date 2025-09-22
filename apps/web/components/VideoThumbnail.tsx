@@ -70,8 +70,10 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		});
 		const imageRef = useRef<HTMLImageElement>(null);
 
-		const { uploadingCapId } = useUploadingContext();
+		const { uploadStatus } = useUploadingContext();
 
+		const uploadingCapId =
+			uploadStatus && "capId" in uploadStatus ? uploadStatus.capId : null;
 		useEffect(() => {
 			imageUrl.refetch();
 		}, [imageUrl.refetch, uploadingCapId]);

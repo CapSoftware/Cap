@@ -1,28 +1,30 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
-import {
-	calculateStrokeDashoffset,
-	getProgressCircleConfig,
-	getUploadStatus,
-} from "@cap/utils";
-import { useUploadingContext } from "../UploadingContext";
+import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
+import { type UploadStatus, useUploadingContext } from "../UploadingContext";
+
+const { circumference } = getProgressCircleConfig();
 
 export const UploadPlaceholderCard = () => {
-	const { uploadingThumbnailUrl, uploadProgress } = useUploadingContext();
-	const { circumference } = getProgressCircleConfig();
-	const status = getUploadStatus(uploadProgress);
+	const { uploadStatus } = useUploadingContext();
 	const strokeDashoffset = calculateStrokeDashoffset(
-		uploadProgress,
+		uploadStatus &&
+			(uploadStatus.status === "converting" ||
+				uploadStatus.status === "uploadingThumbnail" ||
+				uploadStatus.status === "uploadingVideo")
+			? uploadStatus.progress
+			: 0,
 		circumference,
 	);
 
+	if (!uploadStatus) return null;
 	return (
 		<div className="flex flex-col gap-4 w-full h-full rounded-xl bg-gray-1 border-gray-3 border-[1px]">
 			<div className="overflow-hidden relative w-full bg-black rounded-t-xl border-b border-gray-3 aspect-video group">
-				{uploadingThumbnailUrl ? (
+				{uploadStatus.status === "uploadingVideo" ? (
 					<img
-						src={uploadingThumbnailUrl}
+						src={uploadStatus.thumbnailUrl}
 						alt="Uploading thumbnail"
 						className="object-cover w-full h-full"
 					/>
@@ -35,7 +37,9 @@ export const UploadPlaceholderCard = () => {
 				<div className="absolute inset-0 transition-all duration-300 bg-black/60"></div>
 
 				<div className="flex absolute bottom-3 left-3 gap-2 items-center">
-					<span className="text-sm font-semibold text-white">{status}</span>
+					<span className="text-sm font-semibold text-white">
+						{getFriendlyStatus(uploadStatus.status)}
+					</span>
 					<svg className="w-4 h-4 transform -rotate-90" viewBox="0 0 20 20">
 						<circle
 							cx="10"
@@ -82,3 +86,19 @@ export const UploadPlaceholderCard = () => {
 		</div>
 	);
 };
+
+function getFriendlyStatus(status: UploadStatus["status"]) {
+	switch (status) {
+		case "parsing":
+			return "Parsing";
+		case "creating":
+			return "Creating";
+		case "converting":
+			return "Converting";
+		case "uploadingThumbnail":
+		case "uploadingVideo":
+			return "Uploading";
+		default:
+			return "Processing...";
+	}
+}

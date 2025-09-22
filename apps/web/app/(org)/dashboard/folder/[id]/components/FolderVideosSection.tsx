@@ -27,8 +27,12 @@ export default function FolderVideosSection({
 	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
-	const { isUploading, uploadingCapId } = useUploadingContext();
+	const { uploadStatus } = useUploadingContext();
 	const { user } = useDashboardContext();
+
+	const isUploading = uploadStatus !== undefined;
+	const uploadingCapId =
+		uploadStatus && "capId" in uploadStatus ? uploadStatus.capId : null;
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);

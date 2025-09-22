@@ -5,47 +5,26 @@ import { userIsPro } from "@cap/utils";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { createVideoAndGetUploadUrl } from "@/actions/video/upload";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
 
-type UploadState = {
-	videoId?: string;
-	uploaded: number;
-	total: number;
-	pendingTask?: ReturnType<typeof setTimeout>;
-	lastUpdateTime: number;
-};
-
 export const UploadCapButton = ({
-	onStart,
-	onProgress,
-	onComplete,
 	size = "md",
 	folderId,
 }: {
-	onStart?: (id: string, thumbnail?: string) => void;
-	onProgress?: (id: string, progress: number, uploadProgress?: number) => void;
-	onComplete?: (id: string) => void;
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
 	folderId?: string;
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
-	const { isUploading, setIsUploading, setUploadProgress } =
-		useUploadingContext();
+	const { uploadStatus, setUploadStatus } = useUploadingContext();
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
-
-	const [uploadState, setUploadState] = useState<UploadState>({
-		uploaded: 0,
-		total: 0,
-		lastUpdateTime: Date.now(),
-	});
 
 	const handleClick = () => {
 		if (!user) return;
@@ -64,12 +43,11 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
-		setIsUploading(true);
-		setUploadProgress(0);
-		try {
-			const parser = await import("@remotion/media-parser");
-			const webcodecs = await import("@remotion/webcodecs");
+		const parser = await import("@remotion/media-parser");
+		const webcodecs = await import("@remotion/webcodecs");
 
+		try {
+			setUploadStatus({ status: "parsing" });
 			const metadata = await parser.parseMedia({
 				src: file,
 				fields: {
@@ -85,6 +63,7 @@ export const UploadCapButton = ({
 				? Math.round(metadata.durationInSeconds)
 				: undefined;
 
+			setUploadStatus({ status: "creating" });
 			const videoData = await createVideoAndGetUploadUrl({
 				duration,
 				resolution: metadata.dimensions
@@ -98,12 +77,8 @@ export const UploadCapButton = ({
 			});
 
 			const uploadId = videoData.id;
-			// Initial start with thumbnail as undefined
-			onStart?.(uploadId);
-			onProgress?.(uploadId, 10);
 
-			const fileSizeMB = file.size / (1024 * 1024);
-			onProgress?.(uploadId, 15);
+			setUploadStatus({ status: "converting", capId: uploadId, progress: 0 });
 
 			let optimizedBlob: Blob;
 
@@ -137,7 +112,11 @@ export const UploadCapButton = ({
 					onProgress: ({ overallProgress }) => {
 						if (overallProgress !== null) {
 							const progressValue = overallProgress * 100;
-							onProgress?.(uploadId, progressValue);
+							setUploadStatus({
+								status: "converting",
+								capId: uploadId,
+								progress: progressValue,
+							});
 						}
 					},
 				});
@@ -300,10 +279,6 @@ export const UploadCapButton = ({
 				? URL.createObjectURL(thumbnailBlob)
 				: undefined;
 
-			// Pass the thumbnail URL to the parent component
-			onStart?.(uploadId, thumbnailUrl);
-			onProgress?.(uploadId, 100);
-
 			const formData = new FormData();
 			Object.entries(videoData.presignedPostData.fields).forEach(
 				([key, value]) => {
@@ -312,40 +287,111 @@ export const UploadCapButton = ({
 			);
 			formData.append("file", optimizedBlob);
 
-			setUploadProgress(0);
-
-			await new Promise<void>((resolve, reject) => {
-				const xhr = new XMLHttpRequest();
-				xhr.open("POST", videoData.presignedPostData.url);
-
-				xhr.upload.onprogress = (event) => {
-					if (event.lengthComputable) {
-						const percent = (event.loaded / event.total) * 100;
-						setUploadProgress(percent);
-						onProgress?.(uploadId, 100, percent);
-
-						setUploadState({
-							videoId: uploadId,
-							uploaded: event.loaded,
-							total: event.total,
-							lastUpdateTime: Date.now(),
-							pendingTask: uploadState.pendingTask,
-						});
-					}
-				};
-
-				xhr.onload = () => {
-					if (xhr.status >= 200 && xhr.status < 300) {
-						sendProgressUpdate(uploadId, uploadState.total, uploadState.total);
-						resolve();
-					} else {
-						reject(new Error(`Upload failed with status ${xhr.status}`));
-					}
-				};
-				xhr.onerror = () => reject(new Error("Upload failed"));
-
-				xhr.send(formData);
+			setUploadStatus({
+				status: "uploadingVideo",
+				capId: uploadId,
+				progress: 0,
+				thumbnailUrl,
 			});
+
+			// Create progress tracking state outside React
+			const createProgressTracker = () => {
+				const uploadState = {
+					videoId: uploadId,
+					uploaded: 0,
+					total: 0,
+					pendingTask: undefined as ReturnType<typeof setTimeout> | undefined,
+					lastUpdateTime: Date.now(),
+				};
+
+				const scheduleProgressUpdate = (uploaded: number, total: number) => {
+					uploadState.uploaded = uploaded;
+					uploadState.total = total;
+					uploadState.lastUpdateTime = Date.now();
+
+					// Clear any existing pending task
+					if (uploadState.pendingTask) {
+						clearTimeout(uploadState.pendingTask);
+						uploadState.pendingTask = undefined;
+					}
+
+					const shouldSendImmediately = uploaded >= total;
+
+					if (shouldSendImmediately) {
+						// Don't send completion update immediately - let xhr.onload handle it
+						// to avoid double progress updates
+						return;
+					} else {
+						// Schedule delayed update (after 2 seconds)
+						uploadState.pendingTask = setTimeout(() => {
+							if (uploadState.videoId) {
+								sendProgressUpdate(
+									uploadState.videoId,
+									uploadState.uploaded,
+									uploadState.total,
+								);
+							}
+							uploadState.pendingTask = undefined;
+						}, 2000);
+					}
+				};
+
+				const cleanup = () => {
+					if (uploadState.pendingTask) {
+						clearTimeout(uploadState.pendingTask);
+						uploadState.pendingTask = undefined;
+					}
+				};
+
+				const getTotal = () => uploadState.total;
+
+				return { scheduleProgressUpdate, cleanup, getTotal };
+			};
+
+			const progressTracker = createProgressTracker();
+
+			try {
+				await new Promise<void>((resolve, reject) => {
+					const xhr = new XMLHttpRequest();
+					xhr.open("POST", videoData.presignedPostData.url);
+
+					xhr.upload.onprogress = (event) => {
+						if (event.lengthComputable) {
+							const percent = (event.loaded / event.total) * 100;
+							setUploadStatus({
+								status: "uploadingVideo",
+								capId: uploadId,
+								progress: percent,
+								thumbnailUrl,
+							});
+
+							progressTracker.scheduleProgressUpdate(event.loaded, event.total);
+						}
+					};
+
+					xhr.onload = () => {
+						if (xhr.status >= 200 && xhr.status < 300) {
+							progressTracker.cleanup();
+							// Guarantee final 100% progress update
+							const total = progressTracker.getTotal() || 1;
+							sendProgressUpdate(uploadId, total, total);
+							resolve();
+						} else {
+							progressTracker.cleanup();
+							reject(new Error(`Upload failed with status ${xhr.status}`));
+						}
+					};
+					xhr.onerror = () => {
+						progressTracker.cleanup();
+						reject(new Error("Upload failed"));
+					};
+
+					xhr.send(formData);
+				});
+			} catch (uploadError) {
+				progressTracker.cleanup();
+				throw uploadError;
+			}
 
 			if (thumbnailBlob) {
 				const screenshotData = await createVideoAndGetUploadUrl({
@@ -362,6 +408,11 @@ export const UploadCapButton = ({
 				);
 				screenshotFormData.append("file", thumbnailBlob);
 
+				setUploadStatus({
+					status: "uploadingThumbnail",
+					capId: uploadId,
+					progress: 0,
+				});
 				await new Promise<void>((resolve, reject) => {
 					const xhr = new XMLHttpRequest();
 					xhr.open("POST", screenshotData.presignedPostData.url);
@@ -370,7 +421,11 @@ export const UploadCapButton = ({
 						if (event.lengthComputable) {
 							const percent = (event.loaded / event.total) * 100;
 							const thumbnailProgress = 90 + percent * 0.1;
-							onProgress?.(uploadId, 100, thumbnailProgress);
+							setUploadStatus({
+								status: "uploadingThumbnail",
+								capId: uploadId,
+								progress: thumbnailProgress,
+							});
 						}
 					};
 
@@ -387,22 +442,13 @@ export const UploadCapButton = ({
 
 					xhr.send(screenshotFormData);
 				});
-			} else {
 			}
 
-			onProgress?.(uploadId, 100, 100);
-			onComplete?.(uploadId);
 			router.refresh();
 		} catch (err) {
 			console.error("Video upload failed", err);
 		} finally {
-			setIsUploading(false);
-			setUploadProgress(0);
-			setUploadState({
-				uploaded: 0,
-				total: 0,
-				lastUpdateTime: Date.now(),
-			});
+			setUploadStatus(undefined);
 			if (inputRef.current) inputRef.current.value = "";
 		}
 	};
@@ -433,69 +479,7 @@ export const UploadCapButton = ({
 		}
 	};
 
-	// Prevent the user closing the tab while uploading
-	useEffect(() => {
-		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-			if (isUploading) {
-				e.preventDefault();
-				// Chrome requires returnValue to be set
-				e.returnValue = "";
-				return "";
-			}
-		};
-
-		window.addEventListener("beforeunload", handleBeforeUnload);
-		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [isUploading]);
-
-	useEffect(() => {
-		if (!uploadState.videoId || uploadState.uploaded === 0 || !isUploading)
-			return;
-
-		// Clear any existing pending task
-		if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
-
-		const shouldSendImmediately = uploadState.uploaded >= uploadState.total;
-
-		if (shouldSendImmediately) {
-			// Send completion update immediately and clear state
-			sendProgressUpdate(
-				uploadState.videoId,
-				uploadState.uploaded,
-				uploadState.total,
-			);
-
-			setUploadState((prev) => ({
-				...prev,
-				pendingTask: undefined,
-			}));
-		} else {
-			// Schedule delayed update (after 2 seconds)
-			const newPendingTask = setTimeout(() => {
-				if (uploadState.videoId) {
-					sendProgressUpdate(
-						uploadState.videoId,
-						uploadState.uploaded,
-						uploadState.total,
-					);
-				}
-			}, 2000);
-
-			setUploadState((prev) => ({
-				...prev,
-				pendingTask: newPendingTask,
-			}));
-		}
-
-		return () => {
-			if (uploadState.pendingTask) clearTimeout(uploadState.pendingTask);
-		};
-	}, [
-		uploadState.videoId,
-		uploadState.uploaded,
-		uploadState.total,
-		isUploading,
-	]);
+	const isUploading = !!uploadStatus;
 
 	return (
 		<>

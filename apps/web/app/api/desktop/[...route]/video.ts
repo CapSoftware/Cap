@@ -125,9 +125,15 @@ app.get(
 					fps,
 				});
 
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
+			const clientSupportsUploadProgress = xCapVersion
+				? isAtLeastSemver(xCapVersion, 0, 3, 68)
+				: false;
+
+			if (clientSupportsUploadProgress)
+				await db().insert(videoUploads).values({
+					videoId: idToUse,
+				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
@@ -291,14 +297,13 @@ app.post(
 					),
 				);
 
-			if (result.rowsAffected === 0) {
-				const result2 = await db().insert(videoUploads).values({
+			if (result.rowsAffected === 0)
+				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
-			}
 
 			if (uploaded === total)
 				await db()
@@ -312,3 +317,27 @@ app.post(
 		}
 	},
 );
+
+function isAtLeastSemver(
+	versionString: string,
+	major: number,
+	minor: number,
+	patch: number,
+): boolean {
+	const match = versionString
+		.replace(/^v/, "")
+		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
+	if (!match) return false;
+	const [, vMajor, vMinor, vPatch, prerelease] = match;
+	const M = vMajor ? parseInt(vMajor, 10) || 0 : 0;
+	const m = vMinor ? parseInt(vMinor, 10) || 0 : 0;
+	const p = vPatch ? parseInt(vPatch, 10) || 0 : 0;
+	if (M > major) return true;
+	if (M < major) return false;
+	if (m > minor) return true;
+	if (m < minor) return false;
+	if (p > patch) return true;
+	if (p < patch) return false;
+	// Equal triplet: accept only non-prerelease
+	return !prerelease;
+}
