@@ -172,7 +172,7 @@ export const CommercialCard = () => {
 				</div>
 			</div>
 
-			<div className="mb-6">
+			<div className="space-y-6">
 				<ul className="space-y-3">
 					<li className="flex items-center text-sm text-gray-12">
 						<FontAwesomeIcon
@@ -208,18 +208,20 @@ export const CommercialCard = () => {
 						<span>Export to MP4 or GIF</span>
 					</li>
 				</ul>
-			</div>
 
-			<Button
-				disabled={commercialLoading}
-				onClick={openCommercialCheckout}
-				variant="dark"
-				size="lg"
-				className="w-full font-medium"
-				aria-label="Purchase Commercial License"
-			>
-				{commercialLoading ? "Loading..." : homepageCopy.pricing.commercial.cta}
-			</Button>
+				<Button
+					disabled={commercialLoading}
+					onClick={openCommercialCheckout}
+					variant="dark"
+					size="lg"
+					className="w-full font-medium"
+					aria-label="Purchase Commercial License"
+				>
+					{commercialLoading
+						? "Loading..."
+						: homepageCopy.pricing.commercial.cta}
+				</Button>
+			</div>
 		</div>
 	);
 };
