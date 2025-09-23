@@ -78,6 +78,22 @@ pub enum NewVideoEncoderError {
     InputType(windows::core::Error),
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum HandleNeedsInputError {
+    #[error("ProcessTexture: {0}")]
+    ProcessTexture(windows::core::Error),
+    #[error("CreateSurfaceBuffer: {0}")]
+    CreateSurfaceBuffer(windows::core::Error),
+    #[error("CreateSample: {0}")]
+    CreateSample(windows::core::Error),
+    #[error("AddBuffer: {0}")]
+    AddBuffer(windows::core::Error),
+    #[error("SetSampleTime: {0}")]
+    SetSampleTime(windows::core::Error),
+    #[error("ProcessInput: {0}")]
+    ProcessInput(windows::core::Error),
+}
+
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
@@ -349,7 +365,7 @@ impl H264Encoder {
         &mut self,
         texture: &ID3D11Texture2D,
         timestamp: TimeSpan,
-    ) -> windows::core::Result<()> {
+    ) -> Result<(), HandleNeedsInputError> {
         self.video_processor.process_texture(texture)?;
 
         let first_time = self.first_time.get_or_insert(timestamp);
