@@ -99,12 +99,7 @@ After most pages returned, uploads from Cap Desktop still failed. We had configu
    - Set `removal: "retain-all"` for anything that can reference production assets.
    - Add policy checks that fail a plan if a remove or replace action targets the production Vercel project or DNS.
 
-4. **Safer routing for authenticated endpoints**
-
-   - Do not apply host redirects on API paths.
-   - Prefer rewrites or edge routing that preserves headers where a redirect would be user visible.
-
-5. **Incident communications**
+4. **Incident communications**
    - Even if we expect a short interruption, we will notify users promptly inside the app and on status channels. Short incidents can stretch when there are hidden dependencies.
 
 ## Closing
