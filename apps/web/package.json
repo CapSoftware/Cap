@@ -63,6 +63,7 @@
 		"@tanstack/store": "^0.5.5",
 		"@ts-rest/core": "^3.52.1",
 		"@uidotdev/usehooks": "^2.4.1",
+		"@vercel/functions": "^3.1.0",
 		"@virtual-grid/react": "^2.0.3",
 		"@workos-inc/node": "^7.34.0",
 		"aws-sdk": "^2.1530.0",

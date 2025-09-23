@@ -576,6 +576,9 @@ importers:
       '@uidotdev/usehooks':
         specifier: ^2.4.1
         version: 2.4.1(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
+      '@vercel/functions':
+        specifier: ^3.1.0
+        version: 3.1.0(@aws-sdk/credential-provider-web-identity@3.804.0)
       '@virtual-grid/react':
         specifier: ^2.0.3
         version: 2.0.3(react-dom@19.1.0(react@19.1.0))(react@19.1.0)
