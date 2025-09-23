@@ -3,7 +3,7 @@
 import { useStore } from "@tanstack/react-store";
 import { Store } from "@tanstack/store";
 import type React from "react";
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext, useEffect, useRef } from "react";
 
 export type UploadStatus =
 	| {
@@ -33,10 +33,6 @@ interface UploadingStore {
 	uploadStatus: UploadStatus | undefined;
 }
 
-const uploadingStore = new Store<UploadingStore>({
-	uploadStatus: undefined,
-});
-
 interface UploadingContextType {
 	uploadStatus: UploadStatus | undefined;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
@@ -55,23 +51,19 @@ export function useUploadingContext() {
 	return context;
 }
 
-export function useUploadingStore() {
-	return useStore(uploadingStore);
-}
-
-export function useUploadStatus() {
-	return useStore(uploadingStore, (state) => state.uploadStatus);
-}
-
-export function setUploadStatus(status: UploadStatus | undefined) {
-	uploadingStore.setState((state) => ({
-		...state,
-		uploadStatus: status,
-	}));
-}
-
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const uploadStatus = useUploadStatus();
+	const uploadingStoreRef = useRef(new Store<UploadingStore>({
+		uploadStatus: undefined,
+	}));
+	
+	const uploadStatus = useStore(uploadingStoreRef.current, (state) => state.uploadStatus);
+	
+	const setUploadStatus = (status: UploadStatus | undefined) => {
+		uploadingStoreRef.current.setState((state) => ({
+			...state,
+			uploadStatus: status,
+		}));
+	};
 
 	// Prevent the user closing the tab while uploading
 	useEffect(() => {
