@@ -106,10 +106,10 @@ export default $config({
 		});
 
 		const vercelOidc = aws.iam.getOpenIdConnectProviderOutput({
-			url: "https://oidc.vercel.com",
+			url: `https://oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
 		});
 
-		const awsAccount = await aws.getCallerIdentity();
+		const awsAccount = aws.getCallerIdentityOutput();
 
 		const vercelAwsAccessRole = new aws.iam.Role("VercelAWSAccessRole", {
 			assumeRolePolicy: {
@@ -118,7 +118,7 @@ export default $config({
 					{
 						Effect: "Allow",
 						Principal: {
-							Federated: `arn:aws:iam::${awsAccount.id}:oidc-provider/oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
+							Federated: $interpolate`arn:aws:iam::${awsAccount.id}:oidc-provider/oidc.vercel.com/${VERCEL_TEAM_SLUG}`,
 						},
 						Action: "sts:AssumeRoleWithWebIdentity",
 						Condition: {
@@ -127,13 +127,35 @@ export default $config({
 							},
 							StringLike: {
 								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:${vercelProject.name}:environment:${$app.stage}`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:staging`,
 								],
 							},
 						},
 					},
 				],
 			},
+			inlinePolicies: [
+				{
+					name: "VercelAWSAccessPolicy",
+					policy: recordingsBucket.arn.apply((arn) =>
+						JSON.stringify({
+							Version: "2012-10-17",
+							Statement: [
+								{
+									Effect: "Allow",
+									Action: ["s3:*"],
+									Resource: `${arn}/*`,
+								},
+								{
+									Effect: "Allow",
+									Action: ["s3:*"],
+									Resource: `${arn}`,
+								},
+							],
+						}),
+					),
+				},
+			],
 		});
 
 		vercelEnvVar("VercelAWSAccessRoleArn", {

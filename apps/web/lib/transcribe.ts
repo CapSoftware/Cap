@@ -80,7 +80,10 @@ export async function transcribeVideo(
 
 		// Check if video file actually exists before transcribing
 		try {
-			const headResponse = await fetch(videoUrl, { method: "HEAD" });
+			const headResponse = await fetch(videoUrl, {
+				method: "GET",
+				headers: { range: "bytes=0-0" },
+			});
 			if (!headResponse.ok) {
 				// Video not ready yet - reset to null for retry
 				await db()
