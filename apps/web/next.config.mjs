@@ -81,7 +81,7 @@ const nextConfig = {
 		if (process.env.NEXT_PUBLIC_IS_CAP === "true") {
 			rewrites.push({
 				source: "/help/:path*",
-				destination: "https://intercom.help/capsoftware/en/:path*",
+				destination: "https://helpcenter.cap.so/en/:path*",
 			});
 		}
 
