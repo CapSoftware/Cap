@@ -224,7 +224,7 @@ export const homepageCopy: HomePageCopy = {
 			badge: "Best value",
 			title: "Cap Pro",
 			description:
-				"Everything in Desktop plus cloud features for seamless sharing and collaboration.",
+				"Everything in Desktop plus unlimited cloud features for seamless sharing and collaboration.",
 			features: [
 				"Everything in Desktop License",
 				"Unlimited cloud storage & bandwidth",

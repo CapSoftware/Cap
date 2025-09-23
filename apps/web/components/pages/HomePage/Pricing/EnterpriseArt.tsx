@@ -2,48 +2,43 @@ import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
 import { forwardRef, memo, useImperativeHandle } from "react";
 
-export interface CommercialArtRef {
+export interface EnterpriseArtRef {
 	playHoverAnimation: () => void;
 	playDefaultAnimation: () => void;
 }
 
-interface Props {
+interface EnterpriseArtProps {
 	className?: string;
 }
 
-export const CommercialArt = memo(
-	forwardRef<CommercialArtRef, Props>((props, ref) => {
-		const { rive, RiveComponent: CommercialRive } = useRive({
+export const EnterpriseArt = memo(
+	forwardRef<EnterpriseArtRef, EnterpriseArtProps>(({ className }, ref) => {
+		const { rive, RiveComponent: EnterpriseRive } = useRive({
 			src: "/rive/pricing.riv",
-			artboard: "commercial",
+			artboard: "enterprise",
 			animations: "idle",
 			autoplay: false,
 			layout: new Layout({
-				fit: Fit.Cover,
+				fit: Fit.Contain,
 			}),
 		});
 
 		useImperativeHandle(ref, () => ({
 			playHoverAnimation: () => {
 				if (rive) {
-					rive.stop();
-					rive.play("cards");
+					rive.play("out");
 				}
 			},
 			playDefaultAnimation: () => {
 				if (rive) {
-					rive.stop();
-					rive.play("card-stack");
+					rive.play("idle");
 				}
 			},
 		}));
 
 		return (
-			<CommercialRive
-				className={clsx(
-					"w-full max-w-[100px] mx-auto h-[90px]",
-					props.className,
-				)}
+			<EnterpriseRive
+				className={clsx(className, "mx-auto w-full max-w-[200px] h-[120px]")}
 			/>
 		);
 	}),
