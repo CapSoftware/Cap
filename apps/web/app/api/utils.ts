@@ -14,6 +14,7 @@ async function getAuth(c: Context) {
 	let user;
 
 	if (authHeader?.length === 36) {
+		console.log("Using API key auth");
 		const res = await db()
 			.select()
 			.from(users)
@@ -33,6 +34,8 @@ async function getAuth(c: Context) {
 
 		user = await getCurrentUser();
 	}
+
+	console.log("User: ", user);
 
 	if (!user) return;
 	return { user };
