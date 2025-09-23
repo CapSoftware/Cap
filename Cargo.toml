@@ -34,7 +34,7 @@ nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "
 wgpu = "25.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
-sentry = { version = "0.34.0", features = [
+sentry = { version = "0.42.0", features = [
     "anyhow",
     "backtrace",
     "debug-images",

@@ -13,7 +13,7 @@ fn main() {
 
     // We have to hold onto the ClientInitGuard until the very end
     let _guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
-        sentry::init((
+        let sentry_client = sentry::init((
             url,
             sentry::ClientOptions {
                 release: sentry::release_name!(),
@@ -39,7 +39,12 @@ fn main() {
                 })),
                 ..Default::default()
             },
-        ))
+        ));
+
+        // Caution! Everything before here runs in both app and crash reporter processes
+        let _guard = tauri_plugin_sentry::minidump::init(&sentry_client);
+
+        (sentry_client, _guard)
     });
 
     let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
