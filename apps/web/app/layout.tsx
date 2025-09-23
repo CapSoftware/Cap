@@ -4,8 +4,6 @@ import { buildEnv } from "@cap/env";
 import { S3_BUCKET_URL } from "@cap/utils";
 import { Analytics as DubAnalytics } from "@dub/analytics/react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { TanStackDevtools } from "@tanstack/react-devtools";
-import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import type { PropsWithChildren } from "react";
