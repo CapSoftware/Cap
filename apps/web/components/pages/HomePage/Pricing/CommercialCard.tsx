@@ -2,6 +2,7 @@ import { Button, Switch } from "@cap/ui";
 import {
 	faBriefcase,
 	faDownload,
+	faEdit,
 	faMinus,
 	faPlus,
 	faVideo,
@@ -176,6 +177,14 @@ export const CommercialCard = () => {
 				<ul className="space-y-3">
 					<li className="flex items-center text-sm text-gray-12">
 						<FontAwesomeIcon
+							icon={faEdit}
+							className="flex-shrink-0 mr-3 text-gray-12"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span>Studio Mode with full editor</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-12">
+						<FontAwesomeIcon
 							icon={faBriefcase}
 							className="flex-shrink-0 mr-3 text-gray-12"
 							style={{ fontSize: "14px", minWidth: "14px" }}
@@ -197,7 +206,9 @@ export const CommercialCard = () => {
 							className="flex-shrink-0 mr-3 text-gray-12"
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
-						<span>Unlimited local recordings</span>
+						<span>
+							Unlimited local recordings, shareable links up to 5 minutes
+						</span>
 					</li>
 					<li className="flex items-center text-sm text-gray-12">
 						<FontAwesomeIcon

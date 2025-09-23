@@ -2,6 +2,7 @@ import { Button, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
 import {
 	faCloud,
+	faCreditCard,
 	faLink,
 	faMagic,
 	faMinus,
@@ -119,7 +120,7 @@ export const ProCard = () => {
 					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-4 text-sm font-medium text-center text-gray-9">
+					<p className="mb-4 text-sm font-medium text-center text-gray-6">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
@@ -249,12 +250,20 @@ export const ProCard = () => {
 				<ul className="space-y-3">
 					<li className="flex items-center text-sm text-gray-1">
 						<FontAwesomeIcon
+							icon={faCreditCard}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Everything from Desktop License</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
 							icon={faCloud}
 							className="flex-shrink-0 mr-3 text-gray-4"
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
 						<span className="text-gray-4">
-							Unlimited cloud storage & shareable links
+							Unlimited cloud storage & unlimited shareable links
 						</span>
 					</li>
 					<li className="flex items-center text-sm text-gray-1">
@@ -264,7 +273,7 @@ export const ProCard = () => {
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
 						<span className="text-gray-4">
-							Automatic AI title, transcription, summary, and chapter generation
+							Automatic AI title, transcription, summary, and chapters
 						</span>
 					</li>
 					<li className="flex items-center text-sm">

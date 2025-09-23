@@ -8,7 +8,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRef } from "react";
-import { EnterpriseArt, EnterpriseArtRef } from "./EnterpriseArt";
+import { EnterpriseArt, type EnterpriseArtRef } from "./EnterpriseArt";
 
 export const EnterpriseCard = () => {
 	const enterpriseArtRef = useRef<EnterpriseArtRef>(null);
@@ -28,7 +28,7 @@ export const EnterpriseCard = () => {
 		},
 		{
 			icon: faServer,
-			label: "Self-hosting Support",
+			label: "Managed self-hosting",
 		},
 		{
 			icon: faUsers,
@@ -78,7 +78,7 @@ export const EnterpriseCard = () => {
 
 				<div className="space-y-6">
 					<ul className="space-y-3">
-						{enterpriseFeatures.slice(0, 4).map((feature) => (
+						{enterpriseFeatures.map((feature) => (
 							<li
 								key={feature.label}
 								className="flex items-center text-sm text-gray-12"
