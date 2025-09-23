@@ -1,0 +1,107 @@
+---
+title: A deep dive into our September 23rd outage and what we changed
+description: A detailed account of how an IaC change removed our Vercel project, how we restored service, and the concrete fixes we have made to prevent a repeat.
+publishedAt: "2025-09-23"
+category: Technical
+image: /blog/deep-dive.jpg
+author: Richie McIlroy, Brendan Allan
+tags: Security, Outage, Deep Dive
+---
+
+On 23rd September we had our first major outage. We sincerely apologize for the service disruption. This post explains what happened, how we fixed it, and what we are changing. We want this to be useful for users and for other teams running on Vercel and SST.
+
+## Summary
+
+- A local Infrastructure as Code change in SST referenced our Vercel project as a new resource instead of retrieving the existing one.
+- During `sst deploy` the Vercel project that serves cap.so was removed, which took down marketing pages, the dashboard, video sharing pages, and APIs used by Cap Desktop.
+- We rebuilt the project, restored environment variables, and reattached custom domains. Service was mostly back after 90 minutes.
+- Uploads from desktop stayed broken for another 30 minutes due to a www redirect that stripped `Authorization` headers. Removing that behavior brought us back to full health.
+
+## Impact
+
+- **Duration:** 2:30 pm to 4:30 pm AWST for full restoration, with partial restoration at 4:00 pm.
+- **Surface area:** cap.so marketing site, dashboard, video sharing, and desktop upload APIs.
+- **Customer effect:** broken links and failed API calls from Cap Desktop during the incident window.
+
+## Timeline
+
+Times in AWST.
+
+- **2:30 pm**: While configuring IaC in SST, we changed our Vercel linkage from declaration to what we thought was a retrieval pattern.
+- **Shortly after**: `sst deploy` removed the Vercel project that hosts cap.so, taking down web and API surfaces.
+- **~2:40 pm**: We recognized the removal and created a new Vercel project, then began restoring environment variables and domains.
+- **~3:10 pm to 3:50 pm**: Restored required env vars from Bitwarden and SST, reconnected custom domains, redeployed.
+- **4:00 pm**: Most of the app was up again, uploads from desktop still failing.
+- **4:30 pm**: Found a redirect from `cap.so` to `www.cap.so` that swallowed `Authorization` headers. Fixed the routing and header handling. 100 percent of cap.so back online.
+
+## Technical details
+
+### The IaC change
+
+The goal for the day was to stop touching production by hand and to add a staging environment. While moving toward that, our SST code switched from a project declaration to what looked like a reference to an existing Vercel project.
+
+```ts
+/// in config()
+{
+  removal: "retain";
+}
+
+/// in app()
+// what we had
+new vercel.Project("VercelProject", { name: "cap-web" });
+
+// what we expected to use across stages
+vercel.getProjectOutput({ name: "cap-web" });
+```
+
+Two things mattered:
+
+1. **Resource mode**: The first form is a declaration. If the stack believes it owns the lifecycle, removal events can propagate.
+2. **Removal behavior**: We relied on `removal: "retain"`, which does not fully protect nested resources. In hindsight we should have used `removal: "retain-all"` for anything that touches production resources.
+
+During `sst deploy` the Vercel project was deleted. That removed the hosting for marketing, dashboard, video sharing, and the API.
+
+### Rebuild and environment restore
+
+We immediately created a new Vercel project. Critical environment variables were stored in Bitwarden and in SST. We restored those, then reattached customer domains and redeployed.
+
+### Why uploads kept failing
+
+After most pages returned, uploads from Cap Desktop still failed. We had configured cap.so to www.cap.so as recommended by Vercel, but this had a side-effect of causing the Authorization header to be stripped from any requests to cap.so. The client sent the header, the redirect hop discarded it, and the target saw an unauthenticated request. We removed this redirect and video uploads began working again.
+
+## What went wrong
+
+- A local IaC run had the ability to mutate a production resource.
+- We treated `removal: "retain"` as a safety net. It was not sufficient for this stack.
+- A domain level redirect applied to API paths, which caused header loss for authenticated requests.
+
+## What went well
+
+- We had env vars backed up in two places. This reduced guesswork during restore.
+- Custom domains were reattached quickly.
+- We used a clear checklist during restore and avoided risky parallel changes.
+- Cap's local Studio Mode remained fully functional. Users could still record videos locally, export them, or save them for later to create shareable links once service was restored.
+
+## Changes we have made
+
+1. **Air‑gap production from local changes**
+
+   - Use separate AWS credentials and roles for staging vs production.
+   - Require an approval step for any plan that touches production resources.
+
+2. **Treat shared external services as data, not resources**
+
+   - Never declare long‑lived shared services such as Vercel projects or PlanetScale databases in a way that allows lifecycle control from an app stack.
+   - Always use retrieval patterns for cross‑stage references. In SST and our wrappers this means `get*` forms only.
+
+3. **Hard guardrails on removal**
+
+   - Set `removal: "retain-all"` for anything that can reference production assets.
+   - Add policy checks that fail a plan if a remove or replace action targets the production Vercel project or DNS.
+
+4. **Incident communications**
+   - Even if we expect a short interruption, we will notify users promptly inside the app and on status channels. Short incidents can stretch when there are hidden dependencies.
+
+## Closing
+
+The outage was caused by a change that should never have been able to affect production. The fix is not only better configuration. We have changed how we reference shared services, how we protect production from local changes, and how we route authenticated traffic. Thank you for your patience while we worked through this. If you were impacted and need help, contact us and we will make it right.
