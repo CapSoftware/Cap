@@ -2,12 +2,12 @@
 
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
-import { type UploadStatus, useUploadingContext } from "../UploadingContext";
+import { type UploadStatus, useUploadStatus } from "../UploadingContext";
 
 const { circumference } = getProgressCircleConfig();
 
 export const UploadPlaceholderCard = () => {
-	const { uploadStatus } = useUploadingContext();
+	const uploadStatus = useUploadStatus();
 	const strokeDashoffset = calculateStrokeDashoffset(
 		uploadStatus &&
 			(uploadStatus.status === "converting" ||

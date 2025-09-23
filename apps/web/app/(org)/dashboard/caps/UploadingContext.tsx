@@ -1,12 +1,9 @@
 "use client";
 
 import type React from "react";
-import { createContext, useContext, useEffect, useState } from "react";
-
-interface UploadingContextType {
-	uploadStatus: UploadStatus | undefined;
-	setUploadStatus: (state: UploadStatus | undefined) => void;
-}
+import { createContext, useContext, useEffect } from "react";
+import { Store } from "@tanstack/store";
+import { useStore } from "@tanstack/react-store";
 
 export type UploadStatus =
 	| {
@@ -32,6 +29,19 @@ export type UploadStatus =
 			thumbnailUrl: string | undefined;
 	  };
 
+interface UploadingStore {
+	uploadStatus: UploadStatus | undefined;
+}
+
+const uploadingStore = new Store<UploadingStore>({
+	uploadStatus: undefined,
+});
+
+interface UploadingContextType {
+	uploadStatus: UploadStatus | undefined;
+	setUploadStatus: (state: UploadStatus | undefined) => void;
+}
+
 const UploadingContext = createContext<UploadingContextType | undefined>(
 	undefined,
 );
@@ -45,13 +55,28 @@ export function useUploadingContext() {
 	return context;
 }
 
+export function useUploadingStore() {
+	return useStore(uploadingStore);
+}
+
+export function useUploadStatus() {
+	return useStore(uploadingStore, (state) => state.uploadStatus);
+}
+
+export function setUploadStatus(status: UploadStatus | undefined) {
+	uploadingStore.setState((state) => ({
+		...state,
+		uploadStatus: status,
+	}));
+}
+
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const [state, setState] = useState<UploadStatus>();
+	const uploadStatus = useUploadStatus();
 
 	// Prevent the user closing the tab while uploading
 	useEffect(() => {
 		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-			if (state?.status) {
+			if (uploadStatus?.status) {
 				e.preventDefault();
 				// Chrome requires returnValue to be set
 				e.returnValue = "";
@@ -61,13 +86,13 @@ export function UploadingProvider({ children }: { children: React.ReactNode }) {
 
 		window.addEventListener("beforeunload", handleBeforeUnload);
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
-	}, [state]);
+	}, [uploadStatus]);
 
 	return (
 		<UploadingContext.Provider
 			value={{
-				uploadStatus: state,
-				setUploadStatus: setState,
+				uploadStatus,
+				setUploadStatus,
 			}}
 		>
 			{children}
