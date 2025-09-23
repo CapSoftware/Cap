@@ -58,7 +58,7 @@ const nextConfig = {
 		].filter(Boolean),
 	},
 	async rewrites() {
-		const rewrites = [
+		return [
 			{
 				source: "/r/:path*",
 				destination: "https://dub.cap.link/:path*",
@@ -78,14 +78,6 @@ const nextConfig = {
 				],
 			},
 		];
-		if (process.env.NEXT_PUBLIC_IS_CAP === "true") {
-			rewrites.push({
-				source: "/help/:path*",
-				destination: "https://helpcenter.cap.so/en/:path*",
-			});
-		}
-
-		return rewrites;
 	},
 	async redirects() {
 		return [
