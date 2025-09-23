@@ -14,7 +14,7 @@ fn main() {
     }
 
     // We have to hold onto the ClientInitGuard until the very end
-    let _guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
+    let _sentry_guard = std::option_env!("CAP_DESKTOP_SENTRY_URL").map(|url| {
         let sentry_client = sentry::init((
             url,
             sentry::ClientOptions {
@@ -48,8 +48,6 @@ fn main() {
 
         (sentry_client, _guard)
     });
-    // Keep the guard alive for the duration of the program
-    std::mem::forget(_guard);
 
     let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
 
@@ -75,9 +73,7 @@ fn main() {
     });
 
     let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    // Keep the guard alive for the duration of the program
-    std::mem::forget(_guard);
+    let (non_blocking, _logger_guard) = tracing_appender::non_blocking(file_appender);
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
         (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
