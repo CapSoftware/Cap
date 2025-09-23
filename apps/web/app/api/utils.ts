@@ -9,6 +9,7 @@ import { createMiddleware } from "hono/factory";
 import { cookies } from "next/headers";
 
 async function getAuth(c: Context) {
+	console.log("auth header: ", c.req.header("authorization"));
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
 	let user;
