@@ -31,7 +31,7 @@ export default $config({
 	async run() {
 		const WEB_URLS: Record<string, string> = {
 			production: "https://cap.so",
-			staging: "https://cap-staging.brendonovich.dev",
+			staging: "https://staging.cap.so",
 		};
 		const webUrl = WEB_URLS[$app.stage];
 		// const planetscale = Planetscale();
@@ -123,10 +123,11 @@ export default $config({
 						Action: "sts:AssumeRoleWithWebIdentity",
 						Condition: {
 							StringEquals: {
-								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:aud`]:
-									vercelOidc.clientIdLists[0],
+								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:aud`]: `https://vercel.com/${VERCEL_TEAM_SLUG}`,
+							},
+							StringLike: {
 								[`oidc.vercel.com/${VERCEL_TEAM_SLUG}:sub`]: [
-									`owner:${VERCEL_TEAM_SLUG}:project:${vercelProject.name}:environment:staging`,
+									`owner:${VERCEL_TEAM_SLUG}:project:*:environment:staging`,
 								],
 							},
 						},
@@ -148,10 +149,10 @@ export default $config({
 								{
 									Effect: "Allow",
 									Action: ["s3:*"],
-									Resource: arn,
+									Resource: `${arn}`,
 								},
 							],
-						} satisfies aws.iam.PolicyDocument),
+						}),
 					),
 				},
 			],
