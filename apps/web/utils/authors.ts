@@ -10,8 +10,8 @@ export const AUTHORS: Record<string, Author> = {
     handle: "richiemcilroy",
     image: "/blog/author/richiemcilroy.jpg",
   },
-  "Brendan Allen": {
-    name: "Brendan Allen",
+  "Brendan Allan": {
+    name: "Brendan Allan",
     handle: "brendonovichdev",
     image: "/blog/author/brendonovichdev.jpg",
   },
