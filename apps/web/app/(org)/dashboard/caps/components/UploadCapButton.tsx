@@ -165,9 +165,8 @@ async function legacyUploadCap(
 			});
 			optimizedBlob = await convertResult.save();
 
-			if (optimizedBlob.size === 0) {
+			if (optimizedBlob.size === 0)
 				throw new Error("Conversion produced empty file");
-			}
 			const isValidVideo = await new Promise<boolean>((resolve) => {
 				const testVideo = document.createElement("video");
 				testVideo.muted = true;
