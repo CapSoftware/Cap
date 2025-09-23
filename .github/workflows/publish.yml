@@ -234,7 +234,7 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
-          curl -sL https://sentry.io/get-cli/ | bash
+          scoop install sentry-cli
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
 
   done:
