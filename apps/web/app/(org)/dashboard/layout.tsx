@@ -81,7 +81,7 @@ export default async function DashboardLayout({
 				userPreferences={userPreferences}
 				referClicked={referClicked === "true"}
 			>
-				<div className="dashboard-grid">
+				<div className="bg-gray-2 dashboard-grid">
 					<DesktopNav />
 					<div className="flex h-full [grid-area:main] focus:outline-none">
 						<MobileNav />

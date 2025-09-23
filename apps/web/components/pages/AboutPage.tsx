@@ -2,6 +2,7 @@
 
 import { Button } from "@cap/ui";
 import MuxPlayer from "@mux/mux-player-react";
+import { Clapperboard, Zap } from "lucide-react";
 import { ReadyToGetStarted } from "../ReadyToGetStarted";
 
 export const AboutPage = () => {
@@ -24,8 +25,8 @@ export const AboutPage = () => {
 			<div className="mt-[120px]">
 				<div className="relative z-10 px-5 pt-24 pb-36 w-full">
 					<div className="mx-auto text-center wrapper wrapper-sm">
-						<h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[3.75rem] md:leading-[4rem] relative z-10 text-black mb-4">
-							About Cap
+						<h1 className="fade-in-down text-[2rem] leading-[2.5rem] md:text-[4rem] md:leading-[4.5rem] relative z-10 text-black mb-4">
+							The open source screen recording and sharing app
 						</h1>
 						<p className="mx-auto mb-8 max-w-3xl text-md sm:text-xl text-zinc-500 fade-in-down animate-delay-1">
 							Screen recording made simple, secure, and powerful. Cap gives you
@@ -62,20 +63,25 @@ export const AboutPage = () => {
 				{/* Main Content */}
 				<div className="pb-24 wrapper">
 					<div className="mx-auto max-w-4xl">
-						<div className="mb-48">
-							<p className="text-3xl font-light text-center">
-								Your recordings shouldn't be locked away in systems you don't
-								control. At Cap, we're building a screen recording tool that
-								puts you first, respects your privacy, and gives you full
-								control over your content.
-							</p>
+						<div className="mt-14 mb-32">
+							<figure className="mx-auto max-w-4xl space-y-3">
+								<img
+									src="/cap-team-film.jpeg"
+									alt="The Cap team gathered together in San Francisco"
+									loading="lazy"
+									className="block w-full h-[220px] rounded-2xl object-cover object-center shadow-[0_18px_36px_rgba(15,23,42,0.12)] md:h-[450px]"
+								/>
+								<figcaption className="px-2 text-sm text-gray-500 text-left">
+									The Cap team in San Francisco
+								</figcaption>
+							</figure>
 						</div>
 
 						<div className="mb-12" id="video">
 							<div className="text-center max-w-[800px] mx-auto mb-10">
 								<h2 className="inline-block relative mb-6 text-3xl font-medium text-gray-800">
 									See Cap In Action
-									<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-blue-500 rounded-full transform -translate-x-1/2"></span>
+									<span className="absolute -bottom-2 left-1/2 w-20 h-1 bg-gray-900 rounded-full transform -translate-x-1/2"></span>
 								</h2>
 							</div>
 							<div className="mx-auto max-w-3xl">
@@ -83,7 +89,7 @@ export const AboutPage = () => {
 									<MuxPlayer
 										playbackId="A6oZoUWVZjOIVZB6XnBMLagYnXE6xhDhp8Hcyky018hk"
 										metadataVideoTitle="Cap Demo"
-										accentColor="#5C9FFF"
+										accentColor="#111111"
 										style={{ aspectRatio: "16/9", width: "100%" }}
 									/>
 								</div>
@@ -147,8 +153,14 @@ export const AboutPage = () => {
 									Cap gives you two simple ways to record:
 								</p>
 								<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-									<div className="p-6 rounded-xl border bg-blue-50/50 border-blue-100/20">
-										<h3 className="mb-3 text-xl font-semibold text-blue-700">
+									<div className="p-6 rounded-xl border bg-gray-50 border-gray-200 transition-transform duration-300 ease-out hover:-translate-y-[2px]">
+										<h3 className="mb-3 text-xl font-semibold text-gray-900 flex items-center gap-2">
+											<Zap
+												aria-hidden="true"
+												className="size-5 md:size-6"
+												strokeWidth={1.5}
+												fill="yellow"
+											/>
 											Instant Mode
 										</h3>
 										<p className="text-gray-600">
@@ -156,8 +168,14 @@ export const AboutPage = () => {
 											waiting, just record and share in seconds.
 										</p>
 									</div>
-									<div className="p-6 rounded-xl border bg-blue-50/50 border-blue-100/20">
-										<h3 className="mb-3 text-xl font-semibold text-blue-700">
+									<div className="p-6 rounded-xl border bg-gray-50 border-gray-200 transition-transform duration-300 ease-out hover:-translate-y-[2px]">
+										<h3 className="mb-3 text-xl font-semibold text-gray-900 flex items-center gap-2">
+											<Clapperboard
+												aria-hidden="true"
+												className="size-5 md:size-6"
+												strokeWidth={1.5}
+												fill="var(--blue-9)"
+											/>
 											Studio Mode
 										</h3>
 										<p className="text-gray-600">

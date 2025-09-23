@@ -288,11 +288,11 @@ export const CapCard = ({
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
-					"flex relative transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group border-px",
+					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group",
 					isSelected
-						? "!border-blue-10 border-px"
+						? "!border-blue-10"
 						: anyCapSelected
-							? "border-blue-10 border-px hover:border-blue-10"
+							? "border-blue-10 hover:border-blue-10"
 							: "hover:border-blue-10",
 					isDragging && "opacity-50",
 					isOwner && !anyCapSelected && "cursor-grab active:cursor-grabbing",
