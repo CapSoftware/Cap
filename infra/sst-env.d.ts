@@ -5,6 +5,10 @@
 
 declare module "sst" {
   export interface Resource {
+    "DATABASE_URL": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
   }
 }
 /// <reference path="sst-env.d.ts" />

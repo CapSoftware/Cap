@@ -29,6 +29,11 @@ export default $config({
 		};
 	},
 	async run() {
+		const WEB_URLS: Record<string, string> = {
+			production: "https://cap.so",
+			staging: "https://cap-staging.brendonovich.dev",
+		};
+		const webUrl = WEB_URLS[$app.stage];
 		// const planetscale = Planetscale();
 
 		const recordingsBucket = new aws.s3.BucketV2("RecordingsBucket");
@@ -43,10 +48,6 @@ export default $config({
 		// });
 
 		const vercelUser = new aws.iam.User("VercelUser", { forceDestroy: false });
-
-		const vercelAccessKey = new aws.iam.AccessKey("VercelS3AccessKey", {
-			user: vercelUser.name,
-		});
 
 		const vercelProject = vercel.getProjectOutput({ name: "cap-web" });
 
@@ -69,15 +70,40 @@ export default $config({
 			});
 		}
 
-		vercelEnvVar("VercelS3AccessEnv", {
-			key: "CAP_AWS_ACCESS_KEY",
-			value: vercelAccessKey.id,
+		vercelEnvVar("VercelDatabaseURLEnv", {
+			key: "DATABASE_URL",
+			value: new sst.Secret("DATABASE_URL").value,
 		});
+
+		if (webUrl) {
+			vercelEnvVar("VercelWebURLEnv", {
+				key: "WEB_URL",
+				value: webUrl,
+			});
+			vercelEnvVar("VercelNextPublicWebURLEnv", {
+				key: "NEXT_PUBLIC_WEB_URL",
+				value: webUrl,
+			});
+			vercelEnvVar("VercelNextAuthURLEnv", {
+				key: "NEXTAUTH_URL",
+				value: webUrl,
+			});
+		}
 
 		// vercelEnvVar("VercelCloudfrontEnv", {
 		// 	key: "CAP_CLOUDFRONT_DISTRIBUTION_ID",
 		// 	value: cloudfrontDistribution.id,
 		// });
+
+		vercelEnvVar("VercelAWSBucketEnv", {
+			key: "CAP_AWS_BUCKET",
+			value: recordingsBucket.bucket,
+		});
+
+		vercelEnvVar("VercelNextPublicAWSBucketEnv", {
+			key: "NEXT_PUBLIC_CAP_AWS_BUCKET",
+			value: recordingsBucket.bucket,
+		});
 
 		const vercelOidc = aws.iam.getOpenIdConnectProviderOutput({
 			url: "https://oidc.vercel.com",
