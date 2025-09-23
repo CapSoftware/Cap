@@ -1,9 +1,9 @@
 "use client";
 
+import { useStore } from "@tanstack/react-store";
+import { Store } from "@tanstack/store";
 import type React from "react";
 import { createContext, useContext, useEffect } from "react";
-import { Store } from "@tanstack/store";
-import { useStore } from "@tanstack/react-store";
 
 export type UploadStatus =
 	| {
