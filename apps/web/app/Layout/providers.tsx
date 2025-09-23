@@ -1,16 +1,16 @@
 "use client";
 
 import { buildEnv } from "@cap/env";
+import { TanStackDevtools } from "@tanstack/react-devtools";
 import {
 	QueryClient,
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 import { type PropsWithChildren, useEffect, useState } from "react";
-import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
-import { TanStackDevtools } from "@tanstack/react-devtools";
 
 import PostHogPageView from "./PosthogPageView";
 
