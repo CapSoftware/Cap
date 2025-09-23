@@ -4,6 +4,8 @@
 use std::sync::Arc;
 
 use cap_desktop_lib::DynLoggingLayer;
+use dirs;
+use tracing_appender;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
@@ -46,8 +48,36 @@ fn main() {
 
         (sentry_client, _guard)
     });
+    // Keep the guard alive for the duration of the program
+    std::mem::forget(_guard);
 
     let (layer, handle) = tracing_subscriber::reload::Layer::new(None::<DynLoggingLayer>);
+
+    let logs_dir = {
+        #[cfg(target_os = "macos")]
+        let path = dirs::home_dir()
+            .unwrap()
+            .join("Library/Logs")
+            .join("so.cap.desktop");
+
+        #[cfg(not(target_os = "macos"))]
+        let path = dirs::data_local_dir()
+            .unwrap()
+            .join("so.cap.desktop")
+            .join("logs");
+
+        path
+    };
+
+    // Ensure logs directory exists
+    std::fs::create_dir_all(&logs_dir).unwrap_or_else(|e| {
+        eprintln!("Failed to create logs directory: {}", e);
+    });
+
+    let file_appender = tracing_appender::rolling::daily(&logs_dir, "cap-desktop.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    // Keep the guard alive for the duration of the program
+    std::mem::forget(_guard);
 
     let registry = tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(
         (|v| v.target().starts_with("cap_")) as fn(&tracing::Metadata) -> bool,
@@ -59,6 +89,12 @@ fn main() {
             tracing_subscriber::fmt::layer()
                 .with_ansi(true)
                 .with_target(true),
+        )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(non_blocking),
         )
         .init();
 
