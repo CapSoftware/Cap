@@ -41,7 +41,7 @@ export const UpdatesPage = () => {
     });
 
   return (
-    <div className="py-32 md:py-40 wrapper wrapper-sm">
+    <div className="pt-24 pb-32 md:py-40 wrapper wrapper-sm">
       {featuredPosts.length > 0 && (
         <div className="mb-6">
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">

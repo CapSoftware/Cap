@@ -8,7 +8,7 @@ author: Richie McIlroy, Brendan Allan
 tags: Security, Outage, Deep Dive
 ---
 
-On 23rd September we had our first major outage. This post explains what happened, how we fixed it, and what we are changing. We want this to be useful for users and for other teams running on Vercel and SST.
+On 23rd September we had our first major outage. We sincerely apologize for the service disruption. This post explains what happened, how we fixed it, and what we are changing. We want this to be useful for users and for other teams running on Vercel and SST.
 
 ## Summary
 
@@ -41,14 +41,17 @@ Times in AWST.
 The goal for the day was to stop touching production by hand and to add a staging environment. While moving toward that, our SST code switched from a project declaration to what looked like a reference to an existing Vercel project.
 
 ```ts
-// What we had
-new vercel.Project("cap-site", {
-  // ...
-  // removal: "retain" was set at the stack level
-});
+/// in config()
+{
+  removal: "retain";
+}
 
-// What we expected to use across stages
-vercel.getProjectOutput("cap-site");
+/// in app()
+// what we had
+new vercel.Project("VercelProject", { name: "cap-web" });
+
+// what we expected to use across stages
+vercel.getProjectOutput({ name: "cap-web" });
 ```
 
 Two things mattered:
@@ -64,9 +67,7 @@ We immediately created a new Vercel project. Critical environment variables were
 
 ### Why uploads kept failing
 
-After most pages returned, uploads from Cap Desktop still failed. We had configured Vercel to redirect `cap.so` to `www.cap.so`. That is a common recommendation for a single canonical host. In our case the redirect consumed incoming `Authorization` headers on upload endpoints. The client sent the header, the redirect hop discarded it, and the target saw an unauthenticated request.
-
-We removed the behavior on API paths and corrected routing so that authenticated requests do not pass through a redirect that drops headers.
+After most pages returned, uploads from Cap Desktop still failed. We had configured cap.so to www.cap.so as recommended by Vercel, but this had a side-effect of causing the Authorization header to be stripped from any requests to cap.so. The client sent the header, the redirect hop discarded it, and the target saw an unauthenticated request. We removed this redirect and video uploads began working again.
 
 ## What went wrong
 
