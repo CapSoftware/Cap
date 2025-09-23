@@ -13,6 +13,7 @@ import {
 } from "@/utils/blog-registry";
 import { calculateReadingTime } from "@/utils/readTime";
 import { Share } from "../_components/Share";
+import { AuthorByline } from "@/components/blog/AuthorByline";
 
 interface PostProps {
 	params: {
@@ -114,6 +115,9 @@ export default async function PostPage({ params }: PostProps) {
 					</header>
 					<hr className="my-6" />
 					<MDXRemote source={post.content} />
+					{post.metadata.author && (
+						<AuthorByline authors={post.metadata.author} />
+					)}
 					<Share
 						post={post}
 						url={`${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`}
