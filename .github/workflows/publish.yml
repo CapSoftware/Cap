@@ -220,13 +220,22 @@ jobs:
           TAURI_BUNDLE_PATH: ../..
 
       - name: Upload debug symbols to Sentry
-        if: ${{ matrix.settings.runner == 'macos-latest' }}
+        if: ${{ runner.os == 'macOS' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         working-directory: target
         run: |
           curl -sL https://sentry.io/get-cli/ | bash
           sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM
+
+      - name: Upload debug symbols to Sentry
+        if: ${{ runner.os == 'Windows' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        working-directory: target
+        run: |
+          curl -sL https://sentry.io/get-cli/ | bash
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} release/cap_desktop.pdb
 
   done:
     needs: [draft, build]
