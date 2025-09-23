@@ -1224,6 +1224,9 @@ importers:
       '@smithy/types':
         specifier: ^4.3.1
         version: 4.3.1
+      '@vercel/functions':
+        specifier: ^3.1.0
+        version: 3.1.0(@aws-sdk/credential-provider-web-identity@3.804.0)
       drizzle-orm:
         specifier: 0.43.1
         version: 0.43.1(@cloudflare/workers-types@4.20250507.0)(@opentelemetry/api@1.9.0)(@planetscale/database@1.19.0)(mysql2@3.14.1)
@@ -5831,10 +5834,10 @@ packages:
       react-dom:
         optional: true
 
-  '@storybook/builder-vite@10.0.0-beta.2':
-    resolution: {integrity: sha512-H4U+LXXrxXFezTzPc0pfvZA/qjyg9XmgPCGSXa0Q41LH+8UrW9uP42TDVarQkD77jS4Trd7QIFCN64xe34XAoQ==}
+  '@storybook/builder-vite@10.0.0-beta.6':
+    resolution: {integrity: sha512-vtVS4cjw1+8eO7J6TxhWQ2ijjzCDY/J03NVr6clTECaP3JKrSVMnQCQ1LEOz1Z9jXPXyl2pGqiMLbYdfryINkg==}
     peerDependencies:
-      storybook: ^10.0.0-beta.2
+      storybook: ^10.0.0-beta.6
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0
 
   '@storybook/core@8.6.12':
@@ -5845,12 +5848,12 @@ packages:
       prettier:
         optional: true
 
-  '@storybook/csf-plugin@10.0.0-beta.2':
-    resolution: {integrity: sha512-OBjwaEdG3OrgsvUncu0AptCOH9u9BDQeIlMChj/QxnlNCy4yTUdPYNJ140mYzl51a20IKi6OTRverLopP7RNUg==}
+  '@storybook/csf-plugin@10.0.0-beta.6':
+    resolution: {integrity: sha512-2aG6qjedB4ObAtibwVGBjMdVdq48P9kYl/juHbAn+KbEPHTWZwnH4bQEgEwbdzMACCk0jlJwNpMcpnRSeTrZZg==}
     peerDependencies:
       esbuild: '*'
       rollup: '*'
-      storybook: ^10.0.0-beta.2
+      storybook: ^10.0.0-beta.6
       vite: '*'
       webpack: '*'
     peerDependenciesMeta:
@@ -6753,6 +6756,15 @@ packages:
     resolution: {integrity: sha512-1++yncEyIAi68D3UEOlytYb1IUcIulMWdoSzX2h9LuSeeyR7JtaIgR8DcTQ6+DmYOQn+5MCh6LY+UmK6QBByNA==}
     deprecated: This package is deprecated. You should to use `@vercel/functions` instead.
 
+  '@vercel/functions@3.1.0':
+    resolution: {integrity: sha512-V+p8dO+sg1VjiJJUO5rYPp1KG17SzDcR74OWwW7Euyde6L8U5wuTMe9QfEOfLTiWPUPzN1MXZvLcYxqSYhKc4Q==}
+    engines: {node: '>= 20'}
+    peerDependencies:
+      '@aws-sdk/credential-provider-web-identity': '*'
+    peerDependenciesMeta:
+      '@aws-sdk/credential-provider-web-identity':
+        optional: true
+
   '@vercel/nft@0.27.7':
     resolution: {integrity: sha512-FG6H5YkP4bdw9Ll1qhmbxuE8KwW2E/g8fJpM183fWQLeVDGqzeywMIeJ9h2txdWZ03psgWMn6QymTxaDLmdwUg==}
     engines: {node: '>=16'}
@@ -6762,6 +6774,10 @@ packages:
     resolution: {integrity: sha512-A/Si4mrTkQqJ6EXJKv5EYCDQ3NL6nJXxG8VGXePsaiQigsomHYQC9xSpX8qGk7AEZk4b1ssbYIqJ0ISQQ7bfcA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@vercel/oidc@3.0.0':
+    resolution: {integrity: sha512-XOoUcf/1VfGArUAfq0ELxk6TD7l4jGcrOsWjQibj4wYM74uNihzZ9gA46ywWegoqKWWdph4y5CKxGI9823deoA==}
+    engines: {node: '>= 20'}
 
   '@vinxi/listhen@1.5.6':
     resolution: {integrity: sha512-WSN1z931BtasZJlgPp704zJFnQFRg7yzSjkm3MzAWQYe4uXFXlFr1hc5Ac2zae5/HDOz5x1/zDM5Cb54vTCnWw==}
@@ -19271,9 +19287,9 @@ snapshots:
       react: 19.1.0
       react-dom: 19.1.0(react@19.1.0)
 
-  '@storybook/builder-vite@10.0.0-beta.2(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
+  '@storybook/builder-vite@10.0.0-beta.6(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
     dependencies:
-      '@storybook/csf-plugin': 10.0.0-beta.2(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
+      '@storybook/csf-plugin': 10.0.0-beta.6(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
       storybook: 8.6.12(prettier@3.5.3)
       ts-dedent: 2.2.0
       vite: 6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)
@@ -19303,7 +19319,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@storybook/csf-plugin@10.0.0-beta.2(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
+  '@storybook/csf-plugin@10.0.0-beta.6(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))':
     dependencies:
       storybook: 8.6.12(prettier@3.5.3)
       unplugin: 2.3.8
@@ -20287,6 +20303,12 @@ snapshots:
 
   '@vercel/edge@1.2.1': {}
 
+  '@vercel/functions@3.1.0(@aws-sdk/credential-provider-web-identity@3.804.0)':
+    dependencies:
+      '@vercel/oidc': 3.0.0
+    optionalDependencies:
+      '@aws-sdk/credential-provider-web-identity': 3.804.0
+
   '@vercel/nft@0.27.7(encoding@0.1.13)(rollup@4.40.2)':
     dependencies:
       '@mapbox/node-pre-gyp': 1.0.11(encoding@0.1.13)
@@ -20324,6 +20346,11 @@ snapshots:
       - encoding
       - rollup
       - supports-color
+
+  '@vercel/oidc@3.0.0':
+    dependencies:
+      '@types/ms': 2.1.0
+      ms: 2.1.3
 
   '@vinxi/listhen@1.5.6':
     dependencies:
@@ -27499,7 +27526,7 @@ snapshots:
 
   storybook-solidjs-vite@1.0.0-beta.7(@storybook/test@8.6.12(storybook@8.6.12(prettier@3.5.3)))(esbuild@0.25.4)(rollup@4.40.2)(solid-js@1.9.6)(storybook@8.6.12(prettier@3.5.3))(vite-plugin-solid@2.11.6(@testing-library/jest-dom@6.5.0)(solid-js@1.9.6)(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1)):
     dependencies:
-      '@storybook/builder-vite': 10.0.0-beta.2(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
+      '@storybook/builder-vite': 10.0.0-beta.6(esbuild@0.25.4)(rollup@4.40.2)(storybook@8.6.12(prettier@3.5.3))(vite@6.3.5(@types/node@22.15.17)(jiti@2.4.2)(terser@5.39.0)(yaml@2.8.1))
       '@storybook/types': 9.0.0-alpha.1(storybook@8.6.12(prettier@3.5.3))
       magic-string: 0.30.17
       solid-js: 1.9.6

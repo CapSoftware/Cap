@@ -15,9 +15,10 @@
 		"@effect/platform": "^0.90.1",
 		"@effect/rpc": "^0.68.3",
 		"@smithy/types": "^4.3.1",
+		"@vercel/functions": "^3.1.0",
 		"drizzle-orm": "0.43.1",
 		"effect": "^3.17.7",
-		"server-only": "^0.0.1",
-		"next": "14.2.3"
+		"next": "14.2.3",
+		"server-only": "^0.0.1"
 	}
 }

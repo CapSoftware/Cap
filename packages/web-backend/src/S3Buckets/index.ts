@@ -3,7 +3,9 @@ import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
+import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Context, Effect, Layer, Option } from "effect";
+
 import { S3BucketAccess } from "./S3BucketAccess";
 import { S3BucketClientProvider } from "./S3BucketClientProvider";
 import { S3BucketsRepo } from "./S3BucketsRepo";
@@ -34,8 +36,18 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				),
 			),
 			region: yield* Config.string("CAP_AWS_REGION"),
-			accessKey: yield* Config.string("CAP_AWS_ACCESS_KEY"),
-			secretKey: yield* Config.string("CAP_AWS_SECRET_KEY"),
+			credentials: yield* Config.string("CAP_AWS_ACCESS_KEY").pipe(
+				Effect.zip(Config.string("CAP_AWS_SECRET_KEY")),
+				Effect.map(([accessKeyId, secretAccessKey]) => ({
+					accessKeyId,
+					secretAccessKey,
+				})),
+				Effect.catchAll(() =>
+					Config.string("VERCEL_AWS_ROLE_ARN").pipe(
+						Effect.map((arn) => awsCredentialsProvider({ roleArn: arn })),
+					),
+				),
+			),
 			forcePathStyle:
 				Option.getOrNull(
 					yield* Config.boolean("S3_PATH_STYLE").pipe(Config.option),
@@ -49,10 +61,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					? defaultConfigs.internalEndpoint
 					: defaultConfigs.publicEndpoint,
 				region: defaultConfigs.region,
-				credentials: {
-					accessKeyId: defaultConfigs.accessKey,
-					secretAccessKey: defaultConfigs.secretKey,
-				},
+				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
 			});
 
