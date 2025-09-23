@@ -20,6 +20,8 @@ import {
 	ReactQueryProvider,
 	SessionProvider,
 } from "./Layout/providers";
+import { TanStackDevtools } from "@tanstack/react-devtools";
+import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools";
 //@ts-expect-error
 import { script } from "./themeScript";
 

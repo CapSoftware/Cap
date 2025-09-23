@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { Effect, Option } from "effect";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
+import { useFeatureFlag } from "@/app/Layout/features";
 
 type UploadProgress =
 	| {
@@ -22,14 +23,8 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-// TODO: Remove this once we are more confident in the feature
-// localStorage.setItem("betaUploadProgress", "true");
-const enableBetaUploadProgress =
-	"localStorage" in globalThis
-		? localStorage.getItem("betaUploadProgress") === "true"
-		: false;
-
 export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
+	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
 	const enabled = enableBetaUploadProgress ? enabledRaw : false;
 
 	const query = useEffectQuery({
