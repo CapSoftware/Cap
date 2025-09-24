@@ -7,11 +7,12 @@ import { produce } from "solid-js/store";
 
 import "./styles.css";
 
-import { useEditorContext } from "../context";
+import { commands } from "~/utils/tauri";
+import { FPS, OUTPUT_SIZE, useEditorContext } from "../context";
 import { formatTime } from "../utils";
 import { ClipTrack } from "./ClipTrack";
 import { TimelineContextProvider, useTimelineContext } from "./context";
-import { type LayoutSegmentDragState, LayoutTrack } from "./LayoutTrack";
+import { type SceneSegmentDragState, SceneTrack } from "./SceneTrack";
 import { type ZoomSegmentDragState, ZoomTrack } from "./ZoomTrack";
 
 const TIMELINE_PADDING = 16;
@@ -74,21 +75,43 @@ export function Timeline() {
 	}
 
 	let zoomSegmentDragState = { type: "idle" } as ZoomSegmentDragState;
-	let layoutSegmentDragState = { type: "idle" } as LayoutSegmentDragState;
+	let sceneSegmentDragState = { type: "idle" } as SceneSegmentDragState;
 
 	async function handleUpdatePlayhead(e: MouseEvent) {
 		const { left } = timelineBounds;
 		if (
 			zoomSegmentDragState.type !== "moving" &&
-			layoutSegmentDragState.type !== "moving"
+			sceneSegmentDragState.type !== "moving"
 		) {
-			setEditorState(
-				"playbackTime",
-				Math.min(
-					secsPerPixel() * (e.clientX - left!) + transform().position,
-					totalDuration(),
-				),
-			);
+			// Guard against missing bounds and clamp computed time to [0, totalDuration()]
+			if (left == null) return;
+			const rawTime =
+				secsPerPixel() * (e.clientX - left) + transform().position;
+			const newTime = Math.min(Math.max(0, rawTime), totalDuration());
+
+			// If playing, some backends require restart to seek reliably
+			if (editorState.playing) {
+				try {
+					await commands.stopPlayback();
+
+					// Round to nearest frame to prevent off-by-one drift
+					const targetFrame = Math.round(newTime * FPS);
+					await commands.seekTo(targetFrame);
+
+					// If the user paused during these async ops, bail out without restarting
+					if (!editorState.playing) {
+						setEditorState("playbackTime", newTime);
+						return;
+					}
+
+					await commands.startPlayback(FPS, OUTPUT_SIZE);
+					setEditorState("playing", true);
+				} catch (err) {
+					console.error("Failed to seek during playback:", err);
+				}
+			}
+
+			setEditorState("playbackTime", newTime);
 		}
 	}
 
@@ -103,13 +126,15 @@ export function Timeline() {
 				projectActions.deleteZoomSegments(selection.indices);
 			} else if (selection.type === "clip") {
 				projectActions.deleteClipSegment(selection.index);
-			} else if (selection.type === "layout") {
-				projectActions.deleteLayoutSegment(selection.index);
+			} else if (selection.type === "scene") {
+				projectActions.deleteSceneSegment(selection.index);
 			}
 		} else if (e.code === "KeyC" && hasNoModifiers) {
-			if (!editorState.previewTime) return;
+			// Allow cutting while playing: use playbackTime when previewTime is null
+			const time = editorState.previewTime ?? editorState.playbackTime;
+			if (time === null || time === undefined) return;
 
-			projectActions.splitClipSegment(editorState.previewTime);
+			projectActions.splitClipSegment(time);
 		} else if (e.code === "Escape" && hasNoModifiers) {
 			// Deselect all selected segments
 			setEditorState("timeline", "selection", null);
@@ -242,9 +267,9 @@ export function Timeline() {
 					handleUpdatePlayhead={handleUpdatePlayhead}
 				/>
 				<Show when={meta().hasCamera && !project.camera.hide}>
-					<LayoutTrack
+					<SceneTrack
 						onDragStateChanged={(v) => {
-							layoutSegmentDragState = v;
+							sceneSegmentDragState = v;
 						}}
 						handleUpdatePlayhead={handleUpdatePlayhead}
 					/>

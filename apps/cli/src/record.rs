@@ -1,9 +1,8 @@
-use cap_camera::ModelID;
-use cap_recording::screen_capture::ScreenCaptureTarget;
+use cap_recording::{screen_capture::ScreenCaptureTarget, studio_recording};
 use clap::Args;
 use scap_targets::{DisplayId, WindowId};
-use std::{env::current_dir, path::PathBuf, sync::Arc};
-use tokio::{io::AsyncBufReadExt, sync::Mutex};
+use std::{env::current_dir, path::PathBuf};
+use tokio::io::AsyncBufReadExt;
 use uuid::Uuid;
 
 #[derive(Args)]
@@ -43,35 +42,28 @@ impl RecordStart {
             _ => Err("No target specified".to_string()),
         }?;
 
-        let camera = if let Some(model_id) = self.camera {
-            let _model_id: ModelID = model_id
-                .try_into()
-                .map_err(|_| "Invalid model ID".to_string())?;
+        // let camera = if let Some(model_id) = self.camera {
+        //     let _model_id: ModelID = model_id
+        //         .try_into()
+        //         .map_err(|_| "Invalid model ID".to_string())?;
 
-            todo!()
-            // Some(CameraFeed::init(model_id).await.unwrap())
-        } else {
-            None
-        };
+        //     todo!()
+        //     // Some(CameraFeed::init(model_id).await.unwrap())
+        // } else {
+        //     None
+        // };
 
         let id = Uuid::new_v4().to_string();
         let path = self
             .path
             .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
 
-        let actor = cap_recording::spawn_studio_recording_actor(
-            id,
-            path,
-            cap_recording::RecordingBaseInputs {
-                capture_target: target_info,
-                capture_system_audio: self.system_audio,
-                mic_feed: None,
-            },
-            camera.map(|c| Arc::new(Mutex::new(c))),
-            false,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let actor = studio_recording::Actor::builder(path, target_info)
+            .with_system_audio(self.system_audio)
+            .with_custom_cursor(false)
+            .build()
+            .await
+            .map_err(|e| e.to_string())?;
 
         println!("Recording starting, press Enter to stop");
 

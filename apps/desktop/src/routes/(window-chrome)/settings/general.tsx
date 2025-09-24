@@ -164,6 +164,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 
 	type SettingsGroup = {
 		title: string;
+		os?: "macos" | "windows" | "linux";
 		titleStyling?: string;
 		items: SettingItem[];
 	};
@@ -190,6 +191,7 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 		},
 		{
 			title: "App",
+			os: "macos",
 			items: [
 				{
 					label: "Hide dock icon",
@@ -370,19 +372,19 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div class="flex flex-col w-full h-full">
-			<div class="flex-1 custom-scroll">
-				<div class="p-4 space-y-6">
-					<AppearanceSection
-						currentTheme={settings.theme ?? "system"}
-						onThemeChange={(newTheme) => {
-							setSettings("theme", newTheme);
-							generalSettingsStore.set({ theme: newTheme });
-						}}
-					/>
+		<div class="flex flex-col h-full custom-scroll">
+			<div class="p-4 space-y-6">
+				<AppearanceSection
+					currentTheme={settings.theme ?? "system"}
+					onThemeChange={(newTheme) => {
+						setSettings("theme", newTheme);
+						generalSettingsStore.set({ theme: newTheme });
+					}}
+				/>
 
-					<For each={settingsGroups}>
-						{(group) => (
+				<For each={settingsGroups}>
+					{(group) => (
+						<Show when={group.os === ostype || !group.os}>
 							<div>
 								<h3
 									class={cx(
@@ -438,7 +440,10 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 														item.onChange,
 														[
 															{ text: "Open editor", value: "openEditor" },
-															{ text: "Show in overlay", value: "showOverlay" },
+															{
+																text: "Show in overlay",
+																value: "showOverlay",
+															},
 														],
 													);
 												} else if (item.label === "Recording countdown") {
@@ -477,28 +482,28 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 									</For>
 								</div>
 							</div>
-						)}
-					</For>
+						</Show>
+					)}
+				</For>
 
-					<ServerURLSetting
-						value={settings.serverUrl ?? "https://cap.so"}
-						onChange={async (v) => {
-							const url = new URL(v);
-							const origin = url.origin;
+				<ServerURLSetting
+					value={settings.serverUrl ?? "https://cap.so"}
+					onChange={async (v) => {
+						const url = new URL(v);
+						const origin = url.origin;
 
-							if (
-								!(await confirm(
-									`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
-								))
-							)
-								return;
+						if (
+							!(await confirm(
+								`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
+							))
+						)
+							return;
 
-							await authStore.set(undefined);
-							await commands.setServerUrl(origin);
-							handleChange("serverUrl", origin);
-						}}
-					/>
-				</div>
+						await authStore.set(undefined);
+						await commands.setServerUrl(origin);
+						handleChange("serverUrl", origin);
+					}}
+				/>
 			</div>
 		</div>
 	);
@@ -527,6 +532,7 @@ function ServerURLSetting(props: {
 						<Button
 							size="sm"
 							class="mt-2"
+							variant="dark"
 							disabled={props.value === value()}
 							onClick={() => props.onChange(value())}
 						>

@@ -1,23 +1,24 @@
+import { Readable } from "node:stream";
 import * as S3 from "@aws-sdk/client-s3";
 import {
 	createPresignedPost,
 	type PresignedPostOptions,
 } from "@aws-sdk/s3-presigned-post";
 import * as S3Presigner from "@aws-sdk/s3-request-presigner";
-import type {
-	RequestPresigningArguments,
-	StreamingBlobPayloadInputTypes,
-} from "@smithy/types";
-import { type Cause, Data, Effect, Option } from "effect";
-import { S3BucketClientProvider } from "./S3BucketClientProvider";
+import type { RequestPresigningArguments } from "@smithy/types";
+import { type Cause, Effect, Option, Schema, Stream } from "effect";
 
-export class S3Error extends Data.TaggedError("S3Error")<{ message: string }> {}
+import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
+
+export class S3Error extends Schema.TaggedError<S3Error>()("S3Error", {
+	cause: Schema.Unknown,
+}) {}
 
 const wrapS3Promise = <T>(
 	callback: (
 		provider: S3BucketClientProvider["Type"],
 	) => Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,
-): Effect.Effect<T, Cause.UnknownException | S3Error, S3BucketClientProvider> =>
+): Effect.Effect<T, S3Error, S3BucketClientProvider> =>
 	Effect.gen(function* () {
 		const provider = yield* S3BucketClientProvider;
 
@@ -26,7 +27,7 @@ const wrapS3Promise = <T>(
 		if (cbResult instanceof Promise) {
 			return yield* Effect.tryPromise({
 				try: () => cbResult,
-				catch: (e) => new S3Error({ message: String(e) }),
+				catch: (cause) => new S3Error({ cause }),
 			});
 		}
 
@@ -34,11 +35,13 @@ const wrapS3Promise = <T>(
 			Effect.flatMap((cbResult) =>
 				Effect.tryPromise({
 					try: () => cbResult,
-					catch: (e) => new S3Error({ message: String(e) }),
+					catch: (cause) => new S3Error({ cause }),
 				}),
 			),
 		);
-	});
+	}).pipe(
+		Effect.catchTag("UnknownException", (cause) => new S3Error({ cause })),
+	);
 
 // @effect-diagnostics-next-line leakingRequirements:off
 export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
@@ -105,24 +108,42 @@ export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
 						),
 					),
 				),
-			putObject: (
+			putObject: <E>(
 				key: string,
-				body: StreamingBlobPayloadInputTypes,
-				fields?: { contentType?: string },
+				body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
+				fields?: { contentType?: string; contentLength?: number },
 			) =>
 				wrapS3Promise((provider) =>
 					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.PutObjectCommand({
-									Bucket: provider.bucket,
-									Key: key,
-									Body: body,
-									ContentType: fields?.contentType,
-								}),
-							),
+						Effect.flatMap((client) =>
+							Effect.gen(function* () {
+								let _body;
+
+								if (typeof body === "string" || body instanceof Uint8Array) {
+									_body = body;
+								} else if (body instanceof ArrayBuffer) {
+									_body = new Uint8Array(body);
+								} else {
+									_body = body.pipe(
+										Stream.toReadableStreamRuntime(yield* Effect.runtime()),
+										(s) => Readable.fromWeb(s as any),
+									);
+								}
+
+								return client.send(
+									new S3.PutObjectCommand({
+										Bucket: provider.bucket,
+										Key: key,
+										Body: _body,
+										ContentType: fields?.contentType,
+										ContentLength: fields?.contentLength,
+									}),
+								);
+							}),
 						),
 					),
+				).pipe(
+					Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
 				),
 			/** Copy an object within the same bucket */
 			copyObject: (

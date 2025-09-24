@@ -6,52 +6,51 @@ members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
-# cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
-cpal = "0.16"
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
-	"macros",
-	"process",
-	"fs",
-	"sync",
-	"rt",
-	"rt-multi-thread",
-	"time",
+    "macros",
+    "process",
+    "fs",
+    "sync",
+    "rt",
+    "rt-multi-thread",
+    "time",
 ] }
 tauri = { version = "2.5.0", features = ["specta"] }
 specta = { version = "=2.0.0-rc.20", features = [
-	"derive",
-	"serde_json",
-	"uuid",
+    "derive",
+    "serde_json",
+    "uuid",
 ] }
 serde = { version = "1", features = ["derive"] }
 
 scap = { git = "https://github.com/CapSoftware/scap", rev = "3cefe71561ff" }
 nokhwa = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2", features = [
-	"input-native",
-	"serialize",
+    "input-native",
+    "serialize",
 ] }
 nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "b9c8079e82e2" }
 wgpu = "25.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
-sentry = { version = "0.34.0", features = [
-	"anyhow",
-	"backtrace",
-	"debug-images",
+sentry = { version = "0.42.0", features = [
+    "anyhow",
+    "backtrace",
+    "debug-images",
 ] }
 tracing = "0.1.41"
 futures = "0.3.31"
 
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8", features = [
-	"macos_13_0",
-	"cv",
-	"cf",
-	"sc",
-	"av",
-	"blocks",
-	"async",
-	"dispatch",
+    "macos_13_0",
+    "cv",
+    "cf",
+    "sc",
+    "av",
+    "blocks",
+    "async",
+    "dispatch",
 ], default-features = false }
 
 windows = "0.60.0"
@@ -68,6 +67,7 @@ unexpected_cfgs = "allow"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
+unchecked_duration_subtraction = "deny"
 
 # Optimize for smaller binary size
 [profile.release]
@@ -78,7 +78,7 @@ opt-level = "s"   # Optimize for binary size
 debug = true
 
 [patch.crates-io]
-screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
+# screencapturekit = { git = "https://github.com/CapSoftware/screencapturekit-rs", rev = "7ff1e103742e56c8f6c2e940b5e52684ed0bed69" } # branch = "cap-main"
 cidre = { git = "https://github.com/CapSoftware/cidre", rev = "bf84b67079a8" }
 # https://github.com/gfx-rs/wgpu/pull/7550
 # wgpu = { git = "https://github.com/gfx-rs/wgpu", rev = "cd41a6e32a6239b65d1cecbeccde6a43a100914a" }

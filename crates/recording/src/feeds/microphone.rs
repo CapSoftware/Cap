@@ -1,4 +1,5 @@
 use cap_media_info::{AudioInfo, ffmpeg_sample_format_for};
+use cap_timestamp::Timestamp;
 use cpal::{
     Device, InputCallbackInfo, SampleFormat, StreamError, SupportedStreamConfig,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -21,6 +22,7 @@ pub struct MicrophoneSamples {
     pub data: Vec<u8>,
     pub format: SampleFormat,
     pub info: InputCallbackInfo,
+    pub timestamp: Timestamp,
 }
 
 #[derive(Actor)]
@@ -91,43 +93,14 @@ impl MicrophoneFeed {
         }
     }
 
+    pub fn default() -> Option<(String, Device, SupportedStreamConfig)> {
+        let host = cpal::default_host();
+        host.default_input_device().and_then(get_usable_device)
+    }
+
     pub fn list() -> MicrophonesMap {
         let host = cpal::default_host();
         let mut device_map = IndexMap::new();
-
-        let get_usable_device = |device: Device| {
-            device
-                .supported_input_configs()
-                .map_err(|error| {
-                    error!(
-                        "Error getting supported input configs for device: {}",
-                        error
-                    );
-                    error
-                })
-                .ok()
-                .and_then(|configs| {
-                    let mut configs = configs.collect::<Vec<_>>();
-                    configs.sort_by(|a, b| {
-                        b.sample_format()
-                            .sample_size()
-                            .cmp(&a.sample_format().sample_size())
-                            .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
-                    });
-                    configs
-                        .into_iter()
-                        .filter(|c| {
-                            c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000
-                        })
-                        .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
-                })
-                .and_then(|config| {
-                    device
-                        .name()
-                        .ok()
-                        .map(|name| (name, device, config.with_max_sample_rate()))
-                })
-        };
 
         if let Some((name, device, config)) =
             host.default_input_device().and_then(get_usable_device)
@@ -152,12 +125,44 @@ impl MicrophoneFeed {
     }
 }
 
+fn get_usable_device(device: Device) -> Option<(String, Device, SupportedStreamConfig)> {
+    device
+        .supported_input_configs()
+        .map_err(|error| {
+            error!(
+                "Error getting supported input configs for device: {}",
+                error
+            );
+            error
+        })
+        .ok()
+        .and_then(|configs| {
+            let mut configs = configs.collect::<Vec<_>>();
+            configs.sort_by(|a, b| {
+                b.sample_format()
+                    .sample_size()
+                    .cmp(&a.sample_format().sample_size())
+                    .then(b.max_sample_rate().cmp(&a.max_sample_rate()))
+            });
+            configs
+                .into_iter()
+                .filter(|c| c.min_sample_rate().0 <= 48000 && c.max_sample_rate().0 <= 48000)
+                .find(|c| ffmpeg_sample_format_for(c.sample_format()).is_some())
+        })
+        .and_then(|config| {
+            device
+                .name()
+                .ok()
+                .map(|name| (name, device, config.with_max_sample_rate()))
+        })
+}
+
 #[derive(Reply)]
 pub struct MicrophoneFeedLock {
     actor: ActorRef<MicrophoneFeed>,
     config: SupportedStreamConfig,
     audio_info: AudioInfo,
-    lock_tx: Recipient<Unlock>,
+    drop_tx: Option<oneshot::Sender<()>>,
 }
 
 impl MicrophoneFeedLock {
@@ -180,7 +185,9 @@ impl Deref for MicrophoneFeedLock {
 
 impl Drop for MicrophoneFeedLock {
     fn drop(&mut self) {
-        let _ = self.lock_tx.tell(Unlock).blocking_send();
+        if let Some(drop_tx) = self.drop_tx.take() {
+            let _ = drop_tx.send(());
+        }
     }
 }
 
@@ -295,6 +302,7 @@ impl Message<SetInput> for MicrophoneFeed {
                                     data: data.bytes().to_vec(),
                                     format: data.sample_format(),
                                     info: info.clone(),
+                                    timestamp: Timestamp::from_cpal(info.timestamp().capture),
                                 })
                                 .try_send();
                         }
@@ -442,11 +450,19 @@ impl Message<Lock> for MicrophoneFeed {
 
         self.state = State::Locked { inner: attached };
 
+        let (drop_tx, drop_rx) = oneshot::channel();
+
+        let actor_ref = ctx.actor_ref();
+        tokio::spawn(async move {
+            let _ = drop_rx.await;
+            let _ = actor_ref.tell(Unlock).await;
+        });
+
         Ok(MicrophoneFeedLock {
             audio_info: AudioInfo::from_stream_config(&config),
             actor: ctx.actor_ref(),
             config,
-            lock_tx: ctx.actor_ref().recipient(),
+            drop_tx: Some(drop_tx),
         })
     }
 }

@@ -74,13 +74,6 @@ export const calculateStrokeDashoffset = (
 	return circumference - (progress / 100) * circumference;
 };
 
-export const getUploadStatus = (uploadProgress?: number) => {
-	if (uploadProgress !== undefined) {
-		return "Uploading";
-	}
-	return "Processing";
-};
-
 export const getDisplayProgress = (
 	uploadProgress?: number,
 	processingProgress: number = 0,

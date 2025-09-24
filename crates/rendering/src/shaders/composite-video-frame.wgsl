@@ -1,6 +1,6 @@
 struct Uniforms {
-		crop_bounds: vec4<f32>,
-		target_bounds: vec4<f32>,
+    crop_bounds: vec4<f32>,
+    target_bounds: vec4<f32>,
     output_size: vec2<f32>,
     frame_size: vec2<f32>,
     velocity_uv: vec2<f32>,
@@ -14,6 +14,11 @@ struct Uniforms {
     shadow_opacity: f32,
     shadow_blur: f32,
     opacity: f32,
+    border_enabled: f32,
+    border_width: f32,
+    _padding1: vec2<f32>,
+    border_color: vec4<f32>,
+    _padding2: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -49,9 +54,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let p = frag_coord.xy;
     let center = (uniforms.target_bounds.xy + uniforms.target_bounds.zw) * 0.5;
     let size = (uniforms.target_bounds.zw - uniforms.target_bounds.xy) * 0.5;
+    
     let dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
 
-    // Advanced shadow calculation
     let min_frame_size = min(size.x, size.y);
     let shadow_enabled = uniforms.shadow > 0.0;
 
@@ -77,7 +82,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         shadow_enabled
     );
 
-    // Calculate shadow with no offset
     let shadow_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
 
     // Apply blur and size to shadow
@@ -90,7 +94,24 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let bg_color = vec4<f32>(0.0);
 
-    // If outside the target area, just blend shadow with intermediate
+    if (uniforms.border_enabled > 0.0) {
+        let border_outer_dist = sdf_rounded_rect(
+            p - center,
+            size + vec2<f32>(uniforms.border_width),
+            uniforms.rounding_px + uniforms.border_width
+        );
+        let border_inner_dist = sdf_rounded_rect(p - center, size, uniforms.rounding_px);
+
+        if (border_outer_dist <= 0.0 && border_inner_dist > 0.0) {
+            let inner_alpha = smoothstep(-0.5, 0.5, border_inner_dist);
+            let outer_alpha = 1.0 - smoothstep(-0.5, 0.5, border_outer_dist);
+            let edge_alpha = inner_alpha * outer_alpha;
+
+            let border_alpha = edge_alpha * uniforms.border_color.w;
+            return vec4<f32>(uniforms.border_color.xyz, border_alpha);
+        }
+    }
+    
     if target_uv.x < 0.0 || target_uv.x > 1.0 || target_uv.y < 0.0 || target_uv.y > 1.0 {
         return shadow_color;
     }
@@ -102,7 +123,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let blur_amount = select(uniforms.motion_blur_amount, uniforms.camera_motion_blur_amount, uniforms.camera_motion_blur_amount > 0.0);
 
     if blur_amount < 0.01 {
-        // First blend shadow with intermediate, then blend result with base color
         return mix(shadow_color, base_color, base_color.a);
     }
 
@@ -160,7 +180,43 @@ fn sample_texture(uv: vec2<f32>, crop_bounds_uv: vec4<f32>) -> vec4<f32> {
         }
 
         let cropped_uv = sample_uv * (crop_bounds_uv.zw - crop_bounds_uv.xy) + crop_bounds_uv.xy;
-        return vec4(textureSample(frame_texture, frame_sampler, cropped_uv).rgb, 1.0);
+
+        // Calculate downscaling ratio
+        let source_size = uniforms.frame_size * (crop_bounds_uv.zw - crop_bounds_uv.xy);
+        let target_size = uniforms.target_size;
+        let scale_ratio = source_size / target_size;
+        let is_downscaling = max(scale_ratio.x, scale_ratio.y) > 1.1;
+
+        // Sample the center pixel
+        let center_color = textureSample(frame_texture, frame_sampler, cropped_uv).rgb;
+
+        // Apply sharpening when downscaling to preserve text clarity
+        if is_downscaling {
+            let texel_size = 1.0 / uniforms.frame_size;
+
+            // Sample neighboring pixels for unsharp mask
+            let offset_x = vec2<f32>(texel_size.x, 0.0);
+            let offset_y = vec2<f32>(0.0, texel_size.y);
+
+            // 4-tap sampling for edge detection
+            let left = textureSample(frame_texture, frame_sampler, cropped_uv - offset_x).rgb;
+            let right = textureSample(frame_texture, frame_sampler, cropped_uv + offset_x).rgb;
+            let top = textureSample(frame_texture, frame_sampler, cropped_uv - offset_y).rgb;
+            let bottom = textureSample(frame_texture, frame_sampler, cropped_uv + offset_y).rgb;
+
+            // Calculate the blurred version (average of neighbors)
+            let blurred = (left + right + top + bottom) * 0.25;
+
+            // Unsharp mask: enhance the difference between center and blur
+            // Strength is adaptive based on downscale ratio
+            let sharpness = min(scale_ratio.x * 0.3, 0.7); // Cap at 0.7 to avoid over-sharpening
+            let sharpened = center_color + (center_color - blurred) * sharpness;
+
+            // Clamp to avoid color artifacts
+            return vec4(clamp(sharpened, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
+        }
+
+        return vec4(center_color, 1.0);
     }
 
     return vec4(0.0);

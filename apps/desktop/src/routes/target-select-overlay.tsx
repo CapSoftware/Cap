@@ -21,6 +21,7 @@ import {
 	Switch,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import ModeSelect from "~/components/ModeSelect";
 import { authStore, generalSettingsStore } from "~/store";
 import { createOptionsQuery } from "~/utils/queries";
 import {
@@ -30,10 +31,27 @@ import {
 	type ScreenCaptureTarget,
 	type TargetUnderCursor,
 } from "~/utils/tauri";
+import {
+	RecordingOptionsProvider,
+	useRecordingOptions,
+} from "./(window-chrome)/OptionsContext";
+
+const capitalize = (str: string) => {
+	return str.charAt(0).toUpperCase() + str.slice(1);
+};
 
 export default function () {
+	return (
+		<RecordingOptionsProvider>
+			<Inner />
+		</RecordingOptionsProvider>
+	);
+}
+
+function Inner() {
 	const [params] = useSearchParams<{ displayId: DisplayId }>();
 	const { rawOptions, setOptions } = createOptionsQuery();
+	const [toggleModeSelect, setToggleModeSelect] = createSignal(false);
 
 	const [targetUnderCursor, setTargetUnderCursor] =
 		createStore<TargetUnderCursor>({
@@ -125,15 +143,16 @@ export default function () {
 						class="relative w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors"
 					>
 						<div class="absolute inset-0 bg-black/50 -z-10" />
+
 						<Show when={displayInformation.data} keyed>
 							{(display) => (
 								<>
-									<span class="text-3xl font-semibold mb-2 text-white">
+									<span class="mb-2 text-3xl font-semibold text-white">
 										{display.name || "Monitor"}
 									</span>
 									<Show when={display.physical_size}>
 										{(size) => (
-											<span class="text-xs mb-2 text-white">
+											<span class="mb-2 text-xs text-white">
 												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
 											</span>
 										)}
@@ -142,9 +161,23 @@ export default function () {
 							)}
 						</Show>
 
+						<Show when={toggleModeSelect()}>
+							{/* Transparent overlay to capture outside clicks */}
+							<div
+								class="absolute inset-0 z-10"
+								onClick={() => setToggleModeSelect(false)}
+							/>
+							<ModeSelect
+								standalone
+								onClose={() => setToggleModeSelect(false)}
+							/>
+						</Show>
+
 						<RecordingControls
+							setToggleModeSelect={setToggleModeSelect}
 							target={{ variant: "display", id: params.displayId! }}
 						/>
+						<ShowCapFreeWarning isInstantMode={rawOptions.mode === "instant"} />
 					</div>
 				)}
 			</Match>
@@ -191,6 +224,7 @@ export default function () {
 									</span>
 								</div>
 								<RecordingControls
+									setToggleModeSelect={setToggleModeSelect}
 									target={{
 										variant: "window",
 										id: windowUnderCursor.id,
@@ -198,7 +232,7 @@ export default function () {
 								/>
 
 								<Button
-									variant="primary"
+									variant="dark"
 									size="sm"
 									onClick={() => {
 										setBounds(windowUnderCursor.bounds);
@@ -209,6 +243,9 @@ export default function () {
 								>
 									Adjust recording area
 								</Button>
+								<ShowCapFreeWarning
+									isInstantMode={rawOptions.mode === "instant"}
+								/>
 							</div>
 						</div>
 					)}
@@ -641,6 +678,9 @@ export default function () {
 													bounds,
 												}}
 											/>
+											<ShowCapFreeWarning
+												isInstantMode={rawOptions.mode === "instant"}
+											/>
 										</div>
 									</div>
 
@@ -657,15 +697,14 @@ export default function () {
 	);
 }
 
-function RecordingControls(props: { target: ScreenCaptureTarget }) {
+function RecordingControls(props: {
+	target: ScreenCaptureTarget;
+	setToggleModeSelect?: (value: boolean) => void;
+}) {
 	const auth = authStore.createQuery();
-	const { rawOptions, setOptions } = createOptionsQuery();
+	const { setOptions, rawOptions } = useRecordingOptions();
 
 	const generalSetings = generalSettingsStore.createQuery();
-
-	const capitalize = (str: string) => {
-		return str.charAt(0).toUpperCase() + str.slice(1);
-	};
 
 	const menuModes = async () =>
 		await Menu.new({
@@ -692,6 +731,13 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 			text: "Recording Countdown",
 			items: [
 				await CheckMenuItem.new({
+					text: "Off",
+					action: () => generalSettingsStore.set({ recordingCountdown: 0 }),
+					checked:
+						!generalSetings.data?.recordingCountdown ||
+						generalSetings.data?.recordingCountdown === 0,
+				}),
+				await CheckMenuItem.new({
 					text: "3 seconds",
 					action: () => generalSettingsStore.set({ recordingCountdown: 3 }),
 					checked: generalSetings.data?.recordingCountdown === 3,
@@ -714,66 +760,98 @@ function RecordingControls(props: { target: ScreenCaptureTarget }) {
 	};
 
 	return (
-		<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
-			<div
-				onClick={() => setOptions("targetMode", null)}
-				class="flex justify-center items-center bg-white rounded-full transition-opacity size-9 hover:opacity-80"
-			>
-				<IconCapX class="will-change-transform size-3" />
-			</div>
-			<div
-				data-inactive={rawOptions.mode === "instant" && !auth.data}
-				class="flex flex-row rounded-full bg-blue-9 overflow-hidden group h-11"
-				onClick={() => {
-					if (rawOptions.mode === "instant" && !auth.data) {
-						emit("start-sign-in");
-						return;
-					}
+		<>
+			<div class="flex gap-2.5 items-center p-2.5 my-2.5 rounded-xl border min-w-fit w-fit bg-gray-2 border-gray-4">
+				<div
+					onClick={() => setOptions("targetMode", null)}
+					class="flex justify-center items-center rounded-full transition-opacity bg-gray-12 size-9 hover:opacity-80"
+				>
+					<IconCapX class="invert will-change-transform size-3 dark:invert-0" />
+				</div>
+				<div
+					data-inactive={rawOptions.mode === "instant" && !auth.data}
+					class="flex overflow-hidden flex-row h-11 rounded-full bg-blue-9 group"
+					onClick={() => {
+						if (rawOptions.mode === "instant" && !auth.data) {
+							emit("start-sign-in");
+							return;
+						}
 
-					commands.startRecording({
-						capture_target: props.target,
-						mode: rawOptions.mode,
-						capture_system_audio: rawOptions.captureSystemAudio,
-					});
-				}}
-			>
-				<div class="flex items-center pl-4 py-1 hover:bg-blue-10 transition-colors">
-					{rawOptions.mode === "studio" ? (
-						<IconCapFilmCut class="size-4" />
-					) : (
-						<IconCapInstant class="size-4" />
-					)}
-					<div class="flex flex-col ml-3 mr-2">
-						<span class="text-sm text-white font-medium text-nowrap">
-							{rawOptions.mode === "instant" && !auth.data
-								? "Sign In To Use"
-								: "Start Recording"}
-						</span>
-						<span class="text-xs text-nowrap text-white font-light -mt-0.5 opacity-90">
-							{`${capitalize(rawOptions.mode)} Mode`}
-						</span>
+						commands.startRecording({
+							capture_target: props.target,
+							mode: rawOptions.mode,
+							capture_system_audio: rawOptions.captureSystemAudio,
+						});
+					}}
+				>
+					<div class="flex items-center py-1 pl-4 transition-colors hover:bg-blue-10">
+						{rawOptions.mode === "studio" ? (
+							<IconCapFilmCut class="size-4" />
+						) : (
+							<IconCapInstant class="size-4" />
+						)}
+						<div class="flex flex-col mr-2 ml-3">
+							<span class="text-sm font-medium text-white text-nowrap">
+								{rawOptions.mode === "instant" && !auth.data
+									? "Sign In To Use"
+									: "Start Recording"}
+							</span>
+							<span class="text-xs flex items-center text-nowrap gap-1 transition-opacity duration-200 text-white font-light -mt-0.5 opacity-90">
+								{`${capitalize(rawOptions.mode)} Mode`}
+							</span>
+						</div>
+					</div>
+					<div
+						class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
+						onClick={(e) => {
+							e.stopPropagation();
+							menuModes().then((menu) => menu.popup());
+						}}
+					>
+						<IconCapCaretDown class="focus:rotate-90" />
 					</div>
 				</div>
 				<div
-					class="pl-2.5 group-hover:bg-blue-10 transition-colors pr-3 py-1.5 flex items-center"
 					onClick={(e) => {
 						e.stopPropagation();
-						menuModes().then((menu) => menu.popup());
+						preRecordingMenu().then((menu) => menu.popup());
 					}}
+					class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
 				>
-					<IconCapCaretDown class="focus:rotate-90" />
+					<IconCapGear class="will-change-transform size-5" />
 				</div>
 			</div>
 			<div
-				onClick={(e) => {
-					e.stopPropagation();
-					preRecordingMenu().then((menu) => menu.popup());
-				}}
-				class="flex justify-center items-center rounded-full border transition-opacity bg-gray-6 text-gray-12 size-9 hover:opacity-80"
+				onClick={() => props.setToggleModeSelect?.(true)}
+				class="flex gap-1 items-center mb-5 transition-opacity duration-200 hover:opacity-60"
 			>
-				<IconCapGear class="will-change-transform size-5" />
+				<IconCapInfo class="opacity-70 will-change-transform size-3" />
+				<p class="text-sm text-white">
+					<span class="opacity-70">What is </span>
+					<span class="font-medium">{capitalize(rawOptions.mode)} Mode</span>?
+				</p>
 			</div>
-		</div>
+		</>
+	);
+}
+
+function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
+	const auth = authStore.createQuery();
+
+	return (
+		<Suspense>
+			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
+				<p class="text-sm text-center max-w-64">
+					Instant Mode recordings are limited to 5 mins,{" "}
+					<button
+						class="underline"
+						onClick={() => commands.showWindow("Upgrade")}
+					>
+						Upgrade to Pro
+					</button>
+				</p>
+			</Show>
+		</Suspense>
 	);
 }
 

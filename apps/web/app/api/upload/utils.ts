@@ -7,8 +7,8 @@ export function parseVideoIdOrFileKey(
 				fileKey: string;
 		  },
 ) {
-	let videoId;
-	let subpath;
+	let videoId: string;
+	let subpath: string;
 
 	if ("fileKey" in input) {
 		const [_, _videoId, ...subpathParts] = input.fileKey.split("/");

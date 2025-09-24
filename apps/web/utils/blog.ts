@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { recordScreenMacContent } from "../content/blog-content/record-screen-mac-system-audio";
+import { getAllInteractiveBlogPosts } from "./blog-registry";
 
 export type PostMetadata = {
 	title: string;
@@ -27,31 +27,16 @@ export interface BlogPost {
 	isManual?: boolean;
 }
 
-interface ManualBlogPost {
+interface InteractiveBlogPost {
 	slug: string;
-	content: {
-		title: string;
-		description: string;
-		publishedAt: string;
-		author: string;
-		tags?: string[];
-		image?: string;
-		[key: string]: any;
-	};
+	title: string;
+	description: string;
+	publishedAt: string;
+	author: string;
+	tags?: string[];
+	image?: string;
+	[key: string]: any;
 }
-
-export const manualBlogPosts: ManualBlogPost[] = [
-	{
-		slug: recordScreenMacContent.slug,
-		content: {
-			title: recordScreenMacContent.title,
-			description: recordScreenMacContent.description,
-			publishedAt: recordScreenMacContent.publishedAt,
-			author: recordScreenMacContent.author,
-			tags: recordScreenMacContent.tags,
-		},
-	},
-];
 
 function parseFrontmatter(fileContent: string) {
 	const frontmatterRegex = /---\s*([\s\S]*?)\s*---/;
@@ -133,35 +118,52 @@ function getMDXData(dir: string): BlogPost[] {
 	});
 }
 
-export function getManualBlogPosts(): BlogPost[] {
+function getInteractiveBlogPosts(): BlogPost[] {
 	try {
-		return manualBlogPosts.map(({ slug, content }) => {
-			return {
-				slug,
-				metadata: {
-					title: content.title,
-					author: content.author,
-					publishedAt: content.publishedAt,
-					summary: content.description,
-					description: content.description,
-					tags: content.tags?.join(", ") || "",
-					image: content.image,
-				},
-				content: "",
-				isManual: true,
-			} as BlogPost;
-		});
+		const interactivePosts = getAllInteractiveBlogPosts();
+
+		return interactivePosts.map((post) => ({
+			slug: post.slug,
+			metadata: {
+				title: post.title,
+				author: post.author,
+				publishedAt: post.publishedAt,
+				summary: post.description,
+				description: post.description,
+				tags: post.tags?.join(", ") || "",
+			},
+			content: "",
+			isManual: true,
+		}));
 	} catch (error) {
-		console.error("Error getting manual blog posts:", error);
+		console.error("Error getting interactive blog posts:", error);
 		return [];
 	}
 }
 
 export function getBlogPosts(): BlogPost[] {
 	const mdxPosts = getMDXData(path.join(process.cwd(), "content/blog"));
-	const manualPosts = getManualBlogPosts();
+	const interactivePosts = getInteractiveBlogPosts();
 
-	return [...mdxPosts, ...manualPosts];
+	return [...mdxPosts, ...interactivePosts];
+}
+
+export async function getInteractiveBlogContent(slug: string) {
+	try {
+		const contentModule = await import(`../content/blog-content/${slug}`);
+		const exportName = Object.keys(contentModule).find(
+			(key) => key.endsWith("Content") && contentModule[key]?.slug === slug,
+		);
+
+		if (!exportName) {
+			throw new Error(`No content export found for slug: ${slug}`);
+		}
+
+		return contentModule[exportName];
+	} catch (error) {
+		console.error(`Error loading interactive blog content for ${slug}:`, error);
+		throw error;
+	}
 }
 
 export function getDocs() {

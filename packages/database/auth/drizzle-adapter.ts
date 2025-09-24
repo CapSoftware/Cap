@@ -2,8 +2,10 @@ import { STRIPE_AVAILABLE, stripe } from "@cap/utils";
 import { and, eq } from "drizzle-orm";
 import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
 import type { Adapter } from "next-auth/adapters";
-import { nanoId } from "../helpers";
-import { accounts, sessions, users, verificationTokens } from "../schema";
+import type Stripe from "stripe";
+
+import { nanoId } from "../helpers.ts";
+import { accounts, sessions, users, verificationTokens } from "../schema.ts";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 	return {
@@ -25,17 +27,57 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 			if (!row) throw new Error("User not found");
 
 			if (STRIPE_AVAILABLE()) {
-				const customer = await stripe().customers.create({
+				const existingCustomers = await stripe().customers.list({
 					email: userData.email,
-					metadata: {
-						userId: nanoId(),
-					},
+					limit: 1,
 				});
+
+				let customer: Stripe.Customer;
+				if (existingCustomers.data.length > 0 && existingCustomers.data[0]) {
+					customer = existingCustomers.data[0];
+
+					customer = await stripe().customers.update(customer.id, {
+						metadata: {
+							...customer.metadata,
+							userId: row.id,
+						},
+					});
+				} else {
+					customer = await stripe().customers.create({
+						email: userData.email,
+						metadata: {
+							userId: row.id,
+						},
+					});
+				}
+
+				const subscriptions = await stripe().subscriptions.list({
+					customer: customer.id,
+					status: "active",
+					limit: 100,
+				});
+
+				const inviteQuota = subscriptions.data.reduce((total, sub) => {
+					return (
+						total +
+						sub.items.data.reduce(
+							(subTotal, item) => subTotal + (item.quantity || 1),
+							0,
+						)
+					);
+				}, 0);
+
+				const mostRecentSubscription = subscriptions.data[0];
 
 				await db
 					.update(users)
 					.set({
 						stripeCustomerId: customer.id,
+						...(mostRecentSubscription && {
+							stripeSubscriptionId: mostRecentSubscription.id,
+							stripeSubscriptionStatus: mostRecentSubscription.status,
+							inviteQuota: inviteQuota || 1,
+						}),
 					})
 					.where(eq(users.id, row.id));
 			}
@@ -58,7 +100,6 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 				.where(eq(users.email, email))
 				.limit(1)
 				.catch((e) => {
-					console.log(e);
 					throw e;
 				});
 			const row = rows[0];
@@ -182,29 +223,23 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 			await db.delete(sessions).where(eq(sessions.sessionToken, sessionToken));
 		},
 		async createVerificationToken(verificationToken) {
-			// First, check if a token for the given identifier already exists
 			const existingTokens = await db
 				.select()
 				.from(verificationTokens)
 				.where(eq(verificationTokens.identifier, verificationToken.identifier))
 				.limit(1);
 
-			// If a token already exists, you can return the existing token
-			// or handle it based on your business logic
 			if (existingTokens.length > 0) {
-				// For example, updating the existing token:
 				await db
 					.update(verificationTokens)
 					.set({
 						token: verificationToken.token,
 						expires: verificationToken.expires,
-						// you may update other fields as necessary
 					})
 					.where(
 						eq(verificationTokens.identifier, verificationToken.identifier),
 					);
 
-				// Return the updated token
 				return await db
 					.select()
 					.from(verificationTokens)
@@ -215,14 +250,12 @@ export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 					.then((rows) => rows[0]);
 			}
 
-			// If the token does not exist, proceed to create a new one
 			await db.insert(verificationTokens).values({
 				expires: verificationToken.expires,
 				identifier: verificationToken.identifier,
 				token: verificationToken.token,
 			});
 
-			// Retrieve and return the newly created token
 			const rows = await db
 				.select()
 				.from(verificationTokens)

@@ -13,7 +13,6 @@ import { manageBilling } from "@/actions/organization/manage-billing";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 
 import { BillingCard } from "./components/BillingCard";
-import CapSettingsCard from "./components/CapSettingsCard";
 import { InviteDialog } from "./components/InviteDialog";
 import { MembersCard } from "./components/MembersCard";
 import { OrganizationDetailsCard } from "./components/OrganizationDetailsCard";
@@ -63,7 +62,6 @@ export const Organization = () => {
 
 			<div className="flex flex-col gap-6 justify-center items-stretch xl:flex-row">
 				<OrganizationDetailsCard />
-				<CapSettingsCard />
 			</div>
 
 			<MembersCard

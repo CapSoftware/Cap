@@ -6,7 +6,7 @@ export default function Loading() {
 	return (
 		<SkeletonPage
 			customSkeleton={(Skeleton) => (
-				<div className="space-y-6">
+				<div className="flex flex-col gap-6">
 					{/* Seats stats cards */}
 					<div className="flex flex-col gap-6 md:flex-row">
 						{/* Seats Remaining card */}
@@ -66,7 +66,7 @@ export default function Loading() {
 						</div>
 					</div>
 
-					{/* Main content cards - Organization Details and Cap Settings side by side */}
+					{/* Organization details wrapper (matches Organization.tsx) */}
 					<div className="flex flex-col gap-6 justify-center items-stretch xl:flex-row">
 						{/* Organization Details Card */}
 						<div className="flex flex-col flex-1 gap-6 p-6 w-full rounded-2xl border min-h-fit bg-gray-3 border-gray-4">
@@ -84,102 +84,120 @@ export default function Loading() {
 								/>
 							</div>
 
-							{Array(5)
-								.fill(0)
-								.map((_, index) => (
-									<div key={index} className="grid grid-cols-4 w-full">
-										<div className="col-span-3">
-											<Skeleton
-												baseColor="var(--gray-4)"
-												highlightColor="var(--gray-5)"
-												className="h-[16px] w-[320px]"
-											/>
-											<Skeleton
-												baseColor="var(--gray-4)"
-												highlightColor="var(--gray-5)"
-												className="h-[14px] w-[320px]"
-											/>
-										</div>
-										<div className="flex justify-end w-full">
-											<Skeleton
-												baseColor="var(--gray-4)"
-												highlightColor="var(--gray-5)"
-												className="!h-[40px] !w-[60px] !rounded-full"
-											/>
-										</div>
+							{/* Two-column settings grid */}
+							<div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+								{/* Left column: Name */}
+								<div className="space-y-3">
+									<div className="space-y-1">
+										<Skeleton
+											className="h-[16px] w-[120px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[14px] w-[260px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
 									</div>
-								))}
-							{/* Upload Icon */}
-							<div className="flex justify-center items-center w-full h-[100px] border border-gray-5 rounded-xl">
-								<Skeleton
-									baseColor="var(--gray-4)"
-									highlightColor="var(--gray-5)"
-									className="!h-[40px] !w-[60px] !rounded-full"
-								/>
-							</div>
-						</div>
-
-						{/* Cap Settings Card */}
-						<div className="flex relative flex-col flex-1 gap-6 p-6 w-full rounded-2xl border min-h-fit bg-gray-3 border-gray-4">
-							{/* Card Header */}
-							<div className="space-y-2">
-								<Skeleton
-									baseColor="var(--gray-4)"
-									highlightColor="var(--gray-5)"
-									className="h-[24px] w-[120px]"
-								/>
-								<Skeleton
-									baseColor="var(--gray-4)"
-									highlightColor="var(--gray-5)"
-									className="h-[16px] w-[250px]"
-								/>
-							</div>
-
-							{/* Coming Soon Overlay */}
-							<div className="relative">
-								<div className="absolute top-0 left-0 z-[20] rounded-xl flex items-center justify-center w-full h-full backdrop-blur-md bg-zinc-900/20">
-									<Skeleton
-										baseColor="var(--gray-4)"
-										highlightColor="var(--gray-5)"
-										className="!h-[32px] !w-[120px] !rounded-full"
-									/>
+									<div className="flex gap-3 items-center">
+										<Skeleton
+											className="h-[44px] w-full rounded-xl"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[40px] w-[70px] rounded-full"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
 								</div>
 
-								{/* Tabs */}
-								<div className="flex gap-4 pb-4 mt-3 border-b border-gray-4">
-									<Skeleton
-										baseColor="var(--gray-4)"
-										highlightColor="var(--gray-5)"
-										className="!h-[32px] !w-[100px] !rounded-xl"
-									/>
-									<Skeleton
-										baseColor="var(--gray-4)"
-										highlightColor="var(--gray-5)"
-										className="!h-[32px] !w-[80px] !rounded-xl"
-									/>
+								{/* Right column: Custom Domain */}
+								<div className="space-y-3">
+									<div className="space-y-1">
+										<Skeleton
+											className="h-[16px] w-[140px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[14px] w-[300px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
+									<div className="flex gap-3 items-center">
+										<Skeleton
+											className="h-[44px] w-full rounded-xl"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[40px] w-[80px] rounded-full"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
 								</div>
 
-								{/* Settings Items */}
-								<div className="mt-4 space-y-3">
-									{Array(6)
-										.fill(0)
-										.map((_, index) => (
-											<div
-												key={index}
-												className="flex justify-between items-center p-3 rounded-xl border border-gray-4"
-											>
-												<Skeleton
-													baseColor="var(--gray-4)"
-													highlightColor="var(--gray-5)"
-													className="h-[16px] w-[150px]"
-												/>
-												<Skeleton
-													baseColor="var(--gray-4)"
-													highlightColor="var(--gray-5)"
-													className="!h-[24px] !w-[44px] !rounded-full"
-												/>
-											</div>
-										))}
+								{/* Left column: Access email domain */}
+								<div className="space-y-3">
+									<div className="space-y-1">
+										<Skeleton
+											className="h-[16px] w-[160px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[14px] w-[360px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
+									<div className="flex gap-3 items-center">
+										<Skeleton
+											className="h-[44px] w-full rounded-xl"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[40px] w-[70px] rounded-full"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
+								</div>
+
+								{/* Right column: Organization Icon */}
+								<div className="space-y-3">
+									<div className="space-y-1">
+										<Skeleton
+											className="h-[16px] w-[150px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+										<Skeleton
+											className="h-[14px] w-[320px]"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
+									<div className="flex justify-between items-center p-3 rounded-xl border border-dashed border-gray-5">
+										<div className="flex gap-2 items-center">
+											<Skeleton
+												className="h-[28px] w-[110px] rounded-full"
+												baseColor="var(--gray-4)"
+												highlightColor="var(--gray-5)"
+											/>
+										</div>
+										<Skeleton
+											className="h-[28px] w-[28px] rounded-md"
+											baseColor="var(--gray-4)"
+											highlightColor="var(--gray-5)"
+										/>
+									</div>
 								</div>
 							</div>
 						</div>
@@ -221,7 +239,7 @@ export default function Loading() {
 								.fill(0)
 								.map((_, index) => (
 									<div
-										key={index}
+										key={index.toString()}
 										className="flex justify-between items-center p-4 rounded-xl border border-gray-4"
 									>
 										<div className="flex gap-3 items-center">

@@ -1,6 +1,13 @@
+export type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
+export interface ComparisonCell {
+	text: string;
+	status?: ComparisonStatus;
+}
+
 export interface SeoPageContent {
 	title: string;
 	description: string;
+	badge?: string;
 	featuresTitle: string;
 	featuresDescription: string;
 	features: {
@@ -19,13 +26,19 @@ export interface SeoPageContent {
 		answer: string;
 	}[];
 	video: {
-		url: string;
-		thumbnail: string;
+		title?: string;
+		url?: string;
+		thumbnail?: string;
 		alt?: string;
+		iframe?: {
+			src: string;
+			title?: string;
+		};
 	};
 	cta: {
 		title: string;
 		buttonText: string;
+		secondaryButtonText?: string;
 	};
 	comparisonTitle?: string;
 	comparisonDescription?: string;
@@ -36,7 +49,7 @@ export interface SeoPageContent {
 	comparisonTable?: {
 		title: string;
 		headers: string[];
-		rows: string[][];
+		rows: (string | ComparisonCell)[][];
 	};
 	testimonials?: {
 		title: string;
@@ -53,6 +66,7 @@ export interface SeoPageContent {
 		title: string;
 		description: string;
 		modes: {
+			icon: JSX.Element;
 			title: string;
 			description: string;
 		}[];

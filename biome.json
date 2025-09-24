@@ -6,6 +6,11 @@
 		"useIgnoreFile": true
 	},
 	"files": {
+		"includes": [
+			"**",
+			"!apps/desktop/src/utils/tauri.ts",
+			"!packages/ui-solid/src/auto-imports.d.ts"
+		],
 		"ignoreUnknown": false
 	},
 	"formatter": {
@@ -15,7 +20,10 @@
 	"linter": {
 		"enabled": true,
 		"rules": {
-			"recommended": true
+			"recommended": true,
+			"suspicious": {
+				"noShadowRestrictedNames": "off"
+			}
 		}
 	},
 	"javascript": {

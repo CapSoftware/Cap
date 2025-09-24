@@ -419,7 +419,7 @@ const NormalLogin = ({
 					}}
 				/>
 				<MotionButton
-					variant="primary"
+					variant="dark"
 					type="submit"
 					disabled={loading || emailSent}
 					icon={<FontAwesomeIcon className="mr-1 size-4" icon={faEnvelope} />}
@@ -437,7 +437,19 @@ const NormalLogin = ({
                   </div>
                 )} */}
 			</motion.div>
-			<div className="flex gap-4 items-center my-4">
+			<motion.p
+				layout="position"
+				className="mt-3 text-xs text-center text-gray-9"
+			>
+				Don't have an account?{" "}
+				<Link
+					href="/signup"
+					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
+				>
+					Sign up here
+				</Link>
+			</motion.p>
+			<div className="flex gap-4 items-center mt-4 mb-4">
 				<span className="flex-1 h-px bg-gray-5" />
 				<p className="text-sm text-center text-gray-10">OR</p>
 				<span className="flex-1 h-px bg-gray-5" />

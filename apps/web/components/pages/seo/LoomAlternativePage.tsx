@@ -1,9 +1,11 @@
 "use client";
 
+import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
 import { SeoPageTemplate } from "../../seo/SeoPageTemplate";
+import type { SeoPageContent } from "../../seo/types";
 
-export const loomAlternativeContent = {
+export const loomAlternativeContent: SeoPageContent = {
 	title:
 		"The Ultimate Loom Alternative: Why Cap is the Best Open-Source Screen Recorder for Mac & Windows",
 	description:
@@ -27,7 +29,7 @@ export const loomAlternativeContent = {
 		{
 			title: "Half the Price of Loom",
 			description:
-				"Cap is just $9/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
+				"Cap stars from just $8.16/month per user, compared to Loom's $18/month per user. Plus, Cap offers a generous free plan that includes Studio mode for personal use.",
 		},
 		{
 			title: "High-Quality Recordings",
@@ -52,11 +54,19 @@ export const loomAlternativeContent = {
 			"Cap gives you flexible recording options to match your workflow needs, with both modes available in the free plan",
 		modes: [
 			{
+				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
 				title: "Instant Mode",
 				description:
 					"Share your screen right away with a simple link—no waiting, just record and share in seconds. Record up to 5-minute shareable links for free, perfect for quick demos and explanations. Includes built-in thread commenting for easy collaboration.",
 			},
 			{
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="mb-4 size-8"
+						strokeWidth={1.5}
+					/>
+				),
 				title: "Studio Mode",
 				description:
 					"Available completely free for personal use! Records at top quality up to 4K. Captures both your screen and webcam separately so you can edit them later, giving you professional-level production control.",
@@ -106,7 +116,7 @@ export const loomAlternativeContent = {
 		{
 			question: "How does Cap compare in pricing with Loom?",
 			answer:
-				"Cap is significantly more affordable at just $9/month per user, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
+				"Cap is significantly more affordable at just $8.16/month per user when billed annually, compared to Loom's $18/month per user. Cap also has a more generous free plan that includes Studio mode for personal use and the ability to record shareable links up to 5 minutes in 4K quality.",
 		},
 		{
 			question: "Can I keep full ownership of my recordings with Cap?",
@@ -124,23 +134,51 @@ export const loomAlternativeContent = {
 		title: "Feature Comparison: Cap vs. Loom",
 		headers: ["Feature", "Cap", "Loom"],
 		rows: [
-			["Open Source", "✅ Yes", "❌ No"],
-			["Pricing", "✅ $9/month per user", "⚠️ $18/month per user"],
+			[
+				"Open Source",
+				{ text: "Yes", status: "positive" },
+				{ text: "No", status: "negative" },
+			],
+			[
+				"Pricing",
+				{ text: "from $8.16/month per user", status: "positive" },
+				{ text: "$18/month per user", status: "warning" },
+			],
 			[
 				"Free Plan",
-				"✅ Studio mode + 5 min shareable links",
-				"⚠️ Limited features & recording time",
+				{ text: "Studio mode + 5 min shareable links", status: "positive" },
+				{ text: "Limited features & recording time", status: "warning" },
 			],
 			[
 				"4K Recording",
-				"✅ Available in free & paid plans",
-				"⚠️ Only in paid plans",
+				{ text: "Available in free & paid plans", status: "positive" },
+				{ text: "Only in paid plans", status: "warning" },
 			],
-			["Thread Commenting", "✅ Built-in on shareable links", "☑️ Available"],
-			["Custom Domain", "✅ Yes", "☑️ Enterprise plan only"],
-			["Own Storage Integration", "✅ Connect your own S3", "❌ Not available"],
-			["Community Input", "✅ Direct via open source", "☑️ Limited"],
-			["Data Ownership", "✅ 100% with own storage", "☑️ Platform dependent"],
+			[
+				"Thread Commenting",
+				{ text: "Built-in on shareable links", status: "positive" },
+				{ text: "Available", status: "neutral" },
+			],
+			[
+				"Custom Domain",
+				{ text: "Yes", status: "positive" },
+				{ text: "Enterprise plan only", status: "neutral" },
+			],
+			[
+				"Own Storage Integration",
+				{ text: "Connect your own S3", status: "positive" },
+				{ text: "Not available", status: "negative" },
+			],
+			[
+				"Community Input",
+				{ text: "Direct via open source", status: "positive" },
+				{ text: "Limited", status: "neutral" },
+			],
+			[
+				"Data Ownership",
+				{ text: "100% with own storage", status: "positive" },
+				{ text: "Platform dependent", status: "neutral" },
+			],
 		],
 	},
 	migrationGuide: {
@@ -192,7 +230,11 @@ export const LoomAlternativePage = () => {
 				type="application/ld+json"
 				dangerouslySetInnerHTML={{ __html: createFaqStructuredData() }}
 			/>
-			<SeoPageTemplate content={loomAlternativeContent} />
+			<SeoPageTemplate
+				showLogosInHeader
+				showLoomComparisonSlider
+				content={loomAlternativeContent}
+			/>
 		</>
 	);
 };

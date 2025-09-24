@@ -7,11 +7,13 @@ import {
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos } from "@cap/database/schema";
-import { serverEnv } from "@cap/env";
+import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { type Folder, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
+import { dub } from "@/utils/dub";
 import { createBucketProvider } from "@/utils/s3";
 
 async function getVideoUploadPresignedUrl({
@@ -155,14 +157,14 @@ export async function createVideoAndGetUploadUrl({
 	isUpload = false,
 	folderId,
 }: {
-	videoId?: string;
+	videoId?: Video.VideoId;
 	duration?: number;
 	resolution?: string;
 	videoCodec?: string;
 	audioCodec?: string;
 	isScreenshot?: boolean;
 	isUpload?: boolean;
-	folderId?: string;
+	folderId?: Folder.FolderId;
 }) {
 	const user = await getCurrentUser();
 
@@ -210,7 +212,7 @@ export async function createVideoAndGetUploadUrl({
 			}
 		}
 
-		const idToUse = videoId || nanoId();
+		const idToUse = Video.VideoId.make(videoId || nanoId());
 
 		const bucket = await createBucketProvider(customBucket);
 
@@ -230,6 +232,10 @@ export async function createVideoAndGetUploadUrl({
 
 		await db().insert(videos).values(videoData);
 
+		await db().insert(videoUploads).values({
+			videoId: idToUse,
+		});
+
 		const fileKey = `${user.id}/${idToUse}/${
 			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"
 		}`;
@@ -241,7 +247,21 @@ export async function createVideoAndGetUploadUrl({
 			audioCodec,
 		});
 
+		if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production") {
+			await dub()
+				.links.create({
+					url: `${serverEnv().WEB_URL}/s/${idToUse}`,
+					domain: "cap.link",
+					key: idToUse,
+				})
+				.catch((err) => {
+					console.error("Dub link create failed", err);
+				});
+		}
+
+		revalidatePath("/dashboard/caps");
 		revalidatePath("/dashboard/folder");
+		revalidatePath("/dashboard/spaces");
 
 		return {
 			id: idToUse,

@@ -11,7 +11,6 @@ import {
 	createSignal,
 	Match,
 	on,
-	onMount,
 	Show,
 	Switch,
 } from "solid-js";
@@ -115,11 +114,11 @@ function Inner() {
 		<>
 			<Header />
 			<div
-				class="flex overflow-y-hidden flex-col flex-1 gap-2 pb-4 w-full leading-5 animate-in fade-in"
+				class="flex overflow-y-hidden flex-col flex-1 min-h-0 gap-2 pb-4 w-full leading-5 animate-in fade-in"
 				data-tauri-drag-region
 			>
-				<div class="flex overflow-hidden flex-col flex-1">
-					<div class="flex overflow-y-hidden flex-row flex-1 gap-2 px-2 pb-0.5">
+				<div class="flex overflow-hidden flex-col flex-1 min-h-0">
+					<div class="flex overflow-y-hidden flex-row flex-1 min-h-0 gap-2 px-2 pb-0.5">
 						<Player />
 						<ConfigSidebar />
 					</div>
@@ -386,7 +385,7 @@ function Dialogs() {
 												<div class="flex flex-row items-center space-x-[0.5rem] text-gray-11">
 													<Tooltip content="Rule of Thirds">
 														<Button
-															variant="secondary"
+															variant="gray"
 															size="xs"
 															class={cx(
 																"flex items-center justify-center text-center rounded-full h-[2rem] w-[2rem] border text-[0.875rem] focus:border-blue-9",

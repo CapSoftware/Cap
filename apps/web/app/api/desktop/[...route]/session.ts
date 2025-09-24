@@ -1,12 +1,10 @@
 import { db } from "@cap/database";
-import { authOptions } from "@cap/database/auth/auth-options";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { authApiKeys } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
-import { getServerSession } from "next-auth";
 import { decode } from "next-auth/jwt";
 import { z } from "zod";
 

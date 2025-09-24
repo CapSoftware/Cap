@@ -1,8 +1,6 @@
-use std::{path::PathBuf, time::Duration};
-
 use crate::ExporterBase;
 use cap_editor::{AudioRenderer, get_audio_segments};
-use cap_media_encoders::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
+use cap_enc_ffmpeg::{AACEncoder, AudioEncoder, H264Encoder, MP4File, MP4Input};
 use cap_media_info::{RawVideoFormat, VideoInfo};
 use cap_project::XY;
 use cap_rendering::{ProjectUniforms, RenderSegment, RenderedFrame};
@@ -10,6 +8,7 @@ use futures::FutureExt;
 use image::ImageBuffer;
 use serde::Deserialize;
 use specta::Type;
+use std::{path::PathBuf, time::Duration};
 use tracing::{info, trace, warn};
 
 #[derive(Deserialize, Type, Clone, Copy, Debug)]

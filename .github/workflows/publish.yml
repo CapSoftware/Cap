@@ -213,17 +213,29 @@ jobs:
       - name: Upload assets
         uses: crabnebula-dev/cloud-release@v0
         with:
+          working-directory: apps/desktop
           command: release upload ${{ env.CN_APPLICATION }} "${{ needs.draft.outputs.version }}" --framework tauri
           api-key: ${{ secrets.CN_API_KEY }}
+        env:
+          TAURI_BUNDLE_PATH: ../..
+
+      - uses: matbour/setup-sentry-cli@8ef22a4ff03bcd1ebbcaa3a36a81482ca8e3872e
 
       - name: Upload debug symbols to Sentry
-        if: ${{ matrix.settings.runner == 'macos-latest' }}
+        if: ${{ runner.os == 'macOS' }}
+        shell: bash
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        working-directory: target
         run: |
-          curl -sL https://sentry.io/get-cli/ | bash
-          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} Cap.dSYM
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/Cap.dSYM
+
+      - name: Upload debug symbols to Sentry
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          sentry-cli debug-files upload -o ${{ env.SENTRY_ORG }} -p ${{ env.SENTRY_PROJECT }} target/${{ matrix.settings.target }}/release/cap_desktop.pdb
 
   done:
     needs: [draft, build]

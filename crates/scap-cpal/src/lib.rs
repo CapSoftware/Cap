@@ -1,6 +1,6 @@
 use cpal::{
-    BuildStreamError, DefaultStreamConfigError, InputCallbackInfo, PauseStreamError,
-    PlayStreamError, Stream, StreamConfig, StreamError, traits::StreamTrait,
+    InputCallbackInfo, PauseStreamError, PlayStreamError, Stream, StreamConfig, StreamError,
+    traits::StreamTrait,
 };
 use thiserror::Error;
 
@@ -9,9 +9,9 @@ pub enum CapturerError {
     #[error("NoDevice")]
     NoDevice,
     #[error("DefaultConfig: {0}")]
-    DefaultConfig(#[from] DefaultStreamConfigError),
+    DefaultConfig(String),
     #[error("BuildStream: {0}")]
-    BuildStream(#[from] BuildStreamError),
+    BuildStream(String),
 }
 
 pub fn create_capturer(
@@ -24,19 +24,23 @@ pub fn create_capturer(
     let output_device = host
         .default_output_device()
         .ok_or(CapturerError::NoDevice)?;
-    let supported_config = output_device.default_output_config()?;
+    let supported_config = output_device
+        .default_output_config()
+        .map_err(|e| CapturerError::DefaultConfig(e.to_string()))?;
     let config = supported_config.clone().into();
 
-    let stream = output_device.build_input_stream_raw(
-        &config,
-        supported_config.sample_format(),
-        {
-            let config = config.clone();
-            move |data, info: &InputCallbackInfo| data_callback(data, info, &config)
-        },
-        error_callback,
-        None,
-    )?;
+    let stream = output_device
+        .build_input_stream_raw(
+            &config,
+            supported_config.sample_format(),
+            {
+                let config = config.clone();
+                move |data, info: &InputCallbackInfo| data_callback(data, info, &config)
+            },
+            error_callback,
+            None,
+        )
+        .map_err(|e| CapturerError::BuildStream(e.to_string()))?;
 
     Ok(Capturer {
         stream,

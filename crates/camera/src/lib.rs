@@ -3,7 +3,7 @@
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(target_os = "macos")]
@@ -190,9 +190,9 @@ pub enum StartCapturingError {
 #[derive(Debug)]
 pub struct CapturedFrame {
     native: NativeCapturedFrame,
-    pub reference_time: Instant,
+    // pub reference_time: Instant,
     pub timestamp: Duration,
-    pub capture_begin_time: Option<Instant>,
+    // pub capture_begin_time: Option<Instant>,
 }
 
 impl CapturedFrame {
@@ -210,28 +210,34 @@ impl CameraInfo {
         &self,
         format: Format,
         callback: impl FnMut(CapturedFrame) + 'static,
-    ) -> Result<RecordingHandle, StartCapturingError> {
-        #[cfg(target_os = "macos")]
-        {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
-            })
-        }
-        #[cfg(windows)]
-        {
-            Ok(RecordingHandle {
-                native: start_capturing_impl(self, format, Box::new(callback))?,
-            })
-        }
+    ) -> Result<CaptureHandle, StartCapturingError> {
+        Ok(CaptureHandle {
+            #[cfg(target_os = "macos")]
+            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+            #[cfg(windows)]
+            native: Some(start_capturing_impl(self, format, Box::new(callback))?),
+        })
     }
 }
 
-pub struct RecordingHandle {
-    native: NativeRecordingHandle,
+#[must_use = "must be held for the duration of the recording"]
+pub struct CaptureHandle {
+    native: Option<NativeCaptureHandle>,
 }
 
-impl RecordingHandle {
-    pub fn stop_capturing(self) -> Result<(), String> {
-        self.native.stop_capturing()
+impl CaptureHandle {
+    pub fn stop_capturing(mut self) -> Result<(), String> {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing()?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for CaptureHandle {
+    fn drop(&mut self) {
+        if let Some(feed) = self.native.take() {
+            feed.stop_capturing().ok();
+        }
     }
 }

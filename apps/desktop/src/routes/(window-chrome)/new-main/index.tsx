@@ -25,12 +25,12 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
-import { addEventListener } from "solid-js/web";
 import Tooltip from "~/components/Tooltip";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
 	createCameraMutation,
+	createCurrentRecordingQuery,
 	createLicenseQuery,
 	listAudioDevices,
 	listScreens,
@@ -113,12 +113,14 @@ function createUpdateCheck() {
 
 function Page() {
 	const { rawOptions, setOptions } = useRecordingOptions();
+	const currentRecording = createCurrentRecordingQuery();
+	const isRecording = () => !!currentRecording.data;
 
 	createUpdateCheck();
 
 	onMount(async () => {
 		// We don't want the target select overlay on launch
-		setOptions({ targetMode: null });
+		setOptions({ targetMode: (window as any).__CAP__.initialTargetMode });
 
 		// Enforce window size with multiple safeguards
 		const currentWindow = getCurrentWindow();
@@ -293,8 +295,10 @@ function Page() {
 		<div class="flex relative justify-center flex-col px-3 gap-2 h-full text-[--text-primary]">
 			<WindowChromeHeader hideMaximize>
 				<div
-					dir={ostype() === "windows" ? "rtl" : "rtl"}
-					class="flex gap-1 items-center mx-2 w-full"
+					class={cx(
+						"flex items-center mx-2 w-full",
+						ostype() === "macos" && "flex-row-reverse",
+					)}
 					data-tauri-drag-region
 				>
 					<div class="flex gap-1 items-center" data-tauri-drag-region>
@@ -337,7 +341,9 @@ function Page() {
 							</button>
 						)}
 					</div>
-					<div class="flex-1" data-tauri-drag-region />
+					{ostype() === "macos" && (
+						<div class="flex-1" data-tauri-drag-region />
+					)}
 					<ErrorBoundary fallback={<></>}>
 						<Suspense>
 							<span
@@ -351,6 +357,7 @@ function Page() {
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
+									ostype() === "windows" && "ml-2",
 								)}
 							>
 								{license.data?.type === "commercial"
@@ -364,16 +371,16 @@ function Page() {
 				</div>
 			</WindowChromeHeader>
 			<Show when={signIn.isPending}>
-				<div class="bg-gray-1 absolute inset-0 flex items-center justify-center animate-in fade-in">
-					<div class="flex flex-col items-center justify-center gap-4">
-						<span>Singning In...</span>
+				<div class="flex absolute inset-0 justify-center items-center bg-gray-1 animate-in fade-in">
+					<div class="flex flex-col gap-4 justify-center items-center">
+						<span>Signing In...</span>
 
 						<Button
 							onClick={() => {
 								signIn.variables?.abort();
 								signIn.reset();
 							}}
-							variant="secondary"
+							variant="gray"
 							class="w-full"
 						>
 							Cancel Sign In
@@ -385,52 +392,61 @@ function Page() {
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "display"}
 					Component={IconMdiMonitor}
-					onClick={() =>
+					disabled={isRecording()}
+					onClick={() => {
+						//if recording early return
+						if (isRecording()) return;
 						setOptions("targetMode", (v) =>
 							v === "display" ? null : "display",
-						)
-					}
+						);
+					}}
 					name="Display"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "window"}
 					Component={IconLucideAppWindowMac}
-					onClick={() =>
-						setOptions("targetMode", (v) => (v === "window" ? null : "window"))
-					}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "window" ? null : "window"));
+					}}
 					name="Window"
 				/>
 				<TargetTypeButton
 					selected={rawOptions.targetMode === "area"}
 					Component={IconMaterialSymbolsScreenshotFrame2Rounded}
-					onClick={() =>
-						setOptions("targetMode", (v) => (v === "area" ? null : "area"))
-					}
+					disabled={isRecording()}
+					onClick={() => {
+						if (isRecording()) return;
+						setOptions("targetMode", (v) => (v === "area" ? null : "area"));
+					}}
 					name="Area"
 				/>
 			</div>
-			<div class="space-y-2">
-				<CameraSelect
-					disabled={cameras.isPending}
-					options={cameras.data ?? []}
-					value={options.camera() ?? null}
-					onChange={(c) => {
-						if (!c) setCamera.mutate(null);
-						else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
-						else setCamera.mutate({ DeviceID: c.device_id });
-					}}
-				/>
-				<MicrophoneSelect
-					disabled={mics.isPending}
-					options={mics.isPending ? [] : (mics.data ?? [])}
-					// this prevents options.micName() from suspending on initial load
-					value={
-						mics.isPending ? rawOptions.micName : (options.micName() ?? null)
-					}
-					onChange={(v) => setMicInput.mutate(v)}
-				/>
-				<SystemAudio />
-			</div>
+			<Show when={!signIn.isPending}>
+				<div class="space-y-2">
+					<CameraSelect
+						disabled={cameras.isPending}
+						options={cameras.data ?? []}
+						value={options.camera() ?? null}
+						onChange={(c) => {
+							if (!c) setCamera.mutate(null);
+							else if (c.model_id) setCamera.mutate({ ModelID: c.model_id });
+							else setCamera.mutate({ DeviceID: c.device_id });
+						}}
+					/>
+					<MicrophoneSelect
+						disabled={mics.isPending}
+						options={mics.isPending ? [] : (mics.data ?? [])}
+						// this prevents options.micName() from suspending on initial load
+						value={
+							mics.isPending ? rawOptions.micName : (options.micName() ?? null)
+						}
+						onChange={(v) => setMicInput.mutate(v)}
+					/>
+					<SystemAudio />
+				</div>
+			</Show>
 		</div>
 	);
 }

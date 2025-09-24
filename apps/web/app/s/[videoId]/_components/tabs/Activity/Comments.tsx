@@ -1,5 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
@@ -24,7 +25,7 @@ export const Comments = Object.assign(
 		{
 			setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
 			user: typeof userSelectProps | null;
-			videoId: string;
+			videoId: Video.VideoId;
 			optimisticComments: CommentType[];
 			setOptimisticComments: (newComment: CommentType) => void;
 			handleCommentSuccess: (comment: CommentType) => void;
@@ -63,13 +64,7 @@ export const Comments = Object.assign(
 			}
 		};
 
-		useImperativeHandle(
-			ref,
-			() => ({
-				scrollToBottom,
-			}),
-			[],
-		);
+		useImperativeHandle(ref, () => ({ scrollToBottom }), []);
 
 		const rootComments = optimisticComments.filter(
 			(comment) => !comment.parentCommentId || comment.parentCommentId === "",
@@ -228,7 +223,7 @@ export const Comments = Object.assign(
 					{props.children}
 				</div>
 
-				<div className="flex-none p-2 border-t border-gray-200 bg-gray-1">
+				<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
 					{props.user ? (
 						<CommentInput
 							{...props.commentInputProps}

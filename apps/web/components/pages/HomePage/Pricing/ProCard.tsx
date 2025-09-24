@@ -1,10 +1,17 @@
 import { Button, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
-import { faCheck, faMinus, faPlus } from "@fortawesome/free-solid-svg-icons";
+import {
+	faCloud,
+	faCreditCard,
+	faLink,
+	faMagic,
+	faMinus,
+	faPlus,
+	faUsers,
+} from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import NumberFlow from "@number-flow/react";
 import clsx from "clsx";
-import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { homepageCopy } from "../../../../data/homepage-copy";
@@ -16,7 +23,6 @@ export const ProCard = () => {
 	const [proLoading, setProLoading] = useState(false);
 	const [guestLoading, setGuestLoading] = useState(false);
 	const proArtRef = useRef<ProArtRef>(null);
-	const { push } = useRouter();
 
 	const CAP_PRO_ANNUAL_PRICE_PER_USER = homepageCopy.pricing.pro.pricing.annual;
 	const CAP_PRO_MONTHLY_PRICE_PER_USER =
@@ -101,7 +107,7 @@ export const ProCard = () => {
 			onMouseLeave={() => {
 				proArtRef.current?.playDefaultAnimation();
 			}}
-			className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-2xl bg-gray-12"
+			className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-lg bg-gray-12"
 		>
 			<div>
 				<div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
@@ -109,30 +115,30 @@ export const ProCard = () => {
 						{homepageCopy.pricing.pro.badge}
 					</span>
 				</div>
-				<div className="md:h-[300px]">
+				<div className="md:h-[180px]">
 					<ProArt ref={proArtRef} />
-					<h3 className="mb-2 text-2xl text-center">
+					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-6 text-base text-center text-gray-8">
+					<p className="mb-4 text-sm font-medium text-center text-gray-6">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
 
 				<div className="mb-6 text-center">
-					<span className="mr-2 text-5xl tabular-nums text-gray-1">
+					<span className="mr-2 text-3xl tabular-nums text-gray-1">
 						$<NumberFlow suffix="/mo" value={currentTotalPricePro} />
 					</span>
-					<span className="text-lg tabular-nums text-gray-8">
+					<span className="text-base tabular-nums text-gray-8">
 						{" "}
 						{billingCycleTextPro}
 					</span>
 					{isAnnually ? (
-						<p className="text-lg text-gray-8">
+						<p className="text-sm text-gray-8">
 							or,{" "}
 							<NumberFlow
-								value={9 * users}
-								className="text-lg tabular-nums"
+								value={CAP_PRO_MONTHLY_PRICE_PER_USER * users}
+								className="text-sm tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -145,18 +151,18 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
 									users,{" "}
 								</>
 							)}
 							billed monthly
 						</p>
 					) : (
-						<p className="text-lg text-gray-8">
+						<p className="text-sm text-gray-8">
 							or,{" "}
 							<NumberFlow
-								value={6 * users}
-								className="text-lg tabular-nums"
+								value={CAP_PRO_ANNUAL_PRICE_PER_USER * users}
+								className="text-sm tabular-nums"
 								format={{
 									notation: "compact",
 									style: "currency",
@@ -169,7 +175,7 @@ export const ProCard = () => {
 							) : (
 								<>
 									for{" "}
-									<NumberFlow value={users} className="text-lg tabular-nums" />{" "}
+									<NumberFlow value={users} className="text-sm tabular-nums" />{" "}
 									users,{" "}
 								</>
 							)}
@@ -179,42 +185,42 @@ export const ProCard = () => {
 				</div>
 
 				<div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-zinc-700/50 border-zinc-700">
-					<div className="flex gap-3 justify-center items-center">
-						<p className="text-base text-gray-1">
+					<div className="flex gap-2 justify-center items-center">
+						<p className="text-sm text-gray-1">
 							{homepageCopy.pricing.pro.labels.users}
 						</p>
 						<div className="flex items-center">
 							<Button
 								onClick={decrementUsers}
-								className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+								className="p-1 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
 								aria-label="Decrease user count"
 							>
 								<FontAwesomeIcon
 									icon={faMinus}
-									className="text-gray-12 size-3"
+									className="text-gray-12 size-2"
 								/>
 							</Button>
-							<span className="w-8 font-medium tabular-nums text-center text-white">
+							<span className="w-5 font-medium tabular-nums text-center text-white">
 								<NumberFlow value={users} />
 							</span>
 							<Button
 								onClick={incrementUsers}
-								className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+								className="p-1 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
 								aria-label="Increase user count"
 							>
 								<FontAwesomeIcon
 									icon={faPlus}
-									className="text-gray-12 size-3"
+									className="text-gray-12 size-2"
 								/>
 							</Button>
 						</div>
 					</div>
 
 					<div className="flex justify-center items-center">
-						<div className="flex gap-2 items-center">
+						<div className="flex gap-0 items-center">
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									!isAnnually ? "text-white" : "text-gray-8",
 								)}
 							>
@@ -224,11 +230,12 @@ export const ProCard = () => {
 								checked={isAnnually}
 								onCheckedChange={setIsAnnually}
 								aria-label="Billing Cycle For Pro"
+								className="scale-75"
 								id="billing-cycle-cap-pro"
 							/>
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									isAnnually ? "text-white" : "text-gray-8",
 								)}
 							>
@@ -237,14 +244,56 @@ export const ProCard = () => {
 						</div>
 					</div>
 				</div>
+			</div>
 
-				<ul className="mb-8 space-y-3 text-base">
-					{homepageCopy.pricing.pro.features.map((feature) => (
-						<li key={feature} className="flex items-center text-gray-1">
-							<FontAwesomeIcon icon={faCheck} className="mr-2 text-gray-1" />
-							{feature}
-						</li>
-					))}
+			<div className="mb-6">
+				<ul className="space-y-3">
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faCreditCard}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Everything from Desktop License</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faCloud}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Unlimited cloud storage & unlimited shareable links
+						</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faMagic}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Automatic AI title, transcription, summary, and chapters
+						</span>
+					</li>
+					<li className="flex items-center text-sm">
+						<FontAwesomeIcon
+							icon={faLink}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">
+							Connect a custom domain, e.g. cap.yourdomain.com
+						</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
+							icon={faUsers}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Shared team spaces</span>
+					</li>
 				</ul>
 			</div>
 

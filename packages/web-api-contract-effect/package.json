@@ -6,6 +6,6 @@
 	"type": "module",
 	"dependencies": {
 		"@effect/platform": "^0.90.1",
-		"effect": "^3.17.7"
+		"effect": "^3.17.13"
 	}
 }

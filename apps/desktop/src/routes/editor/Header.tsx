@@ -52,6 +52,8 @@ export function Header() {
 		exportState,
 		setExportState,
 		customDomain,
+		editorState,
+		setEditorState,
 	} = useEditorContext();
 
 	let unlistenTitlebar: UnlistenFn | undefined;
@@ -72,25 +74,38 @@ export function Header() {
 				{ostype() === "macos" && <div class="h-full w-[4rem]" />}
 				<EditorButton
 					onClick={async () => {
-						const currentWindow = getCurrentWindow();
-						if (!editorInstance.path) return;
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+
 						if (!(await ask("Are you sure you want to delete this recording?")))
 							return;
-						await remove(editorInstance.path, {
-							recursive: true,
-						});
-						events.recordingDeleted.emit({ path: editorInstance.path });
-						await currentWindow.close();
+
+						await commands.editorDeleteProject();
 					}}
-					tooltipText="Delete recording"
+					tooltipText={
+						editorState.timeline.selection
+							? "Close selection"
+							: "Delete recording"
+					}
 					leftIcon={<IconCapTrash class="w-5" />}
 				/>
 				<EditorButton
 					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+
 						console.log({ path: `${editorInstance.path}/` });
 						revealItemInDir(`${editorInstance.path}/`);
 					}}
-					tooltipText="Open recording bundle"
+					tooltipText={
+						editorState.timeline.selection
+							? "Close selection"
+							: "Open recording bundle"
+					}
 					leftIcon={<IconLucideFolder class="w-5" />}
 				/>
 
@@ -100,14 +115,30 @@ export function Header() {
 				</div>
 				<div data-tauri-drag-region class="flex-1 h-full" />
 				<EditorButton
-					tooltipText="Captions"
+					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+					}}
+					tooltipText={
+						editorState.timeline.selection ? "Close selection" : "Captions"
+					}
 					leftIcon={<IconCapCaptions class="w-5" />}
-					comingSoon
+					comingSoon={!editorState.timeline.selection}
 				/>
 				<EditorButton
-					tooltipText="Performance"
+					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+					}}
+					tooltipText={
+						editorState.timeline.selection ? "Close selection" : "Performance"
+					}
 					leftIcon={<IconCapGauge class="w-[18px]" />}
-					comingSoon
+					comingSoon={!editorState.timeline.selection}
 				/>
 			</div>
 
@@ -126,15 +157,35 @@ export function Header() {
 				)}
 			>
 				<EditorButton
-					onClick={() => projectHistory.undo()}
-					disabled={!projectHistory.canUndo()}
-					tooltipText="Undo"
+					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+						projectHistory.undo();
+					}}
+					disabled={
+						!projectHistory.canUndo() && !editorState.timeline.selection
+					}
+					tooltipText={
+						editorState.timeline.selection ? "Close selection" : "Undo"
+					}
 					leftIcon={<IconCapUndo class="w-5" />}
 				/>
 				<EditorButton
-					onClick={() => projectHistory.redo()}
-					disabled={!projectHistory.canRedo()}
-					tooltipText="Redo"
+					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+						projectHistory.redo();
+					}}
+					disabled={
+						!projectHistory.canRedo() && !editorState.timeline.selection
+					}
+					tooltipText={
+						editorState.timeline.selection ? "Close selection" : "Redo"
+					}
 					leftIcon={<IconCapRedo class="w-5" />}
 				/>
 				<div data-tauri-drag-region class="flex-1 h-full" />
@@ -142,9 +193,14 @@ export function Header() {
 					<ShareButton />
 				</Show>
 				<Button
-					variant="lightdark"
+					variant="dark"
 					class="flex gap-1.5 justify-center h-[40px] w-full max-w-[100px]"
 					onClick={() => {
+						if (editorState.timeline.selection) {
+							setEditorState("timeline", "selection", null);
+							return;
+						}
+
 						trackEvent("export_button_clicked");
 						if (exportState.type === "done") setExportState({ type: "idle" });
 
@@ -216,7 +272,7 @@ function NameEditor(props: { name: string }) {
 
 	return (
 		<Tooltip disabled={!truncated()} content={props.name}>
-			<div class="flex flex-row items-center relative text-sm font-inherit font-normal tracking-inherit text-gray-12">
+			<div class="flex relative flex-row items-center text-sm font-normal font-inherit tracking-inherit text-gray-12">
 				<input
 					ref={prettyNameRef}
 					class={cx(

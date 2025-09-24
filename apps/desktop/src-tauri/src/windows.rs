@@ -1,6 +1,7 @@
 #![allow(unused_mut)]
 #![allow(unused_imports)]
 
+use anyhow::anyhow;
 use futures::pin_mut;
 use scap_targets::{Display, DisplayId};
 use serde::Deserialize;
@@ -16,12 +17,13 @@ use tauri::{
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::{
     App, ArcLock, fake_window,
     general_settings::{AppTheme, GeneralSettingsStore},
     permissions,
+    recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
 };
 
@@ -176,15 +178,29 @@ impl CapWindowId {
 #[derive(Clone, Type, Deserialize)]
 pub enum ShowCapWindow {
     Setup,
-    Main,
-    Settings { page: Option<String> },
-    Editor { project_path: PathBuf },
+    Main {
+        init_target_mode: Option<RecordingTargetMode>,
+    },
+    Settings {
+        page: Option<String>,
+    },
+    Editor {
+        project_path: PathBuf,
+    },
     RecordingsOverlay,
-    WindowCaptureOccluder { screen_id: DisplayId },
-    TargetSelectOverlay { display_id: DisplayId },
-    CaptureArea { screen_id: DisplayId },
+    WindowCaptureOccluder {
+        screen_id: DisplayId,
+    },
+    TargetSelectOverlay {
+        display_id: DisplayId,
+    },
+    CaptureArea {
+        screen_id: DisplayId,
+    },
     Camera,
-    InProgressRecording { countdown: Option<u32> },
+    InProgressRecording {
+        countdown: Option<u32>,
+    },
     Upgrade,
     ModeSelect,
 }
@@ -222,35 +238,43 @@ impl ShowCapWindow {
                 .maximizable(false)
                 .shadow(true)
                 .build()?,
-            Self::Main => {
-                if permissions::do_permissions_check(false).necessary_granted() {
-                    let new_recording_flow = GeneralSettingsStore::get(app)
-                        .ok()
-                        .flatten()
-                        .map(|s| s.enable_new_recording_flow)
-                        .unwrap_or_default();
-
-                    let window = self
-                        .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
-                        .resizable(false)
-                        .maximized(false)
-                        .maximizable(false)
-                        .minimizable(false)
-                        .always_on_top(true)
-                        .visible_on_all_workspaces(true)
-                        .content_protected(true)
-                        .center()
-                        .build()?;
-
-                    if new_recording_flow {
-                        #[cfg(target_os = "macos")]
-                        crate::platform::set_window_level(window.as_ref().window(), 50);
-                    }
-
-                    window
-                } else {
-                    Box::pin(Self::Setup.show(app)).await?
+            Self::Main { init_target_mode } => {
+                if !permissions::do_permissions_check(false).necessary_granted() {
+                    return Box::pin(Self::Setup.show(app)).await;
                 }
+
+                let new_recording_flow = GeneralSettingsStore::get(app)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.enable_new_recording_flow)
+                    .unwrap_or_default();
+
+                let window = self
+                    .window_builder(app, if new_recording_flow { "/new-main" } else { "/" })
+                    .resizable(false)
+                    .maximized(false)
+                    .maximizable(false)
+                    .minimizable(false)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .content_protected(true)
+                    .center()
+                    .initialization_script(format!(
+                        "
+                        window.__CAP__ = window.__CAP__ ?? {{}};
+                        window.__CAP__.initialTargetMode = {}
+                    ",
+                        serde_json::to_string(init_target_mode)
+                            .expect("Failed to serialize initial target mode")
+                    ))
+                    .build()?;
+
+                if new_recording_flow {
+                    #[cfg(target_os = "macos")]
+                    crate::platform::set_window_level(window.as_ref().window(), 50);
+                }
+
+                window
             }
             Self::TargetSelectOverlay { display_id } => {
                 let Some(display) = scap_targets::Display::from_id(display_id) else {
@@ -270,7 +294,8 @@ impl ShowCapWindow {
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
                     .skip_taskbar(true)
-                    .transparent(true);
+                    .transparent(true)
+                    .visible(false);
 
                 #[cfg(target_os = "macos")]
                 {
@@ -328,7 +353,9 @@ impl ShowCapWindow {
                     if let Ok(id) = CapWindowId::from_str(&label)
                         && matches!(
                             id,
-                            CapWindowId::TargetSelectOverlay { .. } | CapWindowId::Main
+                            CapWindowId::TargetSelectOverlay { .. }
+                                | CapWindowId::Main
+                                | CapWindowId::Camera
                         )
                     {
                         let _ = window.hide();
@@ -394,47 +421,80 @@ impl ShowCapWindow {
             Self::Camera => {
                 const WINDOW_SIZE: f64 = 230.0 * 2.0;
 
-                let port = app.state::<Arc<RwLock<App>>>().read().await.camera_ws_port;
-                let mut window_builder = self
-                    .window_builder(app, "/camera")
-                    .maximized(false)
-                    .resizable(false)
-                    .shadow(false)
-                    .fullscreen(false)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .skip_taskbar(true)
-                    .position(
-                        100.0,
-                        (monitor.size().height as f64) / monitor.scale_factor()
-                            - WINDOW_SIZE
-                            - 100.0,
-                    )
-                    .initialization_script(format!(
-                        "
-			                window.__CAP__ = window.__CAP__ ?? {{}};
-			                window.__CAP__.cameraWsPort = {port};
-		                ",
-                    ))
-                    .transparent(true)
-                    .visible(false); // We set this true in `CameraWindowState::init_window`
+                let enable_native_camera_preview = GeneralSettingsStore::get(app)
+                    .ok()
+                    .and_then(|v| v.map(|v| v.enable_native_camera_preview))
+                    .unwrap_or_default();
 
-                let window = window_builder.build()?;
-
-                #[cfg(target_os = "macos")]
                 {
-                    _ = window.run_on_main_thread({
-                        let window = window.as_ref().window();
-                        move || unsafe {
-                            let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
-                            (*win).setCollectionBehavior(
-                            		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
-                            );
-                        }
-                    });
-                }
+                    let state = app.state::<ArcLock<App>>();
+                    let mut state = state.write().await;
 
-                window
+                    if enable_native_camera_preview && state.camera_preview.is_initialized() {
+                        error!("Unable to initialize camera preview as one already exists!");
+                        if let Some(window) = CapWindowId::Camera.get(app) {
+                            window.show().ok();
+                        }
+                        return Err(anyhow!(
+                            "Unable to initialize camera preview as one already exists!"
+                        )
+                        .into());
+                    }
+
+                    let mut window_builder = self
+                        .window_builder(app, "/camera")
+                        .maximized(false)
+                        .resizable(false)
+                        .shadow(false)
+                        .fullscreen(false)
+                        .always_on_top(true)
+                        .visible_on_all_workspaces(true)
+                        .skip_taskbar(true)
+                        .position(
+                            100.0,
+                            (monitor.size().height as f64) / monitor.scale_factor()
+                                - WINDOW_SIZE
+                                - 100.0,
+                        )
+                        .initialization_script(format!(
+                            "
+			                window.__CAP__ = window.__CAP__ ?? {{}};
+			                window.__CAP__.cameraWsPort = {};
+		                ",
+                            state.camera_ws_port
+                        ))
+                        .transparent(true)
+                        .visible(false); // We set this true in `CameraWindowState::init_window`
+
+                    let window = window_builder.build()?;
+
+                    if enable_native_camera_preview {
+                        let camera_feed = state.camera_feed.clone();
+                        if let Err(err) = state
+                            .camera_preview
+                            .init_window(window.clone(), camera_feed)
+                            .await
+                        {
+                            error!("Error initializing camera preview: {err}");
+                            window.close().ok();
+                        }
+                    }
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        _ = window.run_on_main_thread({
+                            let window = window.as_ref().window();
+                            move || unsafe {
+                                let win = window.ns_window().unwrap() as *const objc2_app_kit::NSWindow;
+                                (*win).setCollectionBehavior(
+                                		(*win).collectionBehavior() | objc2_app_kit::NSWindowCollectionBehavior::FullScreenAuxiliary,
+                                );
+                            }
+                        });
+                    }
+
+                    window
+                }
             }
             Self::WindowCaptureOccluder { screen_id } => {
                 let Some(display) = Display::from_id(screen_id) else {
@@ -664,7 +724,7 @@ impl ShowCapWindow {
     pub fn id(&self, app: &AppHandle) -> CapWindowId {
         match self {
             ShowCapWindow::Setup => CapWindowId::Setup,
-            ShowCapWindow::Main => CapWindowId::Main,
+            ShowCapWindow::Main { .. } => CapWindowId::Main,
             ShowCapWindow::Settings { .. } => CapWindowId::Settings,
             ShowCapWindow::Editor { project_path } => {
                 let state = app.state::<EditorWindowIds>();

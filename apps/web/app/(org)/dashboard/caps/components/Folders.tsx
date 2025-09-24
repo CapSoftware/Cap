@@ -1,6 +1,6 @@
 "use client";
 
-import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import { Fit, Layout, type RiveFile, useRive } from "@rive-app/react-canvas";
 import React, { useImperativeHandle } from "react";
 import { useTheme } from "../../Contexts";
 
@@ -9,10 +9,13 @@ export interface FolderHandle {
 	stop: () => void;
 }
 
-export const NormalFolder = React.forwardRef<FolderHandle>((_, ref) => {
+export const NormalFolder = React.forwardRef<
+	FolderHandle,
+	{ riveFile: RiveFile | undefined }
+>((props, ref) => {
 	const { theme } = useTheme();
 	const { rive, RiveComponent: NormalFolderRive } = useRive({
-		src: "/rive/dashboard.riv",
+		riveFile: props.riveFile,
 		artboard: theme === "dark" ? "folder" : "folder-dark",
 		animations: "idle",
 		autoplay: false,
@@ -44,9 +47,12 @@ export const NormalFolder = React.forwardRef<FolderHandle>((_, ref) => {
 	);
 });
 
-export const BlueFolder = React.forwardRef<FolderHandle>((_, ref) => {
+export const BlueFolder = React.forwardRef<
+	FolderHandle,
+	{ riveFile: RiveFile | undefined }
+>((props, ref) => {
 	const { rive, RiveComponent: BlueFolderRive } = useRive({
-		src: "/rive/dashboard.riv",
+		riveFile: props.riveFile,
 		artboard: "folder-blue",
 		animations: "idle",
 		autoplay: false,
@@ -73,9 +79,12 @@ export const BlueFolder = React.forwardRef<FolderHandle>((_, ref) => {
 	return <BlueFolderRive className="w-[50px] h-[50px]" />;
 });
 
-export const RedFolder = React.forwardRef<FolderHandle>((_, ref) => {
+export const RedFolder = React.forwardRef<
+	FolderHandle,
+	{ riveFile: RiveFile | undefined }
+>((props, ref) => {
 	const { rive, RiveComponent: RedFolderRive } = useRive({
-		src: "/rive/dashboard.riv",
+		riveFile: props.riveFile,
 		artboard: "folder-red",
 		animations: "idle",
 		autoplay: false,
@@ -102,9 +111,12 @@ export const RedFolder = React.forwardRef<FolderHandle>((_, ref) => {
 	return <RedFolderRive className="w-[50px] h-[50px]" />;
 });
 
-export const YellowFolder = React.forwardRef<FolderHandle>((_, ref) => {
+export const YellowFolder = React.forwardRef<
+	FolderHandle,
+	{ riveFile: RiveFile | undefined }
+>((props, ref) => {
 	const { rive, RiveComponent: YellowFolderRive } = useRive({
-		src: "/rive/dashboard.riv",
+		riveFile: props.riveFile,
 		artboard: "folder-yellow",
 		animations: "idle",
 		autoplay: false,

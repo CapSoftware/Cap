@@ -5,10 +5,11 @@ use cap_project::{
     ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::{
-    CompletedStudioRecording, RecordingError, RecordingMode, StudioRecordingHandle,
-    feeds::{CameraFeed, microphone},
-    instant_recording::{CompletedInstantRecording, InstantRecordingHandle},
+    RecordingError, RecordingMode,
+    feeds::{camera, microphone},
+    instant_recording,
     sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+    studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
@@ -18,11 +19,11 @@ use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
-    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingStopped,
-    VideoUploadInfo,
+    App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
+    RecordingStopped, VideoUploadInfo,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -40,7 +41,7 @@ use crate::{
 pub enum InProgressRecording {
     Instant {
         target_name: String,
-        handle: InstantRecordingHandle,
+        handle: instant_recording::ActorHandle,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
@@ -48,7 +49,7 @@ pub enum InProgressRecording {
     },
     Studio {
         target_name: String,
-        handle: StudioRecordingHandle,
+        handle: studio_recording::ActorHandle,
         inputs: StartRecordingInputs,
         recording_dir: PathBuf,
     },
@@ -132,25 +133,18 @@ impl InProgressRecording {
 
 pub enum CompletedRecording {
     Instant {
-        recording: CompletedInstantRecording,
+        recording: instant_recording::CompletedRecording,
         target_name: String,
         progressive_upload: Option<InstantMultipartUpload>,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: CompletedStudioRecording,
+        recording: studio_recording::CompletedStudioRecording,
         target_name: String,
     },
 }
 
 impl CompletedRecording {
-    pub fn id(&self) -> &String {
-        match self {
-            Self::Instant { recording, .. } => &recording.id,
-            Self::Studio { recording, .. } => &recording.id,
-        }
-    }
-
     pub fn project_path(&self) -> &PathBuf {
         match self {
             Self::Instant { recording, .. } => &recording.project_path,
@@ -187,7 +181,7 @@ pub async fn list_capture_windows() -> Vec<CaptureWindow> {
 #[tauri::command(async)]
 #[specta::specta]
 pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
-    CameraFeed::list_cameras()
+    cap_camera::list_cameras().collect()
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
@@ -215,6 +209,10 @@ pub async fn start_recording(
     state_mtx: MutableState<'_, App>,
     inputs: StartRecordingInputs,
 ) -> Result<(), String> {
+    if !matches!(state_mtx.read().await.recording_state, RecordingState::None) {
+        return Err("Recording already in progress".to_string());
+    }
+
     let id = uuid::Uuid::new_v4().to_string();
     let general_settings = GeneralSettingsStore::get(&app).ok().flatten();
     let general_settings = general_settings.as_ref();
@@ -357,7 +355,7 @@ pub async fn start_recording(
             )
         });
 
-    println!("spawning actor");
+    debug!("spawning start_recording actor");
 
     // done in spawn to catch panics just in case
     let spawn_actor_res = async {
@@ -375,25 +373,34 @@ pub async fn start_recording(
                     Err(e) => return Err(e.to_string()),
                 };
 
-                let base_inputs = cap_recording::RecordingBaseInputs {
-                    capture_target: inputs.capture_target.clone(),
-                    capture_system_audio: inputs.capture_system_audio,
-                    mic_feed,
+                let camera_feed = match state.camera_feed.ask(camera::Lock).await {
+                    Ok(lock) => Some(Arc::new(lock)),
+                    Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
+                    Err(e) => return Err(e.to_string()),
                 };
 
                 let (actor, actor_done_rx) = match inputs.mode {
                     RecordingMode::Studio => {
-                        let (handle, actor_done_rx) = cap_recording::spawn_studio_recording_actor(
-                            id.clone(),
+                        let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
-                            base_inputs,
-                            state.camera_feed.clone(),
+                            inputs.capture_target.clone(),
+                        )
+                        .with_system_audio(inputs.capture_system_audio)
+                        .with_custom_cursor(
                             general_settings
                                 .map(|s| s.custom_cursor_capture)
                                 .unwrap_or_default(),
-                        )
-                        .await
-                        .map_err(|e| {
+                        );
+
+                        if let Some(camera_feed) = camera_feed {
+                            builder = builder.with_camera_feed(camera_feed);
+                        }
+
+                        if let Some(mic_feed) = mic_feed {
+                            builder = builder.with_mic_feed(mic_feed);
+                        }
+
+                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
                             error!("Failed to spawn studio recording actor: {e}");
                             e.to_string()
                         })?;
@@ -413,17 +420,20 @@ pub async fn start_recording(
                             return Err("Video upload info not found".to_string());
                         };
 
-                        let (handle, actor_done_rx) =
-                            cap_recording::instant_recording::spawn_instant_recording_actor(
-                                id.clone(),
-                                recording_dir.clone(),
-                                base_inputs,
-                            )
-                            .await
-                            .map_err(|e| {
-                                error!("Failed to spawn studio recording actor: {e}");
-                                e.to_string()
-                            })?;
+                        let mut builder = instant_recording::Actor::builder(
+                            recording_dir.clone(),
+                            inputs.capture_target.clone(),
+                        )
+                        .with_system_audio(inputs.capture_system_audio);
+
+                        if let Some(mic_feed) = mic_feed {
+                            builder = builder.with_mic_feed(mic_feed);
+                        }
+
+                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
+                            error!("Failed to spawn studio recording actor: {e}");
+                            e.to_string()
+                        })?;
 
                         (
                             InProgressRecording::Instant {
@@ -628,7 +638,11 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         match settings.post_deletion_behaviour {
             PostDeletionBehaviour::DoNothing => {}
             PostDeletionBehaviour::ReopenRecordingWindow => {
-                let _ = ShowCapWindow::Main.show(&app).await;
+                let _ = ShowCapWindow::Main {
+                    init_target_mode: None,
+                }
+                .show(&app)
+                .await;
             }
         }
     }
@@ -666,8 +680,11 @@ async fn handle_recording_end(
         if let Some(v) = CapWindowId::Camera.get(&handle) {
             let _ = v.close();
         }
-        app.camera_feed.take();
         let _ = app.mic_feed.ask(microphone::RemoveInput).await;
+        let _ = app.camera_feed.ask(camera::RemoveInput).await;
+        if let Some(win) = CapWindowId::Camera.get(&handle) {
+            win.close().ok();
+        }
     }
 
     CurrentRecordingChanged.emit(&handle).ok();
@@ -795,6 +812,7 @@ async fn handle_recording_finish(
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
                                 meta,
+                                None,
                             )
                             .await
                             {
@@ -936,7 +954,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &CompletedStudioRecording,
+    recording: &studio_recording::CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -983,7 +1001,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &CompletedStudioRecording,
+    completed_recording: &studio_recording::CompletedStudioRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
@@ -1009,7 +1027,7 @@ fn project_config_from_recording(
             } else {
                 Vec::new()
             },
-            layout_segments: Vec::new(),
+            scene_segments: Vec::new(),
         }),
         ..default_config.unwrap_or_default()
     }

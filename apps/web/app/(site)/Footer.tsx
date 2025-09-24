@@ -2,7 +2,6 @@
 
 import { Logo } from "@cap/ui";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 
 type FooterLink = {
 	label: string;
@@ -88,6 +87,10 @@ const footerLinks = {
 			label: "Online Classroom Tools",
 			href: "/solutions/online-classroom-tools",
 		},
+		{
+			label: "Agencies",
+			href: "/solutions/agencies",
+		},
 	] as FooterLink[],
 	additional: [
 		{ label: "Screen Recorder", href: "/screen-recorder" },
@@ -96,6 +99,7 @@ const footerLinks = {
 		{ label: "Screen Recorder for Windows", href: "/screen-recorder-windows" },
 		{ label: "Screen Recording Software", href: "/screen-recording-software" },
 		{ label: "Cap vs Loom", href: "/loom-alternative" },
+		{ label: "Student Discount", href: "/student-discount" },
 	] as FooterLink[],
 };
 
@@ -136,7 +140,7 @@ export const Footer = () => {
 							<h3 className="text-lg font-semibold text-gray-12">Product</h3>
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.product.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}
@@ -155,7 +159,7 @@ export const Footer = () => {
 							</h3>
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.additional.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}
@@ -173,7 +177,7 @@ export const Footer = () => {
 							<h3 className="text-lg font-semibold text-gray-12">Cap</h3>
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.help.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}
@@ -190,7 +194,7 @@ export const Footer = () => {
 							<h3 className="text-lg font-semibold text-gray-12">Use Cases</h3>
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.useCases.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}
@@ -208,7 +212,7 @@ export const Footer = () => {
 							<h3 className="text-lg font-semibold text-gray-12">Socials</h3>
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.socials.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}
@@ -231,7 +235,7 @@ export const Footer = () => {
 
 							<ul className="grid grid-cols-1 gap-2 pt-2">
 								{footerLinks.tools.map((link, index) => (
-									<li key={index}>
+									<li key={index.toString()}>
 										<Link
 											className="text-gray-10"
 											href={link.href}

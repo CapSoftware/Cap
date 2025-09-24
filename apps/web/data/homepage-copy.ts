@@ -224,7 +224,7 @@ export const homepageCopy: HomePageCopy = {
 			badge: "Best value",
 			title: "Cap Pro",
 			description:
-				"Everything in Desktop plus cloud features for seamless sharing and collaboration.",
+				"Everything in Desktop plus unlimited cloud features for seamless sharing and collaboration.",
 			features: [
 				"Everything in Desktop License",
 				"Unlimited cloud storage & bandwidth",
@@ -238,13 +238,13 @@ export const homepageCopy: HomePageCopy = {
 			],
 			cta: "Get started",
 			pricing: {
-				annual: 6,
-				monthly: 9,
+				annual: 8.16,
+				monthly: 12,
 			},
 			labels: {
 				users: "Per user",
 				monthly: "Monthly",
-				annually: "Annual (save 33%)",
+				annually: "Annual (save 32%)",
 			},
 		},
 	},

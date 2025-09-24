@@ -40,6 +40,7 @@ import {
 	type CaptureWindow,
 	commands,
 	events,
+	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 
@@ -147,10 +148,12 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "display") {
 				const screenId = rawOptions.captureTarget.id;
-				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			} else if (rawOptions.captureTarget.variant === "area") {
 				const screenId = rawOptions.captureTarget.screen;
-				screen = _screens()?.find((s) => s.id === screenId) ?? _screens()?.[0];
+				screen =
+					_screens()?.find((s: any) => s.id === screenId) ?? _screens()?.[0];
 			}
 
 			return screen;
@@ -160,7 +163,8 @@ function Page() {
 
 			if (rawOptions.captureTarget.variant === "window") {
 				const windowId = rawOptions.captureTarget.id;
-				win = _windows()?.find((s) => s.id === windowId) ?? _windows()?.[0];
+				win =
+					_windows()?.find((s: any) => s.id === windowId) ?? _windows()?.[0];
 			}
 
 			return win;
@@ -173,7 +177,7 @@ function Page() {
 				if ("DeviceID" in cameraID && c.device_id === cameraID.DeviceID)
 					return c;
 			}),
-		micName: () => mics.data?.find((name) => name === rawOptions.micName),
+		micName: () => mics.data?.find((name: any) => name === rawOptions.micName),
 	};
 
 	// if target is window and no windows are available, switch to screen capture
@@ -193,7 +197,7 @@ function Page() {
 	});
 
 	const toggleRecording = createMutation(() => ({
-		mutationFn: async () => {
+		mutationFn: async (payload: { mode: RecordingMode }) => {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
@@ -236,7 +240,7 @@ function Page() {
 
 				await commands.startRecording({
 					capture_target,
-					mode: rawOptions.mode,
+					mode: payload.mode,
 					capture_system_audio: rawOptions.captureSystemAudio,
 				});
 			} else await commands.stopRecording();
@@ -483,36 +487,68 @@ function Page() {
 						Instant Mode
 					</SignInButton>
 				) : (
-					<Button
-						disabled={toggleRecording.isPending}
-						variant="blue"
-						size="md"
-						onClick={() => toggleRecording.mutate()}
-						class="flex flex-grow justify-center items-center"
-					>
-						{isRecording() ? (
-							"Stop Recording"
-						) : (
+					<Tooltip
+						childClass="w-full flex"
+						placement="top"
+						content={
 							<>
-								{rawOptions.mode === "instant" ? (
-									<IconCapInstant
-										class={cx(
-											"size-[0.8rem] mr-1.5",
-											toggleRecording.isPending ? "opacity-50" : "opacity-100",
-										)}
-									/>
-								) : (
-									<IconCapFilmCut
-										class={cx(
-											"size-[0.8rem] mr-2 -mt-[1.5px]",
-											toggleRecording.isPending ? "opacity-50" : "opacity-100",
-										)}
-									/>
-								)}
-								Start Recording
+								Instant Mode recordings are limited
+								<br /> to 5 mins,{" "}
+								<button
+									class="underline"
+									onClick={() => commands.showWindow("Upgrade")}
+								>
+									Upgrade to Pro
+								</button>
 							</>
-						)}
-					</Button>
+						}
+						openDelay={0}
+						closeDelay={0}
+						disabled={
+							!(
+								rawOptions.mode === "instant" &&
+								auth.data?.plan?.upgraded === false
+							)
+						}
+					>
+						<Button
+							disabled={toggleRecording.isPending}
+							variant="blue"
+							size="md"
+							onClick={() => toggleRecording.mutate({ mode: rawOptions.mode })}
+							class="flex flex-grow justify-center items-center"
+						>
+							{isRecording() ? (
+								"Stop Recording"
+							) : (
+								<>
+									{rawOptions.mode === "instant" ? (
+										<IconCapInstant
+											class={cx(
+												"size-[0.8rem] mr-1.5",
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
+											)}
+										/>
+									) : (
+										<IconCapFilmCut
+											class={cx(
+												"size-[0.8rem] mr-2 -mt-[1.5px]",
+												toggleRecording.isPending
+													? "opacity-50"
+													: "opacity-100",
+											)}
+										/>
+									)}
+									{rawOptions.mode === "instant" &&
+									auth.data?.plan?.upgraded === false
+										? "Start 5 min recording"
+										: "Start recording"}
+								</>
+							)}
+						</Button>
+					</Tooltip>
 				)}
 			</div>
 		</div>

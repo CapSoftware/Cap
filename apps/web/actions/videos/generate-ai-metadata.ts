@@ -1,15 +1,17 @@
 "use server";
 
-import { GetObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
 import { createBucketProvider } from "@/utils/s3";
-export async function generateAiMetadata(videoId: string, userId: string) {
+export async function generateAiMetadata(
+	videoId: Video.VideoId,
+	userId: string,
+) {
 	const groqClient = getGroqClient();
 	if (!groqClient && !serverEnv().OPENAI_API_KEY) {
 		console.error(

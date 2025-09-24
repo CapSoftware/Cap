@@ -1,6 +1,7 @@
 use super::*;
 use cidre::*;
 use kameo::prelude::*;
+use tracing::{debug, info, trace};
 
 #[derive(Debug)]
 pub struct CMSampleBufferCapture;
@@ -24,11 +25,8 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
 
 #[derive(Actor)]
 struct FrameHandler {
-    start_time_unix: f64,
-    start_cmtime: f64,
-    start_time_f64: f64,
-    video_tx: Sender<(arc::R<cm::SampleBuf>, f64)>,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
+    video_tx: Sender<(arc::R<cm::SampleBuf>, Timestamp)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
 }
 
 impl Message<NewFrame> for FrameHandler {
@@ -42,9 +40,9 @@ impl Message<NewFrame> for FrameHandler {
         let frame = msg.0;
         let sample_buffer = frame.sample_buf();
 
-        let frame_time = sample_buffer.pts().value as f64 / sample_buffer.pts().scale as f64;
-        let unix_timestamp = self.start_time_unix + frame_time - self.start_cmtime;
-        let relative_time = unix_timestamp - self.start_time_f64;
+        let mach_timestamp = cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts());
+        let timestamp =
+            Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(mach_timestamp));
 
         match &frame {
             scap_screencapturekit::Frame::Screen(frame) => {
@@ -61,7 +59,7 @@ impl Message<NewFrame> for FrameHandler {
                 if check_skip_send().is_ok()
                     && self
                         .video_tx
-                        .send((sample_buffer.retained(), relative_time))
+                        .send((sample_buffer.retained(), timestamp))
                         .is_err()
                 {
                     warn!("Pipeline is unreachable");
@@ -93,16 +91,12 @@ impl Message<NewFrame> for FrameHandler {
                 frame.set_rate(48_000);
                 let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
                 for i in 0..frame.planes() {
-                    use cap_media_info::PlanarData;
-
-                    frame.plane_data_mut(i).copy_from_slice(
+                    frame.data_mut(i).copy_from_slice(
                         &slice[i * data_bytes_size as usize..(i + 1) * data_bytes_size as usize],
                     );
                 }
 
-                frame.set_pts(Some((relative_time * AV_TIME_BASE_Q.den as f64) as i64));
-
-                let _ = audio_tx.send((frame, relative_time));
+                let _ = audio_tx.send((frame, timestamp));
             }
             _ => {}
         }
@@ -129,19 +123,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
-        let start = std::time::SystemTime::now();
-        let start_time_unix = start
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs_f64();
-        let start_cmtime = cidre::cm::Clock::host_time_clock().time();
-        let start_cmtime = start_cmtime.value as f64 / start_cmtime.scale as f64;
-
-        let start_time_f64 = self
-            .start_time
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
+        trace!("PipelineSourceTask::run");
 
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
@@ -150,13 +132,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         self.tokio_handle
             .block_on(async move {
                 let captures_audio = audio_tx.is_some();
-                let frame_handler = FrameHandler::spawn(FrameHandler {
-                    video_tx,
-                    audio_tx,
-                    start_time_unix,
-                    start_cmtime,
-                    start_time_f64,
-                });
+                let frame_handler = FrameHandler::spawn(FrameHandler { video_tx, audio_tx });
 
                 let display = Display::from_id(&config.display)
                     .ok_or_else(|| SourceError::NoDisplay(config.display))?;
@@ -166,6 +142,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .as_content_filter()
                     .await
                     .ok_or_else(|| SourceError::AsContentFilter)?;
+
+                debug!("SCK content filter: {:?}", content_filter);
 
                 let size = {
                     let logical_size = config
@@ -180,7 +158,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
                 };
 
-                tracing::info!("size: {:?}", size);
+                debug!("size: {:?}", size);
 
                 let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
                     .with_width(size.width() as usize)
@@ -191,9 +169,10 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .build();
 
                 settings.set_pixel_format(cv::PixelFormat::_32_BGRA);
+                settings.set_color_space_name(cg::color_space::names::srgb());
 
                 if let Some(crop_bounds) = config.crop_bounds {
-                    tracing::info!("crop bounds: {:?}", crop_bounds);
+                    debug!("crop bounds: {:?}", crop_bounds);
                     settings.set_src_rect(cg::Rect::new(
                         crop_bounds.position().x(),
                         crop_bounds.position().y(),
@@ -203,6 +182,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 }
 
                 let (error_tx, error_rx) = flume::bounded(1);
+
+                trace!("Spawning ScreenCaptureActor");
 
                 let capturer = ScreenCaptureActor::spawn(
                     ScreenCaptureActor::new(
@@ -214,10 +195,14 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .map_err(SourceError::CreateActor)?,
                 );
 
-                let _ = capturer
+                info!("Spawned ScreenCaptureActor");
+
+                capturer
                     .ask(StartCapturing)
                     .await
                     .map_err(SourceError::StartCapturing)?;
+
+                info!("Started capturing");
 
                 let _ = ready_signal.send(Ok(()));
 
@@ -282,10 +267,11 @@ impl ScreenCaptureActor {
         let capturer_builder = scap_screencapturekit::Capturer::builder(target, settings)
             .with_output_sample_buf_cb(move |frame| {
                 let check_err = || {
-                    Result::<_, arc::R<ns::Error>>::Ok(cap_fail::fail_err!(
+                    cap_fail::fail_err!(
                         "macos::ScreenCaptureActor output_sample_buf",
                         ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
-                    ))
+                    );
+                    Result::<_, arc::R<ns::Error>>::Ok(())
                 };
                 if let Err(e) = check_err() {
                     let _ = _error_tx.send(e);
@@ -332,14 +318,20 @@ impl Message<StartCapturing> for ScreenCaptureActor {
         _: StartCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        trace!("ScreenCaptureActor.StartCapturing");
+
         if self.capturing {
             return Err(StartCapturingError::AlreadyCapturing);
         }
+
+        trace!("Starting SCK capturer");
 
         self.capturer
             .start()
             .await
             .map_err(StartCapturingError::Start)?;
+
+        info!("Started SCK capturer");
 
         self.capturing = true;
 
@@ -355,6 +347,8 @@ impl Message<StopCapturing> for ScreenCaptureActor {
         _: StopCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        trace!("ScreenCaptureActor.StopCapturing");
+
         if !self.capturing {
             return Err(StopCapturingError::NotCapturing);
         };

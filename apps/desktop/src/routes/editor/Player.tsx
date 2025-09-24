@@ -174,7 +174,6 @@ export function Player() {
 						editorState.playbackTime,
 					),
 			},
-			{ combo: "C", handler: () => cropDialogHandler() },
 			{
 				combo: "Space",
 				handler: async () => {
@@ -198,7 +197,6 @@ export function Player() {
 				<AspectRatioSelect />
 				<EditorButton
 					tooltipText="Crop Video"
-					kbd={["C"]}
 					onClick={() => cropDialogHandler()}
 					leftIcon={<IconCapCrop class="w-5 text-gray-12" />}
 				>
@@ -258,7 +256,7 @@ export function Player() {
 				<div class="flex flex-row flex-1 gap-4 justify-end items-center">
 					<div class="flex-1" />
 					<EditorButton<typeof KToggleButton>
-						tooltipText="Split"
+						tooltipText="Toggle Split"
 						kbd={["S"]}
 						pressed={editorState.timeline.interactMode === "split"}
 						onChange={(v: boolean) =>

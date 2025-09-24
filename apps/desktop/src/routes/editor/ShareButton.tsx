@@ -1,13 +1,14 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
 import { createMutation } from "@tanstack/solid-query";
+import { Channel } from "@tauri-apps/api/core";
 import { createSignal, Show } from "solid-js";
 import { createStore, produce, reconcile } from "solid-js/store";
 import Tooltip from "~/components/Tooltip";
 import { createProgressBar } from "~/routes/editor/utils";
 import { authStore } from "~/store";
 import { exportVideo } from "~/utils/export";
-import { commands, events } from "~/utils/tauri";
+import { commands, events, type UploadProgress } from "~/utils/tauri";
 import { useEditorContext } from "./context";
 import { RESOLUTION_OPTIONS } from "./Header";
 import {
@@ -20,7 +21,8 @@ import {
 } from "./ui";
 
 function ShareButton() {
-	const { editorInstance, meta, customDomain } = useEditorContext();
+	const { editorInstance, meta, customDomain, editorState, setEditorState } =
+		useEditorContext();
 	const projectPath = editorInstance.path;
 
 	const upload = createMutation(() => ({
@@ -51,68 +53,72 @@ function ShareButton() {
 				}
 			}
 
-			const unlisten = await events.uploadProgress.listen((event) => {
-				console.log("Upload progress event:", event.payload);
+			const uploadChannel = new Channel<UploadProgress>((progress) => {
+				console.log("Upload progress:", progress);
 				setUploadState(
 					produce((state) => {
 						if (state.type !== "uploading") return;
 
-						state.progress = Math.round(event.payload.progress * 100);
+						state.progress = Math.round(progress.progress * 100);
 					}),
 				);
 			});
 
-			try {
-				setUploadState({ type: "starting" });
+			setUploadState({ type: "starting" });
 
-				// Setup progress listener before starting upload
+			// Setup progress listener before starting upload
 
-				console.log("Starting actual upload...");
+			console.log("Starting actual upload...");
 
-				await exportVideo(
-					projectPath,
-					{
-						format: "Mp4",
-						fps: 30,
-						resolution_base: {
-							x: RESOLUTION_OPTIONS._1080p.width,
-							y: RESOLUTION_OPTIONS._1080p.height,
-						},
-						compression: "Web",
+			await exportVideo(
+				projectPath,
+				{
+					format: "Mp4",
+					fps: 30,
+					resolution_base: {
+						x: RESOLUTION_OPTIONS._1080p.width,
+						y: RESOLUTION_OPTIONS._1080p.height,
 					},
-					(msg) => {
-						setUploadState(
-							reconcile({
-								type: "rendering",
-								renderedFrames: msg.renderedCount,
-								totalFrames: msg.totalFrames,
-							}),
-						);
-					},
-				);
+					compression: "Web",
+				},
+				(msg) => {
+					setUploadState(
+						reconcile({
+							type: "rendering",
+							renderedFrames: msg.renderedCount,
+							totalFrames: msg.totalFrames,
+						}),
+					);
+				},
+			);
 
-				setUploadState({ type: "uploading", progress: 0 });
+			setUploadState({ type: "uploading", progress: 0 });
 
-				// Now proceed with upload
-				const result = meta().sharing
-					? await commands.uploadExportedVideo(projectPath, "Reupload")
-					: await commands.uploadExportedVideo(projectPath, {
+			// Now proceed with upload
+			const result = meta().sharing
+				? await commands.uploadExportedVideo(
+						projectPath,
+						"Reupload",
+						uploadChannel,
+					)
+				: await commands.uploadExportedVideo(
+						projectPath,
+						{
 							Initial: { pre_created_video: null },
-						});
+						},
+						uploadChannel,
+					);
 
-				if (result === "NotAuthenticated") {
-					throw new Error("You need to sign in to share recordings");
-				} else if (result === "PlanCheckFailed")
-					throw new Error("Failed to verify your subscription status");
-				else if (result === "UpgradeRequired")
-					throw new Error("This feature requires an upgraded plan");
+			if (result === "NotAuthenticated") {
+				throw new Error("You need to sign in to share recordings");
+			} else if (result === "PlanCheckFailed")
+				throw new Error("Failed to verify your subscription status");
+			else if (result === "UpgradeRequired")
+				throw new Error("This feature requires an upgraded plan");
 
-				setUploadState({ type: "link-copied" });
+			setUploadState({ type: "link-copied" });
 
-				return result;
-			} finally {
-				unlisten();
-			}
+			return result;
 		},
 		onError: (error) => {
 			console.error(error);
@@ -189,8 +195,14 @@ function ShareButton() {
 							>
 								<Button
 									disabled={upload.isPending}
-									onClick={() => upload.mutate()}
-									variant="primary"
+									onClick={() => {
+										if (editorState.timeline.selection) {
+											setEditorState("timeline", "selection", null);
+											return;
+										}
+										upload.mutate();
+									}}
+									variant="dark"
 									class="flex justify-center items-center size-[41px] !px-0 !py-0 space-x-1"
 								>
 									{upload.isPending ? (
@@ -311,7 +323,7 @@ function ShareButton() {
 						</div>
 
 						<p class="relative z-10 mt-3 text-xs text-white">
-							{uploadState.type == "idle" || uploadState.type === "starting"
+							{uploadState.type === "idle" || uploadState.type === "starting"
 								? "Preparing to render..."
 								: uploadState.type === "rendering"
 									? `Rendering video (${uploadState.renderedFrames}/${uploadState.totalFrames} frames)`

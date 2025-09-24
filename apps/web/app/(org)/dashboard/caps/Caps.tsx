@@ -8,7 +8,7 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useQuery } from "@tanstack/react-query";
 import { Effect, Exit } from "effect";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { Rpc, withRpc } from "@/lib/Rpcs";
@@ -24,7 +24,7 @@ import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
-import { useUploadingContext } from "./UploadingContext";
+import { useUploadingContext, useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -46,6 +46,7 @@ export type VideoData = {
 	ownerName: string;
 	metadata?: VideoMetadata;
 	hasPassword: boolean;
+	hasActiveUpload: boolean;
 }[];
 
 export const Caps = ({
@@ -73,13 +74,6 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
-	const {
-		isUploading,
-		setIsUploading,
-		setUploadingCapId,
-		setUploadProgress,
-		setUploadingThumbnailUrl,
-	} = useUploadingContext();
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -260,10 +254,17 @@ export const Caps = ({
 			toast.success("Cap deleted successfully");
 			router.refresh();
 		},
-		onError: () => {
-			toast.error("Failed to delete cap");
-		},
+		onError: () => toast.error("Failed to delete cap"),
 	});
+
+	const [isUploading, uploadingCapId] = useUploadingStatus();
+	const visibleVideos = useMemo(
+		() =>
+			isUploading && uploadingCapId
+				? data.filter((video) => video.id !== uploadingCapId)
+				: data,
+		[data, isUploading, uploadingCapId],
+	);
 
 	if (count === 0) return <EmptyCapState />;
 
@@ -283,21 +284,7 @@ export const Caps = ({
 					<FontAwesomeIcon className="size-3.5" icon={faFolderPlus} />
 					New Folder
 				</Button>
-				<UploadCapButton
-					onStart={(id, thumbnailUrl) => {
-						setIsUploading(true);
-						setUploadingCapId(id);
-						setUploadingThumbnailUrl(thumbnailUrl);
-						setUploadProgress(0);
-					}}
-					size="sm"
-					onComplete={() => {
-						setIsUploading(false);
-						setUploadingCapId(null);
-						setUploadingThumbnailUrl(undefined);
-						setUploadProgress(0);
-					}}
-				/>
+				<UploadCapButton size="sm" />
 			</div>
 			{folders.length > 0 && (
 				<>
@@ -311,7 +298,7 @@ export const Caps = ({
 					</div>
 				</>
 			)}
-			{data.length > 0 && (
+			{visibleVideos.length > 0 && (
 				<>
 					<div className="flex justify-between items-center mb-6 w-full">
 						<h1 className="text-2xl font-medium text-gray-12">Videos</h1>
@@ -321,27 +308,29 @@ export const Caps = ({
 						{isUploading && (
 							<UploadPlaceholderCard key={"upload-placeholder"} />
 						)}
-						{data.map((cap) => (
-							<CapCard
-								key={cap.id}
-								cap={cap}
-								analytics={analytics[cap.id] || 0}
-								onDelete={() => {
-									if (selectedCaps.length > 0) {
-										deleteCaps(selectedCaps);
-									} else {
-										deleteCap(cap.id);
-									}
-								}}
-								userId={user?.id}
-								customDomain={customDomain}
-								isLoadingAnalytics={isLoadingAnalytics}
-								domainVerified={domainVerified}
-								isSelected={selectedCaps.includes(cap.id)}
-								anyCapSelected={anyCapSelected}
-								onSelectToggle={() => handleCapSelection(cap.id)}
-							/>
-						))}
+						{visibleVideos.map((video) => {
+							return (
+								<CapCard
+									key={video.id}
+									cap={video}
+									analytics={analytics[video.id] || 0}
+									onDelete={() => {
+										if (selectedCaps.length > 0) {
+											deleteCaps(selectedCaps);
+										} else {
+											deleteCap(video.id);
+										}
+									}}
+									userId={user?.id}
+									customDomain={customDomain}
+									isLoadingAnalytics={isLoadingAnalytics}
+									domainVerified={domainVerified}
+									isSelected={selectedCaps.includes(video.id)}
+									anyCapSelected={anyCapSelected}
+									onSelectToggle={() => handleCapSelection(video.id)}
+								/>
+							);
+						})}
 					</div>
 				</>
 			)}

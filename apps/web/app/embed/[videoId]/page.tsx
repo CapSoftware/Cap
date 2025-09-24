@@ -6,6 +6,7 @@ import {
 	sharedVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
@@ -125,6 +126,7 @@ export default async function EmbedVideoPage(props: Props) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					awsRegion: videos.awsRegion,
@@ -146,13 +148,17 @@ export default async function EmbedVideoPage(props: Props) {
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
-					hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
+					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+						Boolean,
+					),
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -195,6 +201,7 @@ async function EmbedContent({
 }: {
 	video: Omit<typeof videos.$inferSelect, "password"> & {
 		sharedOrganization: { organizationId: string } | null;
+		hasActiveUpload: boolean | undefined;
 	};
 	autoplay: boolean;
 }) {

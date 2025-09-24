@@ -8,7 +8,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { LogoMarquee } from "@/components/ui/LogoMarquee";
 import {
 	getDownloadButtonText,
@@ -17,6 +17,8 @@ import {
 	PlatformIcons,
 } from "@/utils/platform";
 import { homepageCopy } from "../../../data/homepage-copy";
+import UpgradeToPro from "../_components/UpgradeToPro";
+import type { ProArtRef } from "./Pricing/ProArt";
 import VideoModal from "./VideoModal";
 
 interface HeaderProps {
@@ -63,6 +65,8 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 			homepageCopy.header.variants.default
 		);
 	};
+
+	const proArtRef = useRef<ProArtRef>(null);
 
 	const headerContent = getHeaderContent();
 
@@ -114,33 +118,26 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 					</div>
 
 					<motion.div
-						className="flex flex-col items-center mb-5 space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4"
+						className="flex flex-wrap gap-4 items-center mb-5"
 						initial="hidden"
 						animate="visible"
 						custom={3}
 						variants={fadeIn}
 					>
 						<Button
-							variant="white"
+							variant="dark"
 							href={
 								platform === "windows"
 									? "/download"
 									: getDownloadUrl(platform, isIntel)
 							}
 							size="lg"
-							className="flex justify-center items-center w-full font-medium sm:w-auto"
+							className="flex justify-center items-center font-medium max-w-fit"
 						>
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}
 						</Button>
-						<Button
-							variant="blue"
-							href="/pricing"
-							size="lg"
-							className="relative z-[20] w-full font-medium sm:w-auto"
-						>
-							{homepageCopy.header.cta.primaryButton}
-						</Button>
+						<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
 					</motion.div>
 
 					<motion.p
@@ -178,7 +175,7 @@ const Header = ({ serverHomepageCopyVariant = "" }: HeaderProps) => {
 						variants={fadeIn}
 					>
 						<p className="mb-4 text-sm italic text-gray-10">
-							Trusted by <strong>10,000+</strong> teams, builders and creators
+							Trusted by <strong>15,000+</strong> teams, builders and creators
 						</p>
 						<LogoMarquee />
 					</motion.div>

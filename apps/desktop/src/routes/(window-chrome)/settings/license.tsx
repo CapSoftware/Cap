@@ -23,7 +23,7 @@ export default function Page() {
 	const queryClient = useQueryClient();
 
 	return (
-		<div class="flex overflow-y-auto relative flex-col gap-3 items-center p-4 mx-auto w-full h-full custom-scroll">
+		<div class="flex relative flex-col gap-3 items-center p-4 mx-auto h-full custom-scroll">
 			<Switch fallback={<CommercialLicensePurchase />}>
 				<Match when={license.data?.type === "pro" && license.data}>
 					<div class="flex justify-center items-center w-full h-screen">
@@ -260,7 +260,7 @@ function CommercialLicensePurchase() {
 						<Button
 							onClick={() => openCommercialCheckout.mutate()}
 							disabled={openCommercialCheckout.isPending}
-							variant="lightdark"
+							variant="dark"
 							class="w-full !rounded-full mt-10 !h-[48px] text-lg font-medium"
 							size="lg"
 						>

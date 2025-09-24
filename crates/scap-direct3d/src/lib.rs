@@ -3,16 +3,13 @@
 #![cfg(windows)]
 
 use std::{
-    os::windows::io::AsRawHandle,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
         mpsc::RecvError,
     },
-    thread::JoinHandle,
     time::Duration,
 };
-
 use windows::{
     Foundation::{Metadata::ApiInformation, TypedEventHandler},
     Graphics::{
@@ -23,7 +20,7 @@ use windows::{
         DirectX::{Direct3D11::IDirect3DDevice, DirectXPixelFormat},
     },
     Win32::{
-        Foundation::{HANDLE, HMODULE, LPARAM, S_FALSE, WPARAM},
+        Foundation::HMODULE,
         Graphics::{
             Direct3D::D3D_DRIVER_TYPE_HARDWARE,
             Direct3D11::{
@@ -34,20 +31,15 @@ use windows::{
                 ID3D11DeviceContext, ID3D11Texture2D,
             },
             Dxgi::{
-                Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC},
+                Common::{
+                    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DXGI_SAMPLE_DESC,
+                },
                 IDXGIDevice,
             },
         },
-        System::{
-            Threading::GetThreadId,
-            WinRT::{
-                CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-                Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess},
-                DispatcherQueueOptions, RO_INIT_MULTITHREADED, RoInitialize,
-            },
-        },
-        UI::WindowsAndMessaging::{
-            DispatchMessageW, GetMessageW, MSG, PostThreadMessageW, TranslateMessage, WM_QUIT,
+        System::WinRT::Direct3D11::{
+            CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
         },
     },
     core::{HSTRING, IInspectable, Interface},
@@ -57,19 +49,22 @@ use windows::{
 #[repr(i32)]
 pub enum PixelFormat {
     #[default]
-    R8G8B8A8Unorm = 28,
+    R8G8B8A8Unorm,
+    B8G8R8A8Unorm,
 }
 
 impl PixelFormat {
     pub fn as_directx(&self) -> DirectXPixelFormat {
         match self {
             Self::R8G8B8A8Unorm => DirectXPixelFormat::R8G8B8A8UIntNormalized,
+            Self::B8G8R8A8Unorm => DirectXPixelFormat::B8G8R8A8UIntNormalized,
         }
     }
 
     pub fn as_dxgi(&self) -> DXGI_FORMAT {
         match self {
             Self::R8G8B8A8Unorm => DXGI_FORMAT_R8G8B8A8_UNORM,
+            Self::B8G8R8A8Unorm => DXGI_FORMAT_B8G8R8A8_UNORM,
         }
     }
 }
@@ -123,6 +118,8 @@ pub enum NewCapturerError {
     CursorNotSupported,
     #[error("UpdateIntervalNotSupported")]
     UpdateIntervalNotSupported,
+    #[error("D3DDevice: {0}")]
+    D3DDevice(windows::core::Error),
     #[error("CreateRunner/{0}")]
     CreateRunner(#[from] StartRunnerError),
     #[error("RecvTimeout")]
@@ -132,16 +129,20 @@ pub enum NewCapturerError {
 }
 
 pub struct Capturer {
-    stop_flag: Arc<AtomicBool>,
-    item: GraphicsCaptureItem,
     settings: Settings,
-    thread_handle: Option<JoinHandle<()>>,
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
+    session: GraphicsCaptureSession,
+    _frame_pool: Direct3D11CaptureFramePool,
 }
 
 impl Capturer {
     pub fn new(
         item: GraphicsCaptureItem,
         settings: Settings,
+        mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
+        mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
+        mut d3d_device: Option<ID3D11Device>,
     ) -> Result<Capturer, NewCapturerError> {
         if !is_supported()? {
             return Err(NewCapturerError::NotSupported);
@@ -161,14 +162,192 @@ impl Capturer {
             return Err(NewCapturerError::UpdateIntervalNotSupported);
         }
 
+        if d3d_device.is_none() {
+            unsafe {
+                D3D11CreateDevice(
+                    None,
+                    D3D_DRIVER_TYPE_HARDWARE,
+                    HMODULE::default(),
+                    Default::default(),
+                    None,
+                    D3D11_SDK_VERSION,
+                    Some(&mut d3d_device),
+                    None,
+                    None,
+                )
+            }
+            .map_err(StartRunnerError::D3DDevice)?;
+        }
+
+        let (d3d_device, d3d_context) = d3d_device
+            .map(|d| unsafe { d.GetImmediateContext() }.map(|v| (d, v)))
+            .transpose()
+            .unwrap()
+            .unwrap();
+
+        let item = item.clone();
+        let settings = settings.clone();
         let stop_flag = Arc::new(AtomicBool::new(false));
 
+        let direct3d_device = (|| {
+            let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
+            let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?;
+            inspectable.cast::<IDirect3DDevice>()
+        })()
+        .unwrap();
+        // .map_err(StartRunnerError::Direct3DDevice)?;
+
+        let frame_pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+            &direct3d_device,
+            settings.pixel_format.as_directx(),
+            1,
+            item.Size().unwrap(),
+        )
+        .unwrap();
+        // .map_err(StartRunnerError::FramePool)?;
+
+        let session = frame_pool.CreateCaptureSession(&item).unwrap();
+        // .map_err(StartRunnerError::CaptureSession)?;
+
+        if let Some(border_required) = settings.is_border_required {
+            session.SetIsBorderRequired(border_required).unwrap();
+        }
+
+        if let Some(cursor_capture_enabled) = settings.is_cursor_capture_enabled {
+            session
+                .SetIsCursorCaptureEnabled(cursor_capture_enabled)
+                .unwrap();
+        }
+
+        if let Some(min_update_interval) = settings.min_update_interval {
+            session
+                .SetMinUpdateInterval(min_update_interval.into())
+                .unwrap();
+        }
+
+        let crop_data = settings
+            .crop
+            .map(|crop| {
+                let desc = D3D11_TEXTURE2D_DESC {
+                    Width: (crop.right - crop.left),
+                    Height: (crop.bottom - crop.top),
+                    MipLevels: 1,
+                    ArraySize: 1,
+                    Format: settings.pixel_format.as_dxgi(),
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    Usage: D3D11_USAGE_DEFAULT,
+                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+                    CPUAccessFlags: 0,
+                    MiscFlags: 0,
+                };
+
+                let mut texture = None;
+                unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
+                    .map_err(StartRunnerError::CropTexture)?;
+
+                Ok::<_, StartRunnerError>((texture.unwrap(), crop))
+            })
+            .transpose()
+            .unwrap();
+
+        frame_pool
+            .FrameArrived(
+                &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new({
+                    let d3d_context = d3d_context.clone();
+                    let d3d_device = d3d_device.clone();
+
+                    move |frame_pool, _| {
+                        if stop_flag.load(Ordering::Relaxed) {
+                            return Ok(());
+                        }
+
+                        let frame = frame_pool
+                            .as_ref()
+                            .expect("FrameArrived parameter was None")
+                            .TryGetNextFrame()?;
+
+                        let size = frame.ContentSize()?;
+
+                        let surface = frame.Surface()?;
+                        let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
+                        let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
+
+                        let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
+                            unsafe {
+                                d3d_context.CopySubresourceRegion(
+                                    &cropped_texture,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    &texture,
+                                    0,
+                                    Some(&crop),
+                                );
+                            }
+
+                            Frame {
+                                width: crop.right - crop.left,
+                                height: crop.bottom - crop.top,
+                                pixel_format: settings.pixel_format,
+                                inner: frame,
+                                texture: cropped_texture,
+                                d3d_context: d3d_context.clone(),
+                                d3d_device: d3d_device.clone(),
+                            }
+                        } else {
+                            Frame {
+                                width: size.Width as u32,
+                                height: size.Height as u32,
+                                pixel_format: settings.pixel_format,
+                                inner: frame,
+                                texture,
+                                d3d_context: d3d_context.clone(),
+                                d3d_device: d3d_device.clone(),
+                            }
+                        };
+
+                        (callback)(frame)
+                    }
+                }),
+            )
+            .unwrap();
+        // .map_err(StartRunnerError::RegisterFrameArrived)?;
+
+        item.Closed(
+            &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
+                closed_callback()
+            }),
+        )
+        .unwrap();
+
         Ok(Capturer {
-            stop_flag,
-            item,
             settings,
-            thread_handle: None,
+            // thread_handle: None,
+            d3d_device,
+            d3d_context,
+            session,
+            _frame_pool: frame_pool,
         })
+    }
+
+    pub fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    pub fn session(&self) -> &GraphicsCaptureSession {
+        &self.session
+    }
+
+    pub fn d3d_device(&self) -> &ID3D11Device {
+        &self.d3d_device
+    }
+
+    pub fn d3d_context(&self) -> &ID3D11DeviceContext {
+        &self.d3d_context
     }
 }
 
@@ -182,51 +361,8 @@ pub enum StartCapturerError {
     RecvFailed(RecvError),
 }
 impl Capturer {
-    pub fn start(
-        &mut self,
-        callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
-        closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-    ) -> Result<(), StartCapturerError> {
-        if self.thread_handle.is_some() {
-            return Err(StartCapturerError::AlreadyStarted);
-        }
-
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-
-        let item = self.item.clone();
-        let settings = self.settings.clone();
-        let stop_flag = self.stop_flag.clone();
-
-        let thread_handle = std::thread::spawn({
-            move || {
-                if let Err(e) = unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
-                    && e.code() != S_FALSE
-                {
-                    return;
-                    // return Err(CreateRunnerError::FailedToInitializeWinRT);
-                }
-
-                match Runner::start(item, settings, callback, closed_callback, stop_flag) {
-                    Ok(runner) => {
-                        let _ = started_tx.send(Ok(()));
-
-                        runner.run();
-                    }
-                    Err(e) => {
-                        let _ = started_tx.send(Err(e));
-                    }
-                };
-            }
-        });
-
-        started_rx
-            .recv()
-            .map_err(StartCapturerError::RecvFailed)?
-            .map_err(StartCapturerError::StartFailed)?;
-
-        self.thread_handle = Some(thread_handle);
-
-        Ok(())
+    pub fn start(&mut self) -> windows::core::Result<()> {
+        self.session.StartCapture()
     }
 }
 
@@ -242,44 +378,54 @@ pub enum StopCapturerError {
 
 impl Capturer {
     pub fn stop(&mut self) -> Result<(), StopCapturerError> {
-        let Some(thread_handle) = self.thread_handle.take() else {
-            return Err(StopCapturerError::NotStarted);
-        };
+        // let Some(thread_handle) = self.thread_handle.take() else {
+        //     return Err(StopCapturerError::NotStarted);
+        // };
 
-        self.stop_flag.store(true, Ordering::Relaxed);
+        // let Some(runner) = self.runner.take() else {
+        //     return Err(StopCapturerError::NotStarted);
+        // };
 
-        let handle = HANDLE(thread_handle.as_raw_handle());
-        let thread_id = unsafe { GetThreadId(handle) };
+        // runner._session.Close().unwrap();
 
-        while let Err(e) =
-            unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
-        {
-            if thread_handle.is_finished() {
-                break;
-            }
+        self.session.Close().unwrap();
 
-            if e.code().0 != -2147023452 {
-                return Err(StopCapturerError::PostMessageFailed);
-            }
-        }
+        // self.runner.self.stop_flag.store(true, Ordering::Relaxed);
 
-        thread_handle
-            .join()
-            .map_err(|_| StopCapturerError::ThreadJoinFailed)
+        // let handle = HANDLE(thread_handle.as_raw_handle());
+        // let thread_id = unsafe { GetThreadId(handle) };
+
+        // while let Err(e) =
+        //     unsafe { PostThreadMessageW(thread_id, WM_QUIT, WPARAM::default(), LPARAM::default()) }
+        // {
+        //     if thread_handle.is_finished() {
+        //         break;
+        //     }
+
+        //     if e.code().0 != -2147023452 {
+        //         return Err(StopCapturerError::PostMessageFailed);
+        //     }
+        // }
+
+        // thread_handle
+        //     .join()
+        //     .map_err(|_| StopCapturerError::ThreadJoinFailed)
+
+        Ok(())
     }
 }
 
-pub struct Frame<'a> {
+pub struct Frame {
     width: u32,
     height: u32,
     pixel_format: PixelFormat,
     inner: Direct3D11CaptureFrame,
     texture: ID3D11Texture2D,
-    d3d_device: &'a ID3D11Device,
-    d3d_context: &'a ID3D11DeviceContext,
+    d3d_device: ID3D11Device,
+    d3d_context: ID3D11DeviceContext,
 }
 
-impl<'a> std::fmt::Debug for Frame<'a> {
+impl std::fmt::Debug for Frame {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Frame")
             .field("width", &self.width)
@@ -288,7 +434,7 @@ impl<'a> std::fmt::Debug for Frame<'a> {
     }
 }
 
-impl<'a> Frame<'a> {
+impl Frame {
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -309,7 +455,15 @@ impl<'a> Frame<'a> {
         &self.texture
     }
 
-    pub fn as_buffer(&self) -> windows::core::Result<FrameBuffer<'a>> {
+    pub fn d3d_device(&self) -> &ID3D11Device {
+        &self.d3d_device
+    }
+
+    pub fn d3d_context(&self) -> &ID3D11DeviceContext {
+        &self.d3d_context
+    }
+
+    pub fn as_buffer<'a>(&'a self) -> windows::core::Result<FrameBuffer<'a>> {
         let texture_desc = D3D11_TEXTURE2D_DESC {
             Width: self.width,
             Height: self.height,
@@ -429,190 +583,37 @@ pub enum StartRunnerError {
     Other(#[from] windows::core::Error),
 }
 
-#[derive(Clone)]
-struct Runner {
-    _session: GraphicsCaptureSession,
-    _frame_pool: Direct3D11CaptureFramePool,
-}
+// #[derive(Clone)]
+// struct Runner {
+//     _session: GraphicsCaptureSession,
+//     _frame_pool: Direct3D11CaptureFramePool,
+// }
 
-impl Runner {
-    fn start(
-        item: GraphicsCaptureItem,
-        settings: Settings,
-        mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
-        mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
-        stop_flag: Arc<AtomicBool>,
-    ) -> Result<Self, StartRunnerError> {
-        let queue_options = DispatcherQueueOptions {
-            dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
-            threadType: DQTYPE_THREAD_CURRENT,
-            apartmentType: DQTAT_COM_NONE,
-        };
+// impl Runner {
+//     fn start(
+//         item: GraphicsCaptureItem,
+//         settings: Settings,
+//         mut callback: impl FnMut(Frame) -> windows::core::Result<()> + Send + 'static,
+//         mut closed_callback: impl FnMut() -> windows::core::Result<()> + Send + 'static,
+//         stop_flag: Arc<AtomicBool>,
+//         d3d_device: ID3D11Device,
+//         d3d_context: ID3D11DeviceContext,
+//     ) -> Result<Self, StartRunnerError> {
+//         session
+//             .StartCapture()
+//             .map_err(StartRunnerError::StartCapture)?;
 
-        let _controller = unsafe { CreateDispatcherQueueController(queue_options) }
-            .map_err(StartRunnerError::DispatchQueue)?;
+//         Ok(Self {
+//             _session: session,
+//             _frame_pool: frame_pool,
+//         })
+//     }
 
-        let mut d3d_device = None;
-        let mut d3d_context = None;
-
-        unsafe {
-            D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
-                HMODULE::default(),
-                Default::default(),
-                None,
-                D3D11_SDK_VERSION,
-                Some(&mut d3d_device),
-                None,
-                Some(&mut d3d_context),
-            )
-        }
-        .map_err(StartRunnerError::D3DDevice)?;
-
-        let d3d_device = d3d_device.unwrap();
-        let d3d_context = d3d_context.unwrap();
-
-        let direct3d_device = (|| {
-            let dxgi_device = d3d_device.cast::<IDXGIDevice>()?;
-            let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }?;
-            inspectable.cast::<IDirect3DDevice>()
-        })()
-        .map_err(StartRunnerError::Direct3DDevice)?;
-
-        let frame_pool = Direct3D11CaptureFramePool::Create(
-            &direct3d_device,
-            PixelFormat::R8G8B8A8Unorm.as_directx(),
-            1,
-            item.Size()?,
-        )
-        .map_err(StartRunnerError::FramePool)?;
-
-        let session = frame_pool
-            .CreateCaptureSession(&item)
-            .map_err(StartRunnerError::CaptureSession)?;
-
-        if let Some(border_required) = settings.is_border_required {
-            session.SetIsBorderRequired(border_required)?;
-        }
-
-        if let Some(cursor_capture_enabled) = settings.is_cursor_capture_enabled {
-            session.SetIsCursorCaptureEnabled(cursor_capture_enabled)?;
-        }
-
-        if let Some(min_update_interval) = settings.min_update_interval {
-            session.SetMinUpdateInterval(min_update_interval.into())?;
-        }
-
-        let crop_data = settings
-            .crop
-            .map(|crop| {
-                let desc = D3D11_TEXTURE2D_DESC {
-                    Width: (crop.right - crop.left),
-                    Height: (crop.bottom - crop.top),
-                    MipLevels: 1,
-                    ArraySize: 1,
-                    Format: settings.pixel_format.as_dxgi(),
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    Usage: D3D11_USAGE_DEFAULT,
-                    BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
-                    CPUAccessFlags: 0,
-                    MiscFlags: 0,
-                };
-
-                let mut texture = None;
-                unsafe { d3d_device.CreateTexture2D(&desc, None, Some(&mut texture)) }
-                    .map_err(StartRunnerError::CropTexture)?;
-
-                Ok::<_, StartRunnerError>((texture.unwrap(), crop))
-            })
-            .transpose()?;
-
-        frame_pool
-            .FrameArrived(
-                &TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(
-                    move |frame_pool, _| {
-                        if stop_flag.load(Ordering::Relaxed) {
-                            return Ok(());
-                        }
-
-                        let frame = frame_pool
-                            .as_ref()
-                            .expect("FrameArrived parameter was None")
-                            .TryGetNextFrame()?;
-
-                        let size = frame.ContentSize()?;
-
-                        let surface = frame.Surface()?;
-                        let dxgi_interface = surface.cast::<IDirect3DDxgiInterfaceAccess>()?;
-                        let texture = unsafe { dxgi_interface.GetInterface::<ID3D11Texture2D>() }?;
-
-                        let frame = if let Some((cropped_texture, crop)) = crop_data.clone() {
-                            unsafe {
-                                d3d_context.CopySubresourceRegion(
-                                    &cropped_texture,
-                                    0,
-                                    0,
-                                    0,
-                                    0,
-                                    &texture,
-                                    0,
-                                    Some(&crop),
-                                );
-                            }
-
-                            Frame {
-                                width: crop.right - crop.left,
-                                height: crop.bottom - crop.top,
-                                pixel_format: settings.pixel_format,
-                                inner: frame,
-                                texture: cropped_texture,
-                                d3d_context: &d3d_context,
-                                d3d_device: &d3d_device,
-                            }
-                        } else {
-                            Frame {
-                                width: size.Width as u32,
-                                height: size.Height as u32,
-                                pixel_format: settings.pixel_format,
-                                inner: frame,
-                                texture,
-                                d3d_context: &d3d_context,
-                                d3d_device: &d3d_device,
-                            }
-                        };
-
-                        (callback)(frame)
-                    },
-                ),
-            )
-            .map_err(StartRunnerError::RegisterFrameArrived)?;
-
-        item.Closed(
-            &TypedEventHandler::<GraphicsCaptureItem, IInspectable>::new(move |_, _| {
-                closed_callback()
-            }),
-        )
-        .map_err(StartRunnerError::RegisterClosed)?;
-
-        session
-            .StartCapture()
-            .map_err(StartRunnerError::StartCapture)?;
-
-        Ok(Self {
-            _session: session,
-            _frame_pool: frame_pool,
-        })
-    }
-
-    fn run(self) {
-        let mut message = MSG::default();
-        while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
-            let _ = unsafe { TranslateMessage(&message) };
-            unsafe { DispatchMessageW(&message) };
-        }
-    }
-}
+//     // fn run(self) {
+//     // let mut message = MSG::default();
+//     // while unsafe { GetMessageW(&mut message, None, 0, 0) }.as_bool() {
+//     //     let _ = unsafe { TranslateMessage(&message) };
+//     //     unsafe { DispatchMessageW(&message) };
+//     // }
+//     // }
+// }

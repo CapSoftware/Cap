@@ -11,6 +11,7 @@ import {
 	spaceVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import { Folder } from "@cap/web-domain";
@@ -32,9 +33,9 @@ export async function getFolderById(folderId: string | undefined) {
 	return folder;
 }
 
-export async function getFolderBreadcrumb(folderId: string) {
+export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
 	const breadcrumb: Array<{
-		id: string;
+		id: Folder.FolderId;
 		name: string;
 		color: "normal" | "blue" | "red" | "yellow";
 	}> = [];
@@ -59,7 +60,7 @@ export async function getFolderBreadcrumb(folderId: string) {
 }
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: string[]) {
+async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	if (videoIds.length === 0) return {};
 
 	// Fetch space-level sharing
@@ -141,7 +142,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 	return sharedSpacesMap;
 }
 
-export async function getVideosByFolderId(folderId: string) {
+export async function getVideosByFolderId(folderId: Folder.FolderId) {
 	if (!folderId) throw new Error("Folder ID is required");
 
 	const videoData = await db()
@@ -175,13 +176,17 @@ export async function getVideosByFolderId(folderId: string) {
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
+			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+				Boolean,
+			),
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
+		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(eq(videos.folderId, folderId))
 		.groupBy(
 			videos.id,
@@ -228,7 +233,8 @@ export async function getVideosByFolderId(folderId: string) {
 						[key: string]: unknown;
 				  }
 				| undefined,
-			hasPassword: video.hasPassword === 1,
+			hasPassword: video.hasPassword,
+			hasActiveUpload: video.hasActiveUpload,
 			foldersData: [], // Empty array since videos in a folder don't need folder data
 		};
 	});
