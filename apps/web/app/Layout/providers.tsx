@@ -71,8 +71,8 @@ export function ReactQueryProvider({
 }
 
 import { SessionProvider as NASessionProvider } from "next-auth/react";
-import { featureFlags, useFeatureFlags } from "./features";
 import { demoteFromPro, promoteToPro } from "./devtoolsServer";
+import { featureFlags, useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
 	return <NASessionProvider>{children}</NASessionProvider>;
