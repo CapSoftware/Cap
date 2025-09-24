@@ -84,7 +84,7 @@ export const UploadCapButton = ({
 
 async function legacyUploadCap(
 	file: File,
-	folderId: string | undefined,
+	folderId: Folder.FolderId | undefined,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 ) {
 	const parser = await import("@remotion/media-parser");

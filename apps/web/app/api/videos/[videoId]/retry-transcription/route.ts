@@ -1,12 +1,13 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
-	{ params }: { params: { videoId: string } },
+	{ params }: { params: { videoId: Video.VideoId } },
 ) {
 	try {
 		const user = await getCurrentUser();
