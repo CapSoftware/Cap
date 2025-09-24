@@ -8,6 +8,7 @@ import {
 	int,
 	json,
 	mysqlTable,
+	primaryKey,
 	text,
 	timestamp,
 	tinyint,
@@ -15,8 +16,9 @@ import {
 	varchar,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
-import { nanoIdLength } from "./helpers";
-import type { VideoMetadata } from "./types";
+
+import { nanoIdLength } from "./helpers.ts";
+import type { VideoMetadata } from "./types/index.ts";
 
 const nanoId = customType<{ data: string; notNull: true }>({
 	dataType() {
@@ -240,6 +242,8 @@ export const videos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
+		// TODO: make this non-null
+		orgId: nanoIdNullable("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
 		bucket: nanoIdNullable("bucket"),
 		// in seconds
@@ -258,7 +262,7 @@ export const videos = mysqlTable(
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
-		folderId: nanoIdNullable("folderId"),
+		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		// PRIVATE
@@ -275,19 +279,19 @@ export const videos = mysqlTable(
 		jobStatus: varchar("jobStatus", { length: 255 }),
 		skipProcessing: boolean("skipProcessing").notNull().default(false),
 	},
-	(table) => ({
-		idIndex: index("id_idx").on(table.id),
-		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
-		publicIndex: index("is_public_idx").on(table.public),
-		folderIdIndex: index("folder_id_idx").on(table.folderId),
-	}),
+	(table) => [
+		index("id_idx").on(table.id),
+		index("owner_id_idx").on(table.ownerId),
+		index("is_public_idx").on(table.public),
+		index("folder_id_idx").on(table.folderId),
+	],
 );
 
 export const sharedVideos = mysqlTable(
 	"shared_videos",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		organizationId: nanoId("organizationId").notNull(),
 		sharedByUserId: nanoId("sharedByUserId").notNull(),
 		sharedAt: timestamp("sharedAt").notNull().defaultNow(),
@@ -313,7 +317,7 @@ export const comments = mysqlTable(
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
 		authorId: nanoId("authorId").notNull(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		parentCommentId: nanoId("parentCommentId"),
@@ -648,3 +652,16 @@ export const videoUploads = mysqlTable("video_uploads", {
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const importedVideos = mysqlTable(
+	"imported_videos",
+	{
+		id: nanoId("id").notNull(),
+		orgId: nanoIdNullable("orgId").notNull(),
+		source: varchar("source", { length: 255, enum: ["loom"] }).notNull(),
+		sourceId: varchar("source_id", { length: 255 }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
+	],
+);

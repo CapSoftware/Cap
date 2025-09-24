@@ -12,12 +12,14 @@
 		"@cap/database": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",
+		"@effect/cluster": "^0.48.6",
 		"@effect/platform": "^0.90.1",
-		"@effect/rpc": "^0.68.3",
+		"@effect/rpc": "^0.69.2",
+		"@effect/workflow": "^0.9.5",
 		"@smithy/types": "^4.3.1",
-		"drizzle-orm": "0.43.1",
-		"effect": "^3.17.7",
-		"server-only": "^0.0.1",
-		"next": "14.2.3"
+		"drizzle-orm": "0.44.5",
+		"effect": "^3.17.13",
+		"next": "^14",
+		"server-only": "^0.0.1"
 	}
 }

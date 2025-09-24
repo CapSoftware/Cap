@@ -2,6 +2,7 @@
 
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
+import type { Folder } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useRouter } from "next/navigation";
@@ -21,7 +22,7 @@ export const UploadCapButton = ({
 }: {
 	size?: "sm" | "lg" | "md";
 	grey?: boolean;
-	folderId?: string;
+	folderId?: Folder.FolderId;
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -83,7 +84,7 @@ export const UploadCapButton = ({
 
 async function legacyUploadCap(
 	file: File,
-	folderId: string | undefined,
+	folderId: Folder.FolderId | undefined,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 ) {
 	const parser = await import("@remotion/media-parser");

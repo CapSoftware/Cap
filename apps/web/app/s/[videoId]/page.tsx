@@ -39,7 +39,7 @@ export const dynamicParams = true;
 export const revalidate = 30;
 
 // Helper function to fetch shared spaces data for a video
-async function getSharedSpacesForVideo(videoId: string) {
+async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Fetch space-level sharing
 	const spaceSharing = await db()
 		.select({
@@ -266,6 +266,7 @@ export default async function ShareVideoPage(props: Props) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					awsRegion: videos.awsRegion,
