@@ -452,7 +452,6 @@ export const CapCard = ({
 								"transition-opacity duration-200",
 								uploadProgress && "opacity-30",
 							)}
-							userId={cap.ownerId}
 							videoId={cap.id}
 							alt={`${cap.name} Thumbnail`}
 						/>
