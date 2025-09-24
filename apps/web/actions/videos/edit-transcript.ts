@@ -53,10 +53,11 @@ export async function editTranscriptEntry(
 	}
 
 	const [S3ProviderLayer] = await Effect.gen(function* () {
-		const s3Buckets = yield* S3Buckets;
-		return yield* s3Buckets.getProviderForBucket(Option.none());
+		const buckets = yield* S3Buckets;
+		return yield* buckets.getProviderForBucket(
+			Option.fromNullable(result.bucket?.id),
+		);
 	}).pipe(runPromise);
-
 	try {
 		const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 
