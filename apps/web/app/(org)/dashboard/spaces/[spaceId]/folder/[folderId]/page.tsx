@@ -1,32 +1,41 @@
 import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
-import type { Folder } from "@cap/web-domain";
+import { CurrentUser, type Folder } from "@cap/web-domain";
+import { Effect } from "effect";
+import { notFound } from "next/navigation";
 import FolderCard from "@/app/(org)/dashboard/caps/components/Folder";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
 	getVideosByFolderId,
 } from "@/lib/folder";
+import { runPromise } from "@/lib/server";
 import {
 	BreadcrumbItem,
 	ClientMyCapsLink,
 	NewSubfolderButton,
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
+import { getSpaceOrOrg } from "../../utils";
 
 const FolderPage = async (props: {
 	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
 }) => {
 	const params = await props.params;
 	const user = await getCurrentUser();
-	if (!user) return;
+	if (!user) return notFound();
+
+	await getSpaceOrOrg(params.spaceId).pipe(
+		Effect.catchTag("PolicyDenied", () => Effect.sync(() => notFound())),
+		Effect.provideService(CurrentUser, user),
+		runPromise,
+	);
 
 	const [childFolders, breadcrumb, videosData] = await Promise.all([
 		getChildFolders(params.folderId),
 		getFolderBreadcrumb(params.folderId),
 		getVideosByFolderId(params.folderId),
 	]);
-	const userId = user?.id as string;
 
 	return (
 		<div>
