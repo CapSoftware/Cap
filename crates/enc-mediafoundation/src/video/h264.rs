@@ -78,6 +78,22 @@ pub enum NewVideoEncoderError {
     InputType(windows::core::Error),
 }
 
+#[derive(Clone, Debug, thiserror::Error)]
+pub enum HandleNeedsInputError {
+    #[error("ProcessTexture: {0}")]
+    ProcessTexture(windows::core::Error),
+    #[error("CreateSurfaceBuffer: {0}")]
+    CreateSurfaceBuffer(windows::core::Error),
+    #[error("CreateSample: {0}")]
+    CreateSample(windows::core::Error),
+    #[error("AddBuffer: {0}")]
+    AddBuffer(windows::core::Error),
+    #[error("SetSampleTime: {0}")]
+    SetSampleTime(windows::core::Error),
+    #[error("ProcessInput: {0}")]
+    ProcessInput(windows::core::Error),
+}
+
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
@@ -349,8 +365,10 @@ impl H264Encoder {
         &mut self,
         texture: &ID3D11Texture2D,
         timestamp: TimeSpan,
-    ) -> windows::core::Result<()> {
-        self.video_processor.process_texture(texture)?;
+    ) -> Result<(), HandleNeedsInputError> {
+        self.video_processor
+            .process_texture(texture)
+            .map_err(HandleNeedsInputError::ProcessTexture)?;
 
         let first_time = self.first_time.get_or_insert(timestamp);
 
@@ -360,14 +378,20 @@ impl H264Encoder {
                 self.video_processor.output_texture(),
                 0,
                 false,
-            )?
+            )
+            .map_err(HandleNeedsInputError::CreateSurfaceBuffer)?
         };
-        let mf_sample = unsafe { MFCreateSample()? };
+        let mf_sample = unsafe { MFCreateSample().map_err(HandleNeedsInputError::CreateSample)? };
         unsafe {
-            mf_sample.AddBuffer(&input_buffer)?;
-            mf_sample.SetSampleTime(timestamp.Duration - first_time.Duration)?;
+            mf_sample
+                .AddBuffer(&input_buffer)
+                .map_err(HandleNeedsInputError::AddBuffer)?;
+            mf_sample
+                .SetSampleTime(timestamp.Duration - first_time.Duration)
+                .map_err(HandleNeedsInputError::SetSampleTime)?;
             self.transform
-                .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
+                .ProcessInput(self.input_stream_id, &mf_sample, 0)
+                .map_err(HandleNeedsInputError::ProcessInput)?;
         };
         Ok(())
     }

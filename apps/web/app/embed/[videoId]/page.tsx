@@ -126,6 +126,7 @@ export default async function EmbedVideoPage(props: Props) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					awsRegion: videos.awsRegion,

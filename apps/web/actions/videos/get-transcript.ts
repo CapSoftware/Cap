@@ -3,11 +3,12 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { createBucketProvider } from "@/utils/s3";
 
 export async function getTranscript(
-	videoId: string,
+	videoId: Video.VideoId,
 ): Promise<{ success: boolean; content?: string; message: string }> {
 	const user = await getCurrentUser();
 

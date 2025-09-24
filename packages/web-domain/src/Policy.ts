@@ -1,7 +1,8 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
 import { Context, Data, Effect, type Option, Schema } from "effect";
-import { CurrentUser } from "./Authentication";
+
+import { CurrentUser } from "./Authentication.ts";
 
 export type Policy<E = never, R = never> = Effect.Effect<
 	void,

@@ -23,7 +23,7 @@ export const metadata: Metadata = {
 };
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: string[]) {
+async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	if (videoIds.length === 0) return {};
 
 	// Fetch space-level sharing

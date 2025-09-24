@@ -85,7 +85,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		>("loading");
 
 		useEffect(() => {
-			if (imageRef.current?.complete && imageRef.current.naturalWidth != 0) {
+			if (imageRef.current?.complete && imageRef.current.naturalWidth !== 0) {
 				setImageStatus("success");
 			}
 		}, []);
@@ -124,7 +124,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						key={videoId}
 						style={{ objectFit: objectFit as any }}
 						className={clsx(
-							"w-full h-full",
+							"w-full h-full rounded-t-xl",
 							imageClass,
 							imageStatus === "loading" && "opacity-0",
 						)}

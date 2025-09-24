@@ -1,10 +1,11 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { ImageResponse } from "next/og";
 import { createBucketProvider } from "@/utils/s3";
 
-export async function generateVideoOgImage(videoId: string) {
+export async function generateVideoOgImage(videoId: Video.VideoId) {
 	const videoData = await getData(videoId);
 
 	if (!videoData) {
@@ -145,7 +146,7 @@ export async function generateVideoOgImage(videoId: string) {
 	);
 }
 
-async function getData(videoId: string) {
+async function getData(videoId: Video.VideoId) {
 	const query = await db()
 		.select({
 			video: videos,

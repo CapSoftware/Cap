@@ -33,9 +33,9 @@ export async function getFolderById(folderId: string | undefined) {
 	return folder;
 }
 
-export async function getFolderBreadcrumb(folderId: string) {
+export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
 	const breadcrumb: Array<{
-		id: string;
+		id: Folder.FolderId;
 		name: string;
 		color: "normal" | "blue" | "red" | "yellow";
 	}> = [];
@@ -60,7 +60,7 @@ export async function getFolderBreadcrumb(folderId: string) {
 }
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: string[]) {
+async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	if (videoIds.length === 0) return {};
 
 	// Fetch space-level sharing
@@ -142,7 +142,7 @@ async function getSharedSpacesForVideos(videoIds: string[]) {
 	return sharedSpacesMap;
 }
 
-export async function getVideosByFolderId(folderId: string) {
+export async function getVideosByFolderId(folderId: Folder.FolderId) {
 	if (!folderId) throw new Error("Folder ID is required");
 
 	const videoData = await db()

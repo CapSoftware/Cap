@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { MDXRemote } from "next-mdx-remote/rsc";
+import { AuthorByline } from "@/components/blog/AuthorByline";
 import { BlogTemplate } from "@/components/blog/BlogTemplate";
 import { ReadyToGetStarted } from "@/components/ReadyToGetStarted";
 import { getBlogPosts } from "@/utils/blog";
@@ -81,11 +82,11 @@ export default async function PostPage({ params }: PostProps) {
 
 	return (
 		<>
-			<article className="px-5 py-32 mx-auto md:py-40 prose">
+			<article className="px-5 py-24 mx-auto md:py-40 prose">
 				{post.metadata.image && (
-					<div className="relative mb-12 h-[345px] w-full">
+					<div className="relative mb-6 h-[200px] sm:h-[280px] md:h-[345px] w-full rounded-lg overflow-hidden">
 						<Image
-							className="object-contain m-0 w-full rounded-lg sm:object-cover"
+							className="object-contain m-0 w-full sm:object-cover"
 							src={post.metadata.image}
 							alt={post.metadata.title}
 							fill
@@ -114,6 +115,9 @@ export default async function PostPage({ params }: PostProps) {
 					</header>
 					<hr className="my-6" />
 					<MDXRemote source={post.content} />
+					{"author" in post.metadata && post.metadata.author && (
+						<AuthorByline authors={post.metadata.author} />
+					)}
 					<Share
 						post={post}
 						url={`${buildEnv.NEXT_PUBLIC_WEB_URL}/blog/${post.slug}`}

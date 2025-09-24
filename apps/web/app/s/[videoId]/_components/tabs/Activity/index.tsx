@@ -1,6 +1,7 @@
 "use client";
 
 import type { userSelectProps } from "@cap/database/auth/session";
+import type { Video } from "@cap/web-domain";
 import type React from "react";
 import { forwardRef, Suspense, useState } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
@@ -16,7 +17,7 @@ interface ActivityProps {
 	user: typeof userSelectProps | null;
 	onSeek?: (time: number) => void;
 	handleCommentSuccess: (comment: CommentType) => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;
