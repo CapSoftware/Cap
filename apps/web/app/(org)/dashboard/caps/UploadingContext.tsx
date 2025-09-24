@@ -3,7 +3,7 @@
 import { useStore } from "@tanstack/react-store";
 import { Store } from "@tanstack/store";
 import type React from "react";
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 
 export type UploadStatus =
 	| {
@@ -29,12 +29,8 @@ export type UploadStatus =
 			thumbnailUrl: string | undefined;
 	  };
 
-interface UploadingStore {
-	uploadStatus: UploadStatus | undefined;
-}
-
 interface UploadingContextType {
-	uploadStatus: UploadStatus | undefined;
+	uploadingStore: Store<{ uploadStatus?: UploadStatus }>;
 	setUploadStatus: (state: UploadStatus | undefined) => void;
 }
 
@@ -51,26 +47,49 @@ export function useUploadingContext() {
 	return context;
 }
 
+export function useUploadingStatus() {
+	const { uploadingStore } = useUploadingContext();
+	return useStore(
+		uploadingStore,
+		(s) =>
+			[
+				s.uploadStatus !== undefined,
+				s.uploadStatus && "capId" in s.uploadStatus
+					? s.uploadStatus.capId
+					: null,
+			] as const,
+	);
+}
+
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const uploadingStoreRef = useRef(
-		new Store<UploadingStore>({
-			uploadStatus: undefined,
-		}),
+	const [uploadingStore] = useState<Store<{ uploadStatus?: UploadStatus }>>(
+		() => new Store({}),
 	);
 
-	const uploadStatus = useStore(
-		uploadingStoreRef.current,
-		(state) => state.uploadStatus,
+	return (
+		<UploadingContext.Provider
+			value={{
+				uploadingStore,
+				setUploadStatus: (status: UploadStatus | undefined) => {
+					uploadingStore.setState((state) => ({
+						...state,
+						uploadStatus: status,
+					}));
+				},
+			}}
+		>
+			{children}
+
+			<ForbidLeaveWhenUploading />
+		</UploadingContext.Provider>
 	);
+}
 
-	const setUploadStatus = (status: UploadStatus | undefined) => {
-		uploadingStoreRef.current.setState((state) => ({
-			...state,
-			uploadStatus: status,
-		}));
-	};
+// Separated to prevent rerendering whole tree
+function ForbidLeaveWhenUploading() {
+	const { uploadingStore } = useUploadingContext();
+	const uploadStatus = useStore(uploadingStore, (state) => state.uploadStatus);
 
-	// Prevent the user closing the tab while uploading
 	useEffect(() => {
 		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
 			if (uploadStatus?.status) {
@@ -85,14 +104,5 @@ export function UploadingProvider({ children }: { children: React.ReactNode }) {
 		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
 	}, [uploadStatus]);
 
-	return (
-		<UploadingContext.Provider
-			value={{
-				uploadStatus,
-				setUploadStatus,
-			}}
-		>
-			{children}
-		</UploadingContext.Provider>
-	);
+	return null;
 }

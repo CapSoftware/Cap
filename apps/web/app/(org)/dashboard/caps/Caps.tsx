@@ -24,7 +24,7 @@ import { CapPagination } from "./components/CapPagination";
 import { EmptyCapState } from "./components/EmptyCapState";
 import type { FolderDataType } from "./components/Folder";
 import Folder from "./components/Folder";
-import { useUploadingContext } from "./UploadingContext";
+import { useUploadingContext, useUploadingStatus } from "./UploadingContext";
 
 export type VideoData = {
 	id: Video.VideoId;
@@ -74,7 +74,6 @@ export const Caps = ({
 	const previousCountRef = useRef<number>(0);
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const [isDraggingCap, setIsDraggingCap] = useState(false);
-	const { uploadStatus } = useUploadingContext();
 
 	const anyCapSelected = selectedCaps.length > 0;
 
@@ -258,10 +257,7 @@ export const Caps = ({
 		onError: () => toast.error("Failed to delete cap"),
 	});
 
-	const isUploading = uploadStatus !== undefined;
-	const uploadingCapId =
-		uploadStatus && "capId" in uploadStatus ? uploadStatus.capId : undefined;
-
+	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
 		() =>
 			isUploading && uploadingCapId

@@ -13,7 +13,11 @@ import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
-import { useUploadingContext } from "../../../caps/UploadingContext";
+import {
+	useUploadingContext,
+	useUploadingStatus,
+} from "../../../caps/UploadingContext";
+import { useStore } from "@tanstack/react-store";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
@@ -27,12 +31,7 @@ export default function FolderVideosSection({
 	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
-	const { uploadStatus } = useUploadingContext();
 	const { user } = useDashboardContext();
-
-	const isUploading = uploadStatus !== undefined;
-	const uploadingCapId =
-		uploadStatus && "capId" in uploadStatus ? uploadStatus.capId : null;
 
 	const [selectedCaps, setSelectedCaps] = useState<Video.VideoId[]>([]);
 	const previousCountRef = useRef<number>(0);
@@ -159,6 +158,7 @@ export default function FolderVideosSection({
 		refetchOnMount: true,
 	});
 
+	const [isUploading, uploadingCapId] = useUploadingStatus();
 	const visibleVideos = useMemo(
 		() =>
 			isUploading && uploadingCapId

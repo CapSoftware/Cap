@@ -2,12 +2,14 @@
 
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
-import { type UploadStatus, useUploadStatus } from "../UploadingContext";
+import { useUploadingContext, type UploadStatus } from "../UploadingContext";
+import { useStore } from "@tanstack/react-store";
 
 const { circumference } = getProgressCircleConfig();
 
 export const UploadPlaceholderCard = () => {
-	const uploadStatus = useUploadStatus();
+	const { uploadingStore } = useUploadingContext();
+	const uploadStatus = useStore(uploadingStore, (s) => s.uploadStatus);
 	const strokeDashoffset = calculateStrokeDashoffset(
 		uploadStatus &&
 			(uploadStatus.status === "converting" ||
