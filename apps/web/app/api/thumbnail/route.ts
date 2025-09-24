@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
 
 	try {
 		const [bucket] = await S3Buckets.getBucketAccess(
-			Option.fromNullable(result.bucket?.id),
+			Option.fromNullable(query.bucket?.id),
 		).pipe(runPromise);
 
 		const listResponse = await bucket
