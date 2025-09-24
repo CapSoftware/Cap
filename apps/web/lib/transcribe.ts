@@ -1,7 +1,7 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
@@ -73,20 +73,14 @@ export async function transcribeVideo(
 		.set({ transcriptionStatus: "PROCESSING" })
 		.where(eq(videos.id, videoId));
 
-	const [S3ProviderLayer] = await Effect.gen(function* () {
-		const s3Buckets = yield* S3Buckets;
-		return yield* s3Buckets.getProviderForBucket(
-			Option.fromNullable(result.bucket?.id),
-		);
-	}).pipe(runPromise);
+	const [bucket] = await S3Buckets.getBucketAccess(
+		Option.fromNullable(result.bucket?.id),
+	).pipe(runPromise);
 
 	try {
 		const videoKey = `${userId}/${videoId}/result.mp4`;
 
-		const videoUrl = await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.getSignedObjectUrl(videoKey);
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		const videoUrl = await bucket.getSignedObjectUrl(videoKey).pipe(runPromise);
 
 		// Check if video file actually exists before transcribing
 		try {
@@ -128,14 +122,11 @@ export async function transcribeVideo(
 			throw new Error("Failed to transcribe audio");
 		}
 
-		await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.putObject(
-				`${userId}/${videoId}/transcription.vtt`,
-				transcription,
-				{ contentType: "text/vtt" },
-			);
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		await bucket
+			.putObject(`${userId}/${videoId}/transcription.vtt`, transcription, {
+				contentType: "text/vtt",
+			})
+			.pipe(runPromise);
 
 		await db()
 			.update(videos)

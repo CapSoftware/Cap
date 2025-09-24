@@ -39,30 +39,25 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
-					video.bucketId,
-				);
+				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
 				yield* repo
 					.delete(video.id)
 					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
 
-				yield* Effect.gen(function* () {
-					const s3 = yield* S3BucketAccess;
-					const user = yield* CurrentUser;
+				const user = yield* CurrentUser;
 
-					const prefix = `${user.id}/${video.id}/`;
+				const prefix = `${user.id}/${video.id}/`;
 
-					const listedObjects = yield* s3.listObjects({ prefix });
+				const listedObjects = yield* bucket.listObjects({ prefix });
 
-					if (listedObjects.Contents?.length) {
-						yield* s3.deleteObjects(
-							listedObjects.Contents.map((content) => ({
-								Key: content.Key,
-							})),
-						);
-					}
-				}).pipe(Effect.provide(S3ProviderLayer));
+				if (listedObjects.Contents?.length) {
+					yield* bucket.deleteObjects(
+						listedObjects.Contents.map((content) => ({
+							Key: content.Key,
+						})),
+					);
+				}
 			}),
 
 			/*
@@ -79,33 +74,29 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Policy.withPolicy(policy.isOwner(videoId)),
 					);
 
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
-					video.bucketId,
-				);
+				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
 
 				// Don't duplicate password or sharing data
 				const newVideoId = yield* repo.create(video);
 
-				yield* Effect.gen(function* () {
-					const s3 = yield* S3BucketAccess;
-					const bucketName = yield* s3.bucketName;
+				const prefix = `${video.ownerId}/${video.id}/`;
+				const newPrefix = `${video.ownerId}/${newVideoId}/`;
 
-					const prefix = `${video.ownerId}/${video.id}/`;
-					const newPrefix = `${video.ownerId}/${newVideoId}/`;
+				const allObjects = yield* bucket.listObjects({ prefix });
 
-					const allObjects = yield* s3.listObjects({ prefix });
-
-					if (allObjects.Contents)
-						yield* Effect.all(
-							Array.filterMap(allObjects.Contents, (obj) =>
-								Option.map(Option.fromNullable(obj.Key), (key) => {
-									const newKey = key.replace(prefix, newPrefix);
-									return s3.copyObject(`${bucketName}/${obj.Key}`, newKey);
-								}),
-							),
-							{ concurrency: 1 },
-						);
-				}).pipe(Effect.provide(S3ProviderLayer));
+				if (allObjects.Contents)
+					yield* Effect.all(
+						Array.filterMap(allObjects.Contents, (obj) =>
+							Option.map(Option.fromNullable(obj.Key), (key) => {
+								const newKey = key.replace(prefix, newPrefix);
+								return bucket.copyObject(
+									`${bucket.bucketName}/${obj.Key}`,
+									newKey,
+								);
+							}),
+						),
+						{ concurrency: 1 },
+					);
 			}),
 
 			/*

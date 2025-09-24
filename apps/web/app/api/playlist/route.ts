@@ -1,10 +1,5 @@
 import { serverEnv } from "@cap/env";
-import {
-	provideOptionalAuth,
-	S3BucketAccess,
-	S3Buckets,
-	Videos,
-} from "@cap/web-backend";
+import { provideOptionalAuth, S3Buckets, Videos } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import {
 	HttpApi,
@@ -60,14 +55,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							),
 						);
 
-						const [S3ProviderLayer, customBucket] =
-							yield* s3Buckets.getProviderForBucket(video.bucketId);
-
-						return yield* getPlaylistResponse(
-							video,
-							Option.isSome(customBucket),
-							urlParams,
-						).pipe(Effect.provide(S3ProviderLayer));
+						return yield* getPlaylistResponse(video, urlParams);
 					}).pipe(
 						provideOptionalAuth,
 						Effect.tapErrorCause(Effect.logError),
@@ -78,6 +66,7 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							S3Error: () => new HttpApiError.InternalServerError(),
 							UnknownException: () => new HttpApiError.InternalServerError(),
 						}),
+						Effect.provideService(S3Buckets, s3Buckets),
 					),
 				);
 			}),
@@ -87,13 +76,12 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 const getPlaylistResponse = (
 	video: Video.Video,
-	isCustomBucket: boolean,
 	urlParams: (typeof GetPlaylistParams)["Type"],
 ) =>
 	Effect.gen(function* () {
-		const s3 = yield* S3BucketAccess;
+		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 
-		if (!isCustomBucket) {
+		if (Option.isNone(customBucket)) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
 			if (video.source.type === "desktopMP4" || urlParams.videoType === "mp4")

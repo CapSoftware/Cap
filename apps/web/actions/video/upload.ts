@@ -10,7 +10,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { type Folder, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -109,15 +109,11 @@ async function getVideoUploadPresignedUrl({
 			"x-amz-meta-audiocodec": audioCodec ?? "",
 		};
 
-		const [S3ProviderLayer] = await Effect.gen(function* () {
-			const s3Buckets = yield* S3Buckets;
-			return yield* s3Buckets.getProviderForBucket(
+		const presignedPostData = await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(
 				Option.fromNullable(customBucket?.id),
 			);
-		}).pipe(runPromise);
 
-		const presignedPostData = await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
 			const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
 				Fields,
 				Expires: 1800,
@@ -133,7 +129,7 @@ async function getVideoUploadPresignedUrl({
 			}
 
 			return presignedPostData;
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		}).pipe(runPromise);
 
 		const videoId = fileKey.split("/")[1];
 		if (videoId) {

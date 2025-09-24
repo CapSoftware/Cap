@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -52,19 +52,14 @@ export async function editTranscriptEntry(
 		};
 	}
 
-	const [S3ProviderLayer] = await Effect.gen(function* () {
-		const buckets = yield* S3Buckets;
-		return yield* buckets.getProviderForBucket(
-			Option.fromNullable(result.bucket?.id),
-		);
-	}).pipe(runPromise);
+	const [bucket] = await S3Buckets.getBucketAccess(
+		Option.fromNullable(result.bucket?.id),
+	).pipe(runPromise);
+
 	try {
 		const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 
-		const vttContent = await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.getObject(transcriptKey);
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		const vttContent = await bucket.getObject(transcriptKey).pipe(runPromise);
 		if (Option.isNone(vttContent))
 			return { success: false, message: "Transcript file not found" };
 
@@ -74,12 +69,11 @@ export async function editTranscriptEntry(
 			newText,
 		);
 
-		await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.putObject(transcriptKey, updatedVttContent, {
+		await bucket
+			.putObject(transcriptKey, updatedVttContent, {
 				contentType: "text/vtt",
-			});
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+			})
+			.pipe(runPromise);
 
 		revalidatePath(`/s/${videoId}`);
 

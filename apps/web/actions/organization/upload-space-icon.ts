@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -54,10 +54,9 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 		space.organizationId
 	}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
 
-	const [S3ProviderLayer] = await Effect.gen(function* () {
-		const s3Buckets = yield* S3Buckets;
-		return yield* s3Buckets.getProviderForBucket(Option.none());
-	}).pipe(runPromise);
+	const [bucket] = await S3Buckets.getBucketAccess(Option.none()).pipe(
+		runPromise,
+	);
 
 	try {
 		// Remove previous icon if exists
@@ -66,10 +65,7 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
 			if (key) {
 				try {
-					await Effect.gen(function* () {
-						const bucket = yield* S3BucketAccess;
-						return yield* bucket.deleteObject(key);
-					}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+					await bucket.deleteObject(key).pipe(runPromise);
 				} catch (e) {
 					// Log and continue
 					console.warn("Failed to delete old space icon from S3", e);
@@ -79,26 +75,26 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 
 		const sanitizedFile = await sanitizeFile(file);
 
-		let iconUrl;
-		await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			yield* bucket.putObject(
+		await bucket
+			.putObject(
 				fileKey,
 				Effect.promise(() => sanitizedFile.bytes()),
 				{ contentType: file.type },
-			);
+			)
+			.pipe(runPromise);
 
-			// Construct the icon URL
-			if (serverEnv().CAP_AWS_BUCKET_URL) {
-				iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-			} else if (serverEnv().CAP_AWS_ENDPOINT) {
-				iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-			} else {
-				iconUrl = `https://${bucket.bucketName}.s3.${
-					serverEnv().CAP_AWS_REGION || "us-east-1"
-				}.amazonaws.com/${fileKey}`;
-			}
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		let iconUrl: string | undefined;
+
+		// Construct the icon URL
+		if (serverEnv().CAP_AWS_BUCKET_URL) {
+			iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
+		} else if (serverEnv().CAP_AWS_ENDPOINT) {
+			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
+		} else {
+			iconUrl = `https://${bucket.bucketName}.s3.${
+				serverEnv().CAP_AWS_REGION || "us-east-1"
+			}.amazonaws.com/${fileKey}`;
+		}
 
 		// Update space with new icon URL
 		await db().update(spaces).set({ iconUrl }).where(eq(spaces.id, spaceId));

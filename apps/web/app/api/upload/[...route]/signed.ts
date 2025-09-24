@@ -6,7 +6,7 @@ import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
@@ -116,43 +116,38 @@ app.post(
 			let data: PresignedPost;
 
 			await Effect.gen(function* () {
-				const s3Buckets = yield* S3Buckets;
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+				const [bucket] = yield* S3Buckets.getBucketAccess(
 					Option.fromNullable(customBucket?.id),
 				);
 
-				yield* Effect.gen(function* () {
-					const bucket = yield* S3BucketAccess;
+				if (method === "post") {
+					const Fields = {
+						"Content-Type": contentType,
+						"x-amz-meta-userid": user.id,
+						"x-amz-meta-duration": durationInSecs
+							? durationInSecs.toString()
+							: "",
+					};
 
-					if (method === "post") {
-						const Fields = {
-							"Content-Type": contentType,
-							"x-amz-meta-userid": user.id,
-							"x-amz-meta-duration": durationInSecs
-								? durationInSecs.toString()
-								: "",
-						};
-
-						data = yield* bucket.getPresignedPostUrl(fileKey, {
-							Fields,
-							Expires: 1800,
-						});
-					} else if (method === "put") {
-						const presignedUrl = yield* bucket.getPresignedPutUrl(
-							fileKey,
-							{
-								ContentType: contentType,
-								Metadata: {
-									userid: user.id,
-									duration: durationInSecs ? durationInSecs.toString() : "",
-								},
+					data = yield* bucket.getPresignedPostUrl(fileKey, {
+						Fields,
+						Expires: 1800,
+					});
+				} else if (method === "put") {
+					const presignedUrl = yield* bucket.getPresignedPutUrl(
+						fileKey,
+						{
+							ContentType: contentType,
+							Metadata: {
+								userid: user.id,
+								duration: durationInSecs ? durationInSecs.toString() : "",
 							},
-							{ expiresIn: 1800 },
-						);
+						},
+						{ expiresIn: 1800 },
+					);
 
-						data = { url: presignedUrl, fields: {} };
-					}
-				}).pipe(Effect.provide(S3ProviderLayer));
+					data = { url: presignedUrl, fields: {} };
+				}
 			}).pipe(runPromise);
 
 			console.log("Presigned URL created successfully");

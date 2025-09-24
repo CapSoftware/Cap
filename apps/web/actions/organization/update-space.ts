@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { and, eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -56,15 +56,8 @@ export async function updateSpace(formData: FormData) {
 			if (key) {
 				try {
 					await Effect.gen(function* () {
-						const s3Buckets = yield* S3Buckets;
-						const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
-							Option.none(),
-						);
-
-						yield* Effect.gen(function* () {
-							const bucket = yield* S3BucketAccess;
-							yield* bucket.deleteObject(key);
-						}).pipe(Effect.provide(S3ProviderLayer));
+						const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+						yield* bucket.deleteObject(key);
 					}).pipe(runPromise);
 				} catch (e) {
 					console.warn("Failed to delete old space icon from S3", e);

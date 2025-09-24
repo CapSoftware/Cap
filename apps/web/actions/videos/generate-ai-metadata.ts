@@ -4,7 +4,7 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -122,16 +122,11 @@ export async function generateAiMetadata(
 		const { video } = row;
 
 		const vtt = await Effect.gen(function* () {
-			const s3Buckets = yield* S3Buckets;
-			const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+			const [bucket] = yield* S3Buckets.getBucketAccess(
 				Option.fromNullable(row.bucket?.id),
 			);
 
-			return yield* Effect.gen(function* () {
-				const bucket = yield* S3BucketAccess;
-				const transcriptKey = `${userId}/${videoId}/transcription.vtt`;
-				return yield* bucket.getObject(transcriptKey);
-			}).pipe(Effect.provide(S3ProviderLayer));
+			return yield* bucket.getObject(`${userId}/${videoId}/transcription.vtt`);
 		}).pipe(runPromise);
 
 		if (Option.isNone(vtt)) {

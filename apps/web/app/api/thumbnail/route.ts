@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -48,17 +48,13 @@ export async function GET(request: NextRequest) {
 	const prefix = `${query.video.ownerId}/${query.video.id}/`;
 
 	try {
-		const [S3ProviderLayer] = await Effect.gen(function* () {
-			const s3Buckets = yield* S3Buckets;
-			return yield* s3Buckets.getProviderForBucket(
-				Option.fromNullable(result.bucket?.id),
-			);
-		}).pipe(runPromise);
+		const [bucket] = await S3Buckets.getBucketAccess(
+			Option.fromNullable(result.bucket?.id),
+		).pipe(runPromise);
 
-		const listResponse = await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.listObjects({ prefix: prefix });
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		const listResponse = await bucket
+			.listObjects({ prefix: prefix })
+			.pipe(runPromise);
 		const contents = listResponse.Contents || [];
 
 		const thumbnailKey = contents.find((item) =>
@@ -77,10 +73,9 @@ export async function GET(request: NextRequest) {
 				},
 			);
 
-		const thumbnailUrl = await Effect.gen(function* () {
-			const bucket = yield* S3BucketAccess;
-			return yield* bucket.getSignedObjectUrl(thumbnailKey);
-		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
+		const thumbnailUrl = await bucket
+			.getSignedObjectUrl(thumbnailKey)
+			.pipe(runPromise);
 
 		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
 			status: 200,

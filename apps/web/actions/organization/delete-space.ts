@@ -8,7 +8,7 @@ import {
 	spaces,
 	spaceVideos,
 } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
@@ -70,30 +70,23 @@ export async function deleteSpace(
 		// 4. Delete space icons from S3
 		try {
 			await Effect.gen(function* () {
-				const s3Buckets = yield* S3Buckets;
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
-					Option.none(),
-				);
+				const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
 
-				yield* Effect.gen(function* () {
-					const bucket = yield* S3BucketAccess;
+				const listedObjects = yield* bucket.listObjects({
+					prefix: `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`,
+				});
 
-					const listedObjects = yield* bucket.listObjects({
-						prefix: `organizations/${user.activeOrganizationId}/spaces/${spaceId}/`,
-					});
+				if (listedObjects.Contents?.length) {
+					yield* bucket.deleteObjects(
+						listedObjects.Contents.map((content) => ({
+							Key: content.Key,
+						})),
+					);
 
-					if (listedObjects.Contents?.length) {
-						yield* bucket.deleteObjects(
-							listedObjects.Contents.map((content) => ({
-								Key: content.Key,
-							})),
-						);
-
-						console.log(
-							`Deleted ${listedObjects.Contents.length} objects for space ${spaceId}`,
-						);
-					}
-				}).pipe(Effect.provide(S3ProviderLayer));
+					console.log(
+						`Deleted ${listedObjects.Contents.length} objects for space ${spaceId}`,
+					);
+				}
 			}).pipe(runPromise);
 
 			// List all objects with the space prefix

@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -36,16 +36,10 @@ export async function downloadVideo(videoId: Video.VideoId) {
 		const videoKey = `${video.ownerId}/${videoId}/result.mp4`;
 
 		const downloadUrl = await Effect.gen(function* () {
-			const s3Buckets = yield* S3Buckets;
-			const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+			const [bucket] = yield* S3Buckets.getBucketAccess(
 				Option.fromNullable(video.bucket),
 			);
-
-			yield* Effect.gen(function* () {
-				const bucket = yield* S3BucketAccess;
-
-				yield* bucket.getSignedObjectUrl(videoKey);
-			}).pipe(Effect.provide(S3ProviderLayer));
+			yield* bucket.getSignedObjectUrl(videoKey);
 		}).pipe(runPromise);
 
 		return {

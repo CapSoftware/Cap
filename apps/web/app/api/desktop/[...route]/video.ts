@@ -5,7 +5,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
@@ -224,25 +224,20 @@ app.delete(
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
 			await Effect.gen(function* () {
-				const s3Buckets = yield* S3Buckets;
-				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+				const [bucket] = yield* S3Buckets.getBucketAccess(
 					Option.fromNullable(result.bucket?.id),
 				);
 
-				return yield* Effect.gen(function* () {
-					const bucket = yield* S3BucketAccess;
+				const listedObjects = yield* bucket.listObjects({
+					prefix: `${user.id}/${videoId}/`,
+				});
 
-					const listedObjects = yield* bucket.listObjects({
-						prefix: `${user.id}/${videoId}/`,
-					});
-
-					if (listedObjects.Contents?.length)
-						yield* bucket.deleteObjects(
-							listedObjects.Contents.map((content: any) => ({
-								Key: content.Key,
-							})),
-						);
-				}).pipe(Effect.provide(S3ProviderLayer));
+				if (listedObjects.Contents?.length)
+					yield* bucket.deleteObjects(
+						listedObjects.Contents.map((content: any) => ({
+							Key: content.Key,
+						})),
+					);
 			}).pipe(runPromise);
 
 			return c.json(true);

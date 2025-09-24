@@ -3,7 +3,7 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { Effect, Option } from "effect";
@@ -50,16 +50,13 @@ export async function getTranscript(
 
 	try {
 		const vttContent = await Effect.gen(function* () {
-			const s3Buckets = yield* S3Buckets;
-			const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+			const [bucket] = yield* S3Buckets.getBucketAccess(
 				Option.fromNullable(result.bucket?.id),
 			);
 
-			return yield* Effect.gen(function* () {
-				const bucket = yield* S3BucketAccess;
-				const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
-				return yield* bucket.getObject(transcriptKey);
-			}).pipe(Effect.provide(S3ProviderLayer));
+			return yield* bucket.getObject(
+				`${video.ownerId}/${videoId}/transcription.vtt`,
+			);
 		}).pipe(runPromise);
 
 		if (Option.isNone(vttContent)) {

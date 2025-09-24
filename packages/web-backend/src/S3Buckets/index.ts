@@ -4,10 +4,10 @@ import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
 import { awsCredentialsProvider } from "@vercel/functions/oidc";
-import { Config, Context, Effect, Layer, Option } from "effect";
+import { Config, Effect, Layer, Option } from "effect";
 
 import { Database } from "../Database.ts";
-import { S3BucketAccess } from "./S3BucketAccess.ts";
+import { createS3BucketAccess } from "./S3BucketAccess.ts";
 import { S3BucketClientProvider } from "./S3BucketClientProvider.ts";
 import { S3BucketsRepo } from "./S3BucketsRepo.ts";
 
@@ -61,7 +61,7 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 				return decrypt(v);
 			})();
 
-			const config = {
+			return new S3.S3Client({
 				endpoint,
 				region: await decrypt(bucket.region),
 				credentials: {
@@ -74,12 +74,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 						Option.getOrNull,
 					) ?? true,
 				useArnRegion: false,
-			};
-			console.log({ config });
-			return new S3.S3Client(config);
+			});
 		};
-
-		const defaultBucketAccess = S3BucketAccess.Default;
 
 		const cloudfrontEnvs = yield* Config.all({
 			distributionId: Config.string("CAP_CLOUDFRONT_DISTRIBUTION_ID"),
@@ -95,10 +91,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 		const cloudfrontBucketAccess = cloudfrontEnvs.pipe(
 			Option.map((cloudfrontEnvs) =>
-				Layer.map(defaultBucketAccess, (context) => {
-					const s3 = Context.get(context, S3BucketAccess);
-
-					return Context.make(S3BucketAccess, {
+				Effect.flatMap(createS3BucketAccess, (s3) =>
+					Effect.succeed<typeof s3>({
 						...s3,
 						getSignedObjectUrl: (key) => {
 							const url = `${S3_BUCKET_URL}/${key}`;
@@ -126,15 +120,15 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 								}),
 							);
 						},
-					});
-				}),
+					}),
+				),
 			),
 		);
 
-		const getProvider = Effect.fn("S3Buckets.getProviderLayer")(function* (
+		const getBucketAccess = Effect.fn("S3Buckets.getProviderLayer")(function* (
 			customBucket: Option.Option<S3Bucket.S3Bucket>,
 		) {
-			const layer = yield* Option.match(customBucket, {
+			const bucketAccess = yield* Option.match(customBucket, {
 				onNone: () => {
 					const provider = Layer.succeed(S3BucketClientProvider, {
 						getInternal: Effect.succeed(createDefaultClient(true)),
@@ -144,8 +138,8 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 
 					return Option.match(cloudfrontBucketAccess, {
 						onSome: (access) => access,
-						onNone: () => defaultBucketAccess,
-					}).pipe(Layer.merge(provider), Effect.succeed);
+						onNone: () => createS3BucketAccess,
+					}).pipe(Effect.provide(provider));
 				},
 				onSome: (customBucket) =>
 					Effect.gen(function* () {
@@ -161,15 +155,15 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 							bucket,
 						});
 
-						return Layer.merge(defaultBucketAccess, provider);
+						return yield* createS3BucketAccess.pipe(Effect.provide(provider));
 					}),
 			});
 
-			return [layer, customBucket] as const;
+			return [bucketAccess, customBucket] as const;
 		});
 
 		return {
-			getProviderForBucket: Effect.fn("S3Buckets.getProviderById")(function* (
+			getBucketAccess: Effect.fn("S3Buckets.getBucketAccess")(function* (
 				bucketId: Option.Option<S3Bucket.S3BucketId>,
 			) {
 				const customBucket = yield* bucketId.pipe(
@@ -178,18 +172,25 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 					Effect.map(Option.flatten),
 				);
 
-				return yield* getProvider(customBucket);
+				return yield* getBucketAccess(customBucket);
 			}),
-			getProviderForUser: Effect.fn("S3Buckets.getProviderForUser")(function* (
-				userId: string,
-			) {
-				const customBucket = yield* repo
-					.getForUser(userId)
-					.pipe(Effect.option, Effect.map(Option.flatten));
+			getBucketAccessForUser: Effect.fn("S3Buckets.getProviderForUser")(
+				function* (userId: string) {
+					const customBucket = yield* repo
+						.getForUser(userId)
+						.pipe(Effect.option, Effect.map(Option.flatten));
 
-				return yield* getProvider(customBucket);
-			}),
+					return yield* getBucketAccess(customBucket);
+				},
+			),
 		};
 	}),
 	dependencies: [S3BucketsRepo.Default, Database.Default],
-}) {}
+}) {
+	static getBucketAccess = (bucketId: Option.Option<S3Bucket.S3BucketId>) =>
+		Effect.flatMap(S3Buckets, (b) =>
+			b.getBucketAccess(Option.fromNullable(bucketId).pipe(Option.flatten)),
+		);
+	static getBucketAccessForUser = (userId: string) =>
+		Effect.flatMap(S3Buckets, (b) => b.getBucketAccessForUser(userId));
+}
