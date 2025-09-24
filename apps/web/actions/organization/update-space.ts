@@ -4,10 +4,12 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces } from "@cap/database/schema";
+import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
 import { and, eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "@/lib/server";
 import { uploadSpaceIcon } from "./upload-space-icon";
 
 export async function updateSpace(formData: FormData) {
@@ -48,14 +50,25 @@ export async function updateSpace(formData: FormData) {
 		// Remove icon from S3 and set iconUrl to null
 		const spaceArr = await db().select().from(spaces).where(eq(spaces.id, id));
 		const space = spaceArr[0];
-		if (space && space.iconUrl) {
-			try {
-				const bucketProvider = await createBucketProvider();
-				const prevKeyMatch = space.iconUrl.match(/organizations\/.+/);
-				if (prevKeyMatch && prevKeyMatch[0])
-					await bucketProvider.deleteObject(prevKeyMatch[0]);
-			} catch (e) {
-				console.warn("Failed to delete old space icon from S3", e);
+		if (space?.iconUrl) {
+			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
+
+			if (key) {
+				try {
+					await Effect.gen(function* () {
+						const s3Buckets = yield* S3Buckets;
+						const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+							Option.none(),
+						);
+
+						yield* Effect.gen(function* () {
+							const bucket = yield* S3BucketAccess;
+							yield* bucket.deleteObject(key);
+						}).pipe(Effect.provide(S3ProviderLayer));
+					}).pipe(runPromise);
+				} catch (e) {
+					console.warn("Failed to delete old space icon from S3", e);
+				}
 			}
 		}
 		await db().update(spaces).set({ iconUrl: null }).where(eq(spaces.id, id));

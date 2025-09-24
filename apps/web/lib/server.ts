@@ -44,8 +44,11 @@ export const Dependencies = Layer.mergeAll(
 	Videos.Default,
 	VideosPolicy.Default,
 	Folders.Default,
-	Database.Default,
-).pipe(Layer.provideMerge(Layer.mergeAll(TracingLayer, FetchHttpClient.layer)));
+).pipe(
+	Layer.provideMerge(
+		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),
+	),
+);
 
 // purposefully not exposed
 const EffectRuntime = ManagedRuntime.make(Dependencies);

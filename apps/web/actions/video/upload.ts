@@ -10,11 +10,13 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
 import { type Folder, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
+import { runPromise } from "@/lib/server";
 import { dub } from "@/utils/dub";
-import { createBucketProvider } from "@/utils/s3";
 
 async function getVideoUploadPresignedUrl({
 	fileKey,
@@ -86,8 +88,6 @@ async function getVideoUploadPresignedUrl({
 			}
 		}
 
-		const bucket = await createBucketProvider(customBucket);
-
 		const contentType = fileKey.endsWith(".aac")
 			? "audio/aac"
 			: fileKey.endsWith(".webm")
@@ -109,19 +109,31 @@ async function getVideoUploadPresignedUrl({
 			"x-amz-meta-audiocodec": audioCodec ?? "",
 		};
 
-		const presignedPostData = await bucket.getPresignedPostUrl(fileKey, {
-			Fields,
-			Expires: 1800,
-		});
+		const [S3ProviderLayer] = await Effect.gen(function* () {
+			const s3Buckets = yield* S3Buckets;
+			return yield* s3Buckets.getProviderForBucket(
+				Option.fromNullable(customBucket?.id),
+			);
+		}).pipe(runPromise);
 
-		const customEndpoint = serverEnv().CAP_AWS_ENDPOINT;
-		if (customEndpoint && !customEndpoint.includes("amazonaws.com")) {
-			if (serverEnv().S3_PATH_STYLE) {
-				presignedPostData.url = `${customEndpoint}/${bucket.name}`;
-			} else {
-				presignedPostData.url = customEndpoint;
+		const presignedPostData = await Effect.gen(function* () {
+			const bucket = yield* S3BucketAccess;
+			const presignedPostData = yield* bucket.getPresignedPostUrl(fileKey, {
+				Fields,
+				Expires: 1800,
+			});
+
+			const customEndpoint = serverEnv().CAP_AWS_ENDPOINT;
+			if (customEndpoint && !customEndpoint.includes("amazonaws.com")) {
+				if (serverEnv().S3_PATH_STYLE) {
+					presignedPostData.url = `${customEndpoint}/${bucket.bucketName}`;
+				} else {
+					presignedPostData.url = customEndpoint;
+				}
 			}
-		}
+
+			return presignedPostData;
+		}).pipe(Effect.provide(S3ProviderLayer), runPromise);
 
 		const videoId = fileKey.split("/")[1];
 		if (videoId) {
@@ -214,15 +226,12 @@ export async function createVideoAndGetUploadUrl({
 
 		const idToUse = Video.VideoId.make(videoId || nanoId());
 
-		const bucket = await createBucketProvider(customBucket);
-
 		const videoData = {
 			id: idToUse,
 			name: `Cap ${
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
-			awsBucket: bucket.name,
 			source: { type: "desktopMP4" as const },
 			isScreenshot,
 			bucket: customBucket?.id,

@@ -2,15 +2,18 @@ import {
 	CloudFrontClient,
 	CreateInvalidationCommand,
 } from "@aws-sdk/client-cloudfront";
+import type { PresignedPost } from "@aws-sdk/s3-presigned-post";
 import { db, updateIfDefined } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { S3BucketAccess, S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "@/lib/server";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 import { parseVideoIdOrFileKey } from "../utils";
@@ -110,34 +113,47 @@ app.post(
 								? "application/x-mpegURL"
 								: "video/mp2t";
 
-			const bucket = await createBucketProvider(customBucket);
+			let data: PresignedPost;
 
-			let data;
-			if (method === "post") {
-				const Fields = {
-					"Content-Type": contentType,
-					"x-amz-meta-userid": user.id,
-					"x-amz-meta-duration": durationInSecs
-						? durationInSecs.toString()
-						: "",
-				};
-
-				data = bucket.getPresignedPostUrl(fileKey, { Fields, Expires: 1800 });
-			} else if (method === "put") {
-				const presignedUrl = await bucket.getPresignedPutUrl(
-					fileKey,
-					{
-						ContentType: contentType,
-						Metadata: {
-							userid: user.id,
-							duration: durationInSecs ? durationInSecs.toString() : "",
-						},
-					},
-					{ expiresIn: 1800 },
+			await Effect.gen(function* () {
+				const s3Buckets = yield* S3Buckets;
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderForBucket(
+					Option.fromNullable(customBucket?.id),
 				);
 
-				data = { url: presignedUrl, fields: {} };
-			}
+				yield* Effect.gen(function* () {
+					const bucket = yield* S3BucketAccess;
+
+					if (method === "post") {
+						const Fields = {
+							"Content-Type": contentType,
+							"x-amz-meta-userid": user.id,
+							"x-amz-meta-duration": durationInSecs
+								? durationInSecs.toString()
+								: "",
+						};
+
+						data = yield* bucket.getPresignedPostUrl(fileKey, {
+							Fields,
+							Expires: 1800,
+						});
+					} else if (method === "put") {
+						const presignedUrl = yield* bucket.getPresignedPutUrl(
+							fileKey,
+							{
+								ContentType: contentType,
+								Metadata: {
+									userid: user.id,
+									duration: durationInSecs ? durationInSecs.toString() : "",
+								},
+							},
+							{ expiresIn: 1800 },
+						);
+
+						data = { url: presignedUrl, fields: {} };
+					}
+				}).pipe(Effect.provide(S3ProviderLayer));
+			}).pipe(runPromise);
 
 			console.log("Presigned URL created successfully");
 
@@ -175,8 +191,8 @@ app.post(
 				}
 			}
 
-			if (method === "post") return c.json({ presignedPostData: data });
-			else return c.json({ presignedPutData: data });
+			if (method === "post") return c.json({ presignedPostData: data! });
+			else return c.json({ presignedPutData: data! });
 		} catch (s3Error) {
 			console.error("S3 operation failed:", s3Error);
 			throw new Error(
