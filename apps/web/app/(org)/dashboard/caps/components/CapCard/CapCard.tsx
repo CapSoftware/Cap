@@ -10,6 +10,7 @@ import type { Video } from "@cap/web-domain";
 import {
 	faCheck,
 	faCopy,
+	faDownload,
 	faEllipsis,
 	faLock,
 	faTrash,
@@ -34,6 +35,7 @@ import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
+import { SettingsDialog } from "../SettingsDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
@@ -99,6 +101,7 @@ export const CapCard = ({
 }: CapCardProps) => {
 	const [isSharingDialogOpen, setIsSharingDialogOpen] = useState(false);
 	const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+	const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 	const [passwordProtected, setPasswordProtected] = useState(
 		cap.hasPassword || false,
@@ -266,6 +269,10 @@ export const CapCard = ({
 
 	return (
 		<>
+			<SettingsDialog
+				isOpen={isSettingsDialogOpen}
+				onClose={() => setIsSettingsDialogOpen(false)}
+			/>
 			<SharingDialog
 				isOpen={isSharingDialogOpen}
 				onClose={() => setIsSharingDialogOpen(false)}
@@ -316,11 +323,10 @@ export const CapCard = ({
 						<CapCardButtons
 							capId={cap.id}
 							copyPressed={copyPressed}
-							isDownloading={downloadMutation.isPending}
 							customDomain={customDomain}
 							domainVerified={domainVerified}
+							setIsSettingsDialogOpen={setIsSettingsDialogOpen}
 							handleCopy={handleCopy}
-							handleDownload={handleDownload}
 						/>
 
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
@@ -347,6 +353,14 @@ export const CapCard = ({
 							</Tooltip>
 
 							<DropdownMenuContent align="end" sideOffset={5}>
+								<DropdownMenuItem
+									onClick={handleDownload}
+									disabled={downloadMutation.isPending}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faDownload} />
+									<p className="text-sm text-gray-12">Download</p>
+								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
 										toast.promise(duplicateMutation.mutateAsync(), {
