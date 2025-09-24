@@ -22,7 +22,7 @@ import {
 	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
-export const revalidate = "force-dynamic";
+export const dynamic = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
