@@ -2,8 +2,8 @@
 
 import { LogoSpinner } from "@cap/ui";
 import { calculateStrokeDashoffset, getProgressCircleConfig } from "@cap/utils";
-import { useUploadingContext, type UploadStatus } from "../UploadingContext";
 import { useStore } from "@tanstack/react-store";
+import { type UploadStatus, useUploadingContext } from "../UploadingContext";
 
 const { circumference } = getProgressCircleConfig();
 

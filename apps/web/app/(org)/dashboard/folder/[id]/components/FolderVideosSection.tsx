@@ -2,6 +2,7 @@
 
 import type { Video } from "@cap/web-domain";
 import { useQuery } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-store";
 import { Effect, Exit } from "effect";
 import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
@@ -17,7 +18,6 @@ import {
 	useUploadingContext,
 	useUploadingStatus,
 } from "../../../caps/UploadingContext";
-import { useStore } from "@tanstack/react-store";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;

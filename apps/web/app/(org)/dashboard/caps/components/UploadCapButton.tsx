@@ -4,6 +4,8 @@ import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -14,8 +16,6 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import { useStore } from "@tanstack/react-store";
-import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { imageUrlQuery } from "@/components/VideoThumbnail";
 
 export const UploadCapButton = ({
