@@ -1,4 +1,6 @@
-import { FolderRpcs } from "./Folder";
-import { VideoRpcs } from "./Video";
+import { RpcGroup } from "@effect/rpc";
 
-export const Rpcs = VideoRpcs.merge(FolderRpcs);
+import { FolderRpcs } from "./Folder.ts";
+import { VideoRpcs } from "./Video.ts";
+
+export const Rpcs = RpcGroup.make().merge(VideoRpcs, FolderRpcs);

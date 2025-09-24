@@ -10,6 +10,7 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { type Folder, Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { dub } from "@/utils/dub";
@@ -156,14 +157,14 @@ export async function createVideoAndGetUploadUrl({
 	isUpload = false,
 	folderId,
 }: {
-	videoId?: string;
+	videoId?: Video.VideoId;
 	duration?: number;
 	resolution?: string;
 	videoCodec?: string;
 	audioCodec?: string;
 	isScreenshot?: boolean;
 	isUpload?: boolean;
-	folderId?: string;
+	folderId?: Folder.FolderId;
 }) {
 	const user = await getCurrentUser();
 
@@ -211,7 +212,7 @@ export async function createVideoAndGetUploadUrl({
 			}
 		}
 
-		const idToUse = videoId || nanoId();
+		const idToUse = Video.VideoId.make(videoId || nanoId());
 
 		const bucket = await createBucketProvider(customBucket);
 

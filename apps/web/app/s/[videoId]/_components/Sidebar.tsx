@@ -1,6 +1,7 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
+import type { Video } from "@cap/web-domain";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
@@ -29,7 +30,7 @@ interface SidebarProps {
 	setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	aiData?: {
 		title?: string | null;
 		summary?: string | null;
