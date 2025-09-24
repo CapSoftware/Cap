@@ -1,4 +1,4 @@
-import type { Folder, Video } from "@cap/web-domain";
+import type { Folder, S3Bucket, Video } from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -245,7 +245,7 @@ export const videos = mysqlTable(
 		// TODO: make this non-null
 		orgId: nanoIdNullable("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
-		bucket: nanoIdNullable("bucket"),
+		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
 		duration: float("duration"),
 		width: int("width"),
@@ -371,7 +371,7 @@ export const notifications = mysqlTable(
 );
 
 export const s3Buckets = mysqlTable("s3_buckets", {
-	id: nanoId("id").notNull().primaryKey().unique(),
+	id: nanoId("id").notNull().primaryKey().unique().$type<S3Bucket.S3BucketId>(),
 	ownerId: nanoId("ownerId").notNull(),
 	// Use encryptedText for sensitive fields
 	region: encryptedText("region").notNull(),

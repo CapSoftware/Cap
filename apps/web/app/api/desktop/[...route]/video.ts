@@ -5,13 +5,15 @@ import { nanoId } from "@cap/database/helpers";
 import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { runPromise } from "@/lib/server";
 import { dub } from "@/utils/dub";
-import { createBucketProvider } from "@/utils/s3";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -71,8 +73,6 @@ app.get(
 
 			console.log("User bucket:", customBucket ? "found" : "not found");
 
-			const bucket = await createBucketProvider(customBucket);
-
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
 				"default",
@@ -108,8 +108,6 @@ app.get(
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
-					awsRegion: "auto",
-					awsBucket: bucket.name,
 					source:
 						recordingMode === "hls"
 							? { type: "local" as const }
@@ -225,18 +223,22 @@ app.delete(
 				.delete(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
-			const bucket = await createBucketProvider(result.bucket);
-
-			const listedObjects = await bucket.listObjects({
-				prefix: `${user.id}/${videoId}/`,
-			});
-
-			if (listedObjects.Contents?.length)
-				await bucket.deleteObjects(
-					listedObjects.Contents.map((content: any) => ({
-						Key: content.Key,
-					})),
+			await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(
+					Option.fromNullable(result.bucket?.id),
 				);
+
+				const listedObjects = yield* bucket.listObjects({
+					prefix: `${user.id}/${videoId}/`,
+				});
+
+				if (listedObjects.Contents?.length)
+					yield* bucket.deleteObjects(
+						listedObjects.Contents.map((content: any) => ({
+							Key: content.Key,
+						})),
+					);
+			}).pipe(runPromise);
 
 			return c.json(true);
 		} catch (error) {
