@@ -123,7 +123,7 @@ impl H264EncoderBuilder {
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
-        // output_stream.set_time_base((1, H264Encoder::TIME_BASE));
+        output_stream.set_time_base((1, H264Encoder::TIME_BASE));
         output_stream.set_rate(input_config.frame_rate);
         output_stream.set_parameters(&video_encoder);
 
@@ -149,7 +149,7 @@ pub struct H264Encoder {
 }
 
 impl H264Encoder {
-    const TIME_BASE: i32 = 15000;
+    const TIME_BASE: i32 = 90000;
 
     pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
         H264EncoderBuilder::new(name, input_config)
