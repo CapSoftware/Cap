@@ -15,7 +15,11 @@ export async function promoteToPro() {
 	if (!user) throw new Error("No current user session");
 	await db()
 		.update(users)
-		.set({ stripeSubscriptionStatus: "active" })
+		.set({
+			stripeCustomerId: "development",
+			stripeSubscriptionId: "development",
+			stripeSubscriptionStatus: "active",
+		})
 		.where(eq(users.id, user.id));
 }
 
@@ -29,6 +33,10 @@ export async function demoteFromPro() {
 	if (!user) throw new Error("No current user session");
 	await db()
 		.update(users)
-		.set({ stripeSubscriptionStatus: null })
+		.set({
+			stripeCustomerId: null,
+			stripeSubscriptionId: null,
+			stripeSubscriptionStatus: null,
+		})
 		.where(eq(users.id, user.id));
 }
