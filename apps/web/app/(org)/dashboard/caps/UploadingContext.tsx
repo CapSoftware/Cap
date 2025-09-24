@@ -52,12 +52,17 @@ export function useUploadingContext() {
 }
 
 export function UploadingProvider({ children }: { children: React.ReactNode }) {
-	const uploadingStoreRef = useRef(new Store<UploadingStore>({
-		uploadStatus: undefined,
-	}));
-	
-	const uploadStatus = useStore(uploadingStoreRef.current, (state) => state.uploadStatus);
-	
+	const uploadingStoreRef = useRef(
+		new Store<UploadingStore>({
+			uploadStatus: undefined,
+		}),
+	);
+
+	const uploadStatus = useStore(
+		uploadingStoreRef.current,
+		(state) => state.uploadStatus,
+	);
+
 	const setUploadStatus = (status: UploadStatus | undefined) => {
 		uploadingStoreRef.current.setState((state) => ({
 			...state,
