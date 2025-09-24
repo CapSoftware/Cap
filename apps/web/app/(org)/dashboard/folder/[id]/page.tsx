@@ -1,10 +1,14 @@
+import { getCurrentUser } from "@cap/database/auth/session";
 import { serverEnv } from "@cap/env";
 import { CurrentUser, type Folder } from "@cap/web-domain";
+import { Effect } from "effect";
+import { notFound } from "next/navigation";
 import {
 	getChildFolders,
 	getFolderBreadcrumb,
 	getVideosByFolderId,
 } from "@/lib/folder";
+import { runPromise } from "@/lib/server";
 import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
 import {
@@ -13,10 +17,6 @@ import {
 	NewSubfolderButton,
 } from "./components";
 import FolderVideosSection from "./components/FolderVideosSection";
-import { Effect } from "effect";
-import { runPromise } from "@/lib/server";
-import { getCurrentUser } from "@cap/database/auth/session";
-import { notFound } from "next/navigation";
 
 const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 	const user = await getCurrentUser();
