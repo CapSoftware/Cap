@@ -7,6 +7,7 @@ import {
 	DropdownMenuTrigger,
 } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
+import { HttpClient } from "@effect/platform";
 import {
 	faCheck,
 	faCopy,
@@ -19,6 +20,7 @@ import {
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
+import { Effect, Option } from "effect";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useState } from "react";
@@ -38,8 +40,6 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
 import { CapCardContent } from "./CapCardContent";
-import { Effect, Option } from "effect";
-import { HttpClient } from "@effect/platform";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
