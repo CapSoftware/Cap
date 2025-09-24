@@ -39,7 +39,7 @@ export async function downloadVideo(videoId: Video.VideoId) {
 			const [bucket] = yield* S3Buckets.getBucketAccess(
 				Option.fromNullable(video.bucket),
 			);
-			yield* bucket.getSignedObjectUrl(videoKey);
+			return yield* bucket.getSignedObjectUrl(videoKey);
 		}).pipe(runPromise);
 
 		return {
