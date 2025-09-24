@@ -5,6 +5,7 @@ import {
 	getFolderBreadcrumb,
 	getVideosByFolderId,
 } from "@/lib/folder";
+import { UploadCapButton } from "../../caps/components";
 import FolderCard from "../../caps/components/Folder";
 import {
 	BreadcrumbItem,
@@ -12,7 +13,6 @@ import {
 	NewSubfolderButton,
 } from "./components";
 import FolderVideosSection from "./components/FolderVideosSection";
-import { UploadCapButtonWithFolder } from "./components/UploadCapButtonWithFolder";
 
 const FolderPage = async (props: {
 	params: Promise<{ id: Folder.FolderId }>;
@@ -28,7 +28,7 @@ const FolderPage = async (props: {
 		<div>
 			<div className="flex gap-2 items-center mb-10">
 				<NewSubfolderButton parentFolderId={params.id} />
-				<UploadCapButtonWithFolder folderId={params.id} />
+				<UploadCapButton size="sm" folderId={params.id} />
 			</div>
 			<div className="flex justify-between items-center mb-6 w-full">
 				<div className="flex overflow-x-auto items-center font-medium">

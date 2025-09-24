@@ -9,11 +9,13 @@ import { createMiddleware } from "hono/factory";
 import { cookies } from "next/headers";
 
 async function getAuth(c: Context) {
+	console.log("auth header: ", c.req.header("authorization"));
 	const authHeader = c.req.header("authorization")?.split(" ")[1];
 
 	let user;
 
 	if (authHeader?.length === 36) {
+		console.log("Using API key auth");
 		const res = await db()
 			.select()
 			.from(users)
@@ -33,6 +35,8 @@ async function getAuth(c: Context) {
 
 		user = await getCurrentUser();
 	}
+
+	console.log("User: ", user);
 
 	if (!user) return;
 	return { user };

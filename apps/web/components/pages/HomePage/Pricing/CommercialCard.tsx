@@ -2,6 +2,7 @@ import { Button, Switch } from "@cap/ui";
 import {
 	faBriefcase,
 	faDownload,
+	faEdit,
 	faMinus,
 	faPlus,
 	faVideo,
@@ -115,30 +116,30 @@ export const CommercialCard = () => {
 				</div>
 
 				<div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-gray-3 border-gray-4">
-					<div className="flex gap-3 justify-center items-center">
-						<p className="text-base text-gray-12">
+					<div className="flex gap-2 justify-center items-center">
+						<p className="text-sm text-gray-12">
 							{homepageCopy.pricing.commercial.labels.licenses}
 						</p>
 						<div className="flex items-center">
 							<Button
 								onClick={decrementLicenses}
-								className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
+								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
 								aria-label="Decrease license count"
 							>
 								<FontAwesomeIcon
 									icon={faMinus}
-									className="text-gray-1 size-3"
+									className="text-gray-1 size-2"
 								/>
 							</Button>
-							<span className="w-8 font-medium tabular-nums text-center text-gray-12">
+							<span className="w-5 font-medium tabular-nums text-center text-gray-12">
 								<NumberFlow value={licenses} />
 							</span>
 							<Button
 								onClick={incrementLicenses}
-								className="px-1.5 py-1.5 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
+								className="p-1 bg-gray-12 hover:bg-gray-11 min-w-fit h-fit"
 								aria-label="Increase license count"
 							>
-								<FontAwesomeIcon icon={faPlus} className="text-gray-1 size-3" />
+								<FontAwesomeIcon icon={faPlus} className="text-gray-1 size-2" />
 							</Button>
 						</div>
 					</div>
@@ -147,7 +148,7 @@ export const CommercialCard = () => {
 						<div className="flex gap-2 items-center">
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									isYearly ? "font-medium text-gray-12" : "text-gray-10",
 								)}
 							>
@@ -161,7 +162,7 @@ export const CommercialCard = () => {
 							/>
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									!isYearly ? "font-medium text-gray-12" : "text-gray-10",
 								)}
 							>
@@ -172,8 +173,16 @@ export const CommercialCard = () => {
 				</div>
 			</div>
 
-			<div className="mb-6">
+			<div className="space-y-6">
 				<ul className="space-y-3">
+					<li className="flex items-center text-sm text-gray-12">
+						<FontAwesomeIcon
+							icon={faEdit}
+							className="flex-shrink-0 mr-3 text-gray-12"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span>Studio Mode with full editor</span>
+					</li>
 					<li className="flex items-center text-sm text-gray-12">
 						<FontAwesomeIcon
 							icon={faBriefcase}
@@ -197,7 +206,9 @@ export const CommercialCard = () => {
 							className="flex-shrink-0 mr-3 text-gray-12"
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
-						<span>Unlimited local recordings</span>
+						<span>
+							Unlimited local recordings, shareable links up to 5 minutes
+						</span>
 					</li>
 					<li className="flex items-center text-sm text-gray-12">
 						<FontAwesomeIcon
@@ -208,18 +219,20 @@ export const CommercialCard = () => {
 						<span>Export to MP4 or GIF</span>
 					</li>
 				</ul>
-			</div>
 
-			<Button
-				disabled={commercialLoading}
-				onClick={openCommercialCheckout}
-				variant="dark"
-				size="lg"
-				className="w-full font-medium"
-				aria-label="Purchase Commercial License"
-			>
-				{commercialLoading ? "Loading..." : homepageCopy.pricing.commercial.cta}
-			</Button>
+				<Button
+					disabled={commercialLoading}
+					onClick={openCommercialCheckout}
+					variant="dark"
+					size="lg"
+					className="w-full font-medium"
+					aria-label="Purchase Commercial License"
+				>
+					{commercialLoading
+						? "Loading..."
+						: homepageCopy.pricing.commercial.cta}
+				</Button>
+			</div>
 		</div>
 	);
 };

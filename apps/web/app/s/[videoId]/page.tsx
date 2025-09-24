@@ -9,6 +9,7 @@ import {
 	spaceVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
@@ -38,7 +39,7 @@ export const dynamicParams = true;
 export const revalidate = 30;
 
 // Helper function to fetch shared spaces data for a video
-async function getSharedSpacesForVideo(videoId: string) {
+async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Fetch space-level sharing
 	const spaceSharing = await db()
 		.select({
@@ -266,6 +267,7 @@ export default async function ShareVideoPage(props: Props) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
 					awsRegion: videos.awsRegion,
@@ -286,15 +288,22 @@ export default async function ShareVideoPage(props: Props) {
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
-					hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+					ownerIsPro:
+						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
+							Boolean,
+						),
+					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+						Boolean,
+					),
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(users, eq(videos.ownerId, users.id))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -348,8 +357,8 @@ async function AuthorizedContent({
 }: {
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
-		hasPassword: number;
-		ownerIsPro?: number;
+		hasPassword: boolean;
+		ownerIsPro?: boolean;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -447,7 +456,10 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
-				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+				ownerIsPro:
+					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
+						Boolean,
+					),
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
 				awsRegion: videos.awsRegion,
@@ -658,8 +670,6 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
-		hasPassword: Number(video.hasPassword) === 1,
-		ownerIsPro: Number(video.ownerIsPro) === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,

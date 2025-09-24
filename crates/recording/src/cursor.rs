@@ -4,7 +4,7 @@ use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
 use cap_timestamp::Timestamps;
 use std::{collections::HashMap, path::PathBuf};
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
 pub struct Cursor {
     pub file_name: String,
@@ -24,13 +24,13 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    stop: CancellationToken,
+    stop: DropGuard,
     rx: oneshot::Receiver<CursorActorResponse>,
 }
 
 impl CursorActor {
     pub async fn stop(self) -> CursorActorResponse {
-        self.stop.cancel();
+        drop(self.stop);
         self.rx.await.unwrap()
     }
 }
@@ -180,7 +180,7 @@ pub fn spawn_cursor_recorder(
     });
 
     CursorActor {
-        stop: stop_token,
+        stop: stop_token.drop_guard(),
         rx,
     }
 }

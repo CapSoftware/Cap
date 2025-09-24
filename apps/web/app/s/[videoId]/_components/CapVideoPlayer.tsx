@@ -1,11 +1,14 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
+import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -28,22 +31,26 @@ import {
 
 interface Props {
 	videoSrc: string;
+	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
 	videoRef: React.RefObject<HTMLVideoElement>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
+	hasActiveUpload: boolean | undefined;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
+	videoId,
 	chaptersSrc,
 	captionsSrc,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
 	enableCrossOrigin = false,
+	hasActiveUpload,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -81,7 +88,10 @@ export function CapVideoPlayer({
 				? `${videoSrc}&_t=${timestamp}`
 				: `${videoSrc}?_t=${timestamp}`;
 
-			const response = await fetch(urlWithTimestamp, { method: "HEAD" });
+			const response = await fetch(urlWithTimestamp, {
+				method: "GET",
+				headers: { range: "bytes=0-0" },
+			});
 			const finalUrl = response.redirected ? response.url : urlWithTimestamp;
 
 			// Check if the resolved URL is from a CORS-incompatible service
@@ -331,9 +341,7 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
-				if (retryTimeout.current) {
-					clearTimeout(retryTimeout.current);
-				}
+				if (retryTimeout.current) clearTimeout(retryTimeout.current);
 			};
 		}
 
@@ -379,61 +387,108 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
+	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
+	const isUploading = uploadProgress?.status === "uploading";
+	const isUploadFailed = uploadProgress?.status === "failed";
+
+	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
+	useEffect(() => {
+		// Check if we transitioned from having upload progress to null which means it's completed and reload the video.
+		// This prevents it just showing the dreaded "Format error" screen.
+		if (prevUploadProgress.current && !uploadProgress && !videoLoaded) {
+			reloadVideo();
+			// Make it more reliable.
+			setTimeout(() => reloadVideo(), 1000);
+		}
+		prevUploadProgress.current = uploadProgress;
+	}, [uploadProgress, videoLoaded, reloadVideo]);
+
 	return (
-		<>
-			<MediaPlayer
-				onMouseEnter={() => setControlsVisible(true)}
-				onMouseLeave={() => setControlsVisible(false)}
-				onTouchStart={() => setControlsVisible(true)}
-				onTouchEnd={() => setControlsVisible(false)}
-				className={clsx(
-					mediaPlayerClassName,
-					"[&::-webkit-media-text-track-display]:!hidden",
-				)}
-				autoHide
-			>
-				<div
-					className={clsx(
-						"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-						videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100",
-					)}
-				>
-					<div className="flex flex-col items-center gap-2">
-						<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-						{retryCount.current > 0 && (
-							<p className="text-white text-sm opacity-75">
-								Preparing video... ({retryCount.current}/{maxRetries})
-							</p>
-						)}
-					</div>
+		<MediaPlayer
+			onMouseEnter={() => setControlsVisible(true)}
+			onMouseLeave={() => setControlsVisible(false)}
+			onTouchStart={() => setControlsVisible(true)}
+			onTouchEnd={() => setControlsVisible(false)}
+			className={clsx(
+				mediaPlayerClassName,
+				"[&::-webkit-media-text-track-display]:!hidden",
+			)}
+			autoHide
+		>
+			{isUploadFailed && (
+				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
+					<AlertTriangleIcon className="text-red-500 size-12" />
+					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
+						Upload failed. Please try re-uploading from the Cap desktop app via
+						Settings {">"} Previous Recordings.
+					</p>
 				</div>
-				{urlResolved && (
-					<MediaPlayerVideo
-						src={resolvedVideoSrc}
-						ref={videoRef}
-						onLoadedData={() => {
-							setVideoLoaded(true);
-						}}
-						onPlay={() => {
-							setShowPlayButton(false);
-							setHasPlayedOnce(true);
-						}}
-						crossOrigin={useCrossOrigin ? "anonymous" : undefined}
-						playsInline
-						autoPlay={autoplay}
-					>
-						<track default kind="chapters" src={chaptersSrc} />
-						<track
-							label="English"
-							kind="captions"
-							srcLang="en"
-							src={captionsSrc}
-							default
-						/>
-					</MediaPlayerVideo>
+			)}
+			<div
+				className={clsx(
+					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+					videoLoaded || !!uploadProgress
+						? "opacity-0 pointer-events-none"
+						: "opacity-100",
 				)}
-				<AnimatePresence>
-					{showPlayButton && videoLoaded && !hasPlayedOnce && (
+			>
+				<div className="flex flex-col gap-2 items-center">
+					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+					{retryCount.current > 0 && (
+						<p className="text-sm text-white opacity-75">
+							Preparing video... ({retryCount.current}/{maxRetries})
+						</p>
+					)}
+				</div>
+			</div>
+			{urlResolved && (
+				<MediaPlayerVideo
+					src={resolvedVideoSrc}
+					ref={videoRef}
+					onLoadedData={() => {
+						setVideoLoaded(true);
+					}}
+					onPlay={() => {
+						setShowPlayButton(false);
+						setHasPlayedOnce(true);
+					}}
+					crossOrigin={useCrossOrigin ? "anonymous" : undefined}
+					playsInline
+					autoPlay={autoplay}
+				>
+					<track default kind="chapters" src={chaptersSrc} />
+					<track
+						label="English"
+						kind="captions"
+						srcLang="en"
+						src={captionsSrc}
+						default
+					/>
+				</MediaPlayerVideo>
+			)}
+			<AnimatePresence>
+				{!videoLoaded && isUploading && !isUploadFailed && (
+					<motion.div
+						initial={{ opacity: 0, y: 10 }}
+						animate={{ opacity: 1, y: 0 }}
+						exit={{ opacity: 0, y: 10 }}
+						transition={{ duration: 0.2 }}
+						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
+					>
+						<ProgressCircle
+							progress={
+								uploadProgress?.status === "uploading"
+									? uploadProgress.progress
+									: 0
+							}
+						/>
+					</motion.div>
+				)}
+				{showPlayButton &&
+					videoLoaded &&
+					!hasPlayedOnce &&
+					!isUploading &&
+					!isUploadFailed && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -450,52 +505,56 @@ export function CapVideoPlayer({
 							/>
 						</motion.div>
 					)}
-				</AnimatePresence>
-				{currentCue && toggleCaptions && (
-					<div
-						className={clsx(
-							"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
-							"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
-							controlsVisible || videoRef.current?.paused
-								? "bottom-16 sm:bottom-20"
-								: "bottom-3 sm:bottom-12",
-						)}
-					>
-						{currentCue}
+			</AnimatePresence>
+			{currentCue && toggleCaptions && (
+				<div
+					className={clsx(
+						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
+						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
+						controlsVisible || videoRef.current?.paused
+							? "bottom-16 sm:bottom-20"
+							: "bottom-3 sm:bottom-12",
+					)}
+				>
+					{currentCue}
+				</div>
+			)}
+			<MediaPlayerLoading />
+			{!isRetrying && !isRetryingRef.current && !isUploading && (
+				<MediaPlayerError />
+			)}
+			<MediaPlayerVolumeIndicator />
+			<MediaPlayerControls
+				className="flex-col items-start gap-2.5"
+				isUploadingOrFailed={isUploading || isUploadFailed}
+			>
+				<MediaPlayerControlsOverlay />
+				<MediaPlayerSeek
+					tooltipThumbnailSrc={
+						isMobile || !useCrossOrigin || isUploading
+							? undefined
+							: generateVideoFrameThumbnail
+					}
+				/>
+				<div className="flex gap-2 items-center w-full">
+					<div className="flex flex-1 gap-2 items-center">
+						<MediaPlayerPlay />
+						<MediaPlayerSeekBackward />
+						<MediaPlayerSeekForward />
+						<MediaPlayerVolume expandable />
+						<MediaPlayerTime />
 					</div>
-				)}
-				<MediaPlayerLoading />
-				{!isRetrying && !isRetryingRef.current && <MediaPlayerError />}
-				<MediaPlayerVolumeIndicator />
-				<MediaPlayerControls className="flex-col items-start gap-2.5">
-					<MediaPlayerControlsOverlay />
-					<MediaPlayerSeek
-						tooltipThumbnailSrc={
-							isMobile || !useCrossOrigin
-								? undefined
-								: generateVideoFrameThumbnail
-						}
-					/>
-					<div className="flex gap-2 items-center w-full">
-						<div className="flex flex-1 gap-2 items-center">
-							<MediaPlayerPlay />
-							<MediaPlayerSeekBackward />
-							<MediaPlayerSeekForward />
-							<MediaPlayerVolume expandable />
-							<MediaPlayerTime />
-						</div>
-						<div className="flex gap-2 items-center">
-							<MediaPlayerCaptions
-								setToggleCaptions={setToggleCaptions}
-								toggleCaptions={toggleCaptions}
-							/>
-							<MediaPlayerSettings />
-							<MediaPlayerPiP />
-							<MediaPlayerFullscreen />
-						</div>
+					<div className="flex gap-2 items-center">
+						<MediaPlayerCaptions
+							setToggleCaptions={setToggleCaptions}
+							toggleCaptions={toggleCaptions}
+						/>
+						<MediaPlayerSettings />
+						<MediaPlayerPiP />
+						<MediaPlayerFullscreen />
 					</div>
-				</MediaPlayerControls>
-			</MediaPlayer>
-		</>
+				</div>
+			</MediaPlayerControls>
+		</MediaPlayer>
 	);
 }

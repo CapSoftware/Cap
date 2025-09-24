@@ -19,7 +19,7 @@ use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder};
 use tauri_specta::Event;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
@@ -355,7 +355,7 @@ pub async fn start_recording(
             )
         });
 
-    println!("spawning actor");
+    debug!("spawning start_recording actor");
 
     // done in spawn to catch panics just in case
     let spawn_actor_res = async {
@@ -812,6 +812,7 @@ async fn handle_recording_finish(
                                 Some(video_upload_info.config.clone()),
                                 Some(display_screenshot.clone()),
                                 meta,
+                                None,
                             )
                             .await
                             {

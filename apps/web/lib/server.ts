@@ -1,10 +1,8 @@
 import "server-only";
 
-import { db } from "@cap/database";
 import { decrypt } from "@cap/database/crypto";
 import {
 	Database,
-	DatabaseError,
 	Folders,
 	HttpAuthMiddlewareLive,
 	S3Buckets,
@@ -14,6 +12,7 @@ import {
 import { type HttpAuthMiddleware, Video } from "@cap/web-domain";
 import * as NodeSdk from "@effect/opentelemetry/NodeSdk";
 import {
+	FetchHttpClient,
 	type HttpApi,
 	HttpApiBuilder,
 	HttpMiddleware,
@@ -24,15 +23,7 @@ import { cookies } from "next/headers";
 import { allowedOrigins } from "@/utils/cors";
 import { getTracingConfig } from "./tracing";
 
-const DatabaseLive = Layer.sync(Database, () => ({
-	execute: (cb) =>
-		Effect.tryPromise({
-			try: () => cb(db()),
-			catch: (error) => new DatabaseError({ message: String(error) }),
-		}),
-}));
-
-const TracingLayer = NodeSdk.layer(getTracingConfig);
+export const TracingLayer = NodeSdk.layer(getTracingConfig);
 
 const CookiePasswordAttachmentLive = Layer.effect(
 	Video.VideoPasswordAttachment,
@@ -52,8 +43,8 @@ export const Dependencies = Layer.mergeAll(
 	Videos.Default,
 	VideosPolicy.Default,
 	Folders.Default,
-	TracingLayer,
-).pipe(Layer.provideMerge(DatabaseLive));
+	Database.Default,
+).pipe(Layer.provideMerge(Layer.mergeAll(TracingLayer, FetchHttpClient.layer)));
 
 // purposefully not exposed
 const EffectRuntime = ManagedRuntime.make(Dependencies);

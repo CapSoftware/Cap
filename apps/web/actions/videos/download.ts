@@ -3,10 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { createBucketProvider } from "@/utils/s3";
 
-export async function downloadVideo(videoId: string) {
+export async function downloadVideo(videoId: Video.VideoId) {
 	const user = await getCurrentUser();
 
 	if (!user || !videoId) {

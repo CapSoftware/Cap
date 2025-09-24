@@ -11,6 +11,7 @@ import {
 	spaceVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
@@ -201,11 +202,15 @@ export default async function SharedCapsPage(props: {
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
+						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+							Boolean,
+						),
 					})
 					.from(spaceVideos)
 					.innerJoin(videos, eq(spaceVideos.videoId, videos.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
+					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 					.where(
 						and(eq(spaceVideos.spaceId, spaceId), isNull(spaceVideos.folderId)),
 					)
@@ -307,11 +312,15 @@ export default async function SharedCapsPage(props: {
 						totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
 						ownerName: users.name,
 						effectiveDate: sql<string>`COALESCE(JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')), ${videos.createdAt})`,
+						hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+							Boolean,
+						),
 					})
 					.from(sharedVideos)
 					.innerJoin(videos, eq(sharedVideos.videoId, videos.id))
 					.leftJoin(comments, eq(videos.id, comments.videoId))
 					.leftJoin(users, eq(videos.ownerId, users.id))
+					.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 					.where(
 						and(
 							eq(sharedVideos.organizationId, orgId),

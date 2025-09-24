@@ -5,10 +5,10 @@ import {
 } from "@cap/web-domain";
 import { Effect, Layer, Option } from "effect";
 
-import { getCurrentUser } from "./Auth";
-import { Database } from "./Database";
-import { FolderRpcsLive } from "./Folders/FoldersRpcs";
-import { VideosRpcsLive } from "./Videos/VideosRpcs";
+import { getCurrentUser } from "./Auth.ts";
+import { Database } from "./Database.ts";
+import { FolderRpcsLive } from "./Folders/FoldersRpcs.ts";
+import { VideosRpcsLive } from "./Videos/VideosRpcs.ts";
 
 export const RpcsLive = Layer.mergeAll(VideosRpcsLive, FolderRpcsLive);
 

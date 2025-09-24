@@ -1,9 +1,10 @@
 import { Policy, Video } from "@cap/web-domain";
 import { Array, Effect, Option } from "effect";
 
-import { OrganisationsRepo } from "../Organisations/OrganisationsRepo";
-import { SpacesRepo } from "../Spaces/SpacesRepo";
-import { VideosRepo } from "./VideosRepo";
+import { Database } from "../Database.ts";
+import { OrganisationsRepo } from "../Organisations/OrganisationsRepo.ts";
+import { SpacesRepo } from "../Spaces/SpacesRepo.ts";
+import { VideosRepo } from "./VideosRepo.ts";
 
 export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 	"VideosPolicy",
@@ -91,6 +92,7 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 			VideosRepo.Default,
 			OrganisationsRepo.Default,
 			SpacesRepo.Default,
+			Database.Default,
 		],
 	},
 ) {}

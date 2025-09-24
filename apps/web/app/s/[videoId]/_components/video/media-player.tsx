@@ -876,10 +876,11 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 
 interface MediaPlayerControlsProps extends React.ComponentProps<"div"> {
 	asChild?: boolean;
+	isUploadingOrFailed?: boolean;
 }
 
 function MediaPlayerControls(props: MediaPlayerControlsProps) {
-	const { asChild, className, ...controlsProps } = props;
+	const { asChild, className, isUploadingOrFailed, ...controlsProps } = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
 	const isFullscreen = useMediaSelector(
@@ -888,6 +889,8 @@ function MediaPlayerControls(props: MediaPlayerControlsProps) {
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
 
 	const ControlsPrimitive = asChild ? Slot : "div";
+
+	if (isUploadingOrFailed) return null;
 
 	return (
 		<ControlsPrimitive

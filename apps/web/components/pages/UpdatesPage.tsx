@@ -8,7 +8,10 @@ import {
 } from "@/utils/blog-registry";
 import { generateGradientFromSlug } from "@/utils/gradients";
 
-const FEATURED_SLUGS = ["handling-a-stripe-payment-attack", "cap-v03-launch"];
+const FEATURED_SLUGS = [
+	"handling-a-stripe-payment-attack",
+	"september-23-outage-deep-dive",
+];
 
 export const UpdatesPage = () => {
 	const allUpdates = getBlogPosts() as BlogPost[];
@@ -38,7 +41,7 @@ export const UpdatesPage = () => {
 		});
 
 	return (
-		<div className="py-32 md:py-40 wrapper wrapper-sm">
+		<div className="pt-24 pb-32 md:py-40 wrapper wrapper-sm">
 			{featuredPosts.length > 0 && (
 				<div className="mb-6">
 					<div className="grid grid-cols-1 gap-6 md:grid-cols-2">
