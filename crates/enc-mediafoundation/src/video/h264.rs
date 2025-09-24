@@ -15,7 +15,8 @@ use windows::{
             MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
             MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer, MFCreateMediaType,
-            MFCreateSample, MFMediaType_Video, MFT_MESSAGE_COMMAND_FLUSH,
+            MFCreateSample, MFMediaType_Video, MFT_ENUM_FLAG, MFT_ENUM_FLAG_HARDWARE,
+            MFT_ENUM_FLAG_SORTANDFILTER, MFT_ENUM_FLAG_TRANSCODE_ONLY, MFT_MESSAGE_COMMAND_FLUSH,
             MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_END_OF_STREAM,
             MFT_MESSAGE_NOTIFY_END_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
             MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_DATA_BUFFER, MFT_SET_TYPE_TEST_ONLY,
@@ -97,13 +98,15 @@ pub enum HandleNeedsInputError {
 unsafe impl Send for H264Encoder {}
 
 impl H264Encoder {
-    pub fn new_with_scaled_output(
+    fn new_with_scaled_output_with_flags(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
         input_resolution: SizeInt32,
         output_resolution: SizeInt32,
         frame_rate: u32,
         bitrate_multipler: f32,
+        flags: MFT_ENUM_FLAG,
+        enable_hardware_transforms: bool,
     ) -> Result<Self, NewVideoEncoderError> {
         let bitrate = calculate_bitrate(
             output_resolution.Width as u32,
@@ -112,13 +115,14 @@ impl H264Encoder {
             bitrate_multipler,
         );
 
-        let transform = EncoderDevice::enumerate(MFMediaType_Video, MFVideoFormat_H264)
-            .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
-            .first()
-            .cloned()
-            .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
-            .create_transform()
-            .map_err(NewVideoEncoderError::EncoderTransform)?;
+        let transform =
+            EncoderDevice::enumerate_with_flags(MFMediaType_Video, MFVideoFormat_H264, flags)
+                .map_err(|_| NewVideoEncoderError::NoVideoEncoderDevice)?
+                .first()
+                .cloned()
+                .ok_or(NewVideoEncoderError::NoVideoEncoderDevice)?
+                .create_transform()
+                .map_err(NewVideoEncoderError::EncoderTransform)?;
 
         let video_processor = VideoProcessor::new(
             d3d_device.clone(),
@@ -130,7 +134,6 @@ impl H264Encoder {
         )
         .map_err(NewVideoEncoderError::VideoProcessor)?;
 
-        // Create MF device manager
         let mut device_manager_reset_token: u32 = 0;
         let media_device_manager = {
             let mut media_device_manager = None;
@@ -149,7 +152,6 @@ impl H264Encoder {
                 .map_err(NewVideoEncoderError::DeviceManager)?
         };
 
-        // Setup MFTransform
         let event_generator: IMFMediaEventGenerator = transform
             .cast()
             .map_err(NewVideoEncoderError::EventGenerator)?;
@@ -163,7 +165,10 @@ impl H264Encoder {
                 .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
                 .map_err(NewVideoEncoderError::EventGenerator)?;
             attributes
-                .SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)
+                .SetUINT32(
+                    &MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS,
+                    enable_hardware_transforms as u32,
+                )
                 .map_err(NewVideoEncoderError::EventGenerator)?;
         };
 
@@ -182,13 +187,6 @@ impl H264Encoder {
             match result {
                 Ok(_) => {}
                 Err(error) => {
-                    // https://docs.microsoft.com/en-us/windows/win32/api/mftransform/nf-mftransform-imftransform-getstreamids
-                    // This method can return E_NOTIMPL if both of the following conditions are true:
-                    //   * The transform has a fixed number of streams.
-                    //   * The streams are numbered consecutively from 0 to n – 1, where n is the
-                    //     number of input streams or output streams. In other words, the first
-                    //     input stream is 0, the second is 1, and so on; and the first output
-                    //     stream is 0, the second is 1, and so on.
                     if error.code() == E_NOTIMPL {
                         for i in 0..number_of_input_streams {
                             input_stream_ids[i as usize] = i;
@@ -206,7 +204,6 @@ impl H264Encoder {
         let input_stream_id = input_stream_ids[0];
         let output_stream_id = output_stream_ids[0];
 
-        // TOOD: Avoid this AddRef?
         unsafe {
             let temp = media_device_manager.clone();
             transform
@@ -300,6 +297,46 @@ impl H264Encoder {
         })
     }
 
+    pub fn new_with_scaled_output(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        input_resolution: SizeInt32,
+        output_resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate_multipler: f32,
+    ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output_with_flags(
+            d3d_device,
+            format,
+            input_resolution,
+            output_resolution,
+            frame_rate,
+            bitrate_multipler,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY,
+            true,
+        )
+    }
+
+    pub fn new_with_scaled_output_software(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        input_resolution: SizeInt32,
+        output_resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate_multipler: f32,
+    ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output_with_flags(
+            d3d_device,
+            format,
+            input_resolution,
+            output_resolution,
+            frame_rate,
+            bitrate_multipler,
+            MFT_ENUM_FLAG_TRANSCODE_ONLY,
+            false,
+        )
+    }
+
     pub fn new(
         d3d_device: &ID3D11Device,
         format: DXGI_FORMAT,
@@ -308,6 +345,23 @@ impl H264Encoder {
         bitrate_multipler: f32,
     ) -> Result<Self, NewVideoEncoderError> {
         Self::new_with_scaled_output(
+            d3d_device,
+            format,
+            resolution,
+            resolution,
+            frame_rate,
+            bitrate_multipler,
+        )
+    }
+
+    pub fn new_software(
+        d3d_device: &ID3D11Device,
+        format: DXGI_FORMAT,
+        resolution: SizeInt32,
+        frame_rate: u32,
+        bitrate_multipler: f32,
+    ) -> Result<Self, NewVideoEncoderError> {
+        Self::new_with_scaled_output_software(
             d3d_device,
             format,
             resolution,

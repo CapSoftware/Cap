@@ -21,16 +21,29 @@ pub struct EncoderDevice {
 
 impl EncoderDevice {
     pub fn enumerate(major_type: GUID, subtype: GUID) -> Result<Vec<EncoderDevice>> {
+        Self::enumerate_with_flags(
+            major_type,
+            subtype,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY | MFT_ENUM_FLAG_SORTANDFILTER,
+        )
+    }
+
+    pub fn enumerate_with_flags(
+        major_type: GUID,
+        subtype: GUID,
+        flags: MFT_ENUM_FLAG,
+    ) -> Result<Vec<EncoderDevice>> {
         let output_info = MFT_REGISTER_TYPE_INFO {
             guidMajorType: major_type,
             guidSubtype: subtype,
         };
-        let encoders = enumerate_mfts(
-            &MFT_CATEGORY_VIDEO_ENCODER,
-            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_TRANSCODE_ONLY | MFT_ENUM_FLAG_SORTANDFILTER,
-            None,
-            Some(&output_info),
-        )?;
+        let flags = if flags.is_empty() {
+            MFT_ENUM_FLAG_SORTANDFILTER
+        } else {
+            flags | MFT_ENUM_FLAG_SORTANDFILTER
+        };
+        let encoders =
+            enumerate_mfts(&MFT_CATEGORY_VIDEO_ENCODER, flags, None, Some(&output_info))?;
         let mut encoder_devices = Vec::new();
         for encoder in encoders {
             let display_name = if let Some(display_name) =
