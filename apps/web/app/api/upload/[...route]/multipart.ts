@@ -251,7 +251,7 @@ app.post(
 						"Sending to S3:",
 						JSON.stringify(
 							{
-								Bucket: bucket.name,
+								Bucket: bucket.bucketName,
 								Key: fileKey,
 								UploadId: uploadId,
 								Parts: formattedParts,
