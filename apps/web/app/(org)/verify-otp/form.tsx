@@ -78,7 +78,6 @@ export function VerifyOTPForm({
 			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
-				{ redirect: "manual" },
 			);
 
 			if (!res.url.includes("/login-success")) {

@@ -15,19 +15,21 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
 
+		const getById = (id: Video.VideoId) =>
+			repo
+				.getById(id)
+				.pipe(
+					Policy.withPublicPolicy(policy.canView(id)),
+					Effect.withSpan("Videos.getById"),
+				);
+
 		return {
 			/*
 			 * Get a video by ID. Will fail if the user does not have access.
 			 */
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
-			getById: (id: Video.VideoId) =>
-				repo
-					.getById(id)
-					.pipe(
-						Policy.withPublicPolicy(policy.canView(id)),
-						Effect.withSpan("Videos.getById"),
-					),
+			getById,
 
 			/*
 			 * Delete a video. Will fail if the user does not have access.
@@ -129,6 +131,34 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			}),
 
 			create: Effect.fn("Videos.create")(repo.create),
+
+			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
+				videoId: Video.VideoId,
+			) {
+				const [video] = yield* getById(videoId).pipe(
+					Effect.flatMap(
+						Effect.catchTag(
+							"NoSuchElementException",
+							() => new Video.NotFoundError(),
+						),
+					),
+				);
+
+				const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+
+				return yield* Option.fromNullable(Video.Video.getSource(video)).pipe(
+					Option.filter((v) => v._tag === "Mp4Source"),
+					Option.map((v) =>
+						bucket.getSignedObjectUrl(v.getFileKey()).pipe(
+							Effect.map((downloadUrl) => ({
+								fileName: `${video.name}.mp4`,
+								downloadUrl,
+							})),
+						),
+					),
+					Effect.transposeOption,
+				);
+			}),
 		};
 	}),
 	dependencies: [
