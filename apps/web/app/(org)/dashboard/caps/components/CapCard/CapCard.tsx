@@ -38,6 +38,8 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButtons } from "./CapCardButtons";
 import { CapCardContent } from "./CapCardContent";
+import { Effect, Option } from "effect";
+import { HttpClient } from "@effect/platform";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
@@ -111,27 +113,29 @@ export const CapCard = ({
 
 	const router = useRouter();
 
-	const downloadMutation = useMutation({
-		mutationFn: async () => {
-			const response = await downloadVideo(cap.id);
-			if (response.success && response.downloadUrl) {
-				const fetchResponse = await fetch(response.downloadUrl);
-				const blob = await fetchResponse.blob();
+	const downloadMutation = useEffectMutation({
+		mutationFn: () =>
+			Effect.gen(function* () {
+				const result = yield* withRpc((r) => r.VideoGetDownloadInfo(cap.id));
+				const httpClient = yield* HttpClient.HttpClient;
+				if (Option.isSome(result)) {
+					const fetchResponse = yield* httpClient.get(result.value.downloadUrl);
+					const blob = yield* fetchResponse.arrayBuffer;
 
-				const blobUrl = window.URL.createObjectURL(blob);
-				const link = document.createElement("a");
-				link.href = blobUrl;
-				link.download = response.filename;
-				link.style.display = "none";
-				document.body.appendChild(link);
-				link.click();
-				document.body.removeChild(link);
+					const blobUrl = window.URL.createObjectURL(new Blob([blob]));
+					const link = document.createElement("a");
+					link.href = blobUrl;
+					link.download = result.value.fileName;
+					link.style.display = "none";
+					document.body.appendChild(link);
+					link.click();
+					document.body.removeChild(link);
 
-				window.URL.revokeObjectURL(blobUrl);
-			} else {
-				throw new Error("Failed to get download URL");
-			}
-		},
+					window.URL.revokeObjectURL(blobUrl);
+				} else {
+					throw new Error("Failed to get download URL");
+				}
+			}),
 	});
 
 	const deleteMutation = useMutation({
