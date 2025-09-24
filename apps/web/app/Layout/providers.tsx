@@ -71,6 +71,7 @@ export function ReactQueryProvider({
 }
 
 import { SessionProvider as NASessionProvider } from "next-auth/react";
+import { demoteFromPro, promoteToPro } from "./devtoolsServer";
 import { featureFlags, useFeatureFlags } from "./features";
 
 export function SessionProvider({ children }: PropsWithChildren) {
@@ -121,6 +122,30 @@ function CapDevtools() {
 					/>
 					<span>Enable Upload Progress UI</span>
 				</label>
+			</div>
+			<div className="space-y-2">
+				<h1 className="text-lg font-semibold">Cap Pro</h1>
+				<p className="text-xs text-muted-foreground">
+					Toggle the current user's Pro status (dev only)
+				</p>
+				<div className="flex items-center space-x-2">
+					<form action={promoteToPro}>
+						<button
+							type="submit"
+							className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"
+						>
+							Promote to Pro
+						</button>
+					</form>
+					<form action={demoteFromPro}>
+						<button
+							type="submit"
+							className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+						>
+							Demote from Pro
+						</button>
+					</form>
+				</div>
 			</div>
 		</div>
 	);
