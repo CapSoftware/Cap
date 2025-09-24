@@ -100,7 +100,6 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 				>
 					<VideoThumbnail
 						imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
-						userId={video.ownerId}
 						videoId={video.id}
 						alt={`${video.name} Thumbnail`}
 						objectFit="cover"

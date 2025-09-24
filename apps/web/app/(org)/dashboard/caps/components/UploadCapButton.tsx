@@ -5,6 +5,8 @@ import { userIsPro } from "@cap/utils";
 import type { Folder } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -15,6 +17,7 @@ import {
 	useUploadingContext,
 } from "@/app/(org)/dashboard/caps/UploadingContext";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { imageUrlQuery } from "@/components/VideoThumbnail";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -26,9 +29,11 @@ export const UploadCapButton = ({
 }) => {
 	const { user } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
-	const { uploadStatus, setUploadStatus } = useUploadingContext();
+	const { uploadingStore, setUploadStatus } = useUploadingContext();
+	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const router = useRouter();
+	const queryClient = useQueryClient();
 
 	const handleClick = () => {
 		if (!user) return;
@@ -47,12 +52,15 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
-		const ok = await legacyUploadCap(file, folderId, setUploadStatus);
+		const ok = await legacyUploadCap(
+			file,
+			folderId,
+			setUploadStatus,
+			queryClient,
+		);
 		if (ok) router.refresh();
 		if (inputRef.current) inputRef.current.value = "";
 	};
-
-	const isUploading = !!uploadStatus;
 
 	return (
 		<>
@@ -86,6 +94,7 @@ async function legacyUploadCap(
 	file: File,
 	folderId: Folder.FolderId | undefined,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	queryClient: QueryClient,
 ) {
 	const parser = await import("@remotion/media-parser");
 	const webcodecs = await import("@remotion/webcodecs");
@@ -476,6 +485,7 @@ async function legacyUploadCap(
 				xhr.onload = () => {
 					if (xhr.status >= 200 && xhr.status < 300) {
 						resolve();
+						queryClient.refetchQueries(imageUrlQuery(uploadId));
 					} else {
 						reject(
 							new Error(`Screenshot upload failed with status ${xhr.status}`),
