@@ -40,6 +40,7 @@ import type {
 	RequestPresigningArguments,
 	StreamingBlobPayloadInputTypes,
 } from "@smithy/types";
+import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import type { InferSelectModel } from "drizzle-orm";
 
 type S3Config = {
@@ -64,16 +65,19 @@ async function tryDecrypt(
 
 export async function getS3Config(config?: S3Config, internal = false) {
 	if (!config) {
+		const env = serverEnv();
 		return {
 			endpoint: internal
-				? (serverEnv().S3_INTERNAL_ENDPOINT ?? serverEnv().CAP_AWS_ENDPOINT)
-				: (serverEnv().S3_PUBLIC_ENDPOINT ?? serverEnv().CAP_AWS_ENDPOINT),
-			region: serverEnv().CAP_AWS_REGION,
-			credentials: {
-				accessKeyId: serverEnv().CAP_AWS_ACCESS_KEY ?? "",
-				secretAccessKey: serverEnv().CAP_AWS_SECRET_KEY ?? "",
-			},
-			forcePathStyle: serverEnv().S3_PATH_STYLE,
+				? (env.S3_INTERNAL_ENDPOINT ?? env.CAP_AWS_ENDPOINT)
+				: (env.S3_PUBLIC_ENDPOINT ?? env.CAP_AWS_ENDPOINT),
+			region: env.CAP_AWS_REGION,
+			credentials: env.VERCEL_AWS_ROLE_ARN
+				? awsCredentialsProvider({ roleArn: env.VERCEL_AWS_ROLE_ARN })
+				: {
+						accessKeyId: env.CAP_AWS_ACCESS_KEY ?? "",
+						secretAccessKey: env.CAP_AWS_SECRET_KEY ?? "",
+					},
+			forcePathStyle: env.S3_PATH_STYLE,
 		};
 	}
 

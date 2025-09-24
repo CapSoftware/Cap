@@ -3,6 +3,7 @@ import * as CloudFrontPresigner from "@aws-sdk/cloudfront-signer";
 import { decrypt } from "@cap/database/crypto";
 import { S3_BUCKET_URL } from "@cap/utils";
 import type { S3Bucket } from "@cap/web-domain";
+import { awsCredentialsProvider } from "@vercel/functions/oidc";
 import { Config, Context, Effect, Layer, Option } from "effect";
 
 import { Database } from "../Database.ts";
@@ -18,26 +19,24 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 			publicEndpoint: yield* Config.string("S3_PUBLIC_ENDPOINT").pipe(
 				Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
 				Config.option,
-				Effect.flatten,
-				Effect.catchTag("NoSuchElementException", () =>
-					Effect.dieMessage(
-						"Neither S3_PUBLIC_ENDPOINT nor CAP_AWS_ENDPOINT provided",
-					),
-				),
 			),
 			internalEndpoint: yield* Config.string("S3_INTERNAL_ENDPOINT").pipe(
 				Config.orElse(() => Config.string("CAP_AWS_ENDPOINT")),
 				Config.option,
-				Effect.flatten,
-				Effect.catchTag("NoSuchElementException", () =>
-					Effect.dieMessage(
-						"Neither S3_INTERNAL_ENDPOINT nor CAP_AWS_ENDPOINT provided",
+			),
+			region: yield* Config.string("CAP_AWS_REGION"),
+			credentials: yield* Config.string("CAP_AWS_ACCESS_KEY").pipe(
+				Effect.zip(Config.string("CAP_AWS_SECRET_KEY")),
+				Effect.map(([accessKeyId, secretAccessKey]) => ({
+					accessKeyId,
+					secretAccessKey,
+				})),
+				Effect.catchAll(() =>
+					Config.string("VERCEL_AWS_ROLE_ARN").pipe(
+						Effect.map((arn) => awsCredentialsProvider({ roleArn: arn })),
 					),
 				),
 			),
-			region: yield* Config.string("CAP_AWS_REGION"),
-			accessKey: yield* Config.string("CAP_AWS_ACCESS_KEY"),
-			secretKey: yield* Config.string("CAP_AWS_SECRET_KEY"),
 			forcePathStyle:
 				Option.getOrNull(
 					yield* Config.boolean("S3_PATH_STYLE").pipe(Config.option),
@@ -48,13 +47,10 @@ export class S3Buckets extends Effect.Service<S3Buckets>()("S3Buckets", {
 		const createDefaultClient = (internal: boolean) =>
 			new S3.S3Client({
 				endpoint: internal
-					? defaultConfigs.internalEndpoint
-					: defaultConfigs.publicEndpoint,
+					? Option.getOrUndefined(defaultConfigs.internalEndpoint)
+					: Option.getOrUndefined(defaultConfigs.publicEndpoint),
 				region: defaultConfigs.region,
-				credentials: {
-					accessKeyId: defaultConfigs.accessKey,
-					secretAccessKey: defaultConfigs.secretKey,
-				},
+				credentials: defaultConfigs.credentials,
 				forcePathStyle: defaultConfigs.forcePathStyle,
 			});
 

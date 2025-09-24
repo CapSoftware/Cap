@@ -88,7 +88,10 @@ export function CapVideoPlayer({
 				? `${videoSrc}&_t=${timestamp}`
 				: `${videoSrc}?_t=${timestamp}`;
 
-			const response = await fetch(urlWithTimestamp, { method: "HEAD" });
+			const response = await fetch(urlWithTimestamp, {
+				method: "GET",
+				headers: { range: "bytes=0-0" },
+			});
 			const finalUrl = response.redirected ? response.url : urlWithTimestamp;
 
 			// Check if the resolved URL is from a CORS-incompatible service
