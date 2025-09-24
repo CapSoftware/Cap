@@ -31,6 +31,15 @@ export const VideosRpcsLive = Video.VideoRpcs.toLayer(
 						UnknownException: () => new InternalError({ type: "unknown" }),
 					}),
 				),
+			VideoGetDownloadInfo: (videoId) =>
+				videos.getDownloadInfo(videoId).pipe(
+					provideOptionalAuth,
+					Effect.catchTags({
+						DatabaseError: () => new InternalError({ type: "database" }),
+						UnknownException: () => new InternalError({ type: "unknown" }),
+						S3Error: () => new InternalError({ type: "s3" }),
+					}),
+				),
 		};
 	}),
 );

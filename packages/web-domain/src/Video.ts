@@ -156,4 +156,16 @@ export class VideoRpcs extends RpcGroup.make(
 			VerifyVideoPasswordError,
 		),
 	}),
+	Rpc.make("VideoGetDownloadInfo", {
+		payload: VideoId,
+		success: Schema.Option(
+			Schema.Struct({ fileName: Schema.String, downloadUrl: Schema.String }),
+		),
+		error: Schema.Union(
+			NotFoundError,
+			InternalError,
+			PolicyDeniedError,
+			VerifyVideoPasswordError,
+		),
+	}),
 ) {}
