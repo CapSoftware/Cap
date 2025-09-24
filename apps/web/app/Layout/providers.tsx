@@ -72,6 +72,7 @@ export function ReactQueryProvider({
 
 import { SessionProvider as NASessionProvider } from "next-auth/react";
 import { featureFlags, useFeatureFlags } from "./features";
+import { demoteFromPro, promoteToPro } from "./devtoolsServer";
 
 export function SessionProvider({ children }: PropsWithChildren) {
 	return <NASessionProvider>{children}</NASessionProvider>;
@@ -103,44 +104,6 @@ export function Devtools() {
 function CapDevtools() {
 	const flags = useFeatureFlags();
 
-	// Server actions are defined inline so we can keep everything in this devtools
-	// file. These only run in development and will throw if somehow invoked in prod.
-	async function promoteToPro() {
-		"use server";
-		if (process.env.NODE_ENV !== "development") {
-			throw new Error("promoteToPro can only be used in development");
-		}
-		const { getCurrentUser } = await import("@cap/database/auth/session");
-		const { db } = await import("@cap/database");
-		const { users } = await import("@cap/database/schema");
-		const { eq } = await import("drizzle-orm");
-
-		const user = await getCurrentUser();
-		if (!user) throw new Error("No current user session");
-		await db()
-			.update(users)
-			.set({ stripeSubscriptionStatus: "active" })
-			.where(eq(users.id, user.id));
-	}
-
-	async function demoteFromPro() {
-		"use server";
-		if (process.env.NODE_ENV !== "development") {
-			throw new Error("demoteFromPro can only be used in development");
-		}
-		const { getCurrentUser } = await import("@cap/database/auth/session");
-		const { db } = await import("@cap/database");
-		const { users } = await import("@cap/database/schema");
-		const { eq } = await import("drizzle-orm");
-
-		const user = await getCurrentUser();
-		if (!user) throw new Error("No current user session");
-		await db()
-			.update(users)
-			.set({ stripeSubscriptionStatus: null })
-			.where(eq(users.id, user.id));
-	}
-
 	return (
 		<div className="flex flex-col space-y-4 p-4">
 			<h1 className="text-2xl font-semibold">Cap Devtools</h1>
@@ -160,32 +123,30 @@ function CapDevtools() {
 					<span>Enable Upload Progress UI</span>
 				</label>
 			</div>
-			{process.env.NODE_ENV === "development" && (
-				<div className="space-y-2">
-					<h1 className="text-lg font-semibold">Cap Pro</h1>
-					<p className="text-xs text-muted-foreground">
-						Toggle the current user\'s Pro status (dev only)
-					</p>
-					<div className="flex items-center space-x-2">
-						<form action={promoteToPro}>
-							<button
-								type="submit"
-								className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"
-							>
-								Promote to Pro
-							</button>
-						</form>
-						<form action={demoteFromPro}>
-							<button
-								type="submit"
-								className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
-							>
-								Demote from Pro
-							</button>
-						</form>
-					</div>
+			<div className="space-y-2">
+				<h1 className="text-lg font-semibold">Cap Pro</h1>
+				<p className="text-xs text-muted-foreground">
+					Toggle the current user's Pro status (dev only)
+				</p>
+				<div className="flex items-center space-x-2">
+					<form action={promoteToPro}>
+						<button
+							type="submit"
+							className="rounded bg-green-600 px-2 py-1 text-xs font-medium text-white hover:bg-green-700"
+						>
+							Promote to Pro
+						</button>
+					</form>
+					<form action={demoteFromPro}>
+						<button
+							type="submit"
+							className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700"
+						>
+							Demote from Pro
+						</button>
+					</form>
 				</div>
-			)}
+			</div>
 		</div>
 	);
 }
