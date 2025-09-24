@@ -1,6 +1,7 @@
 "use client";
 
 import { Avatar } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Image from "next/image";
 import Link from "next/link";
@@ -10,7 +11,6 @@ import { toast } from "sonner";
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";
 import { registerDropTarget } from "./ClientCapCard";
-import { Video } from "@cap/web-domain";
 
 export function ClientMyCapsLink() {
 	const [isDragOver, setIsDragOver] = useState(false);

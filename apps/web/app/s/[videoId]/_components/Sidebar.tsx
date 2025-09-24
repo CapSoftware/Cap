@@ -1,13 +1,13 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
+import type { Video } from "@cap/web-domain";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
 import { Transcript } from "./tabs/Transcript";
-import { Video } from "@cap/web-domain";
 
 type TabType = "activity" | "transcript" | "summary" | "settings";
 

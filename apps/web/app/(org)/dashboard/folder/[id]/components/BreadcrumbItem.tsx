@@ -1,11 +1,11 @@
 "use client";
 
+import type { Folder } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Folder } from "@cap/web-domain";
 
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";

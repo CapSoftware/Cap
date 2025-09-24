@@ -9,6 +9,7 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -22,7 +23,6 @@ import { shareCap } from "@/actions/caps/share";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import type { Spaces } from "@/app/(org)/dashboard/dashboard-data";
 import { Tooltip } from "@/components/Tooltip";
-import type { Video } from "@cap/web-domain";
 
 interface SharingDialogProps {
 	isOpen: boolean;

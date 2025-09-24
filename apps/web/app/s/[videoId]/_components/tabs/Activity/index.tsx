@@ -1,6 +1,7 @@
 "use client";
 
 import type { userSelectProps } from "@cap/database/auth/session";
+import type { Video } from "@cap/web-domain";
 import type React from "react";
 import { forwardRef, Suspense, useState } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
@@ -8,7 +9,6 @@ import type { CommentType } from "../../../Share";
 import { AuthOverlay } from "../../AuthOverlay";
 import Analytics from "./Analytics";
 import { Comments } from "./Comments";
-import { Video } from "@cap/web-domain";
 
 interface ActivityProps {
 	views: MaybePromise<number>;

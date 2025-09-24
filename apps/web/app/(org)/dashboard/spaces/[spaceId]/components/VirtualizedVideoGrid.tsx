@@ -1,8 +1,8 @@
+import type { Video } from "@cap/web-domain";
 import { Grid, useGrid } from "@virtual-grid/react";
 import React, { useEffect, useRef, useState } from "react";
 import type { VideoData } from "./AddVideosDialogBase";
 import VideoCard from "./VideoCard";
-import { Video } from "@cap/web-domain";
 
 interface VirtualizedVideoGridProps {
 	videos: VideoData[];

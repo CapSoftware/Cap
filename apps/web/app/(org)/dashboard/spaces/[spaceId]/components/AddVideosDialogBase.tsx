@@ -9,6 +9,7 @@ import {
 	Input,
 	LoadingSpinner,
 } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { faVideo } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -21,7 +22,6 @@ import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import * as z from "zod";
 import VirtualizedVideoGrid from "./VirtualizedVideoGrid";
-import { Video } from "@cap/web-domain";
 
 interface AddVideosDialogBaseProps {
 	open: boolean;
