@@ -37,7 +37,7 @@ impl EncoderDevice {
             guidMajorType: major_type,
             guidSubtype: subtype,
         };
-        let flags = if flags.is_empty() {
+        let flags = if flags.0 == 0 {
             MFT_ENUM_FLAG_SORTANDFILTER
         } else {
             flags | MFT_ENUM_FLAG_SORTANDFILTER
