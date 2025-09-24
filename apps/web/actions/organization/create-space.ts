@@ -172,7 +172,9 @@ export async function createSpace(
 					if (!userId) return null;
 					// Creator is always Owner, others are Member
 					const role =
-						email.toLowerCase() === creatorEmail ? "Admin" : "Member";
+						email.toLowerCase() === creatorEmail
+							? ("Admin" as const)
+							: ("member" as const);
 					return {
 						id: uuidv4().substring(0, nanoIdLength),
 						spaceId,

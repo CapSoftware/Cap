@@ -79,7 +79,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 							.where(
 								Dz.and(
 									Dz.eq(Db.folders.id, parentId),
-									Dz.eq(Db.folders.organizationId, user.activeOrgId),
+									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
 								),
 							),
 					);
@@ -91,7 +91,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					id: Folder.FolderId.make(nanoId()),
 					name: data.name,
 					color: data.color,
-					organizationId: user.activeOrgId,
+					organizationId: user.activeOrganizationId,
 					createdById: user.id,
 					spaceId: data.spaceId,
 					parentId: data.parentId,

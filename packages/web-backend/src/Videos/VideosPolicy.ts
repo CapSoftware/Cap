@@ -36,9 +36,7 @@ export class VideosPolicy extends Effect.Service<VideosPolicy>()(
 										orgsRepo
 											.membershipForVideo(userId, video.id)
 											.pipe(Effect.map(Array.get(0))),
-										spacesRepo
-											.membershipForVideo(userId, video.id)
-											.pipe(Effect.map(Array.get(0))),
+										spacesRepo.membershipForVideo(userId, video.id),
 									]);
 
 								if (

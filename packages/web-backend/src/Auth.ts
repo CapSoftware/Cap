@@ -1,6 +1,6 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
+import { CurrentUser, HttpAuthMiddleware, Policy } from "@cap/web-domain";
 import { HttpApiError, HttpServerRequest } from "@effect/platform";
 import * as Dz from "drizzle-orm";
 import { type Cause, Effect, Layer, Option, Schema } from "effect";
@@ -65,7 +65,7 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 					Option.map((user) => ({
 						id: user.id,
 						email: user.email,
-						activeOrgId: user.activeOrganizationId,
+						activeOrganizationId: user.activeOrganizationId,
 					})),
 					Effect.catchTag(
 						"NoSuchElementException",
@@ -98,7 +98,7 @@ export const provideOptionalAuth = <A, E, R>(
 				CurrentUser.context({
 					id: user.id,
 					email: user.email,
-					activeOrgId: user.activeOrganizationId,
+					activeOrganizationId: user.activeOrganizationId,
 				}),
 			),
 			Option.match({
