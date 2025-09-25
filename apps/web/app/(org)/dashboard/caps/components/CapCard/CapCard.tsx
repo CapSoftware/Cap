@@ -106,8 +106,7 @@ export const CapCard = ({
 	);
 	const [copyPressed, setCopyPressed] = useState(false);
 	const [isDragging, setIsDragging] = useState(false);
-	const { isSubscribed, setUpgradeModalOpen, activeSpace, user } =
-		useDashboardContext();
+	const { isSubscribed, setUpgradeModalOpen } = useDashboardContext();
 
 	const [confirmOpen, setConfirmOpen] = useState(false);
 
