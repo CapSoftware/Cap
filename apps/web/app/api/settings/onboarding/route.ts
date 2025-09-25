@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
 		)
 		.limit(1);
 
-	const isMemberOfOrganization = memberButNotOwner.length > 0;;
+	const isMemberOfOrganization = memberButNotOwner.length > 0;
 
 	const [organization] = await db()
 		.select()
