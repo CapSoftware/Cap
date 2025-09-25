@@ -1,6 +1,6 @@
 import type { Video } from "@cap/web-domain";
 import { Grid, useGrid } from "@virtual-grid/react";
-import React, { RefObject, useEffect, useRef, useState } from "react";
+import React, { type RefObject, useEffect, useRef, useState } from "react";
 import type { VideoData } from "./AddVideosDialogBase";
 import VideoCard from "./VideoCard";
 

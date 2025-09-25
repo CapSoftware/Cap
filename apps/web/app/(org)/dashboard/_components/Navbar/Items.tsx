@@ -31,7 +31,7 @@ import { Check, ChevronDown, Plus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { cloneElement, RefObject, useRef, useState } from "react";
+import { cloneElement, type RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";

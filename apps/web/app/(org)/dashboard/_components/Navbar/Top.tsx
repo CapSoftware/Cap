@@ -25,10 +25,10 @@ import {
 	cloneElement,
 	type MutableRefObject,
 	memo,
+	type RefObject,
 	useMemo,
 	useRef,
 	useState,
-	RefObject,
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
