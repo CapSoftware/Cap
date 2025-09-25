@@ -322,9 +322,14 @@ export const CapCard = ({
 						onClick={(e) => {
 							e.stopPropagation();
 							handleCopy(
-								buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
-									? `https://cap.link/${cap.id}`
-									: `${location.origin}/s/${cap.id}`,
+								buildEnv.NEXT_PUBLIC_IS_CAP &&
+									NODE_ENV === "production" &&
+									customDomain &&
+									domainVerified
+									? `https://${customDomain}/${cap.id}`
+									: buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+										? `https://cap.link/${cap.id}`
+										: `${location.origin}/s/${cap.id}`,
 							);
 						}}
 						className="delay-0"
