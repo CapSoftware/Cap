@@ -34,7 +34,7 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;

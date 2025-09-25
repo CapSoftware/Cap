@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
-	{ params }: { params: { videoId: Video.VideoId } },
+	props: RouteContext<"/api/videos/[videoId]/retry-transcription">,
 ) {
 	try {
 		const user = await getCurrentUser();
@@ -15,7 +15,7 @@ export async function POST(
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
-		const { videoId } = params;
+		const { videoId } = (await props.params) as { videoId: Video.VideoId };
 		if (!videoId) {
 			return Response.json({ error: "Video ID is required" }, { status: 400 });
 		}

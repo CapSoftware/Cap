@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui";
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
 import clsx from "clsx";
-import { memo } from "react";
+import { type JSX, memo } from "react";
 import { homepageCopy } from "../../../data/homepage-copy";
 
 type Feature = {

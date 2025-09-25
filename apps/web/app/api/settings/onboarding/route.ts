@@ -47,11 +47,7 @@ export async function POST(request: NextRequest) {
 		)
 		.limit(1);
 
-	console.log("memberButNotOwner", memberButNotOwner);
-
 	const isMemberOfOrganization = memberButNotOwner.length > 0;
-
-	console.log("isMemberOfOrganization", isMemberOfOrganization);
 
 	const [organization] = await db()
 		.select()

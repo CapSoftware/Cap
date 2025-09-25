@@ -246,20 +246,25 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         cap_mediafoundation_utils::thread_init();
 
         let screen_config = source.0.info();
+        let frame_rate = source.0.config().fps();
+        let bitrate_multiplier = 0.1f32;
+        let d3d_device = source.0.d3d_device().clone();
+        let pixel_format = screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi();
+        let capture_resolution = SizeInt32 {
+            Width: screen_config.width as i32,
+            Height: screen_config.height as i32,
+        };
 
         let mut output = ffmpeg::format::output(&output_path)
             .map_err(|e| MediaError::Any(format!("CreateOutput: {e}").into()))?;
 
         let screen_encoder = {
             let native_encoder = cap_enc_mediafoundation::H264Encoder::new(
-                source.0.d3d_device(),
-                screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                SizeInt32 {
-                    Width: screen_config.width as i32,
-                    Height: screen_config.height as i32,
-                },
-                source.0.config().fps(),
-                0.1,
+                &d3d_device,
+                pixel_format,
+                capture_resolution,
+                frame_rate,
+                bitrate_multiplier,
             );
 
             match native_encoder {
@@ -312,26 +317,92 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     let _ = ready.send(Ok(()));
 
                     let mut timestamp_tx = Some(timestamp_tx);
+                    let mut pending_frame: Option<(
+                        Self::VideoFormat,
+                        Timestamp,
+                        windows::Foundation::TimeSpan,
+                    )> = None;
+                    let mut using_software_encoder = false;
 
-                    while let Ok(e) = encoder.get_event() {
+                    'event_loop: while let Ok(e) = encoder.get_event() {
                         match e {
                             MediaFoundation::METransformNeedInput => {
-                                let Ok((frame, timestamp)) = source.1.recv() else {
-                                    break;
+                                let (mut frame, timestamp, frame_time) = if let Some(pending) =
+                                    pending_frame.take()
+                                {
+                                    pending
+                                } else {
+                                    let Ok((frame, timestamp)) = source.1.recv() else {
+                                        break;
+                                    };
+
+                                    if let Some(timestamp_tx) = timestamp_tx.take() {
+                                        let _ = timestamp_tx.send(timestamp);
+                                    }
+
+                                    let frame_time = frame
+                                        .inner()
+                                        .SystemRelativeTime()
+                                        .map_err(|e| format!("FrameTime: {e}"))?;
+
+                                    (frame, timestamp, frame_time)
                                 };
 
-                                if let Some(timestamp_tx) = timestamp_tx.take() {
-                                    timestamp_tx.send(timestamp).unwrap();
+                                loop {
+                                    match encoder.handle_needs_input(
+                                        frame.texture(),
+                                        frame_time,
+                                    ) {
+                                        Ok(()) => break,
+                                        Err(
+                                            cap_enc_mediafoundation::video::HandleNeedsInputError::ProcessInput(
+                                                error,
+                                            ),
+                                        ) => {
+                                            use tracing::warn;
+                                            use windows::Win32::Foundation::E_FAIL;
+
+                                            if !using_software_encoder && error.code() == E_FAIL {
+                                                warn!(
+                                                    "Native H264 ProcessInput failed with {:?}; falling back to software encoder",
+                                                    error.code()
+                                                );
+                                                pending_frame =
+                                                    Some((frame, timestamp, frame_time));
+
+                                                let mut software_encoder =
+                                                    cap_enc_mediafoundation::H264Encoder::new_software(
+                                                        &d3d_device,
+                                                        pixel_format,
+                                                        capture_resolution,
+                                                        frame_rate,
+                                                        bitrate_multiplier,
+                                                    )
+                                                    .map_err(|e| format!(
+                                                        "SoftwareEncoderInit: {e}"
+                                                    ))?;
+                                                software_encoder
+                                                    .start()
+                                                    .map_err(|e| {
+                                                        format!(
+                                                            "ScreenEncoderStart: {e}"
+                                                        )
+                                                    })?;
+
+                                                encoder = software_encoder;
+                                                using_software_encoder = true;
+                                                continue 'event_loop;
+                                            }
+
+                                            return Err(format!(
+                                                "NeedsInput: ProcessInput: {error}"
+                                            ));
+                                        }
+                                        Err(err) => {
+                                            return Err(format!("NeedsInput: {err}"));
+                                        }
+                                    }
                                 }
-
-                                let frame_time = frame
-                                    .inner()
-                                    .SystemRelativeTime()
-                                    .map_err(|e| format!("FrameTime: {e}"))?;
-
-                                encoder
-                                    .handle_needs_input(frame.texture(), frame_time)
-                                    .map_err(|e| format!("NeedsInput: {e}"))?;
                             }
                             MediaFoundation::METransformHaveOutput => {
                                 if let Some(output_sample) = encoder
@@ -427,24 +498,30 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
         let has_audio_sources = audio_mixer.has_sources();
         let screen_config = source.0.info();
+        let frame_rate = 30u32;
+        let bitrate_multiplier = 0.15f32;
+        let d3d_device = source.0.d3d_device().clone();
+        let pixel_format = screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi();
+        let input_resolution = SizeInt32 {
+            Width: screen_config.width as i32,
+            Height: screen_config.height as i32,
+        };
+        let output_resolution = SizeInt32 {
+            Width: screen_config.width as i32,
+            Height: screen_config.height as i32,
+        };
 
         let mut output = ffmpeg::format::output(&output_path)
             .map_err(|e| MediaError::Any(format!("CreateOutput: {e}").into()))?;
 
         let screen_encoder = {
             let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                source.0.d3d_device(),
-                screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                SizeInt32 {
-                    Width: screen_config.width as i32,
-                    Height: screen_config.height as i32,
-                },
-                SizeInt32 {
-                    Width: screen_config.width as i32,
-                    Height: screen_config.height as i32,
-                },
-                30,
-                0.15,
+                &d3d_device,
+                pixel_format,
+                input_resolution,
+                output_resolution,
+                frame_rate,
+                bitrate_multiplier,
             );
 
             match native_encoder {
@@ -454,7 +531,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         cap_mediafoundation_ffmpeg::MuxerConfig {
                             width: screen_config.width,
                             height: screen_config.height,
-                            fps: 30,
+                            fps: frame_rate,
                             bitrate: screen_encoder.bitrate(),
                         },
                     )
@@ -539,20 +616,35 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                     let _ = ready.send(Ok(()));
 
                     let mut first_frame_tx = Some(first_frame_tx);
+                    let mut pending_frame: Option<(
+                        Self::VideoFormat,
+                        windows::Foundation::TimeSpan,
+                    )> = None;
+                    let mut using_software_encoder = false;
 
-                    while let Ok(e) = encoder.get_event() {
+                    'event_loop: while let Ok(e) = encoder.get_event() {
                         match e {
                             MediaFoundation::METransformNeedInput => {
                                 use cap_timestamp::PerformanceCounterTimestamp;
+                                use tracing::warn;
+                                use windows::Win32::Foundation::E_FAIL;
 
-                                let Ok((frame, _)) = source.1.recv() else {
-                                    break;
+                                let (mut frame, frame_time) = if let Some(pending) =
+                                    pending_frame.take()
+                                {
+                                    pending
+                                } else {
+                                    let Ok((frame, _)) = source.1.recv() else {
+                                        break;
+                                    };
+
+                                    let frame_time = frame
+                                        .inner()
+                                        .SystemRelativeTime()
+                                        .map_err(|e| format!("Frame Time: {e}"))?;
+
+                                    (frame, frame_time)
                                 };
-
-                                let frame_time = frame
-                                    .inner()
-                                    .SystemRelativeTime()
-                                    .map_err(|e| format!("Frame Time: {e}"))?;
 
                                 let timestamp = Timestamp::PerformanceCounter(
                                     PerformanceCounterTimestamp::new(frame_time.Duration),
@@ -562,9 +654,56 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                                     let _ = first_frame_tx.send(timestamp);
                                 }
 
-                                encoder
-                                    .handle_needs_input(frame.texture(), frame_time)
-                                    .map_err(|e| format!("NeedsInput: {e}"))?;
+                                loop {
+                                    match encoder.handle_needs_input(
+                                        frame.texture(),
+                                        frame_time,
+                                    ) {
+                                        Ok(()) => break,
+                                        Err(
+                                            cap_enc_mediafoundation::video::HandleNeedsInputError::ProcessInput(
+                                                error,
+                                            ),
+                                        ) => {
+                                            if !using_software_encoder && error.code() == E_FAIL {
+                                                warn!(
+                                                    "Native H264 ProcessInput failed with {:?}; falling back to software encoder",
+                                                    error.code()
+                                                );
+                                                pending_frame = Some((frame, frame_time));
+
+                                                let mut software_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output_software(
+                                                    &d3d_device,
+                                                    pixel_format,
+                                                    input_resolution,
+                                                    output_resolution,
+                                                    frame_rate,
+                                                    bitrate_multiplier,
+                                                )
+                                                .map_err(|e| {
+                                                    format!("SoftwareEncoderInit: {e}")
+                                                })?;
+
+                                                software_encoder
+                                                    .start()
+                                                    .map_err(|e| format!(
+                                                        "StartScreenEncoder: {e}"
+                                                    ))?;
+
+                                                encoder = software_encoder;
+                                                using_software_encoder = true;
+                                                continue 'event_loop;
+                                            }
+
+                                            return Err(format!(
+                                                "NeedsInput: ProcessInput: {error}"
+                                            ));
+                                        }
+                                        Err(err) => {
+                                            return Err(format!("NeedsInput: {err}"));
+                                        }
+                                    }
+                                }
                             }
                             MediaFoundation::METransformHaveOutput => {
                                 if let Some(output_sample) = encoder
