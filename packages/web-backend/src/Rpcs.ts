@@ -28,7 +28,7 @@ export const RpcAuthMiddlewareLive = Layer.effect(
 							Effect.succeed({
 								id: user.id,
 								email: user.email,
-								activeOrgId: user.activeOrganizationId,
+								activeOrganizationId: user.activeOrganizationId,
 							}),
 					}),
 				),

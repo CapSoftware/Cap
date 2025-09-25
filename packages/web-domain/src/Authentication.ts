@@ -6,7 +6,7 @@ import { InternalError } from "./Errors.ts";
 
 export class CurrentUser extends Context.Tag("CurrentUser")<
 	CurrentUser,
-	{ id: string; email: string; activeOrgId: string }
+	{ id: string; email: string; activeOrganizationId: string }
 >() {}
 
 export class HttpAuthMiddleware extends HttpApiMiddleware.Tag<HttpAuthMiddleware>()(

@@ -9,16 +9,18 @@ import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
 import { z } from "zod";
 
+const spaceRole = z.union([z.literal("Admin"), z.literal("member")]);
+
 const addSpaceMemberSchema = z.object({
 	spaceId: z.string(),
 	userId: z.string(),
-	role: z.string(),
+	role: spaceRole,
 });
 
 const addSpaceMembersSchema = z.object({
 	spaceId: z.string(),
 	userIds: z.array(z.string()),
-	role: z.string(),
+	role: spaceRole,
 });
 
 export async function addSpaceMember(
@@ -149,7 +151,7 @@ export async function removeSpaceMember(
 const setSpaceMembersSchema = z.object({
 	spaceId: z.string(),
 	userIds: z.array(z.string()),
-	role: z.string().default("member"),
+	role: spaceRole.default("member"),
 });
 
 export async function setSpaceMembers(
