@@ -6,15 +6,17 @@ import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useDashboardContext } from "../../Contexts";
 
 export const Settings = ({
 	user,
 }: {
 	user?: typeof users.$inferSelect | null;
 }) => {
+	const router = useRouter();
+	const { organizationData } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
-	const router = useRouter();
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
@@ -26,9 +28,7 @@ export const Settings = ({
 					lastName: lastName.trim() ? lastName.trim() : null,
 				}),
 			});
-			if (!res.ok) {
-				throw new Error("Failed to update name");
-			}
+			if (!res.ok) throw new Error("Failed to update name");
 		},
 		onSuccess: () => {
 			toast.success("Name updated successfully");
