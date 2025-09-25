@@ -14,21 +14,16 @@ import type { VideoData } from "../../../caps/Caps";
 import { CapCard } from "../../../caps/components/CapCard/CapCard";
 import { SelectedCapsBar } from "../../../caps/components/SelectedCapsBar";
 import { UploadPlaceholderCard } from "../../../caps/components/UploadPlaceholderCard";
-import {
-	useUploadingContext,
-	useUploadingStatus,
-} from "../../../caps/UploadingContext";
+import { useUploadingStatus } from "../../../caps/UploadingContext";
 
 interface FolderVideosSectionProps {
 	initialVideos: VideoData;
 	dubApiKeyEnabled: boolean;
-	cardType?: "shared" | "default";
 }
 
 export default function FolderVideosSection({
 	initialVideos,
 	dubApiKeyEnabled,
-	cardType = "default",
 }: FolderVideosSectionProps) {
 	const router = useRouter();
 	const { user } = useDashboardContext();

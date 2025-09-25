@@ -56,8 +56,8 @@ const PlanIcon = ({
 	proArtRef,
 }: {
 	planName: string;
-	commercialArtRef: React.RefObject<CommercialArtRef>;
-	proArtRef: React.RefObject<ProArtRef>;
+	commercialArtRef: React.RefObject<CommercialArtRef | null>;
+	proArtRef: React.RefObject<ProArtRef | null>;
 }) => {
 	if (planName === "Desktop License") {
 		return (

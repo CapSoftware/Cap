@@ -212,7 +212,7 @@ export const Comments = Object.assign(
 					ComponentProps<typeof CommentInput>,
 					"user" | "placholder" | "buttonLabel"
 				>;
-				commentsContainerRef?: React.RefObject<HTMLDivElement>;
+				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
 			}>,
 		) => (
 			<>

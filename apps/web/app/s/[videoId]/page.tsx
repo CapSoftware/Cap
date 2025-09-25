@@ -96,8 +96,8 @@ async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 }
 
 type Props = {
-	params: { [key: string]: string | string[] | undefined };
-	searchParams: { [key: string]: string | string[] | undefined };
+	params: Promise<{ [key: string]: string | string[] | undefined }>;
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
 
 type VideoWithOrganization = typeof videos.$inferSelect & {
@@ -122,10 +122,13 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
-export function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(
+	props: PageProps<"/s/[videoId]">,
+): Promise<Metadata> {
+	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
-	const referrer = headers().get("x-referrer") || "";
+	const referrer = (await headers()).get("x-referrer") || "";
 	const isAllowedReferrer = ALLOWED_REFERRERS.some((domain) =>
 		referrer.includes(domain),
 	);
@@ -252,9 +255,9 @@ export function generateMetadata({ params }: Props): Promise<Metadata> {
 	);
 }
 
-export default async function ShareVideoPage(props: Props) {
-	const params = props.params;
-	const searchParams = props.searchParams;
+export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
+	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 
 	return Effect.gen(function* () {
@@ -335,10 +338,7 @@ export default async function ShareVideoPage(props: Props) {
 						</p>
 					</div>,
 				),
-			NoSuchElementException: () => {
-				console.log("[ShareVideoPage] No video found for videoId:", videoId);
-				return Effect.succeed(<p>No video found</p>);
-			},
+			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
