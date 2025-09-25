@@ -70,7 +70,6 @@ const FolderPage = async (props: {
 			)}
 			{/* Display Videos */}
 			<FolderVideosSection
-				cardType="shared"
 				initialVideos={videosData}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 			/>

@@ -1,6 +1,5 @@
 import type { VideoMetadata } from "@cap/database/types";
 import {
-	Button,
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
@@ -11,7 +10,9 @@ import { HttpClient } from "@effect/platform";
 import {
 	faCheck,
 	faCopy,
+	faDownload,
 	faEllipsis,
+	faLink,
 	faLock,
 	faTrash,
 	faUnlock,
@@ -25,20 +26,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
-import { downloadVideo } from "@/actions/videos/download";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import ProgressCircle, {
 	useUploadProgress,
 } from "@/app/s/[videoId]/_components/ProgressCircle";
-import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
-import { CapCardButtons } from "./CapCardButtons";
+import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
 
 export interface CapCardProps extends PropsWithChildren {
@@ -305,51 +304,102 @@ export const CapCard = ({
 				{anyCapSelected && !sharedCapCard && (
 					<div className="absolute inset-0 z-10" onClick={handleCardClick} />
 				)}
-				{!sharedCapCard && (
-					<div
-						className={clsx(
-							"flex absolute duration-200",
-							anyCapSelected
-								? "opacity-0"
-								: isDropdownOpen
-									? "opacity-100"
-									: "opacity-0 group-hover:opacity-100",
-							"top-2 right-2 flex-col gap-2 z-[20]",
-						)}
-					>
-						<CapCardButtons
-							capId={cap.id}
-							copyPressed={copyPressed}
-							isDownloading={downloadMutation.isPending}
-							customDomain={customDomain}
-							domainVerified={domainVerified}
-							handleCopy={handleCopy}
-							handleDownload={handleDownload}
-						/>
 
-						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
-							<Tooltip content="More options">
-								<DropdownMenuTrigger asChild>
-									<Button
-										onClick={(e) => {
-											e.stopPropagation();
-										}}
-										className={clsx(
-											"!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0 delay-75",
-											isDropdownOpen ? "bg-gray-5 border-gray-7" : "",
-										)}
-										variant="white"
-										size="sm"
-										aria-label="More options"
+				<div
+					className={clsx(
+						"flex absolute duration-200",
+						anyCapSelected
+							? "opacity-0"
+							: isDropdownOpen
+								? "opacity-100"
+								: "opacity-0 group-hover:opacity-100",
+						"top-2 right-2 flex-col gap-2 z-[20]",
+					)}
+				>
+					<CapCardButton
+						tooltipContent="Copy link"
+						onClick={(e) => {
+							e.stopPropagation();
+							handleCopy(cap.id);
+						}}
+						className="delay-0"
+						icon={() => {
+							return !copyPressed ? (
+								<FontAwesomeIcon
+									className="text-gray-12 size-4"
+									icon={faLink}
+								/>
+							) : (
+								<svg
+									xmlns="http://www.w3.org/2000/svg"
+									width="24"
+									height="24"
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									className="text-gray-12 size-5 svgpathanimation"
+								>
+									<path d="M20 6 9 17l-5-5" />
+								</svg>
+							);
+						}}
+					/>
+					<CapCardButton
+						tooltipContent="Download Cap"
+						onClick={(e) => {
+							e.stopPropagation();
+							handleDownload();
+						}}
+						disabled={downloadMutation.isPending}
+						className="delay-25"
+						icon={() => {
+							return downloadMutation.isPending ? (
+								<div className="animate-spin size-3">
+									<svg
+										className="size-3"
+										xmlns="http://www.w3.org/2000/svg"
+										fill="none"
+										viewBox="0 0 24 24"
+										aria-hidden="true"
 									>
-										<FontAwesomeIcon
-											className="text-gray-12 size-4"
-											icon={faEllipsis}
-										/>
-									</Button>
-								</DropdownMenuTrigger>
-							</Tooltip>
+										<circle
+											className="opacity-25"
+											cx="12"
+											cy="12"
+											r="10"
+											stroke="currentColor"
+											strokeWidth="4"
+										></circle>
+										<path
+											className="opacity-75"
+											fill="currentColor"
+											d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
+										></path>
+									</svg>
+								</div>
+							) : (
+								<FontAwesomeIcon
+									className="text-gray-12 size-3"
+									icon={faDownload}
+								/>
+							);
+						}}
+					/>
 
+					{isOwner && (
+						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
+							<DropdownMenuTrigger>
+								<CapCardButton
+									tooltipContent="More options"
+									className="delay-75"
+									icon={() => (
+										<FontAwesomeIcon className="size-4" icon={faEllipsis} />
+									)}
+								/>
+							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end" sideOffset={5}>
 								<DropdownMenuItem
 									onClick={() => {
@@ -392,19 +442,21 @@ export const CapCard = ({
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
-						<ConfirmationDialog
-							open={confirmOpen}
-							icon={<FontAwesomeIcon icon={faVideo} />}
-							title="Delete Cap"
-							description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
-							confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
-							cancelLabel="Cancel"
-							loading={deleteMutation.isPending}
-							onConfirm={() => deleteMutation.mutate()}
-							onCancel={() => setConfirmOpen(false)}
-						/>
-					</div>
-				)}
+					)}
+
+					<ConfirmationDialog
+						open={confirmOpen}
+						icon={<FontAwesomeIcon icon={faVideo} />}
+						title="Delete Cap"
+						description={`Are you sure you want to delete the cap "${cap.name}"? This action cannot be undone.`}
+						confirmLabel={deleteMutation.isPending ? "Deleting..." : "Delete"}
+						cancelLabel="Cancel"
+						loading={deleteMutation.isPending}
+						onConfirm={() => deleteMutation.mutate()}
+						onCancel={() => setConfirmOpen(false)}
+					/>
+				</div>
+
 				{!sharedCapCard && onSelectToggle && (
 					<div
 						className={clsx(
