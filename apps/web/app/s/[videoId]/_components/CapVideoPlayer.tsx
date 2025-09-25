@@ -297,12 +297,29 @@ export function CapVideoPlayer({
 			}
 		};
 
+		// Ensure all caption tracks remain hidden
+		const ensureTracksHidden = (): void => {
+			const tracks = Array.from(video.textTracks);
+			for (const track of tracks) {
+				if (track.kind === "captions" || track.kind === "subtitles") {
+					if (track.mode !== "hidden") {
+						track.mode = "hidden";
+					}
+				}
+			}
+		};
+
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 			setupTracks();
+		};
+
+		// Monitor for track changes and ensure they stay hidden
+		const handleTrackChange = () => {
+			ensureTracksHidden();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -312,6 +329,11 @@ export function CapVideoPlayer({
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+
+		// Add event listeners to monitor track changes
+		video.textTracks.addEventListener("change", handleTrackChange);
+		video.textTracks.addEventListener("addtrack", handleTrackChange);
+		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -341,6 +363,9 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
+				video.textTracks.removeEventListener("change", handleTrackChange);
+				video.textTracks.removeEventListener("addtrack", handleTrackChange);
+				video.textTracks.removeEventListener("removetrack", handleTrackChange);
 				if (retryTimeout.current) clearTimeout(retryTimeout.current);
 			};
 		}
@@ -355,6 +380,9 @@ export function CapVideoPlayer({
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
+			video.textTracks.removeEventListener("change", handleTrackChange);
+			video.textTracks.removeEventListener("addtrack", handleTrackChange);
+			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (retryTimeout.current) {
 				clearTimeout(retryTimeout.current);
 			}
@@ -462,7 +490,6 @@ export function CapVideoPlayer({
 						kind="captions"
 						srcLang="en"
 						src={captionsSrc}
-						default
 					/>
 				</MediaPlayerVideo>
 			)}
