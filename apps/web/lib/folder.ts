@@ -29,7 +29,6 @@ export async function getFolderById(folderId: string | undefined) {
 
 	if (!folder) throw new Error("Folder not found");
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
 	return folder;
 }
 
