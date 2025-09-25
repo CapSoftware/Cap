@@ -109,7 +109,7 @@ const SpaceDialog = ({
 
 export interface NewSpaceFormProps {
 	onSpaceCreated: () => void;
-	formRef?: React.RefObject<HTMLFormElement>;
+	formRef?: React.RefObject<HTMLFormElement | null>;
 	setCreateLoading?: React.Dispatch<React.SetStateAction<boolean>>;
 	onNameChange?: (name: string) => void;
 	edit?: boolean;
