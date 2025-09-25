@@ -14,11 +14,10 @@ import {
 } from "../../../../folder/[id]/components";
 import FolderVideosSection from "../../../../folder/[id]/components/FolderVideosSection";
 
-const FolderPage = async ({
-	params,
-}: {
-	params: { spaceId: string; folderId: Folder.FolderId };
+const FolderPage = async (props: {
+	params: Promise<{ spaceId: string; folderId: Folder.FolderId }>;
 }) => {
+	const params = await props.params;
 	const user = await getCurrentUser();
 	if (!user) return;
 
@@ -71,7 +70,6 @@ const FolderPage = async ({
 			)}
 			{/* Display Videos */}
 			<FolderVideosSection
-				cardType="shared"
 				initialVideos={videosData}
 				dubApiKeyEnabled={!!serverEnv().DUB_API_KEY}
 			/>

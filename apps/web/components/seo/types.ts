@@ -1,3 +1,5 @@
+import type { JSX } from "react";
+
 export type ComparisonStatus = "positive" | "negative" | "warning" | "neutral";
 export interface ComparisonCell {
 	text: string;
