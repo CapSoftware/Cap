@@ -1055,7 +1055,7 @@ export default function Cropper(
 							handle.isCorner ? (
 								<button
 									type="button"
-									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0"
+									class="fixed z-50 flex h-[30px] w-[30px] focus:ring-0 outline-none"
 									tabIndex={-1}
 									classList={{
 										"opacity-0": state.overlayDragging,
@@ -1117,7 +1117,7 @@ export default function Cropper(
 							) : (
 								<button
 									type="button"
-									class="absolute focus:outline-none focus:ring-0"
+									class="absolute focus:outline-none focus:ring-0 outline-none"
 									tabIndex={-1}
 									style={{
 										visibility: state.resizing ? "hidden" : "visible",

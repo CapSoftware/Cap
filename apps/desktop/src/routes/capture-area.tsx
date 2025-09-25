@@ -231,12 +231,17 @@ export default function CaptureArea() {
 
 								<div class="h-full transition-all duration-300 ease-out">
 									<button
-										class="group flex items-center justify-center px-3 h-full min-w-28 border border-gray-5 rounded-full gap-2 text-blue-10 bg-gray-1 shadow-xl shadow-black/30 duration-200 enabled:hover:bg-blue-2 enabled:hover:border-blue-5 enabled:active:bg-blue-3 disabled:opacity-90 disabled:cursor-not-allowed disabled:bg-gray-3 disabled:border-gray-4 cursor-default"
+										class="group flex items-center justify-center px-3 h-full min-w-28 border border-gray-5 rounded-full gap-2 text-blue-10 disabled:text-gray-10 bg-gray-1 shadow-xl shadow-black/30 duration-200 enabled:hover:bg-blue-2 enabled:hover:border-blue-5 enabled:active:bg-blue-3 disabled:opacity-90 disabled:cursor-not-allowed disabled:bg-gray-3 disabled:border-gray-4 cursor-default"
 										type="button"
 										disabled={!isValid()}
 										onClick={handleConfirm}
 									>
-										<div class="group-active:scale-95 transition-transform flex gap-2">
+										<div
+											class="flex gap-2"
+											classList={{
+												"group-active:scale-95 transition-transform": isValid(),
+											}}
+										>
 											<IconLucideCheck class="size-5 *:pointer-events-none" />
 											<span class="font-medium text-sm">Confirm</span>
 										</div>
