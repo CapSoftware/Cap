@@ -87,9 +87,9 @@ const Links = [
 				href: "/faq",
 			},
 			{
-				label: "Email support",
-				sub: "Support via email",
-				href: "mailto:hello@cap.so",
+				label: "Help Center",
+				sub: "Guides, tutorials, and more. Currently in progress.",
+				href: "https://help.cap.so",
 			},
 			{
 				label: "Chat support",

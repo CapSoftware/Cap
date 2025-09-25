@@ -1,14 +1,15 @@
 import { db, updateIfDefined } from "@cap/database";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
-import type { VideoMetadata } from "@cap/database/types";
+import { videos, videoUploads } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { and, eq } from "drizzle-orm";
+import { Effect } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
 import { withAuth } from "@/app/api/utils";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "@/lib/server";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { parseVideoIdOrFileKey } from "../utils";
 
@@ -37,34 +38,38 @@ app.post(
 
 		try {
 			try {
-				const { bucket } = await getUserBucketWithClient(user.id);
+				const uploadId = await Effect.gen(function* () {
+					const [bucket] = yield* S3Buckets.getBucketAccessForUser(user.id);
 
-				const finalContentType = contentType || "video/mp4";
-				console.log(
-					`Creating multipart upload in bucket: ${bucket.name}, content-type: ${finalContentType}, key: ${fileKey}`,
-				);
+					const finalContentType = contentType || "video/mp4";
+					console.log(
+						`Creating multipart upload in bucket: ${bucket.bucketName}, content-type: ${finalContentType}, key: ${fileKey}`,
+					);
 
-				const { UploadId } = await bucket.multipart.create(fileKey, {
-					ContentType: finalContentType,
-					Metadata: {
-						userId: user.id,
-						source: "cap-multipart-upload",
-					},
-					CacheControl: "max-age=31536000",
-				});
+					const { UploadId } = yield* bucket.multipart.create(fileKey, {
+						ContentType: finalContentType,
+						Metadata: {
+							userId: user.id,
+							source: "cap-multipart-upload",
+						},
+						CacheControl: "max-age=31536000",
+					});
 
-				if (!UploadId) {
-					throw new Error("No UploadId returned from S3");
-				}
+					if (!UploadId) {
+						throw new Error("No UploadId returned from S3");
+					}
 
-				console.log(
-					`Successfully initiated multipart upload with ID: ${UploadId}`,
-				);
-				console.log(
-					`Upload details: Bucket=${bucket.name}, Key=${fileKey}, ContentType=${finalContentType}`,
-				);
+					console.log(
+						`Successfully initiated multipart upload with ID: ${UploadId}`,
+					);
+					console.log(
+						`Upload details: Bucket=${bucket.bucketName}, Key=${fileKey}, ContentType=${finalContentType}`,
+					);
 
-				return c.json({ uploadId: UploadId });
+					return UploadId;
+				}).pipe(runPromise);
+
+				return c.json({ uploadId: uploadId });
 			} catch (s3Error) {
 				console.error("S3 operation failed:", s3Error);
 				throw new Error(
@@ -115,18 +120,23 @@ app.post(
 
 		try {
 			try {
-				const { bucket } = await getUserBucketWithClient(user.id);
+				const presignedUrl = await Effect.gen(function* () {
+					const [bucket] = yield* S3Buckets.getBucketAccessForUser(user.id);
 
-				console.log(
-					`Getting presigned URL for part ${partNumber} of upload ${uploadId}`,
-				);
+					console.log(
+						`Getting presigned URL for part ${partNumber} of upload ${uploadId}`,
+					);
 
-				const presignedUrl = await bucket.multipart.getPresignedUploadPartUrl(
-					fileKey,
-					uploadId,
-					partNumber,
-					{ ContentMD5: md5Sum },
-				);
+					const presignedUrl =
+						yield* bucket.multipart.getPresignedUploadPartUrl(
+							fileKey,
+							uploadId,
+							partNumber,
+							{ ContentMD5: md5Sum },
+						);
+
+					return presignedUrl;
+				}).pipe(runPromise);
 
 				return c.json({ presignedUrl });
 			} catch (s3Error) {
@@ -188,53 +198,59 @@ app.post(
 
 		try {
 			try {
-				const { bucket } = await getUserBucketWithClient(user.id);
-
-				console.log(
-					`Completing multipart upload ${uploadId} with ${parts.length} parts for key: ${fileKey}`,
+				const [bucket] = await S3Buckets.getBucketAccessForUser(user.id).pipe(
+					runPromise,
 				);
 
-				const totalSize = parts.reduce((acc, part) => acc + part.size, 0);
-				console.log(`Total size of all parts: ${totalSize} bytes`);
-
-				const sortedParts = [...parts].sort(
-					(a, b) => a.partNumber - b.partNumber,
-				);
-
-				const sequentialCheck = sortedParts.every(
-					(part, index) => part.partNumber === index + 1,
-				);
-
-				if (!sequentialCheck) {
-					console.warn(
-						"WARNING: Part numbers are not sequential! This may cause issues with the assembled file.",
+				const { result, formattedParts } = await Effect.gen(function* () {
+					console.log(
+						`Completing multipart upload ${uploadId} with ${parts.length} parts for key: ${fileKey}`,
 					);
-				}
 
-				const formattedParts = sortedParts.map((part) => ({
-					PartNumber: part.partNumber,
-					ETag: part.etag,
-				}));
+					const totalSize = parts.reduce((acc, part) => acc + part.size, 0);
+					console.log(`Total size of all parts: ${totalSize} bytes`);
 
-				console.log(
-					"Sending to S3:",
-					JSON.stringify(
-						{
-							Bucket: bucket.name,
-							Key: fileKey,
-							UploadId: uploadId,
+					const sortedParts = [...parts].sort(
+						(a, b) => a.partNumber - b.partNumber,
+					);
+
+					const sequentialCheck = sortedParts.every(
+						(part, index) => part.partNumber === index + 1,
+					);
+
+					if (!sequentialCheck) {
+						console.warn(
+							"WARNING: Part numbers are not sequential! This may cause issues with the assembled file.",
+						);
+					}
+
+					const formattedParts = sortedParts.map((part) => ({
+						PartNumber: part.partNumber,
+						ETag: part.etag,
+					}));
+
+					console.log(
+						"Sending to S3:",
+						JSON.stringify(
+							{
+								Bucket: bucket.bucketName,
+								Key: fileKey,
+								UploadId: uploadId,
+								Parts: formattedParts,
+							},
+							null,
+							2,
+						),
+					);
+
+					const result = yield* bucket.multipart.complete(fileKey, uploadId, {
+						MultipartUpload: {
 							Parts: formattedParts,
 						},
-						null,
-						2,
-					),
-				);
+					});
 
-				const result = await bucket.multipart.complete(fileKey, uploadId, {
-					MultipartUpload: {
-						Parts: formattedParts,
-					},
-				});
+					return { result, formattedParts };
+				}).pipe(runPromise);
 
 				try {
 					console.log(
@@ -244,36 +260,41 @@ app.post(
 					);
 					console.log(`Complete response: ${JSON.stringify(result, null, 2)}`);
 
-					try {
+					await Effect.gen(function* () {
 						console.log(
 							"Performing metadata fix by copying the object to itself...",
 						);
 
-						const copyResult = await bucket.copyObject(
-							`${bucket.name}/${fileKey}`,
-							fileKey,
-							{
+						yield* bucket
+							.copyObject(`${bucket.bucketName}/${fileKey}`, fileKey, {
 								ContentType: "video/mp4",
 								MetadataDirective: "REPLACE",
-							},
-						);
+							})
+							.pipe(
+								Effect.tap((result) =>
+									Effect.log("Copy for metadata fix successful:", result),
+								),
+								Effect.catchAll((e) =>
+									Effect.logError(
+										"Warning: Failed to copy object to fix metadata:",
+										e,
+									),
+								),
+							);
 
-						console.log("Copy for metadata fix successful:", copyResult);
-					} catch (copyError) {
-						console.error(
-							"Warning: Failed to copy object to fix metadata:",
-							copyError,
+						yield* bucket.headObject(fileKey).pipe(
+							Effect.tap((headResult) =>
+								Effect.log(
+									`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
+								),
+							),
+							Effect.catchAll((headError) =>
+								Effect.logError(
+									`Warning: Unable to verify object: ${headError}`,
+								),
+							),
 						);
-					}
-
-					try {
-						const headResult = await bucket.headObject(fileKey);
-						console.log(
-							`Object verification successful: ContentType=${headResult.ContentType}, ContentLength=${headResult.ContentLength}`,
-						);
-					} catch (headError) {
-						console.error(`Warning: Unable to verify object: ${headError}`);
-					}
+					}).pipe(runPromise);
 
 					const videoIdFromFileKey = fileKey.split("/")[1];
 
@@ -359,22 +380,3 @@ app.post(
 		}
 	},
 );
-
-async function getUserBucketWithClient(userId: string) {
-	const [customBucket] = await db()
-		.select()
-		.from(s3Buckets)
-		.where(eq(s3Buckets.ownerId, userId));
-
-	console.log("S3 bucket configuration:", {
-		hasEndpoint: !!customBucket?.endpoint,
-		endpoint: customBucket?.endpoint || "N/A",
-		region: customBucket?.region || "N/A",
-		hasAccessKey: !!customBucket?.accessKeyId,
-		hasSecretKey: !!customBucket?.secretAccessKey,
-	});
-
-	const bucket = await createBucketProvider(customBucket);
-
-	return { bucket };
-}

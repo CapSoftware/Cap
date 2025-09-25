@@ -15,23 +15,17 @@ export class S3Error extends Schema.TaggedError<S3Error>()("S3Error", {
 }) {}
 
 const wrapS3Promise = <T>(
-	callback: (
-		provider: S3BucketClientProvider["Type"],
-	) => Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,
-): Effect.Effect<T, S3Error, S3BucketClientProvider> =>
+	promise: Promise<T> | Effect.Effect<Promise<T>, Cause.UnknownException>,
+): Effect.Effect<T, S3Error, never> =>
 	Effect.gen(function* () {
-		const provider = yield* S3BucketClientProvider;
-
-		const cbResult = callback(provider);
-
-		if (cbResult instanceof Promise) {
+		if (promise instanceof Promise) {
 			return yield* Effect.tryPromise({
-				try: () => cbResult,
+				try: () => promise,
 				catch: (cause) => new S3Error({ cause }),
 			});
 		}
 
-		return yield* cbResult.pipe(
+		return yield* promise.pipe(
 			Effect.flatMap((cbResult) =>
 				Effect.tryPromise({
 					try: () => cbResult,
@@ -43,257 +37,256 @@ const wrapS3Promise = <T>(
 		Effect.catchTag("UnknownException", (cause) => new S3Error({ cause })),
 	);
 
-// @effect-diagnostics-next-line leakingRequirements:off
-export class S3BucketAccess extends Effect.Service<S3BucketAccess>()(
-	"S3BucketAccess",
-	{
-		sync: () => ({
-			bucketName: Effect.map(S3BucketClientProvider, (p) => p.bucket),
-			getSignedObjectUrl: (key: string) =>
-				wrapS3Promise((provider) =>
-					provider.getPublic.pipe(
-						Effect.map((client) =>
-							S3Presigner.getSignedUrl(
-								client,
-								new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
-								{ expiresIn: 3600 },
-							),
+export const createS3BucketAccess = Effect.gen(function* () {
+	const provider = yield* S3BucketClientProvider;
+	return {
+		bucketName: provider.bucket,
+		getSignedObjectUrl: (key: string) =>
+			wrapS3Promise(
+				provider.getPublic.pipe(
+					Effect.map((client) =>
+						S3Presigner.getSignedUrl(
+							client,
+							new S3.GetObjectCommand({ Bucket: provider.bucket, Key: key }),
+							{ expiresIn: 3600 },
 						),
 					),
-				).pipe(Effect.withSpan("getSignedObjectUrl")),
-			getObject: (key: string) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map(async (client) => {
-							const a = await client
-								.send(
-									new S3.GetObjectCommand({
-										Bucket: provider.bucket,
-										Key: key,
-									}),
-								)
-								.then((resp) => resp.Body?.transformToString())
-								.catch((e) => {
-									if (e instanceof S3.NoSuchKey) {
-										return null;
-									} else {
-										throw e;
-									}
-								});
-							return Option.fromNullable(a);
-						}),
-					),
 				),
-			listObjects: (config: { prefix?: string; maxKeys?: number }) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.ListObjectsV2Command({
+			).pipe(Effect.withSpan("getSignedObjectUrl")),
+		getObject: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map(async (client) => {
+						const a = await client
+							.send(
+								new S3.GetObjectCommand({
 									Bucket: provider.bucket,
-									Prefix: config?.prefix,
-									MaxKeys: config?.maxKeys,
+									Key: key,
 								}),
-							),
-						),
-					),
-				),
-			headObject: (key: string) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.HeadObjectCommand({ Bucket: provider.bucket, Key: key }),
-							),
-						),
-					),
-				),
-			putObject: <E>(
-				key: string,
-				body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
-				fields?: { contentType?: string; contentLength?: number },
-			) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.flatMap((client) =>
-							Effect.gen(function* () {
-								let _body;
-
-								if (typeof body === "string" || body instanceof Uint8Array) {
-									_body = body;
-								} else if (body instanceof ArrayBuffer) {
-									_body = new Uint8Array(body);
+							)
+							.then((resp) => resp.Body?.transformToString())
+							.catch((e) => {
+								if (e instanceof S3.NoSuchKey) {
+									return null;
 								} else {
-									_body = body.pipe(
-										Stream.toReadableStreamRuntime(yield* Effect.runtime()),
-										(s) => Readable.fromWeb(s as any),
-									);
+									throw e;
 								}
-
-								return client.send(
-									new S3.PutObjectCommand({
-										Bucket: provider.bucket,
-										Key: key,
-										Body: _body,
-										ContentType: fields?.contentType,
-										ContentLength: fields?.contentLength,
-									}),
-								);
+							});
+						return Option.fromNullable(a);
+					}),
+				),
+			),
+		listObjects: (config: { prefix?: string; maxKeys?: number }) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						client.send(
+							new S3.ListObjectsV2Command({
+								Bucket: provider.bucket,
+								Prefix: config?.prefix,
+								MaxKeys: config?.maxKeys,
 							}),
 						),
 					),
-				).pipe(
-					Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
 				),
-			/** Copy an object within the same bucket */
-			copyObject: (
-				source: string,
-				key: string,
-				args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
-			) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.CopyObjectCommand({
-									Bucket: provider.bucket,
-									CopySource: source,
-									Key: key,
-									...args,
-								}),
-							),
+			),
+		headObject: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						client.send(
+							new S3.HeadObjectCommand({ Bucket: provider.bucket, Key: key }),
 						),
 					),
 				),
-			deleteObject: (key: string) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.DeleteObjectCommand({
-									Bucket: provider.bucket,
-									Key: key,
-								}),
-							),
-						),
-					),
-				),
-			deleteObjects: (objects: S3.ObjectIdentifier[]) =>
-				wrapS3Promise((provider) =>
-					provider.getInternal.pipe(
-						Effect.map((client) =>
-							client.send(
-								new S3.DeleteObjectsCommand({
-									Bucket: provider.bucket,
-									Delete: {
-										Objects: objects,
-									},
-								}),
-							),
-						),
-					),
-				),
-			getPresignedPutUrl: (
-				key: string,
-				args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
-				signingArgs?: RequestPresigningArguments,
-			) =>
-				wrapS3Promise((provider) =>
-					provider.getPublic.pipe(
-						Effect.map((client) =>
-							S3Presigner.getSignedUrl(
-								client,
+			),
+		putObject: <E>(
+			key: string,
+			body: string | Uint8Array | ArrayBuffer | Stream.Stream<Uint8Array, E>,
+			fields?: { contentType?: string; contentLength?: number },
+		) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.flatMap((client) =>
+						Effect.gen(function* () {
+							let _body;
+
+							if (typeof body === "string" || body instanceof Uint8Array) {
+								_body = body;
+							} else if (body instanceof ArrayBuffer) {
+								_body = new Uint8Array(body);
+							} else {
+								_body = body.pipe(
+									Stream.toReadableStreamRuntime(yield* Effect.runtime()),
+									(s) => Readable.fromWeb(s as any),
+								);
+							}
+
+							return client.send(
 								new S3.PutObjectCommand({
 									Bucket: provider.bucket,
 									Key: key,
-									...args,
+									Body: _body,
+									ContentType: fields?.contentType,
+									ContentLength: fields?.contentLength,
 								}),
-								signingArgs,
-							),
+							);
+						}),
+					),
+				),
+			).pipe(
+				Effect.withSpan("S3BucketAccess.putObject", { attributes: { key } }),
+			),
+		/** Copy an object within the same bucket */
+		copyObject: (
+			source: string,
+			key: string,
+			args?: Omit<S3.CopyObjectCommandInput, "Bucket" | "CopySource" | "Key">,
+		) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						client.send(
+							new S3.CopyObjectCommand({
+								Bucket: provider.bucket,
+								CopySource: source,
+								Key: key,
+								...args,
+							}),
 						),
 					),
 				),
-			getPresignedPostUrl: (
-				key: string,
-				args: Omit<PresignedPostOptions, "Bucket" | "Key">,
-			) =>
-				wrapS3Promise((provider) =>
-					provider.getPublic.pipe(
-						Effect.map((client) =>
-							createPresignedPost(client, {
-								...args,
+			),
+		deleteObject: (key: string) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						client.send(
+							new S3.DeleteObjectCommand({
 								Bucket: provider.bucket,
 								Key: key,
 							}),
 						),
 					),
 				),
-			multipart: {
-				create: (
-					key: string,
-					args?: Omit<S3.CreateMultipartUploadCommandInput, "Bucket" | "Key">,
-				) =>
-					wrapS3Promise((provider) =>
-						provider.getInternal.pipe(
-							Effect.map((client) =>
-								client.send(
-									new S3.CreateMultipartUploadCommand({
-										...args,
-										Bucket: provider.bucket,
-										Key: key,
-									}),
-								),
+			),
+		deleteObjects: (objects: S3.ObjectIdentifier[]) =>
+			wrapS3Promise(
+				provider.getInternal.pipe(
+					Effect.map((client) =>
+						client.send(
+							new S3.DeleteObjectsCommand({
+								Bucket: provider.bucket,
+								Delete: {
+									Objects: objects,
+								},
+							}),
+						),
+					),
+				),
+			),
+		getPresignedPutUrl: (
+			key: string,
+			args?: Omit<S3.PutObjectRequest, "Key" | "Bucket">,
+			signingArgs?: RequestPresigningArguments,
+		) =>
+			wrapS3Promise(
+				provider.getPublic.pipe(
+					Effect.map((client) =>
+						S3Presigner.getSignedUrl(
+							client,
+							new S3.PutObjectCommand({
+								Bucket: provider.bucket,
+								Key: key,
+								...args,
+							}),
+							signingArgs,
+						),
+					),
+				),
+			),
+		getPresignedPostUrl: (
+			key: string,
+			args: Omit<PresignedPostOptions, "Bucket" | "Key">,
+		) =>
+			wrapS3Promise(
+				provider.getPublic.pipe(
+					Effect.map((client) =>
+						createPresignedPost(client, {
+							...args,
+							Bucket: provider.bucket,
+							Key: key,
+						}),
+					),
+				),
+			),
+		multipart: {
+			create: (
+				key: string,
+				args?: Omit<S3.CreateMultipartUploadCommandInput, "Bucket" | "Key">,
+			) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.CreateMultipartUploadCommand({
+									...args,
+									Bucket: provider.bucket,
+									Key: key,
+								}),
 							),
 						),
 					),
-				getPresignedUploadPartUrl: (
-					key: string,
-					uploadId: string,
-					partNumber: number,
-					args?: Omit<
-						S3.UploadPartCommandInput,
-						"Key" | "Bucket" | "PartNumber" | "UploadId"
-					>,
-				) =>
-					wrapS3Promise((provider) =>
-						provider.getPublic.pipe(
-							Effect.map((client) =>
-								S3Presigner.getSignedUrl(
-									client,
-									new S3.UploadPartCommand({
-										...args,
-										Bucket: provider.bucket,
-										Key: key,
-										UploadId: uploadId,
-										PartNumber: partNumber,
-									}),
-								),
+				),
+			getPresignedUploadPartUrl: (
+				key: string,
+				uploadId: string,
+				partNumber: number,
+				args?: Omit<
+					S3.UploadPartCommandInput,
+					"Key" | "Bucket" | "PartNumber" | "UploadId"
+				>,
+			) =>
+				wrapS3Promise(
+					provider.getPublic.pipe(
+						Effect.map((client) =>
+							S3Presigner.getSignedUrl(
+								client,
+								new S3.UploadPartCommand({
+									...args,
+									Bucket: provider.bucket,
+									Key: key,
+									UploadId: uploadId,
+									PartNumber: partNumber,
+								}),
 							),
 						),
 					),
-				complete: (
-					key: string,
-					uploadId: string,
-					args?: Omit<
-						S3.CompleteMultipartUploadCommandInput,
-						"Key" | "Bucket" | "UploadId"
-					>,
-				) =>
-					wrapS3Promise((provider) =>
-						provider.getInternal.pipe(
-							Effect.map((client) =>
-								client.send(
-									new S3.CompleteMultipartUploadCommand({
-										Bucket: provider.bucket,
-										Key: key,
-										UploadId: uploadId,
-										...args,
-									}),
-								),
+				),
+			complete: (
+				key: string,
+				uploadId: string,
+				args?: Omit<
+					S3.CompleteMultipartUploadCommandInput,
+					"Key" | "Bucket" | "UploadId"
+				>,
+			) =>
+				wrapS3Promise(
+					provider.getInternal.pipe(
+						Effect.map((client) =>
+							client.send(
+								new S3.CompleteMultipartUploadCommand({
+									Bucket: provider.bucket,
+									Key: key,
+									UploadId: uploadId,
+									...args,
+								}),
 							),
 						),
 					),
-			},
-		}),
-	},
-) {}
+				),
+		},
+	};
+});
+
+export type S3BucketAccess = Effect.Effect.Success<typeof createS3BucketAccess>;
