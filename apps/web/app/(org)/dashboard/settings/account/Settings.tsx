@@ -91,6 +91,19 @@ export const Settings = ({
 						disabled
 					/>
 				</Card>
+				<Card className="flex flex-col flex-1 gap-4 justify-between items-stretch">
+					<div className="space-y-1">
+						<CardTitle>Default organization</CardTitle>
+						<CardDescription>This is the default organization</CardDescription>
+					</div>
+					{/*<Input
+						type="email"
+						value={user?.email as string}
+						id="contactEmail"
+						name="contactEmail"
+						disabled
+					/>*/}
+				</Card>
 			</div>
 			<Button
 				disabled={!firstName || updateNamePending}
