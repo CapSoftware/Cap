@@ -17,7 +17,7 @@ import {
 	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
-export const revalidate = "force-dynamic";
+export const dynamic = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
@@ -228,7 +228,7 @@ const getPlaylistResponse = (
 		}).pipe(Effect.withSpan("generateUrls"));
 	});
 
-const { handler } = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
 
-export const GET = handler;
-export const HEAD = handler;
+export const GET = (r: Request) => handler(r);
+export const HEAD = (r: Request) => handler(r);

@@ -139,7 +139,7 @@ const CustomDomainDialog = ({
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	const confettiRef = useRef<ConfettiRef>(null);
 
-	const pollInterval = useRef<NodeJS.Timeout>();
+	const pollInterval = useRef<NodeJS.Timeout | undefined>(undefined);
 
 	// Mutation for updating domain
 	const updateDomainMutation = useMutation({
