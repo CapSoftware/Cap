@@ -1,4 +1,7 @@
+import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
+import { organizationMembers, organizations } from "@cap/database/schema";
+import { and, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getDashboardData } from "../../dashboard-data";
@@ -15,12 +18,24 @@ export default async function OrganizationPage() {
 		redirect("/auth/signin");
 	}
 
-	const dashboardData = await getDashboardData(user);
-	const isOwner = dashboardData.organizationSelect.find(
-		(organization) => organization.organization.ownerId === user.id,
-	);
+	const [member] = await db()
+		.select({
+			role: organizationMembers.role,
+		})
+		.from(organizationMembers)
+		.limit(1)
+		.leftJoin(
+			organizations,
+			eq(organizationMembers.organizationId, organizations.id),
+		)
+		.where(
+			and(
+				eq(organizationMembers.userId, user.id),
+				eq(organizations.id, user.activeOrganizationId),
+			),
+		);
 
-	if (!isOwner) {
+	if (member?.role !== "owner") {
 		redirect("/dashboard/caps");
 	}
 
