@@ -20,9 +20,9 @@ import FolderVideosSection from "./components/FolderVideosSection";
 
 const FolderPage = async ({ params }: { params: { id: Folder.FolderId } }) => {
 	const user = await getCurrentUser();
-	if (!user) return notFound();
+	if (!user || !user.activeOrganizationId) return notFound();
 
-	Effect.gen(function* () {
+	return Effect.gen(function* () {
 		const [childFolders, breadcrumb, videosData] = yield* Effect.all([
 			getChildFolders(params.id, { variant: "user" }),
 			getFolderBreadcrumb(params.id),
