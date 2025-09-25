@@ -1,5 +1,6 @@
 import { createEventListenerMap } from "@solid-primitives/event-listener";
 import { createResizeObserver } from "@solid-primitives/resize-observer";
+import { type as ostype } from "@tauri-apps/plugin-os";
 import {
 	type Accessor,
 	children,
@@ -88,8 +89,9 @@ const clamp = (n: number, min = 0, max = 1) => Math.max(min, Math.min(max, n));
 const easeInOutCubic = (t: number) =>
 	t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 
+const shouldTriggerHaptic = ostype() === "macos";
 function triggerHaptic() {
-	commands.performHapticFeedback("alignment", null);
+	if (shouldTriggerHaptic) commands.performHapticFeedback("alignment", null);
 }
 
 function findClosestRatio(
@@ -437,16 +439,21 @@ export default function Cropper(
 			else {
 				animationFrameId = null;
 				setIsAnimating(false);
+				triggerHaptic();
 			}
 		};
 
 		animationFrameId = requestAnimationFrame(step);
 	}
 
-	function setRawBoundsAndAnimate(bounds: CropBounds, durationMs = 240) {
+	function setRawBoundsAndAnimate(
+		bounds: CropBounds,
+		origin?: Vec2,
+		durationMs = 240,
+	) {
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
 		setIsAnimating(true);
-		setRawBoundsConstraining(bounds);
+		setRawBoundsConstraining(bounds, origin);
 		animateToRawBounds(rawBounds(), durationMs);
 	}
 
@@ -526,6 +533,18 @@ export default function Cropper(
 		if (!isAnimating()) setDisplayRawBounds(newBounds);
 	}
 
+	function fill() {
+		const container = containerSize();
+		const targetRaw = {
+			x: 0,
+			y: 0,
+			width: container.x,
+			height: container.y,
+		};
+		setRawBoundsAndAnimate(targetRaw);
+		setAspectState("snapped", null);
+	}
+
 	onMount(() => {
 		if (!containerRef) return;
 		let initialized = false;
@@ -565,18 +584,6 @@ export default function Cropper(
 		}
 
 		if (props.ref) {
-			const fill = () => {
-				const container = containerSize();
-				const targetRaw = {
-					x: 0,
-					y: 0,
-					width: container.x,
-					height: container.y,
-				};
-				setRawBoundsAndAnimate(targetRaw);
-				setAspectState("snapped", null);
-			};
-
 			const cropperRef: CropperRef = {
 				reset: () => {
 					const bounds = computeInitialBounds();
@@ -602,7 +609,7 @@ export default function Cropper(
 					return realBounds;
 				},
 				animateTo: (real, durationMs) =>
-					setRawBoundsAndAnimate(boundsToRaw(real), durationMs),
+					setRawBoundsAndAnimate(boundsToRaw(real), undefined, durationMs),
 			};
 
 			if (typeof props.ref === "function") props.ref(cropperRef);
@@ -771,6 +778,31 @@ export default function Cropper(
 				pointermove: (e) => handleResizePointerMove(e, context),
 			}),
 		);
+	}
+
+	function onHandleDoubleClick(handle: HandleSide, e: MouseEvent) {
+		e.stopPropagation();
+		const currentBounds = rawBounds();
+		const container = containerSize();
+
+		const newBounds = { ...currentBounds };
+
+		if (handle.movable.top) {
+			newBounds.height = currentBounds.y + currentBounds.height;
+			newBounds.y = 0;
+		}
+		if (handle.movable.bottom) {
+			newBounds.height = container.y - currentBounds.y;
+		}
+		if (handle.movable.left) {
+			newBounds.width = currentBounds.x + currentBounds.width;
+			newBounds.x = 0;
+		}
+		if (handle.movable.right) {
+			newBounds.width = container.x - currentBounds.x;
+		}
+
+		setRawBoundsAndAnimate(newBounds, handle.origin);
 	}
 
 	function onOverlayPointerDown(e: PointerEvent) {
@@ -981,6 +1013,7 @@ export default function Cropper(
 			onKeyUp={handleKeyUp}
 			tabIndex={0}
 			onContextMenu={props.onContextMenu}
+			onDblClick={() => fill()}
 		>
 			<Transition
 				appear
@@ -1075,6 +1108,7 @@ export default function Cropper(
 											: { bottom: "-12px" }),
 									}}
 									onMouseEnter={() => setState("hoveringHandle", { ...handle })}
+									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
 									aria-label={`Resize ${handle.direction}`}
 									aria-describedby="cropper-aspect"
@@ -1120,7 +1154,10 @@ export default function Cropper(
 									class="absolute focus:outline-none focus:ring-0 outline-none"
 									tabIndex={-1}
 									style={{
-										visibility: state.resizing ? "hidden" : "visible",
+										visibility:
+											state.resizing && state.hoveringHandle?.isCorner
+												? "hidden"
+												: "visible",
 										cursor: state.cursorStyle ?? handle.cursor,
 										...(handle.x === "l"
 											? {
@@ -1155,8 +1192,8 @@ export default function Cropper(
 														}),
 									}}
 									onMouseEnter={() => setState("hoveringHandle", { ...handle })}
+									onDblClick={[onHandleDoubleClick, handle]}
 									onPointerDown={[onHandlePointerDown, handle]}
-									onTouchStart={() => {}}
 									aria-label={`Resize ${handle.direction}`}
 									aria-describedby="cropper-aspect"
 								/>
