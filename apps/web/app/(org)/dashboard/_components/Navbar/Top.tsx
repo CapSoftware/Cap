@@ -28,6 +28,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	RefObject,
 } from "react";
 import { markAsRead } from "@/actions/notifications/mark-as-read";
 import Notifications from "@/app/(org)/dashboard/_components/Notifications";
@@ -318,7 +319,11 @@ const User = () => {
 };
 
 interface Props {
-	icon: React.ReactElement;
+	icon: React.ReactElement<{
+		ref: RefObject<DownloadIconHandle | null>;
+		className: string;
+		size: number;
+	}>;
 	name: string;
 	href?: string;
 	onClick: () => void;

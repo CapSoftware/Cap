@@ -31,7 +31,7 @@ import { Check, ChevronDown, Plus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { cloneElement, useRef, useState } from "react";
+import { cloneElement, RefObject, useRef, useState } from "react";
 import { NewOrganization } from "@/components/forms/NewOrganization";
 import { Tooltip } from "@/components/Tooltip";
 import { UsageButton } from "@/components/UsageButton";
@@ -453,7 +453,11 @@ const NavItem = ({
 }: {
 	name: string;
 	href: string;
-	icon: React.ReactElement;
+	icon: React.ReactElement<{
+		ref: RefObject<CogIconHandle | null>;
+		className: string;
+		size: number;
+	}>;
 	sidebarCollapsed: boolean;
 	toggleMobileNav?: () => void;
 	isPathActive: (path: string) => boolean;

@@ -6,7 +6,7 @@ export const runtime = "edge";
 
 export const revalidate = 0;
 
-export async function GET(
+export const GET = (async (
 	req: Request,
 	props: {
 		params: Promise<{
@@ -15,7 +15,7 @@ export async function GET(
 			arch: string;
 		}>;
 	},
-) {
+) => {
 	const params = await props.params;
 	try {
 		if (params.arch === "x86_64") {
@@ -48,4 +48,4 @@ export async function GET(
 		console.error("Error fetching latest release:", error);
 		return Response.json({ error: "Missing required fields" }, { status: 400 });
 	}
-}
+}) as any;

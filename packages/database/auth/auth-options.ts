@@ -89,7 +89,7 @@ export const authOptions = (): NextAuthOptions => {
 							);
 							console.log(`📧 Email: ${identifier}`);
 							console.log(`🔢 Code: ${token}`);
-							console.log(`⏱️  Expires in: 10 minutes`);
+							console.log(`⏱  Expires in: 10 minutes`);
 							console.log(
 								"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 							);
@@ -137,8 +137,10 @@ export const authOptions = (): NextAuthOptions => {
 
 				if (needsOrganizationSetup) {
 					const { cookies } = await import("next/headers");
-					const dubId = cookies().get("dub_id")?.value;
-					const dubPartnerData = cookies().get("dub_partner_data")?.value;
+					const dubId = (await cookies()).get("dub_id")?.value;
+					const dubPartnerData = (await cookies()).get(
+						"dub_partner_data",
+					)?.value;
 
 					if (dubId && isNewUser) {
 						try {
@@ -154,9 +156,9 @@ export const authOptions = (): NextAuthOptions => {
 
 							console.log("Dub tracking successful:", trackResult);
 
-							cookies().delete("dub_id");
+							(await cookies()).delete("dub_id");
 							if (dubPartnerData) {
-								cookies().delete("dub_partner_data");
+								(await cookies()).delete("dub_partner_data");
 							}
 						} catch (error) {
 							console.error("Failed to track lead with Dub:", error);

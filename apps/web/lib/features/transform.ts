@@ -1,4 +1,4 @@
-import React from "react";
+import React, { type JSX } from "react";
 import type { SeoPageContent } from "@/components/seo/types";
 import type { FeaturePageConfig } from "./types";
 

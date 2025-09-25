@@ -242,5 +242,5 @@ const getPlaylistResponse = (
 
 const { handler } = apiToHandler(ApiLive);
 
-export const GET = handler;
-export const HEAD = handler;
+export const GET = handler as any;
+export const HEAD = handler as any;

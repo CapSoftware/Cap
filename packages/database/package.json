@@ -26,7 +26,7 @@
 		"@react-email/tailwind": "^1.0.5",
 		"drizzle-orm": "0.44.5",
 		"dub": "^0.64.0",
-		"effect": "^3.17.13",
+		"effect": "^3.17.14",
 		"nanoid": "^5.0.4",
 		"next": "15.5.4",
 		"next-auth": "^4.24.5",

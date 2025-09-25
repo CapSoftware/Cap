@@ -7,16 +7,15 @@ import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
-	props: { params: Promise<{ videoId: Video.VideoId }> },
+	props: { params: Promise<{ videoId: string }> },
 ) {
-	const params = await props.params;
 	try {
 		const user = await getCurrentUser();
 		if (!user) {
 			return Response.json({ error: "Unauthorized" }, { status: 401 });
 		}
 
-		const { videoId } = params;
+		const { videoId } = (await props.params) as { videoId: Video.VideoId };
 		if (!videoId) {
 			return Response.json({ error: "Video ID is required" }, { status: 400 });
 		}

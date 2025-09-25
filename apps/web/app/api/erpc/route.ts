@@ -14,5 +14,5 @@ const { handler } = RpcServer.toWebHandler(Rpcs, {
 	).pipe(Layer.provideMerge(Dependencies)),
 });
 
-export const GET = handler;
-export const POST = handler;
+export const GET = handler as any;
+export const POST = handler as any;

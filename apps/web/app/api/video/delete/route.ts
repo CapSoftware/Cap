@@ -49,4 +49,4 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 const { handler } = apiToHandler(ApiLive);
 
-export const DELETE = handler;
+export const DELETE = handler as any;
