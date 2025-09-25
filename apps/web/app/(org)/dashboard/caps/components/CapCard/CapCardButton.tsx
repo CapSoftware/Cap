@@ -1,7 +1,7 @@
 import { Button } from "@cap/ui";
-import { Tooltip } from "@/components/Tooltip";
-import { type ReactNode, type MouseEvent } from "react";
 import clsx from "clsx";
+import type { MouseEvent, ReactNode } from "react";
+import { Tooltip } from "@/components/Tooltip";
 
 interface CapCardButtonProps {
 	tooltipContent: string;

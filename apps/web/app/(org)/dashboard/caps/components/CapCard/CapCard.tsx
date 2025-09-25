@@ -37,8 +37,8 @@ import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
 import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
-import { CapCardContent } from "./CapCardContent";
 import { CapCardButton } from "./CapCardButton";
+import { CapCardContent } from "./CapCardContent";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
