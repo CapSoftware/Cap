@@ -85,7 +85,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,7 +93,6 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());

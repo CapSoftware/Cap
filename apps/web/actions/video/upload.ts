@@ -179,14 +179,11 @@ export async function createVideoAndGetUploadUrl({
 }) {
 	const user = await getCurrentUser();
 
-	if (!user) {
-		throw new Error("Unauthorized");
-	}
+	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300) {
+		if (!userIsPro(user) && duration && duration > 300)
 			throw new Error("upgrade_required");
-		}
 
 		const [customBucket] = await db()
 			.select()
