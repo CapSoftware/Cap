@@ -138,7 +138,7 @@ export const Navbar = () => {
 							<Link passHref href="/home">
 								<Logo
 									hideLogoName={hideLogoName}
-									className="transition-all duration-[0.2s] ease-out"
+									className="transition-all duration-200 ease-out"
 									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
 									style={{
 										width: hideLogoName ? 45.5 : 90,
@@ -169,9 +169,9 @@ export const Navbar = () => {
 																				href={sublink.href}
 																				className="block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
 																			>
-																				<div className="flex items-center gap-2 text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
+																				<div className="flex gap-2 items-center text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
 																					{sublink.icon && sublink.icon}
-																					<span className="text-gray-12 font-semibold">
+																					<span className="font-semibold text-gray-12">
 																						{sublink.label}
 																					</span>
 																				</div>

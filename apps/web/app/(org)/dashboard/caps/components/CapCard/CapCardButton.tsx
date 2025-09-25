@@ -1,3 +1,5 @@
+"use client";
+
 import { Button } from "@cap/ui";
 import clsx from "clsx";
 import type { MouseEvent, ReactNode } from "react";

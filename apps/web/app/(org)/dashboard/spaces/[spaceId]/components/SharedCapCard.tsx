@@ -1,3 +1,5 @@
+"use client";
+
 import type { VideoMetadata } from "@cap/database/types";
 import type { Video } from "@cap/web-domain";
 import { faBuilding, faUser } from "@fortawesome/free-solid-svg-icons";
