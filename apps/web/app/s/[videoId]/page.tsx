@@ -310,13 +310,7 @@ export default async function ShareVideoPage(props: Props) {
 		return Option.fromNullable(video);
 	}).pipe(
 		Effect.flatten,
-		Effect.map(
-			(video) =>
-				({
-					needsPassword: false,
-					video,
-				}) as const,
-		),
+		Effect.map((video) => ({ needsPassword: false, video }) as const),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),
@@ -342,9 +336,7 @@ export default async function ShareVideoPage(props: Props) {
 						</p>
 					</div>,
 				),
-			NoSuchElementException: () => {
-				throw notFound();
-			},
+			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
