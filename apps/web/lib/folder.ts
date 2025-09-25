@@ -55,7 +55,6 @@ export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
 		currentFolderId = folder.parentId;
 	}
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
 	return breadcrumb;
 }
 
@@ -239,8 +238,6 @@ export async function getVideosByFolderId(folderId: Folder.FolderId) {
 		};
 	});
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
-
 	return processedVideoData;
 }
 
@@ -267,8 +264,6 @@ export async function getChildFolders(folderId: Folder.FolderId) {
 				eq(folders.organizationId, user.activeOrganizationId),
 			),
 		);
-
-	revalidatePath(`/dashboard/folder/${folderId}`);
 
 	return childFolders;
 }
