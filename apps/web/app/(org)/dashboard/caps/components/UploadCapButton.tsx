@@ -2,11 +2,11 @@
 
 import { Button } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
-import type { Folder } from "@cap/web-domain";
+import type { Folder, Video } from "@cap/web-domain";
 import { faUpload } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { type QueryClient, useQueryClient } from "@tanstack/react-query";
-import { Effect, useStore } from "@tanstack/react-store";
+import { useStore } from "@tanstack/react-store";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
@@ -19,8 +19,8 @@ import {
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { imageUrlQuery } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
-import { Queue } from "effect";
-import Stream from "stream";
+import { Effect, Queue, Stream } from "effect";
+import { useFeatureFlag } from "@/app/Layout/features";
 
 export const UploadCapButton = ({
 	size = "md",
@@ -52,7 +52,8 @@ export const UploadCapButton = ({
 	};
 
 	const uploadCapMutation = useEffectMutation({
-		mutationFn: (file: File) => uploadCap(file, folderId, setUploadStatus),
+		mutationFn: (file: File) =>
+			uploadCap(file, folderId, setUploadStatus, queryClient),
 		onSuccess: () => {
 			router.refresh();
 			if (inputRef.current) inputRef.current.value = "";
@@ -66,20 +67,22 @@ export const UploadCapButton = ({
 		},
 	});
 
+	const useEffectForUploadButton = useFeatureFlag("enableEffectOnUploadButton");
 	const handleChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
-		uploadCapMutation.mutate(file);
-
-		// const ok = await legacyUploadCap(
-		// 	file,
-		// 	folderId,
-		// 	setUploadStatus,
-		// 	queryClient,
-		// );
-		// if (ok) router.refresh();
-		// if (inputRef.current) inputRef.current.value = "";
+		if (useEffectForUploadButton) uploadCapMutation.mutate(file);
+		else {
+			const ok = await legacyUploadCap(
+				file,
+				folderId,
+				setUploadStatus,
+				queryClient,
+			);
+			if (ok) router.refresh();
+			if (inputRef.current) inputRef.current.value = "";
+		}
 	};
 
 	return (
@@ -112,8 +115,9 @@ export const UploadCapButton = ({
 
 const uploadCap = (
 	file: File,
-	folderId: string | undefined,
+	folderId: Folder.FolderId | undefined,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
+	queryClient: QueryClient,
 ) =>
 	Effect.gen(function* () {
 		const parser = yield* Effect.promise(
@@ -392,6 +396,8 @@ const uploadCap = (
 					undefined,
 					setUploadStatus,
 					"thumbnail",
+				).pipe(
+					Effect.tap(() => queryClient.refetchQueries(imageUrlQuery(uploadId))),
 				);
 
 				yield* Effect.all([videoUpload, thumbnailUpload], { concurrency: 2 });
