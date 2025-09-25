@@ -27,12 +27,9 @@ export const dynamic = "auto";
 export const dynamicParams = true;
 export const revalidate = 30;
 
-type Props = {
-	params: Promise<{ [key: string]: string | string[] | undefined }>;
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
-};
-
-export async function generateMetadata(props: Props): Promise<Metadata> {
+export async function generateMetadata(
+	props: PageProps<"/embed/[videoId]">,
+): Promise<Metadata> {
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
@@ -112,7 +109,9 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
 	);
 }
 
-export default async function EmbedVideoPage(props: Props) {
+export default async function EmbedVideoPage(
+	props: PageProps<"/embed/[videoId]">,
+) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;

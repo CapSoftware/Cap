@@ -74,6 +74,8 @@ jobs:
         uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --check

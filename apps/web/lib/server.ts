@@ -98,4 +98,5 @@ export const apiToHandler = (
 			HttpApiBuilder.middleware(Effect.provide(CookiePasswordAttachmentLive)),
 		),
 		HttpApiBuilder.toWebHandler,
+		(v) => (req: Request) => v.handler(req),
 	);

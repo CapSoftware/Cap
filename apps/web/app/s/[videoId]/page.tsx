@@ -122,7 +122,9 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
-export async function generateMetadata(props: Props): Promise<Metadata> {
+export async function generateMetadata(
+	props: PageProps<"/s/[videoId]">,
+): Promise<Metadata> {
 	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
@@ -253,7 +255,7 @@ export async function generateMetadata(props: Props): Promise<Metadata> {
 	);
 }
 
-export default async function ShareVideoPage(props: Props) {
+export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 	const params = await props.params;
 	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;

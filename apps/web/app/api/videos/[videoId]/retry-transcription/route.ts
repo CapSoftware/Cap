@@ -7,7 +7,7 @@ import { revalidatePath } from "next/cache";
 
 export async function POST(
 	_request: Request,
-	props: { params: Promise<{ videoId: string }> },
+	props: RouteContext<"/api/videos/[videoId]/retry-transcription">,
 ) {
 	try {
 		const user = await getCurrentUser();

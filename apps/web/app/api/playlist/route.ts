@@ -240,7 +240,7 @@ const getPlaylistResponse = (
 		}).pipe(Effect.withSpan("generateUrls"));
 	});
 
-const { handler } = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
 
-export const GET = handler as any;
-export const HEAD = handler as any;
+export const GET = (r: Request) => handler(r);
+export const HEAD = (r: Request) => handler(r);

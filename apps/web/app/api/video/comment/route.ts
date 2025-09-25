@@ -88,10 +88,10 @@ async function handlePost(request: NextRequest) {
 	}
 }
 
-export const POST = (async (request: NextRequest) => {
+export const POST = async (request: NextRequest) => {
 	const headersList = await headers();
-	return rateLimitMiddleware(10, handlePost(request), headersList);
-}) as any;
+	return rateLimitMiddleware(10, handlePost(request), headersList) as any;
+};
 
 export async function GET() {
 	return Response.json({ error: true }, { status: 405 });
