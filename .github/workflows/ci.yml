@@ -46,6 +46,8 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
+      - run: pnpm web next typegen
+
       - name: Typecheck
         run: pnpm typecheck
 
