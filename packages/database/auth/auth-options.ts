@@ -17,9 +17,7 @@ import { organizationMembers, organizations, users } from "../schema.ts";
 import { isEmailAllowedForSignup } from "./domain-utils.ts";
 import { DrizzleAdapter } from "./drizzle-adapter.ts";
 
-export const config = {
-	maxDuration: 120,
-};
+export const maxDuration = 120;
 
 export const authOptions = (): NextAuthOptions => {
 	let _adapter: Adapter | undefined;
