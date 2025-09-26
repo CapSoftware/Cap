@@ -157,7 +157,7 @@ export function LoginForm() {
 				</motion.p>
 			</motion.div>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
-				<MotionLogoBadge layout="position" className="w-[72px] h-[72px]" />
+				<MotionLogoBadge layout="position" className="size-12" />
 			</MotionLink>
 			<motion.div
 				layout="position"
@@ -459,18 +459,16 @@ const NormalLogin = ({
 				className="flex flex-col gap-3 justify-center items-center"
 			>
 				{!oauthError && (
-					<>
-						<MotionButton
-							variant="gray"
-							type="button"
-							className="flex gap-2 justify-center items-center w-full text-sm"
-							onClick={handleGoogleSignIn}
-							disabled={loading}
-						>
-							<Image src="/google.svg" alt="Google" width={16} height={16} />
-							Login with Google
-						</MotionButton>
-					</>
+					<MotionButton
+						variant="gray"
+						type="button"
+						className="flex gap-2 justify-center items-center w-full text-sm"
+						onClick={handleGoogleSignIn}
+						disabled={loading}
+					>
+						<Image src="/google.svg" alt="Google" width={16} height={16} />
+						Login with Google
+					</MotionButton>
 				)}
 
 				{oauthError && (
@@ -481,8 +479,7 @@ const NormalLogin = ({
 						/>
 						<p className="text-xs leading-5 text-gray-50">
 							It looks like you've previously used this email to sign up via
-							email login. Please enter your email below to receive a sign in
-							link.
+							email login. Please enter your email.
 						</p>
 					</div>
 				)}
