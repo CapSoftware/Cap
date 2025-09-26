@@ -1066,6 +1066,7 @@ export default function Cropper(
 					ref={regionRef}
 					class="absolute top-0 left-0 z-30 size-36 border border-white/50"
 					style={{ cursor: state.cursorStyle ?? "grab" }}
+					onDblClick={(e) => e.stopPropagation()}
 				>
 					<button
 						class="absolute inset-0 z-10 bg-transparent"
