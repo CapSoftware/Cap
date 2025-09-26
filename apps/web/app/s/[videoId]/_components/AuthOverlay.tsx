@@ -137,6 +137,14 @@ const StepOne = ({
 	emailId: string;
 }) => {
 	const videoId = useParams().videoId;
+	const handleGoogleSignIn = () => {
+		trackEvent("auth_started", { method: "google", is_signup: true });
+		setLoading(true);
+		signIn("google", {
+			redirect: false,
+			callbackUrl: `${window.location.origin}/s/${videoId}`,
+		});
+	};
 	return (
 		<form
 			onSubmit={async (e) => {
@@ -178,7 +186,7 @@ const StepOne = ({
 					autoComplete="email"
 					required
 					value={email}
-					disabled={emailSent}
+					disabled={emailSent || loading}
 					onChange={(e) => {
 						setEmail(e.target.value);
 					}}
@@ -205,15 +213,7 @@ const StepOne = ({
 				variant="gray"
 				type="button"
 				className="flex gap-2 justify-center items-center my-1 w-full text-sm"
-				onClick={() => {
-					trackEvent("auth_started", { method: "google", is_signup: true });
-					setLoading(true);
-					signIn("google", {
-						redirect: false,
-						callbackUrl: `${window.location.origin}/s/${videoId}`,
-					});
-					setLoading(false);
-				}}
+				onClick={handleGoogleSignIn}
 				disabled={loading}
 			>
 				<Image src="/google.svg" alt="Google" width={16} height={16} />

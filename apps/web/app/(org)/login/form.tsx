@@ -464,7 +464,7 @@ const NormalLogin = ({
 						type="button"
 						className="flex gap-2 justify-center items-center w-full text-sm"
 						onClick={handleGoogleSignIn}
-						disabled={loading}
+						disabled={loading || emailSent}
 					>
 						<Image src="/google.svg" alt="Google" width={16} height={16} />
 						Login with Google
@@ -489,7 +489,7 @@ const NormalLogin = ({
 					className="w-full"
 					layout
 					onClick={() => setShowOrgInput(true)}
-					disabled={loading}
+					disabled={loading || emailSent}
 				>
 					<LucideArrowUpRight size={20} />
 					Login with SAML SSO
