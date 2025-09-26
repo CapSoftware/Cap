@@ -1,6 +1,7 @@
 "use client";
 
 import type { VideoMetadata } from "@cap/database/types";
+import { buildEnv, NODE_ENV } from "@cap/env";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -340,7 +341,16 @@ export const CapCard = ({
 						tooltipContent="Copy link"
 						onClick={(e) => {
 							e.stopPropagation();
-							handleCopy(cap.id);
+							handleCopy(
+								buildEnv.NEXT_PUBLIC_IS_CAP &&
+									NODE_ENV === "production" &&
+									customDomain &&
+									domainVerified
+									? `https://${customDomain}/s/${cap.id}`
+									: buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production"
+										? `https://cap.link/${cap.id}`
+										: `${location.origin}/s/${cap.id}`,
+							);
 						}}
 						className="delay-0"
 						icon={() => {
