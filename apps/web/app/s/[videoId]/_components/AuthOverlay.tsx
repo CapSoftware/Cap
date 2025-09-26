@@ -3,10 +3,13 @@ import { Button, Dialog, DialogContent, Input, LogoBadge } from "@cap/ui";
 import { faArrowLeft, faEnvelope } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { AnimatePresence } from "framer-motion";
+import Image from "next/image";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { signIn } from "next-auth/react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
+import { trackEvent } from "@/app/utils/analytics";
 import OtpForm from "./OtpForm";
 
 interface AuthOverlayProps {
@@ -133,6 +136,7 @@ const StepOne = ({
 	setLastResendTime: (time: number | null) => void;
 	emailId: string;
 }) => {
+	const videoId = useParams().videoId as string;
 	return (
 		<form
 			onSubmit={async (e) => {
@@ -191,6 +195,29 @@ const StepOne = ({
 						? "Email sent to your terminal"
 						: "Email sent to your inbox"
 					: "Continue with Email"}
+			</Button>
+			<div className="flex gap-4 items-center">
+				<span className="flex-1 h-px bg-gray-5" />
+				<p className="text-sm text-center text-gray-10">OR</p>
+				<span className="flex-1 h-px bg-gray-5" />
+			</div>
+			<Button
+				variant="gray"
+				type="button"
+				className="flex gap-2 justify-center items-center my-1 w-full text-sm"
+				onClick={() => {
+					trackEvent("auth_started", { method: "google", is_signup: true });
+					setLoading(true);
+					signIn("google", {
+						redirect: false,
+						callbackUrl: `${window.location.origin}/s/${videoId}`,
+					});
+					setLoading(false);
+				}}
+				disabled={loading}
+			>
+				<Image src="/google.svg" alt="Google" width={16} height={16} />
+				Login with Google
 			</Button>
 		</form>
 	);
