@@ -9,6 +9,7 @@ interface CapCardButtonProps {
 	disabled?: boolean;
 	className: string;
 	icon: () => ReactNode;
+	asChild?: boolean;
 }
 
 export const CapCardButton = ({
@@ -17,12 +18,14 @@ export const CapCardButton = ({
 	disabled,
 	className,
 	icon,
+	asChild,
 }: CapCardButtonProps) => {
 	return (
 		<Tooltip key={tooltipContent} content={tooltipContent}>
 			<Button
 				onClick={(e) => onClick?.(e)}
 				disabled={disabled}
+				asChild={asChild}
 				className={clsx(
 					`!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0`,
 					className,
