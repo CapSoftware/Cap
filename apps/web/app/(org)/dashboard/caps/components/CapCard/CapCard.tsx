@@ -401,7 +401,7 @@ export const CapCard = ({
 
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
-							<DropdownMenuTrigger>
+							<DropdownMenuTrigger asChild>
 								<CapCardButton
 									tooltipContent="More options"
 									className="delay-75"
