@@ -99,6 +99,14 @@ const VerifyStep = ({
 		hasRecommendedCNAME && !cnameConfigured && isSubdomain(domain);
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
+	console.log({
+		recommendedAValues,
+		aRecordConfigured,
+		isSubdomain: isSubdomain(domain),
+		showARecord,
+		domain,
+	});
+
 	const handleCopy = async (text: string, fieldId: string) => {
 		try {
 			await navigator.clipboard.writeText(text);
@@ -131,7 +139,7 @@ const VerifyStep = ({
 				<h3 className="text-lg font-semibold text-gray-12">
 					{isVerified ? "Domain Verified" : "Verify your domain"}
 				</h3>
-				<p className="text-sm text-gray-11">
+				<p className="text-sm text-gray-11 w-full max-w-[350px] mx-auto">
 					{isVerified
 						? "Your domain is verified!"
 						: `Add the DNS records below to verify ownership of ${domain}: wait a minute after updating to verify.`}
