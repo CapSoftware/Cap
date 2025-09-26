@@ -420,9 +420,18 @@ export default function Cropper(
 	}
 
 	function animateToRawBounds(target: CropBounds, durationMs = 240) {
+		const start = displayRawBounds();
+		if (
+			target.x === start.x &&
+			target.y === start.y &&
+			target.width === start.width &&
+			target.height === start.height
+		) {
+			return;
+		}
+
 		setIsAnimating(true);
 		if (animationFrameId !== null) cancelAnimationFrame(animationFrameId);
-		const start = displayRawBounds();
 		const startTime = performance.now();
 
 		const step = () => {
