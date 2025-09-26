@@ -204,7 +204,8 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 													className="duration-200 size-3 text-gray-10"
 												/>
 												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
-													{activeOrg?.organization.customDomain
+													{activeOrg?.organization.customDomain &&
+													activeOrg?.organization.domainVerified
 														? activeOrg?.organization.customDomain
 														: "No custom domain set"}
 												</p>
