@@ -94,7 +94,6 @@ export default function CaptureArea() {
 				{ screenId: target.id, bounds: currentBounds },
 			]);
 		}
-		console.log(`Hei`);
 
 		const b = crop();
 		setOptions(
