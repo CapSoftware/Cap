@@ -102,6 +102,7 @@ const VerifyStep = ({
 		recommendedAValues,
 		isSubdomain: isSubdomain(domain),
 		showARecord,
+		domainConfig,
 		domain,
 	});
 
