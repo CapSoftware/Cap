@@ -87,6 +87,7 @@ const OtpForm = ({
 		},
 		onSuccess: () => {
 			router.refresh();
+			onClose();
 		},
 		onError: (e) => {
 			if (typeof e === "string") {
@@ -174,7 +175,6 @@ const OtpForm = ({
 				spinner={isVerifying}
 				onClick={() => {
 					handleVerify.mutate(undefined);
-					onClose();
 				}}
 				disabled={code.some((digit) => !digit) || isVerifying}
 			>
