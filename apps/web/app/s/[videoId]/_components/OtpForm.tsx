@@ -87,6 +87,7 @@ const OtpForm = ({
 		},
 		onSuccess: () => {
 			router.refresh();
+			toast.success("Sign in successful!");
 			onClose();
 		},
 		onError: (e) => {
