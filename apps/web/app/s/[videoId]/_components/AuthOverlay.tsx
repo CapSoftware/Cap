@@ -29,7 +29,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 	const emailId = useId();
 	return (
 		<Dialog open={isOpen} onOpenChange={onClose}>
-			<DialogContent className="w-[90vw] relative sm:max-w-md p-6 rounded-xl">
+			<DialogContent className="w-[90vw] bg-gray-3 relative sm:max-w-md p-6 rounded-xl">
 				{emailSent && (
 					<div
 						onClick={() => {
@@ -40,7 +40,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 							setCode(["", "", "", "", "", ""]);
 							setLastResendTime(null);
 						}}
-						className="absolute top-5 left-5 cursor-pointer z-20 flex gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 rounded-full hover:bg-gray-3 transition-colors duration-300"
+						className="absolute top-5 left-5 cursor-pointer z-20 flex gap-2 items-center py-1.5 px-3 text-gray-12 bg-transparent border border-gray-4 rounded-full hover:bg-gray-1 transition-colors duration-300"
 					>
 						<FontAwesomeIcon className="w-2" icon={faArrowLeft} />
 						<p className="text-xs">Back</p>
