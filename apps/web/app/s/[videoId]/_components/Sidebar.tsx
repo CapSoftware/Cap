@@ -30,6 +30,14 @@ interface SidebarProps {
 	setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
+	settings?: {
+		disableSummary?: boolean;
+		disableCaptions?: boolean;
+		disableChapters?: boolean;
+		disableReactions?: boolean;
+		disableTranscript?: boolean;
+		disableComments?: boolean;
+	};
 	videoId: Video.VideoId;
 	aiData?: {
 		title?: string | null;
@@ -75,6 +83,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			handleCommentSuccess,
 			setOptimisticComments,
 			views,
+			settings,
 			onSeek,
 			videoId,
 			aiData,
@@ -91,13 +100,18 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		const [activeTab, setActiveTab] = useState<TabType>("activity");
 		const [[page, direction], setPage] = useState([0, 0]);
 
-		const hasExistingAiData =
-			aiData?.summary || (aiData?.chapters && aiData.chapters.length > 0);
-
 		const tabs = [
-			{ id: "activity", label: "Comments" },
-			{ id: "summary", label: "Summary" },
-			{ id: "transcript", label: "Transcript" },
+			{
+				id: "activity",
+				label: "Comments",
+				disabled: settings?.disableComments,
+			},
+			{ id: "summary", label: "Summary", disabled: settings?.disableSummary },
+			{
+				id: "transcript",
+				label: "Transcript",
+				disabled: settings?.disableTranscript,
+			},
 		];
 
 		const paginate = (tabId: TabType) => {
@@ -159,38 +173,40 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
 				<div className="flex-none">
 					<div className="flex border-b border-gray-5">
-						{tabs.map((tab) => (
-							<button
-								key={tab.id}
-								onClick={() => paginate(tab.id as TabType)}
-								className={classNames(
-									"flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
-									"hover:bg-gray-1",
-									activeTab === tab.id ? "bg-gray-3" : "",
-								)}
-							>
-								<span
+						{tabs
+							.filter((tab) => !tab.disabled)
+							.map((tab) => (
+								<button
+									key={tab.id}
+									onClick={() => paginate(tab.id as TabType)}
 									className={classNames(
-										"relative z-10 text-sm",
-										activeTab === tab.id ? "text-gray-12" : "text-gray-9",
+										"flex-1 px-5 py-3 text-sm font-medium relative transition-colors duration-200",
+										"hover:bg-gray-1",
+										activeTab === tab.id ? "bg-gray-3" : "",
 									)}
 								>
-									{tab.label}
-								</span>
-								{activeTab === tab.id && (
-									<motion.div
-										layoutId="activeTab"
-										className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500"
-										initial={false}
-										transition={{
-											type: "spring",
-											stiffness: 500,
-											damping: 30,
-										}}
-									/>
-								)}
-							</button>
-						))}
+									<span
+										className={classNames(
+											"relative z-10 text-sm",
+											activeTab === tab.id ? "text-gray-12" : "text-gray-9",
+										)}
+									>
+										{tab.label}
+									</span>
+									{activeTab === tab.id && (
+										<motion.div
+											layoutId="activeTab"
+											className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500"
+											initial={false}
+											transition={{
+												type: "spring",
+												stiffness: 500,
+												damping: 30,
+											}}
+										/>
+									)}
+								</button>
+							))}
 					</div>
 				</div>
 				<div className="flex-1 min-h-0">

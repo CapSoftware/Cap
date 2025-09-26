@@ -15,6 +15,7 @@ interface ToolbarProps {
 	user: typeof userSelectProps | null;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
+	disableReactions?: boolean;
 }
 
 export const Toolbar = ({
@@ -22,6 +23,7 @@ export const Toolbar = ({
 	user,
 	onOptimisticComment,
 	onCommentSuccess,
+	disableReactions,
 }: ToolbarProps) => {
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
@@ -184,6 +186,10 @@ export const Toolbar = ({
 		}
 		setCommentBoxOpen(true);
 	};
+
+	if (disableReactions) {
+		return null;
+	}
 
 	return (
 		<>

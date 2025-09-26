@@ -253,6 +253,14 @@ export const videos = mysqlTable(
 		fps: int("fps"),
 		metadata: json("metadata").$type<VideoMetadata>(),
 		public: boolean("public").notNull().default(true),
+		settings: json("settings").$type<{
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+			disableComments?: boolean;
+		}>(),
 		transcriptionStatus: varchar("transcriptionStatus", { length: 255 }).$type<
 			"PROCESSING" | "COMPLETE" | "ERROR"
 		>(),

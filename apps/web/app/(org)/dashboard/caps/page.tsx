@@ -176,6 +176,7 @@ export default async function CapsPage(props: {
 			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
 				Boolean,
 			),
+			settings: videos.settings,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
@@ -231,6 +232,7 @@ export default async function CapsPage(props: {
 			...videoWithoutEffectiveDate,
 			id: Video.VideoId.make(video.id),
 			foldersData,
+			settings: video.settings,
 			sharedOrganizations: Array.isArray(video.sharedOrganizations)
 				? video.sharedOrganizations.filter(
 						(organization) => organization.id !== null,

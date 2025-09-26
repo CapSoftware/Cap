@@ -8,55 +8,98 @@ import {
 	Switch,
 } from "@cap/ui";
 import { userIsPro } from "@cap/utils";
+import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+import { updateVideoSettings } from "@/actions/videos/settings";
 import { useDashboardContext } from "../../Contexts";
 
 interface SettingsDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
+	capId: Video.VideoId;
+	settingsData?: {
+		disableComments?: boolean;
+		disableSummary?: boolean;
+		disableCaptions?: boolean;
+		disableChapters?: boolean;
+		disableReactions?: boolean;
+		disableTranscript?: boolean;
+	};
 }
 
-export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
-	const { user } = useDashboardContext();
+const options = [
+	{
+		label: "Disable comments",
+		value: "disableComments",
+		description: "Prevent viewers from commenting on this cap",
+	},
+	{
+		label: "Disable summary",
+		value: "disableSummary",
+		description: "Remove the summary for this cap",
+		pro: true,
+	},
+	{
+		label: "Disable captions",
+		value: "disableCaptions",
+		description: "Prevent viewers from using captions for this cap",
+	},
+	{
+		label: "Disable chapters",
+		value: "disableChapters",
+		description: "Remove the chapters for this cap",
+		pro: true,
+	},
+	{
+		label: "Disable reactions",
+		value: "disableReactions",
+		description: "Prevent viewers from reacting to this cap",
+	},
+	{
+		label: "Disable transcript",
+		value: "disableTranscript",
+		description: "Remove the transcript for this cap",
+		pro: true,
+	},
+];
 
-	const options = useMemo(
-		() => [
-			{
-				label: "Disable comments",
-				value: "disable_comments",
-				description: "Prevent viewers from commenting on this cap",
-			},
-			{
-				label: "Disable reactions",
-				value: "disable_reactions",
-				description: "Prevent viewers from reacting to this cap",
-			},
-			{
-				label: "Disable summary",
-				value: "disable_summary",
-				description: "Remove the summary for this cap",
-				pro: true,
-			},
-			{
-				label: "Disable chapters",
-				value: "remove_chapters",
-				description: "Remove the chapters for this cap",
-				pro: true,
-			},
-			{
-				label: "Disable transcript",
-				value: "remove_transcript",
-				description: "Remove the transcript for this cap",
-				pro: true,
-			},
-		],
-		[],
-	);
+export const SettingsDialog = ({
+	isOpen,
+	onClose,
+	capId,
+	settingsData,
+}: SettingsDialogProps) => {
+	const { user } = useDashboardContext();
+	const [saveLoading, setSaveLoading] = useState(false);
+	const [settings, setSettings] = useState<typeof settingsData>({
+		disableComments: settingsData?.disableComments,
+		disableSummary: settingsData?.disableSummary,
+		disableCaptions: settingsData?.disableCaptions,
+		disableChapters: settingsData?.disableChapters,
+		disableReactions: settingsData?.disableReactions,
+		disableTranscript: settingsData?.disableTranscript,
+	});
 
 	const isUserPro = userIsPro(user);
+
+	const saveHandler = async () => {
+		setSaveLoading(true);
+		if (!settings) return;
+		try {
+			await updateVideoSettings(capId, settings);
+			toast.success("Settings updated successfully");
+		} catch (error) {
+			console.error("Error updating video settings:", error);
+			toast.error("Failed to update settings");
+		} finally {
+			setSaveLoading(false);
+		}
+		onClose();
+	};
 
 	return (
 		<Dialog open={isOpen} onOpenChange={onClose}>
@@ -67,7 +110,7 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
 				>
 					<DialogTitle>Settings</DialogTitle>
 				</DialogHeader>
-				<div className="p-5 space-y-3">
+				<div className="grid grid-cols-2 gap-3 p-5">
 					{options.map((option) => (
 						<div
 							key={option.value}
@@ -86,16 +129,36 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
 								</div>
 								<p className="text-xs text-gray-10">{option.description}</p>
 							</div>
-							<Switch disabled={option.pro && !isUserPro} />
+							<Switch
+								disabled={option.pro && !isUserPro}
+								checked={settings?.[option.value as keyof typeof settings]}
+								onCheckedChange={(checked) =>
+									setSettings({
+										...settings,
+										[option.value as keyof typeof settings]: checked,
+									})
+								}
+							/>
 						</div>
 					))}
 				</div>
 				<DialogFooter className="p-5 border-t border-gray-4">
-					<Button variant="gray" size="sm" onClick={onClose}>
+					<Button
+						variant="gray"
+						size="sm"
+						onClick={onClose}
+						disabled={saveLoading}
+					>
 						Cancel
 					</Button>
-					<Button variant="dark" size="sm" onClick={onClose}>
-						Save
+					<Button
+						variant="dark"
+						size="sm"
+						onClick={saveHandler}
+						spinner={saveLoading}
+						disabled={saveLoading}
+					>
+						{saveLoading ? "Saving..." : "Save"}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

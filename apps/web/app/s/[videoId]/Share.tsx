@@ -44,6 +44,14 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
+	settings?: {
+		disableSummary?: boolean;
+		disableCaptions?: boolean;
+		disableChapters?: boolean;
+		disableReactions?: boolean;
+		disableTranscript?: boolean;
+		disableComments?: boolean;
+	};
 };
 
 interface ShareProps {
@@ -278,6 +286,7 @@ export const Share = ({
 						setOptimisticComments={setOptimisticComments}
 						handleCommentSuccess={handleCommentSuccess}
 						views={views}
+						settings={data.settings}
 						onSeek={handleSeek}
 						videoId={data.id}
 						aiData={aiData}
@@ -292,6 +301,7 @@ export const Share = ({
 					<Toolbar
 						onOptimisticComment={handleOptimisticComment}
 						onCommentSuccess={handleCommentSuccess}
+						disableReactions={data.settings?.disableReactions}
 						data={data}
 						user={user}
 					/>

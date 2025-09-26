@@ -70,6 +70,14 @@ export interface CapCardProps extends PropsWithChildren {
 		hasPassword?: boolean;
 		hasActiveUpload: boolean | undefined;
 		duration?: number;
+		settings?: {
+			disableComments?: boolean;
+			disableSummary?: boolean;
+			disableCaptions?: boolean;
+			disableChapters?: boolean;
+			disableReactions?: boolean;
+			disableTranscript?: boolean;
+		};
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -286,6 +294,8 @@ export const CapCard = ({
 			/>
 			<SettingsDialog
 				isOpen={isSettingsDialogOpen}
+				settingsData={cap.settings}
+				capId={cap.id}
 				onClose={() => setIsSettingsDialogOpen(false)}
 			/>
 			<PasswordDialog
@@ -381,60 +391,31 @@ export const CapCard = ({
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
 							<DropdownMenuTrigger asChild suppressHydrationWarning>
-								<CapCardButton
-									tooltipContent="Download Cap"
-									onClick={(e) => {
-										e.stopPropagation();
-										handleDownload();
-									}}
-									disabled={downloadMutation.isPending}
-									className="delay-25"
-									icon={() => {
-										return downloadMutation.isPending ? (
-											<div className="animate-spin size-3">
-												<svg
-													className="size-3"
-													xmlns="http://www.w3.org/2000/svg"
-													fill="none"
-													viewBox="0 0 24 24"
-													aria-hidden="true"
-												>
-													<circle
-														className="opacity-25"
-														cx="12"
-														cy="12"
-														r="10"
-														stroke="currentColor"
-														strokeWidth="4"
-													></circle>
-													<path
-														className="opacity-75"
-														fill="currentColor"
-														d="m2 12c0-5.523 4.477-10 10-10v3c-3.866 0-7 3.134-7 7s3.134 7 7 7 7-3.134 7-7c0-1.457-.447-2.808-1.208-3.926l2.4-1.6c1.131 1.671 1.808 3.677 1.808 5.526 0 5.523-4.477 10-10 10s-10-4.477-10-10z"
-													></path>
-												</svg>
-											</div>
-										) : (
-											<FontAwesomeIcon
-												className="text-gray-12 size-3"
-												icon={faDownload}
-											/>
-										);
-									}}
-								/>
-								<CapCardButton
-									tooltipContent="More options"
-									className="delay-75"
-									icon={() => (
-										<FontAwesomeIcon className="size-4" icon={faEllipsis} />
-									)}
-								/>
+								<div>
+									<CapCardButton
+										tooltipContent="More options"
+										className="delay-75"
+										icon={() => (
+											<FontAwesomeIcon className="size-4" icon={faEllipsis} />
+										)}
+									/>
+								</div>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent
 								align="end"
 								sideOffset={5}
 								suppressHydrationWarning
 							>
+								<DropdownMenuItem
+									onClick={(e) => {
+										e.stopPropagation();
+										handleDownload();
+									}}
+									className="flex gap-2 items-center rounded-lg"
+								>
+									<FontAwesomeIcon className="size-3" icon={faDownload} />
+									<p className="text-sm text-gray-12">Download</p>
+								</DropdownMenuItem>
 								<DropdownMenuItem
 									onClick={() => {
 										toast.promise(duplicateMutation.mutateAsync(), {
