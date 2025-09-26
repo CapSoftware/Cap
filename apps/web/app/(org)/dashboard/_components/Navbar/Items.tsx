@@ -101,7 +101,7 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 					position="right"
 					content={activeOrg?.organization.name ?? "No organization found"}
 				>
-					<PopoverTrigger asChild>
+					<PopoverTrigger suppressHydrationWarning asChild>
 						<motion.div
 							transition={{
 								type: "easeInOut",

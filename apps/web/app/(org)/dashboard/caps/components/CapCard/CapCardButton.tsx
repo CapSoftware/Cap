@@ -23,7 +23,7 @@ export const CapCardButton = ({
 	return (
 		<Tooltip key={tooltipContent} content={tooltipContent}>
 			<Button
-				onClick={(e) => onClick?.(e)}
+				onClick={onClick}
 				disabled={disabled}
 				className={clsx(
 					`!size-8 hover:bg-gray-5 hover:border-gray-7 rounded-full min-w-fit !p-0`,
