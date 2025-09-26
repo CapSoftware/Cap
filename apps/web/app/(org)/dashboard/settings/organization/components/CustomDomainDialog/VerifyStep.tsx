@@ -93,15 +93,13 @@ const VerifyStep = ({
 	const cnameConfigured =
 		recommendedCnames.length > 0 &&
 		recommendedCnames.some((rec) => currentCnames.includes(rec.value));
-	const showARecord =
-		recommendedAValues.length > 0 && !aRecordConfigured && !isSubdomain(domain);
+	const showARecord = recommendedAValues.length > 0 && !isSubdomain(domain);
 	const showCNAMERecord =
 		hasRecommendedCNAME && !cnameConfigured && isSubdomain(domain);
 	const showTXTRecord = hasTXTVerification && !isVerified;
 
 	console.log({
 		recommendedAValues,
-		aRecordConfigured,
 		isSubdomain: isSubdomain(domain),
 		showARecord,
 		domain,
