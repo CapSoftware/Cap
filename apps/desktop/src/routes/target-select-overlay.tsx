@@ -94,7 +94,7 @@ function Inner() {
 
 	const [bounds, _setBounds] = createStore({
 		position: { x: 0, y: 0 },
-		size: { width: 400, height: 300 },
+		size: { width: 0, height: 0 },
 	});
 
 	const setBounds = (newBounds: typeof bounds) => {
@@ -105,14 +105,14 @@ function Inner() {
 			},
 			size: {
 				width: Math.max(
-					150,
+					0,
 					Math.min(
 						window.innerWidth - Math.max(0, newBounds.position.x),
 						newBounds.size.width,
 					),
 				),
 				height: Math.max(
-					150,
+					0,
 					Math.min(
 						window.innerHeight - Math.max(0, newBounds.position.y),
 						newBounds.size.height,
@@ -261,6 +261,9 @@ function Inner() {
 					>
 						{(_) => {
 							const [dragging, setDragging] = createSignal(false);
+							const [selecting, setSelecting] = createSignal(false);
+							const showSelection = () =>
+								bounds.size.width > 0 && bounds.size.height > 0;
 							// Track whether the controls should be placed above the selection to avoid window bottom overflow
 							const [placeControlsAbove, setPlaceControlsAbove] =
 								createSignal(false);
@@ -606,87 +609,143 @@ function Inner() {
 							}
 
 							return (
-								<div class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair">
+								<div
+									class="w-screen h-screen flex flex-col items-center justify-center data-[over='true']:bg-blue-600/40 transition-colors relative cursor-crosshair"
+									onMouseDown={(downEvent) => {
+										// If a selection already exists and user clicked inside it, let the box handler manage dragging
+										const hasSelection = showSelection();
+										const withinExisting =
+											downEvent.clientX >= bounds.position.x &&
+											downEvent.clientX <=
+												bounds.position.x + bounds.size.width &&
+											downEvent.clientY >= bounds.position.y &&
+											downEvent.clientY <=
+												bounds.position.y + bounds.size.height;
+										if (hasSelection && withinExisting) return; // handled by the box below
+
+										// Start a new selection from the cursor
+										setSelecting(true);
+										const startX = downEvent.clientX;
+										const startY = downEvent.clientY;
+										_setBounds({
+											position: { x: startX, y: startY },
+											size: { width: 0, height: 0 },
+										});
+
+										createRoot((dispose) => {
+											createEventListenerMap(window, {
+												mousemove: (moveEvent) => {
+													const curX = moveEvent.clientX;
+													const curY = moveEvent.clientY;
+													const x = Math.min(startX, curX);
+													const y = Math.min(startY, curY);
+													const width = Math.abs(curX - startX);
+													const height = Math.abs(curY - startY);
+													setBounds({
+														position: { x, y },
+														size: { width, height },
+													});
+												},
+												mouseup: () => {
+													setSelecting(false);
+													dispose();
+												},
+											});
+										});
+									}}
+								>
 									<Occluders />
 
-									<div
-										class={cx(
-											"flex absolute flex-col items-center",
-											dragging() ? "cursor-grabbing" : "cursor-grab",
-										)}
-										style={{
-											width: `${bounds.size.width}px`,
-											height: `${bounds.size.height}px`,
-											left: `${bounds.position.x}px`,
-											top: `${bounds.position.y}px`,
-										}}
-										onMouseDown={(downEvent) => {
-											setDragging(true);
-											const startPosition = { ...bounds.position };
-
-											createRoot((dispose) => {
-												createEventListenerMap(window, {
-													mousemove: (moveEvent) => {
-														const newPosition = {
-															x:
-																startPosition.x +
-																moveEvent.clientX -
-																downEvent.clientX,
-															y:
-																startPosition.y +
-																moveEvent.clientY -
-																downEvent.clientY,
-														};
-
-														if (newPosition.x < 0) newPosition.x = 0;
-														if (newPosition.y < 0) newPosition.y = 0;
-														if (
-															newPosition.x + bounds.size.width >
-															window.innerWidth
-														)
-															newPosition.x =
-																window.innerWidth - bounds.size.width;
-														if (
-															newPosition.y + bounds.size.height >
-															window.innerHeight
-														)
-															newPosition.y =
-																window.innerHeight - bounds.size.height;
-
-														_setBounds("position", newPosition);
-													},
-													mouseup: () => {
-														setDragging(false);
-														dispose();
-													},
-												});
-											});
-										}}
-									>
+									<Show when={showSelection()}>
 										<div
-											ref={controlsEl}
 											class={cx(
-												"flex absolute flex-col items-center m-2",
-												placeControlsAbove() ? "bottom-full" : "top-full",
+												"flex absolute flex-col items-center",
+												selecting()
+													? "cursor-crosshair"
+													: dragging()
+														? "cursor-grabbing"
+														: "cursor-grab",
 											)}
-											style={{ width: `${bounds.size.width}px` }}
+											style={{
+												width: `${bounds.size.width}px`,
+												height: `${bounds.size.height}px`,
+												left: `${bounds.position.x}px`,
+												top: `${bounds.position.y}px`,
+											}}
+											onMouseDown={(downEvent) => {
+												// Ignore while creating the selection
+												if (selecting()) return;
+												setDragging(true);
+												const startPosition = { ...bounds.position };
+
+												createRoot((dispose) => {
+													createEventListenerMap(window, {
+														mousemove: (moveEvent) => {
+															const newPosition = {
+																x:
+																	startPosition.x +
+																	moveEvent.clientX -
+																	downEvent.clientX,
+																y:
+																	startPosition.y +
+																	moveEvent.clientY -
+																	downEvent.clientY,
+															};
+
+															if (newPosition.x < 0) newPosition.x = 0;
+															if (newPosition.y < 0) newPosition.y = 0;
+															if (
+																newPosition.x + bounds.size.width >
+																window.innerWidth
+															)
+																newPosition.x =
+																	window.innerWidth - bounds.size.width;
+															if (
+																newPosition.y + bounds.size.height >
+																window.innerHeight
+															)
+																newPosition.y =
+																	window.innerHeight - bounds.size.height;
+
+															_setBounds("position", newPosition);
+														},
+														mouseup: () => {
+															setDragging(false);
+															dispose();
+														},
+													});
+												});
+											}}
 										>
-											<RecordingControls
-												target={{
-													variant: "area",
-													screen: params.displayId!,
-													bounds,
-												}}
-											/>
-											<ShowCapFreeWarning
-												isInstantMode={rawOptions.mode === "instant"}
-											/>
+											<div
+												ref={controlsEl}
+												class={cx(
+													"flex absolute flex-col items-center m-2",
+													placeControlsAbove() ? "bottom-full" : "top-full",
+												)}
+												style={{ width: `${bounds.size.width}px` }}
+											>
+												<RecordingControls
+													target={{
+														variant: "area",
+														screen: params.displayId!,
+														bounds,
+													}}
+												/>
+												<ShowCapFreeWarning
+													isInstantMode={rawOptions.mode === "instant"}
+												/>
+											</div>
 										</div>
-									</div>
 
-									<ResizeHandles />
+										<Show when={!selecting()}>
+											<ResizeHandles />
+										</Show>
+									</Show>
 
-									<p class="z-10 text-xl">Click and drag area to record</p>
+									<Show when={!showSelection()}>
+										<p class="z-10 text-xl">Click and drag to select area</p>
+									</Show>
 								</div>
 							);
 						}}
