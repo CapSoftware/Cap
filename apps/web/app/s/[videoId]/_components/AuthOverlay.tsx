@@ -79,6 +79,7 @@ export const AuthOverlay: React.FC<AuthOverlayProps> = ({
 								email={email}
 								code={code}
 								setCode={setCode}
+								onClose={onClose}
 								step={step}
 								lastResendTime={lastResendTime}
 								setLastResendTime={setLastResendTime}
