@@ -136,7 +136,7 @@ const StepOne = ({
 	setLastResendTime: (time: number | null) => void;
 	emailId: string;
 }) => {
-	const videoId = useParams().videoId as string;
+	const videoId = useParams().videoId;
 	return (
 		<form
 			onSubmit={async (e) => {
