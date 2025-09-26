@@ -3,7 +3,7 @@
 	"version": "0.3.1",
 	"private": true,
 	"scripts": {
-		"dev": "dotenv -e ../../.env -- next dev --turbopack",
+		"dev": "dotenv -e ../../.env -- next dev",
 		"build": "next build --turbopack",
 		"build:web": "next build --turbopack",
 		"build:web:docker": "cd ../.. && docker build -t cap-web-docker . --no-cache --progress=plain",
