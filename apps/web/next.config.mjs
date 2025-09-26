@@ -12,7 +12,6 @@ const { version } = packageJson;
 
 const nextConfig = {
 	reactStrictMode: true,
-	swcMinify: true,
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
@@ -27,7 +26,6 @@ const nextConfig = {
 		ignoreBuildErrors: true,
 	},
 	experimental: {
-		instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",

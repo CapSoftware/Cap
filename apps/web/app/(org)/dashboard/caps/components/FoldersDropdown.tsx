@@ -16,7 +16,7 @@ interface FoldersDropdownProps {
 	id: string;
 	setIsRenaming: (isRenaming: boolean) => void;
 	setConfirmDeleteFolderOpen: (open: boolean) => void;
-	nameRef: RefObject<HTMLTextAreaElement>;
+	nameRef: RefObject<HTMLTextAreaElement | null>;
 	parentId?: string | null;
 }
 
