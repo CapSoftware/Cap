@@ -439,7 +439,7 @@ const NormalLogin = ({
 			</motion.div>
 			<motion.p
 				layout="position"
-				className="mt-3 text-xs text-center text-gray-9"
+				className="mt-3 mb-2 text-xs text-center text-gray-9"
 			>
 				Don't have an account?{" "}
 				<Link
