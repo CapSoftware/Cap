@@ -803,26 +803,29 @@ async fn handle_recording_finish(
                                 }
                             }
                         } else {
-                            let meta = build_video_meta(&output_path).ok();
-                            // The upload_video function handles screenshot upload, so we can pass it along
-                            match upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                Some(video_upload_info.config.clone()),
-                                Some(display_screenshot.clone()),
-                                meta,
-                                None,
-                            )
-                            .await
+                            if let Ok(meta) = build_video_meta(&output_path)
+                                .map_err(|err| error!("Error getting video metdata: {}", err))
                             {
-                                Ok(_) => {
-                                    info!(
-                                        "Final video upload with screenshot completed successfully"
-                                    )
-                                }
-                                Err(e) => {
-                                    error!("Error in final upload with screenshot: {}", e)
+                                // The upload_video function handles screenshot upload, so we can pass it along
+                                match upload_video(
+                                    &app,
+                                    video_upload_info.id.clone(),
+                                    output_path,
+                                    display_screenshot.clone(),
+                                    video_upload_info.config.clone(),
+                                    meta,
+                                    None,
+                                )
+                                .await
+                                {
+                                    Ok(_) => {
+                                        info!(
+                                            "Final video upload with screenshot completed successfully"
+                                        )
+                                    }
+                                    Err(e) => {
+                                        error!("Error in final upload with screenshot: {}", e)
+                                    }
                                 }
                             }
                         }

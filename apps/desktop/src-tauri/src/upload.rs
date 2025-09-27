@@ -34,53 +34,10 @@ pub struct CreateErrorResponse {
     error: String,
 }
 
-// fn deserialize_empty_object_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-// where
-//     D: Deserializer<'de>,
-// {
-//     struct StringOrObject;
-
-//     impl<'de> de::Visitor<'de> for StringOrObject {
-//         type Value = String;
-
-//         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-//             formatter.write_str("string or empty object")
-//         }
-
-//         fn visit_str<E>(self, value: &str) -> Result<String, E>
-//         where
-//             E: de::Error,
-//         {
-//             Ok(value.to_string())
-//         }
-
-//         fn visit_string<E>(self, value: String) -> Result<String, E>
-//         where
-//             E: de::Error,
-//         {
-//             Ok(value)
-//         }
-
-//         fn visit_map<M>(self, _map: M) -> Result<String, M::Error>
-//         where
-//             M: de::MapAccess<'de>,
-//         {
-//             // Return empty string for empty objects
-//             Ok(String::new())
-//         }
-//     }
-
-//     deserializer.deserialize_any(StringOrObject)
-// }
-
 impl S3UploadMeta {
     pub fn id(&self) -> &str {
         &self.id
     }
-
-    // pub fn new(id: String) -> Self {
-    //     Self { id }
-    // }
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -105,12 +62,6 @@ pub struct UploadedImage {
     pub link: String,
     pub id: String,
 }
-
-// pub struct UploadedAudio {
-//     pub link: String,
-//     pub id: String,
-//     pub config: S3UploadMeta,
-// }
 
 pub struct UploadProgressUpdater {
     video_state: Option<VideoProgressState>,
@@ -212,18 +163,14 @@ pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
     file_path: PathBuf,
-    existing_config: Option<S3UploadMeta>,
-    screenshot_path: Option<PathBuf>,
-    meta: Option<S3VideoMeta>,
+    screenshot_path: PathBuf,
+    s3_config: S3UploadMeta,
+    meta: S3VideoMeta,
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedVideo, String> {
-    println!("Uploading video {video_id}...");
+    info!("Uploading video {video_id}...");
 
     let client = reqwest::Client::new();
-    let s3_config = match existing_config {
-        Some(config) => config,
-        None => create_or_get_video(app, false, Some(video_id.clone()), None, meta).await?,
-    };
 
     let presigned_put = presigned_s3_put(
         app,
@@ -231,7 +178,7 @@ pub async fn upload_video(
             video_id: video_id.clone(),
             subpath: "result.mp4".to_string(),
             method: PresignedS3PutRequestMethod::Put,
-            meta: Some(build_video_meta(&file_path)?),
+            meta: Some(meta),
         },
     )
     .await?;
@@ -270,12 +217,7 @@ pub async fn upload_video(
         }
     });
 
-    let screenshot_upload = match screenshot_path {
-        Some(screenshot_path) if screenshot_path.exists() => {
-            Some(prepare_screenshot_upload(app, &s3_config, screenshot_path))
-        }
-        _ => None,
-    };
+    let screenshot_upload = prepare_screenshot_upload(app, &s3_config, screenshot_path);
 
     let video_upload = client
         .put(presigned_put)
@@ -284,21 +226,15 @@ pub async fn upload_video(
 
     let (video_upload, screenshot_result): (
         Result<reqwest::Response, reqwest::Error>,
-        Option<Result<reqwest::Response, String>>,
-    ) = tokio::join!(video_upload.send(), async {
-        if let Some(screenshot_req) = screenshot_upload {
-            Some(screenshot_req.await)
-        } else {
-            None
-        }
-    });
+        Result<reqwest::Response, String>,
+    ) = tokio::join!(video_upload.send(), screenshot_upload);
 
     let response = video_upload.map_err(|e| format!("Failed to send upload file request: {e}"))?;
 
     if response.status().is_success() {
         println!("Video uploaded successfully");
 
-        if let Some(Ok(screenshot_response)) = screenshot_result {
+        if let Ok(screenshot_response) = screenshot_result {
             if screenshot_response.status().is_success() {
                 println!("Screenshot uploaded successfully");
             } else {

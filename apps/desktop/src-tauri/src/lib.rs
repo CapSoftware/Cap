@@ -1111,9 +1111,9 @@ async fn upload_exported_video(
         &app,
         upload_id.clone(),
         output_path,
-        Some(s3_config),
-        Some(meta.project_path.join("screenshots/display.jpg")),
-        Some(metadata),
+        meta.project_path.join("screenshots/display.jpg"),
+        s3_config,
+        metadata,
         Some(channel.clone()),
     )
     .await
