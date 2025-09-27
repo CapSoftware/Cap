@@ -16,10 +16,12 @@ struct CacheState {
     warmup: Mutex<Option<WarmupTask>>,
 }
 
+type WarmupResult = Result<(), arc::R<ns::Error>>;
+
 #[derive(Clone)]
 struct WarmupTask {
     notify: Arc<Notify>,
-    result: Arc<Mutex<Option<Result<(), arc::R<ns::Error>>>>>,
+    result: Arc<Mutex<Option<WarmupResult>>>,
 }
 
 static STATE: OnceLock<CacheState> = OnceLock::new();
@@ -51,14 +53,12 @@ pub(super) async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>>
     };
 
     warmup.notify.notified().await;
-    let result = warmup
+    warmup
         .result
         .lock()
         .await
         .clone()
-        .expect("ScreenCaptureKit warmup task missing result");
-
-    result
+        .expect("ScreenCaptureKit warmup task missing result")
 }
 
 async fn run_warmup(task: WarmupTask) {
@@ -90,10 +90,10 @@ async fn run_warmup(task: WarmupTask) {
     task.notify.notify_waiters();
 
     let mut guard = state().warmup.lock().await;
-    if let Some(current) = guard.as_ref() {
-        if Arc::ptr_eq(&current.notify, &task.notify) {
-            *guard = None;
-        }
+    if let Some(current) = guard.as_ref()
+        && Arc::ptr_eq(&current.notify, &task.notify)
+    {
+        *guard = None;
     }
 }
 

@@ -122,10 +122,14 @@ impl PipelineBuilder {
         // TODO: Shut down tasks if launch failed.
         for (name, task) in tasks.into_iter() {
             // TODO: Wait for these in parallel?
-            tokio::time::timeout(Duration::from_secs(15), task.ready_signal.recv_async())
-                .await
-                .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
-                .map_err(|e| MediaError::TaskLaunch(format!("'{name}' build / {e}")))??;
+            let launch_timeout = if cfg!(target_os = "macos") { 15 } else { 5 };
+            tokio::time::timeout(
+                Duration::from_secs(launch_timeout),
+                task.ready_signal.recv_async(),
+            )
+            .await
+            .map_err(|_| MediaError::TaskLaunch(format!("task timed out: '{name}'")))?
+            .map_err(|e| MediaError::TaskLaunch(format!("'{name}' build / {e}")))??;
 
             task_handles.insert(name.clone(), task.join_handle);
             stop_rx.push(task.done_rx);

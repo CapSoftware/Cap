@@ -223,8 +223,7 @@ impl DisplayImpl {
             }
         };
 
-        let windows = windows.into_iter().collect::<Vec<_>>();
-        let excluded_windows = ns::Array::from_slice_retained(windows.as_slice());
+        let excluded_windows = ns::Array::from_slice_retained(&windows);
 
         let filter =
             sc::ContentFilter::with_display_excluding_windows(display.as_ref(), &excluded_windows);
