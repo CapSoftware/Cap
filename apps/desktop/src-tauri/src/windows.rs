@@ -21,12 +21,15 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, warn};
 
 use crate::{
-    App, ArcLock, RequestScreenCapturePrewarm, ScreenCapturePrewarmer, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
     general_settings::{AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
 };
+
+#[cfg(target_os = "macos")]
+use crate::ScreenCapturePrewarmer;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
