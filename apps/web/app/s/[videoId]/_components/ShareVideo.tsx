@@ -116,7 +116,7 @@ export const ShareVideo = forwardRef<
 				setSubtitleUrl(null);
 			}
 		}
-	}, [data.transcriptionStatus, transcriptData, subtitleUrl]);
+	}, [data.transcriptionStatus, transcriptData]);
 
 	// Handle chapters URL creation
 	useEffect(() => {
@@ -142,7 +142,7 @@ export const ShareVideo = forwardRef<
 				setChaptersUrl(null);
 			}
 		}
-	}, [chapters, chaptersUrl]);
+	}, [chapters]);
 
 	let videoSrc: string;
 	let enableCrossOrigin = false;
