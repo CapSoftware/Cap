@@ -787,6 +787,21 @@ pub async fn create_screen_capture(
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
 
+    #[cfg(target_os = "macos")]
+    {
+        let warm_start = std::time::Instant::now();
+        match scap_targets::prewarm_shareable_content().await {
+            Ok(()) => tracing::trace!(
+                elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0,
+                "ScreenCaptureKit cache ensured before capture"
+            ),
+            Err(error) => tracing::warn!(
+                error = %error,
+                "ScreenCaptureKit prewarm failed before capture"
+            ),
+        }
+    }
+
     ScreenCaptureSource::<ScreenCaptureMethod>::init(
         capture_target,
         force_show_cursor,

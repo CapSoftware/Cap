@@ -7490,6 +7490,7 @@ dependencies = [
  "objc",
  "serde",
  "specta",
+ "tokio",
  "tracing",
  "windows 0.60.0",
 ]

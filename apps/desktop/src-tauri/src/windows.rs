@@ -16,16 +16,20 @@ use tauri::{
     AppHandle, LogicalPosition, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, Wry,
 };
+use tauri_specta::Event;
 use tokio::sync::RwLock;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
-    App, ArcLock, fake_window,
+    App, ArcLock, RequestScreenCapturePrewarm, fake_window,
     general_settings::{AppTheme, GeneralSettingsStore},
     permissions,
     recording_settings::RecordingTargetMode,
     target_select_overlay::WindowFocusManager,
 };
+
+#[cfg(target_os = "macos")]
+use crate::ScreenCapturePrewarmer;
 
 #[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
@@ -272,6 +276,19 @@ impl ShowCapWindow {
                 if new_recording_flow {
                     #[cfg(target_os = "macos")]
                     crate::platform::set_window_level(window.as_ref().window(), 50);
+                }
+
+                #[cfg(target_os = "macos")]
+                {
+                    let app_handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let prewarmer = app_handle.state::<ScreenCapturePrewarmer>();
+                        prewarmer.request(false).await;
+                    });
+
+                    if let Err(error) = (RequestScreenCapturePrewarm { force: false }).emit(app) {
+                        warn!(%error, "Failed to emit ScreenCaptureKit prewarm event");
+                    }
                 }
 
                 window
