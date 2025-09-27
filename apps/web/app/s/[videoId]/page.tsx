@@ -365,13 +365,6 @@ async function AuthorizedContent({
 
 	if (user && video && user.id !== video.ownerId) {
 		try {
-			// Add debugging to see what videoId we're using
-			console.log(
-				"Creating view notification for videoId:",
-				video.id,
-				"userId:",
-				user.id,
-			);
 			await createNotification({
 				type: "view",
 				videoId: video.id,
