@@ -79,6 +79,8 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+#[cfg(target_os = "macos")]
+use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
@@ -321,10 +323,91 @@ pub struct RequestOpenSettings {
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScreenCapturePrewarm {
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct NewNotification {
     title: String,
     body: String,
     is_error: bool,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrewarmState {
+    Idle,
+    Warming,
+    Warmed,
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) struct ScreenCapturePrewarmer {
+    state: Mutex<PrewarmState>,
+}
+
+#[cfg(target_os = "macos")]
+impl Default for ScreenCapturePrewarmer {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(PrewarmState::Idle),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ScreenCapturePrewarmer {
+    async fn request(&self, force: bool) {
+        let should_start = {
+            let mut state = self.state.lock().await;
+
+            if force {
+                *state = PrewarmState::Idle;
+            }
+
+            match *state {
+                PrewarmState::Idle => {
+                    *state = PrewarmState::Warming;
+                    true
+                }
+                PrewarmState::Warming => {
+                    trace!("ScreenCaptureKit prewarm already in progress");
+                    false
+                }
+                PrewarmState::Warmed => {
+                    if force {
+                        *state = PrewarmState::Warming;
+                        true
+                    } else {
+                        trace!("ScreenCaptureKit cache already warmed");
+                        false
+                    }
+                }
+            }
+        };
+
+        if !should_start {
+            return;
+        }
+
+        let warm_start = std::time::Instant::now();
+        let result = scap_targets::prewarm_shareable_content().await;
+
+        let mut state = self.state.lock().await;
+        match result {
+            Ok(()) => {
+                let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
+                *state = PrewarmState::Warmed;
+                trace!(elapsed_ms, "ScreenCaptureKit cache warmed");
+            }
+            Err(error) => {
+                *state = PrewarmState::Idle;
+                tracing::warn!(error = %error, "ScreenCaptureKit prewarm failed");
+            }
+        }
+    }
 }
 
 type ArcLock<T> = Arc<RwLock<T>>;
@@ -1937,6 +2020,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RequestOpenRecordingPicker,
             RequestNewScreenshot,
             RequestOpenSettings,
+            RequestScreenCapturePrewarm,
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
@@ -2075,6 +2159,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            #[cfg(target_os = "macos")]
+            app.manage(ScreenCapturePrewarmer::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2202,6 +2288,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
                 .show(&app)
                 .await;
+            });
+
+            #[cfg(target_os = "macos")]
+            RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
+                let prewarmer = app.state::<ScreenCapturePrewarmer>();
+                prewarmer.request(event.force).await;
             });
 
             let app_handle = app.clone();

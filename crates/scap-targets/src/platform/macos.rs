@@ -15,6 +15,13 @@ use core_graphics::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use tracing::{trace, warn};
+
+mod cache;
+
+pub async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
+    cache::prewarm_shareable_content().await
+}
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -174,13 +181,17 @@ impl DisplayImpl {
 
 impl DisplayImpl {
     pub async fn as_sc(&self) -> Option<arc::R<sc::Display>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
-            .displays()
-            .iter()
-            .find(|d| d.display_id().0 == self.0.id)
-            .map(|v| v.retained())
+        match cache::get_display(self.0.id).await {
+            Ok(display) => display,
+            Err(error) => {
+                warn!(
+                    display_id = self.0.id,
+                    error = %error,
+                    "Failed to access ScreenCaptureKit display cache"
+                );
+                None
+            }
+        }
     }
 
     pub async fn as_content_filter(&self) -> Option<arc::R<sc::ContentFilter>> {
@@ -191,13 +202,40 @@ impl DisplayImpl {
         &self,
         windows: Vec<arc::R<sc::Window>>,
     ) -> Option<arc::R<sc::ContentFilter>> {
-        let excluded_windows =
-            ns::Array::from_slice_retained(windows.into_iter().collect::<Vec<_>>().as_slice());
+        let lookup_start = std::time::Instant::now();
 
-        Some(sc::ContentFilter::with_display_excluding_windows(
-            self.as_sc().await?.as_ref(),
-            &excluded_windows,
-        ))
+        let display = match cache::get_display(self.0.id).await {
+            Ok(Some(display)) => display,
+            Ok(None) => {
+                warn!(
+                    display_id = self.0.id,
+                    "Display missing from ScreenCaptureKit cache"
+                );
+                return None;
+            }
+            Err(error) => {
+                warn!(
+                    display_id = self.0.id,
+                    error = %error,
+                    "Failed to resolve ScreenCaptureKit display"
+                );
+                return None;
+            }
+        };
+
+        let windows = windows.into_iter().collect::<Vec<_>>();
+        let excluded_windows = ns::Array::from_slice_retained(windows.as_slice());
+
+        let filter =
+            sc::ContentFilter::with_display_excluding_windows(display.as_ref(), &excluded_windows);
+
+        trace!(
+            display_id = self.0.id,
+            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
+            "Created ScreenCaptureKit content filter"
+        );
+
+        Some(filter)
     }
 }
 
@@ -449,13 +487,17 @@ impl WindowImpl {
     }
 
     pub async fn as_sc(&self) -> Option<arc::R<sc::Window>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
-            .windows()
-            .iter()
-            .find(|w| w.id() == self.0)
-            .map(|v| v.retained())
+        match cache::get_window(self.0).await {
+            Ok(window) => window,
+            Err(error) => {
+                warn!(
+                    window_id = self.0,
+                    error = %error,
+                    "Failed to access ScreenCaptureKit window cache"
+                );
+                None
+            }
+        }
     }
 
     pub fn display(&self) -> Option<DisplayImpl> {

@@ -18,6 +18,7 @@ core-graphics = "0.24.0"
 core-foundation = "0.10.0"
 cocoa = "0.26.0"
 objc = "0.2.7"
+tokio = { workspace = true, features = ["sync"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
