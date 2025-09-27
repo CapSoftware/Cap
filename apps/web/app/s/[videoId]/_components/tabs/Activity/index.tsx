@@ -3,7 +3,13 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { Video } from "@cap/web-domain";
 import type React from "react";
-import { forwardRef, type JSX, Suspense, useState } from "react";
+import {
+	forwardRef,
+	type JSX,
+	type RefObject,
+	Suspense,
+	useState,
+} from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import type { CommentType } from "../../../Share";
 import { AuthOverlay } from "../../AuthOverlay";
@@ -21,6 +27,7 @@ interface ActivityProps {
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;
+	playerRef: RefObject<HTMLVideoElement | null>;
 }
 
 export const Activity = Object.assign(
@@ -30,6 +37,7 @@ export const Activity = Object.assign(
 				user,
 				videoId,
 				isOwnerOrMember,
+				playerRef,
 				comments,
 				handleCommentSuccess,
 				optimisticComments,
@@ -65,6 +73,7 @@ export const Activity = Object.assign(
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
 							onSeek={props.onSeek}
+							playerRef={playerRef}
 						/>
 					)}
 				</Activity.Shell>

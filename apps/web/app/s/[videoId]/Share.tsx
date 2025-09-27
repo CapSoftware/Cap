@@ -261,6 +261,7 @@ export const Share = ({
 						<Toolbar
 							onOptimisticComment={handleOptimisticComment}
 							onCommentSuccess={handleCommentSuccess}
+							playerRef={playerRef}
 							data={data}
 							user={user}
 						/>
@@ -274,6 +275,7 @@ export const Share = ({
 							createdAt: effectiveDate,
 							transcriptionStatus,
 						}}
+						playerRef={playerRef}
 						user={user}
 						commentsData={commentsData}
 						setCommentsData={setCommentsData}
@@ -297,6 +299,7 @@ export const Share = ({
 						onCommentSuccess={handleCommentSuccess}
 						data={data}
 						user={user}
+						playerRef={playerRef}
 					/>
 				</div>
 			</div>

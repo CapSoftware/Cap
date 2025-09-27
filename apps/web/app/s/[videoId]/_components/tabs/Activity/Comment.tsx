@@ -94,7 +94,7 @@ const Comment: React.FC<{
 					transition={{ duration: 0.75, ease: "easeInOut", delay: 0.15 }}
 					className={"flex-1 p-3 rounded-xl border border-gray-3 bg-gray-2"}
 				>
-					<div className="flex justify-between items-center">
+					<div className="flex gap-3 justify-between items-center">
 						<p className="text-sm font-medium truncate text-gray-12">
 							{comment.authorName || "Anonymous"}
 						</p>
