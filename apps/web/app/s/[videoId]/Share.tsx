@@ -214,9 +214,56 @@ export const Share = ({
 	const aiLoading = shouldShowLoading();
 
 	const handleSeek = useCallback((time: number) => {
-		if (playerRef.current) {
-			playerRef.current.currentTime = time;
+		let video = playerRef.current;
+
+		// Fallback to DOM query if ref is not available
+		if (!video) {
+			video = document.querySelector("video") as HTMLVideoElement;
+			if (!video) {
+				console.warn("Video player not ready");
+				return;
+			}
 		}
+
+		// Try to seek immediately if video has metadata
+		if (video.readyState >= 1) {
+			// HAVE_METADATA
+			try {
+				video.currentTime = time;
+				return;
+			} catch (error) {
+				console.error("Failed to seek video:", error);
+			}
+		}
+
+		// If video isn't ready, wait for it to be ready
+		const handleCanPlay = () => {
+			try {
+				video.currentTime = time;
+			} catch (error) {
+				console.error("Failed to seek video after canplay:", error);
+			}
+			video.removeEventListener("canplay", handleCanPlay);
+		};
+
+		const handleLoadedMetadata = () => {
+			try {
+				video.currentTime = time;
+			} catch (error) {
+				console.error("Failed to seek video after loadedmetadata:", error);
+			}
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		};
+
+		// Listen for multiple events to ensure we catch when the video is ready
+		video.addEventListener("canplay", handleCanPlay);
+		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+		// Cleanup after 3 seconds if events don't fire
+		setTimeout(() => {
+			video.removeEventListener("canplay", handleCanPlay);
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		}, 3000);
 	}, []);
 
 	const handleOptimisticComment = useCallback(
@@ -252,7 +299,6 @@ export const Share = ({
 								comments={comments}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
-								onSeek={handleSeek}
 								ref={playerRef}
 							/>
 						</div>

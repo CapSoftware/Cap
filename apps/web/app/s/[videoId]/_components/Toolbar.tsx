@@ -2,7 +2,13 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
 import { AnimatePresence, motion } from "motion/react";
-import { type RefObject, startTransition, useEffect, useState } from "react";
+import {
+	type RefObject,
+	startTransition,
+	useCallback,
+	useEffect,
+	useState,
+} from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
@@ -28,37 +34,10 @@ export const Toolbar = ({
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
-	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(
-		null,
-	);
-
-	useEffect(() => {
-		const checkForVideoElement = () => {
-			const element = document.getElementById(
-				"video-player",
-			) as HTMLVideoElement | null;
-			if (element) {
-				setVideoElement(element);
-			} else {
-				setTimeout(checkForVideoElement, 100); // Check again after 100ms
-			}
-		};
-
-		checkForVideoElement();
-	}, []);
-
-	const getTimestamp = (): number => {
-		if (videoElement) {
-			return videoElement.currentTime;
-		}
-		console.warn("Video element not available, using default timestamp");
-		return 0;
-	};
+	const videoElement = playerRef.current;
 
 	const handleEmojiClick = async (emoji: string) => {
-		const currentTime = playerRef?.current?.currentTime || 0;
-		console.log("playerRef", playerRef);
-		console.log("currentTime", currentTime);
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -98,7 +77,7 @@ export const Toolbar = ({
 		if (comment.length === 0) {
 			return;
 		}
-		const currentTime = playerRef?.current?.currentTime || 0;
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -240,8 +219,8 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									{videoElement && getTimestamp() > 0
-										? `Comment at ${getTimestamp().toFixed(2)}`
+									{videoElement && videoElement.currentTime > 0
+										? `Comment at ${videoElement.currentTime.toFixed(2)}`
 										: "Comment"}
 								</MotionButton>
 								<MotionButton

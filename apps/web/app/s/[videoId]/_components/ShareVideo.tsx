@@ -41,11 +41,10 @@ export const ShareVideo = forwardRef<
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		aiProcessing?: boolean;
-		onSeek?: (time: number) => void;
 	}
->(({ data, comments, chapters = [], onSeek }, ref) => {
+>(({ data, comments, chapters = [] }, ref) => {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
-	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
