@@ -32,22 +32,48 @@ export async function createNotification(
 	notification: CreateNotificationInput,
 ) {
 	try {
-		// First, get the video and owner data
-		const [videoResult] = await db()
-			.select({
-				videoId: videos.id,
-				ownerId: users.id,
-				activeOrganizationId: users.activeOrganizationId,
-				preferences: users.preferences,
-			})
+		// First, check if the video exists
+		const [videoExists] = await db()
+			.select({ id: videos.id, ownerId: videos.ownerId })
 			.from(videos)
-			.innerJoin(users, eq(users.id, videos.ownerId))
 			.where(eq(videos.id, Video.VideoId.make(notification.videoId)))
 			.limit(1);
 
-		if (!videoResult) {
-			throw new Error("Video or owner not found");
+		if (!videoExists) {
+			console.error("Video not found for videoId:", notification.videoId);
+			throw new Error(`Video not found for videoId: ${notification.videoId}`);
 		}
+
+		// Then get the owner data
+		const [ownerResult] = await db()
+			.select({
+				id: users.id,
+				activeOrganizationId: users.activeOrganizationId,
+				preferences: users.preferences,
+			})
+			.from(users)
+			.where(eq(users.id, videoExists.ownerId))
+			.limit(1);
+
+		if (!ownerResult) {
+			console.warn(
+				"Owner not found for videoId:",
+				notification.videoId,
+				"ownerId:",
+				videoExists.ownerId,
+				"- skipping notification creation",
+			);
+			// Don't throw an error, just skip notification creation
+			// This handles cases where the video exists but the owner was deleted
+			return;
+		}
+
+		const videoResult = {
+			videoId: videoExists.id,
+			ownerId: ownerResult.id,
+			activeOrganizationId: ownerResult.activeOrganizationId,
+			preferences: ownerResult.preferences,
+		};
 
 		const { type, ...data } = notification;
 
