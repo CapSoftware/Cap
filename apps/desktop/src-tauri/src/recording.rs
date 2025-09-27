@@ -250,7 +250,7 @@ pub async fn start_recording(
             match AuthStore::get(&app).ok().flatten() {
                 Some(_) => {
                     // Pre-create the video and get the shareable link
-                    if let Ok(s3_config) = create_or_get_video(
+                    let s3_config = create_or_get_video(
                         &app,
                         false,
                         None,
@@ -261,18 +261,19 @@ pub async fn start_recording(
                         None,
                     )
                     .await
-                    {
-                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
-                        info!("Pre-created shareable link: {}", link);
+                    .map_err(|err| {
+                        error!("Error creating instant mode video: {err}");
+                        err
+                    })?;
 
-                        Some(VideoUploadInfo {
-                            id: s3_config.id().to_string(),
-                            link: link.clone(),
-                            config: s3_config,
-                        })
-                    } else {
-                        None
-                    }
+                    let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
+                    info!("Pre-created shareable link: {}", link);
+
+                    Some(VideoUploadInfo {
+                        id: s3_config.id().to_string(),
+                        link: link.clone(),
+                        config: s3_config,
+                    })
                 }
                 // Allow the recording to proceed without error for any signed-in user
                 _ => {

@@ -85,7 +85,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,7 +93,6 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
@@ -271,6 +270,38 @@ app.post(
 		const user = c.get("user");
 		const videoId = Video.VideoId.make(videoIdRaw);
 
+		console.log("Progress update request:", {
+			videoId: videoIdRaw,
+			uploaded: uploadedRaw,
+			total,
+			userId: user.id,
+			updatedAt,
+		});
+
+		// Validate inputs
+		if (total < 0) {
+			console.error("Invalid total size:", total);
+			return c.json(
+				{ error: true, message: "Invalid total size" },
+				{ status: 400 },
+			);
+		}
+
+		if (uploadedRaw < 0) {
+			console.error("Invalid uploaded size:", uploadedRaw);
+			return c.json(
+				{ error: true, message: "Invalid uploaded size" },
+				{ status: 400 },
+			);
+		}
+
+		if (total === 0 && uploadedRaw > 0) {
+			console.warn("Total is 0 but uploaded is greater than 0:", {
+				uploaded: uploadedRaw,
+				total,
+			});
+		}
+
 		// Prevent it maths breaking
 		const uploaded = Math.min(uploadedRaw, total);
 
@@ -299,18 +330,35 @@ app.post(
 					),
 				);
 
-			if (result.rowsAffected === 0)
+			if (result.rowsAffected === 0) {
+				console.log("No existing progress record, inserting new one:", {
+					videoId: videoIdRaw,
+					uploaded,
+					total,
+				});
 				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
+			} else {
+				console.log("Updated existing progress record:", {
+					videoId: videoIdRaw,
+					uploaded,
+					total,
+					rowsAffected: result.rowsAffected,
+				});
+			}
 
-			if (uploaded === total)
+			if (uploaded === total) {
+				console.log("Upload completed, cleaning up progress record:", {
+					videoId: videoIdRaw,
+				});
 				await db()
 					.delete(videoUploads)
 					.where(eq(videoUploads.videoId, videoId));
+			}
 
 			return c.json(true);
 		} catch (error) {

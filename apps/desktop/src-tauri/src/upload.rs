@@ -135,12 +135,37 @@ impl UploadProgressUpdater {
     }
 
     pub fn update(&mut self, uploaded: u64, total: u64) {
+        // Safety checks for edge cases
+        if total == 0 && uploaded == 0 {
+            debug!("Skipping progress update with both uploaded and total as 0");
+            return;
+        }
+
+        let clamped_uploaded = uploaded.min(total);
+
+        debug!(
+            "Progress update: {}/{} bytes ({:.1}%)",
+            clamped_uploaded,
+            total,
+            if total > 0 {
+                (clamped_uploaded as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            }
+        );
+
         let should_send_immediately = {
-            let state = self.video_state.get_or_insert_with(|| VideoProgressState {
-                uploaded,
-                total,
-                pending_task: None,
-                last_update_time: Instant::now(),
+            let state = self.video_state.get_or_insert_with(|| {
+                debug!(
+                    "Initializing progress state with {}/{} bytes",
+                    clamped_uploaded, total
+                );
+                VideoProgressState {
+                    uploaded: clamped_uploaded,
+                    total,
+                    pending_task: None,
+                    last_update_time: Instant::now(),
+                }
             });
 
             // Cancel any pending task
@@ -148,12 +173,20 @@ impl UploadProgressUpdater {
                 handle.abort();
             }
 
-            state.uploaded = uploaded;
+            // Only update if we have meaningful progress or completion
+            let has_meaningful_change = clamped_uploaded != state.uploaded || total != state.total;
+
+            if !has_meaningful_change {
+                debug!("No meaningful progress change, skipping update");
+                return;
+            }
+
+            state.uploaded = clamped_uploaded;
             state.total = total;
             state.last_update_time = Instant::now();
 
             // Send immediately if upload is complete
-            uploaded >= total
+            clamped_uploaded >= total && total > 0
         };
 
         let app = self.app.clone();
@@ -161,19 +194,19 @@ impl UploadProgressUpdater {
             tokio::spawn({
                 let video_id = self.video_id.clone();
                 async move {
-                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                    Self::send_api_update(&app, video_id, clamped_uploaded, total).await;
                 }
             });
 
             // Clear state since upload is complete
             self.video_state = None;
-        } else {
-            // Schedule delayed update
+        } else if total > 0 {
+            // Only schedule delayed update if we have a valid total
             let handle = {
                 let video_id = self.video_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                    Self::send_api_update(&app, video_id, clamped_uploaded, total).await;
                 })
             };
 
@@ -184,26 +217,41 @@ impl UploadProgressUpdater {
     }
 
     async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
+        debug!("\tUploadProgressUpdater::send_api_update({video_id}, {uploaded}, {total})");
+
         let response = app
             .authed_api_request("/api/desktop/video/progress", |client, url| {
-                client
-                    .post(url)
-                    .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
-                    .json(&json!({
-                        "videoId": video_id,
-                        "uploaded": uploaded,
-                        "total": total,
-                        "updatedAt": chrono::Utc::now().to_rfc3339()
-                    }))
+                client.post(url).json(&json!({
+                    "videoId": video_id,
+                    "uploaded": uploaded,
+                    "total": total,
+                    "updatedAt": chrono::Utc::now().to_rfc3339()
+                }))
             })
             .await;
 
         match response {
             Ok(resp) if resp.status().is_success() => {
-                trace!("Progress update sent successfully");
+                trace!(
+                    "Progress update sent successfully: {}/{} bytes",
+                    uploaded, total
+                );
             }
-            Ok(resp) => error!("Failed to send progress update: {}", resp.status()),
-            Err(err) => error!("Failed to send progress update: {err}"),
+            Ok(resp) => {
+                error!(
+                    "Failed to send progress update: {} - {}/{} bytes",
+                    resp.status(),
+                    uploaded,
+                    total
+                );
+                if let Ok(body) = resp.text().await {
+                    error!("Response body: {}", body);
+                }
+            }
+            Err(err) => error!(
+                "Failed to send progress update: {err} - {}/{} bytes",
+                uploaded, total
+            ),
         }
     }
 }
@@ -259,9 +307,14 @@ pub async fn upload_video(
 
         if bytes_uploaded > 0 {
             if let Some(channel) = &channel {
+                let progress_value = if total_size > 0 {
+                    bytes_uploaded as f64 / total_size as f64
+                } else {
+                    0.0
+                };
                 channel
                     .send(UploadProgress {
-                        progress: bytes_uploaded as f64 / total_size as f64,
+                        progress: progress_value,
                     })
                     .ok();
             }
@@ -760,6 +813,17 @@ impl InstantMultipartUpload {
                 }
             };
 
+            // Skip if file size is 0
+            if file_size == 0 {
+                if realtime_is_done.unwrap_or(false) {
+                    error!("File size is 0 after recording completed");
+                    return Err("File size is 0 after recording completed".to_string());
+                }
+                debug!("File size is still 0, waiting for recording to write data...");
+                sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+
             let new_data_size = file_size - last_uploaded_position;
 
             if ((new_data_size >= CHUNK_SIZE)
@@ -857,6 +921,11 @@ impl InstantMultipartUpload {
             Err(e) => return Err(format!("Failed to get file metadata: {e}")),
         };
 
+        // Check if file size is 0
+        if file_size == 0 {
+            return Err("File size is 0, cannot upload".to_string());
+        }
+
         // Check if we're at the end of the file
         if *last_uploaded_position >= file_size {
             return Err("No more data to read - already at end of file".to_string());
@@ -866,6 +935,7 @@ impl InstantMultipartUpload {
         let remaining = file_size - *last_uploaded_position;
         let bytes_to_read = std::cmp::min(chunk_size, remaining);
 
+        // TODO: Surely we can reuse this
         let mut file = tokio::fs::File::open(file_path)
             .await
             .map_err(|e| format!("Failed to open file: {e}"))?;
@@ -925,6 +995,7 @@ impl InstantMultipartUpload {
             );
         }
 
+        // TODO: Shouldn't this be inferable?
         let file_size = tokio::fs::metadata(file_path)
             .await
             .map(|m| m.len())
@@ -962,8 +1033,6 @@ impl InstantMultipartUpload {
                 ));
             }
         };
-
-        progress.update(expected_pos, file_size);
 
         if !presign_response.status().is_success() {
             let status = presign_response.status();
@@ -1068,10 +1137,19 @@ impl InstantMultipartUpload {
 
         // Advance the global progress
         *last_uploaded_position += total_read as u64;
-        println!(
-            "After upload: new last_uploaded_position is {} ({}% of file)",
-            *last_uploaded_position,
+
+        // Update progress after successful upload
+        progress.update(*last_uploaded_position, file_size);
+
+        let progress_percent = if file_size > 0 {
             (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
+        } else {
+            0
+        };
+
+        println!(
+            "After upload: new last_uploaded_position is {} ({}% of file, {}/{} bytes)",
+            *last_uploaded_position, progress_percent, *last_uploaded_position, file_size
         );
 
         let part = UploadedPart {
