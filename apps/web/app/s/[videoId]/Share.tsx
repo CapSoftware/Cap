@@ -221,7 +221,9 @@ export const Share = ({
 
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
-			setOptimisticComments(comment);
+			startTransition(() => {
+				setOptimisticComments(comment);
+			});
 			setTimeout(() => {
 				activityRef.current?.scrollToBottom();
 			}, 100);
