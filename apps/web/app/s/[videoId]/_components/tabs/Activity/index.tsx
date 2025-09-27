@@ -27,7 +27,6 @@ interface ActivityProps {
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;
-	playerRef: RefObject<HTMLVideoElement | null>;
 }
 
 export const Activity = Object.assign(
@@ -37,7 +36,6 @@ export const Activity = Object.assign(
 				user,
 				videoId,
 				isOwnerOrMember,
-				playerRef,
 				comments,
 				handleCommentSuccess,
 				optimisticComments,
@@ -73,7 +71,6 @@ export const Activity = Object.assign(
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
 							onSeek={props.onSeek}
-							playerRef={playerRef}
 						/>
 					)}
 				</Activity.Shell>

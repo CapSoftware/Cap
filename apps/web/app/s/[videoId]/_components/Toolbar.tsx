@@ -2,13 +2,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
 import { AnimatePresence, motion } from "motion/react";
-import {
-	type RefObject,
-	startTransition,
-	useCallback,
-	useEffect,
-	useState,
-} from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
@@ -21,7 +15,6 @@ interface ToolbarProps {
 	user: typeof userSelectProps | null;
 	onOptimisticComment?: (comment: CommentType) => void;
 	onCommentSuccess?: (comment: CommentType) => void;
-	playerRef: RefObject<HTMLVideoElement | null>;
 }
 
 export const Toolbar = ({
@@ -29,14 +22,13 @@ export const Toolbar = ({
 	user,
 	onOptimisticComment,
 	onCommentSuccess,
-	playerRef,
 }: ToolbarProps) => {
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
-	const videoElement = playerRef.current;
 
 	const handleEmojiClick = async (emoji: string) => {
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
@@ -77,6 +69,7 @@ export const Toolbar = ({
 		if (comment.length === 0) {
 			return;
 		}
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
@@ -147,6 +140,9 @@ export const Toolbar = ({
 					setShowAuthOverlay(true);
 					return;
 				}
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
 				if (videoElement) {
 					videoElement.pause();
 				}
@@ -158,13 +154,14 @@ export const Toolbar = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyPress);
 		};
-	}, [commentBoxOpen, user, videoElement]);
+	}, [commentBoxOpen, user]);
 
 	const handleCommentClick = () => {
 		if (!user) {
 			setShowAuthOverlay(true);
 			return;
 		}
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		if (videoElement) {
 			videoElement.pause();
 		}
@@ -219,9 +216,14 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									{videoElement && videoElement.currentTime > 0
-										? `Comment at ${videoElement.currentTime.toFixed(2)}`
-										: "Comment"}
+									{(() => {
+										const videoElement = document.querySelector(
+											"video",
+										) as HTMLVideoElement;
+										return videoElement && videoElement.currentTime > 0
+											? `Comment at ${videoElement.currentTime.toFixed(2)}`
+											: "Comment";
+									})()}
 								</MotionButton>
 								<MotionButton
 									variant="gray"

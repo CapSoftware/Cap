@@ -3,7 +3,7 @@ import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
 import { AnimatePresence, motion } from "framer-motion";
-import { forwardRef, type RefObject, Suspense, useState } from "react";
+import { forwardRef, Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -31,7 +31,6 @@ interface SidebarProps {
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
 	videoId: Video.VideoId;
-	playerRef: RefObject<HTMLVideoElement | null>;
 	aiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -76,7 +75,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			handleCommentSuccess,
 			setOptimisticComments,
 			views,
-			playerRef,
 			onSeek,
 			videoId,
 			aiData,
@@ -135,7 +133,6 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 								isOwnerOrMember={isOwnerOrMember}
 								onSeek={onSeek}
 								videoId={videoId}
-								playerRef={playerRef}
 							/>
 						</Suspense>
 					);

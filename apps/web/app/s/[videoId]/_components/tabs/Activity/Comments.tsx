@@ -7,7 +7,6 @@ import {
 	type ComponentProps,
 	forwardRef,
 	type PropsWithChildren,
-	type RefObject,
 	startTransition,
 	useCallback,
 	useEffect,
@@ -34,7 +33,6 @@ export const Comments = Object.assign(
 			handleCommentSuccess: (comment: CommentType) => void;
 			onSeek?: (time: number) => void;
 			setShowAuthOverlay: (v: boolean) => void;
-			playerRef: RefObject<HTMLVideoElement | null>;
 		}
 	>((props, ref) => {
 		const {
@@ -42,7 +40,6 @@ export const Comments = Object.assign(
 			setOptimisticComments,
 			setComments,
 			handleCommentSuccess,
-			playerRef,
 			onSeek,
 		} = props;
 		const commentParams = useSearchParams().get("comment");
@@ -78,7 +75,8 @@ export const Comments = Object.assign(
 
 		const handleNewComment = async (content: string) => {
 			// Get current video time from the video element
-			const currentTime = playerRef?.current?.currentTime || 0;
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
 
 			const optimisticComment: CommentType = {
 				id: `temp-${Date.now()}`,
@@ -114,7 +112,8 @@ export const Comments = Object.assign(
 
 		const handleReply = async (content: string) => {
 			if (!replyingTo) return;
-			const currentTime = playerRef?.current?.currentTime || 0;
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
 
 			const parentComment = optimisticComments.find((c) => c.id === replyingTo);
 			const actualParentId = parentComment?.parentCommentId
