@@ -526,15 +526,13 @@ export function CapVideoPlayer({
 					playsInline
 					autoPlay={autoplay}
 				>
-					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
-					{captionsSrc && (
-						<track
-							label="English"
-							kind="captions"
-							srcLang="en"
-							src={captionsSrc}
-						/>
-					)}
+					<track default kind="chapters" src={chaptersSrc || ""} />
+					<track
+						label="English"
+						kind="captions"
+						srcLang="en"
+						src={captionsSrc || ""}
+					/>
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
