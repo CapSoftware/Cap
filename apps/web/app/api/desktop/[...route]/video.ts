@@ -71,8 +71,6 @@ app.get(
 				.from(s3Buckets)
 				.where(eq(s3Buckets.ownerId, user.id));
 
-			console.log("User bucket:", customBucket ? "found" : "not found");
-
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
 				"default",
@@ -85,7 +83,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,7 +91,6 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
@@ -108,6 +105,7 @@ app.get(
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
+					orgId: undefined,
 					source:
 						recordingMode === "hls"
 							? { type: "local" as const }
