@@ -1,17 +1,14 @@
 "use client";
 
-import { Avatar, LogoSpinner } from "@cap/ui";
+import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import {
-	faChevronRight,
-	faComment,
-	faPlay,
-} from "@fortawesome/free-solid-svg-icons";
+import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import CommentStamp from "./CommentStamp";
 import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
@@ -68,6 +65,7 @@ export function CapVideoPlayer({
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
+	const [mainControlsVisible, setMainControlsVisible] = useState(false);
 	const [toggleCaptions, setToggleCaptions] = useState(true);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
@@ -590,7 +588,7 @@ export function CapVideoPlayer({
 						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
 						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
 						controlsVisible || videoRef.current?.paused
-							? "bottom-16 sm:bottom-20"
+							? "bottom-16 sm:bottom-24"
 							: "bottom-3 sm:bottom-12",
 					)}
 				>
@@ -603,7 +601,8 @@ export function CapVideoPlayer({
 			)}
 			<MediaPlayerVolumeIndicator />
 
-			{markersReady &&
+			{mainControlsVisible &&
+				markersReady &&
 				comments
 					.filter(
 						(comment) => comment && comment.timestamp !== null && comment.id,
@@ -615,67 +614,21 @@ export function CapVideoPlayer({
 						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
 
 						return (
-							<div
+							<CommentStamp
 								key={comment.id}
-								className="absolute z-20"
-								style={{
-									left: adjustedPosition,
-									transform: "translateX(-50%)",
-									bottom: "65px",
-								}}
-								onMouseEnter={() => handleMouseEnter(comment.id)}
-								onMouseLeave={handleMouseLeave}
-							>
-								{/* Comment marker */}
-								<button
-									type="button"
-									onClick={() => {
-										if (onSeek && comment.timestamp !== null) {
-											onSeek(Number(comment.timestamp));
-										}
-									}}
-									className="flex justify-center items-center bg-black rounded-full transition-all cursor-pointer size-6 hover:opacity-75"
-								>
-									{comment.type === "emoji" ? (
-										<span className="text-sm">{comment.content}</span>
-									) : (
-										<FontAwesomeIcon
-											icon={faComment}
-											className="text-white size-3"
-										/>
-									)}
-								</button>
-
-								{hoveredComment === comment.id && (
-									<div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 bg-black backdrop-blur-md rounded-lg px-3 py-2 shadow-lg min-w-[200px] max-w-[300px]">
-										{/* Arrow pointing down to marker */}
-										<div className="absolute top-full left-1/2 w-0 h-0 border-t-4 border-r-4 border-l-4 border-black transform -translate-x-1/2 border-l-transparent border-r-transparent"></div>
-
-										<div className="flex gap-2 items-center">
-											{/* User avatar/initial */}
-											<Avatar
-												className="size-6"
-												letterClass="text-sm"
-												name={comment.authorName}
-											/>
-											{/* Comment content */}
-											<div className="flex-1 min-w-0">
-												<div className="text-sm font-medium text-white truncate">
-													{comment.authorName || "Anonymous"}
-												</div>
-												<div className="text-xs truncate text-gray-11">
-													{comment.content}
-												</div>
-											</div>
-										</div>
-									</div>
-								)}
-							</div>
+								comment={comment}
+								adjustedPosition={adjustedPosition}
+								handleMouseEnter={handleMouseEnter}
+								handleMouseLeave={handleMouseLeave}
+								onSeek={onSeek}
+								hoveredComment={hoveredComment}
+							/>
 						);
 					})}
 
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
+				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
 				isUploadingOrFailed={isUploading || isUploadFailed}
 			>
 				<MediaPlayerControlsOverlay />

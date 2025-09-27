@@ -46,7 +46,7 @@ import {
 	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
-import { forwardRef } from "react";
+import { forwardRef, useCallback, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
@@ -877,16 +877,29 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 interface MediaPlayerControlsProps extends React.ComponentProps<"div"> {
 	asChild?: boolean;
 	isUploadingOrFailed?: boolean;
+	mainControlsVisible?: (arg: boolean) => void;
 }
 
 function MediaPlayerControls(props: MediaPlayerControlsProps) {
-	const { asChild, className, isUploadingOrFailed, ...controlsProps } = props;
+	const {
+		asChild,
+		className,
+		isUploadingOrFailed,
+		mainControlsVisible,
+		...controlsProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
 	const isFullscreen = useMediaSelector(
 		(state) => state.mediaIsFullscreen ?? false,
 	);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
+	// Call the callback whenever controlsVisible changes
+	useEffect(() => {
+		if (typeof mainControlsVisible === "function") {
+			mainControlsVisible(controlsVisible);
+		}
+	}, [mainControlsVisible, controlsVisible]);
 
 	const ControlsPrimitive = asChild ? Slot : "div";
 
@@ -2327,8 +2340,7 @@ function MediaPlayerVolume(props: MediaPlayerVolumeProps) {
 				className={cn(
 					"flex relative items-center select-none touch-none",
 					expandable
-						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100"
-						: "w-16",
+						? "w-0 opacity-0 transition-[width,opacity] duration-200 ease-in-out group-focus-within:w-16 group-focus-within:opacity-100 group-hover:w-16 group-hover:opacity-100":"w-16",
 					className,
 				)}
 				disabled={isDisabled}
