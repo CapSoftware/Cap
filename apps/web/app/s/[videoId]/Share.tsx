@@ -320,7 +320,6 @@ export const Share = ({
 							createdAt: effectiveDate,
 							transcriptionStatus,
 						}}
-						playerRef={playerRef}
 						user={user}
 						commentsData={commentsData}
 						setCommentsData={setCommentsData}

@@ -2,7 +2,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
 import { AnimatePresence, motion } from "motion/react";
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { startTransition, useEffect, useState } from "react";
 import { newComment } from "@/actions/videos/new-comment";
 import type { CommentType } from "../Share";
 import { AuthOverlay } from "./AuthOverlay";
@@ -216,14 +216,7 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									{(() => {
-										const videoElement = document.querySelector(
-											"video",
-										) as HTMLVideoElement;
-										return videoElement && videoElement.currentTime > 0
-											? `Comment at ${videoElement.currentTime.toFixed(2)}`
-											: "Comment";
-									})()}
+									Comment
 								</MotionButton>
 								<MotionButton
 									variant="gray"
