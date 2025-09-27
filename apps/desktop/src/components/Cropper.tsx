@@ -297,11 +297,11 @@ export default function Cropper(
 		if (min && max) {
 			if (min.x > max.x)
 				throw new Error(
-					`Cropper error: minSize.x (${min.x}) cannot be greater than maxSize.x (${max.x}).`,
+					`Cropper constraint error: minSize.x (${min.x}px) exceeds maxSize.x (${max.x}px). Please adjust the size constraints.`,
 				);
 			if (min.y > max.y)
 				throw new Error(
-					`Cropper error: minSize.y (${min.y}) cannot be greater than maxSize.y (${max.y}).`,
+					`Cropper constraint error: minSize.y (${min.y}px) exceeds maxSize.y (${max.y}px). Please adjust the size constraints.`,
 				);
 		}
 	});

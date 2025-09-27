@@ -111,6 +111,8 @@ function Inner() {
 	);
 	onCleanup(() => unsubOnEscapePress.then((f) => f()));
 
+	// This prevents browser keyboard shortcuts from firing.
+	// Eg. on Windows Ctrl+P would open the print dialog without this
 	createEventListener(document, "keydown", (e) => e.preventDefault());
 
 	return (
@@ -132,7 +134,7 @@ function Inner() {
 									<Show when={display.physical_size}>
 										{(size) => (
 											<span class="mb-2 text-xs text-white">
-												{`${size().width}x${size().height} Â· ${display.refresh_rate}FPS`}
+												{`${size().width}x${size().height} · ${display.refresh_rate}FPS`}
 											</span>
 										)}
 									</Show>

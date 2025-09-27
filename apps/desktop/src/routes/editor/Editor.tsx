@@ -301,7 +301,10 @@ function Dialogs() {
 							{(dialog) => {
 								const { setProject: setState, editorInstance } =
 									useEditorContext();
-								const display = editorInstance.recordings.segments[0].display;
+								const firstSegment = editorInstance.recordings.segments[0];
+								if (!firstSegment)
+									throw new Error("Project doesn't have a first segment");
+								const display = firstSegment.display;
 
 								let cropperRef: CropperRef | undefined;
 								const [crop, setCrop] = createSignal(CROP_ZERO);
