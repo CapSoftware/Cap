@@ -205,9 +205,6 @@ function slideBoundsIntoContainer(
 ): CropBounds {
 	let { x, y, width, height } = bounds;
 
-	if (width > containerWidth) width = containerWidth;
-	if (height > containerHeight) height = containerHeight;
-
 	if (x < 0) x = 0;
 	if (y < 0) y = 0;
 	if (x + width > containerWidth) x = containerWidth - width;
