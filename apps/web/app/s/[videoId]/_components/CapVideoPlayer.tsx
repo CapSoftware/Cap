@@ -253,6 +253,15 @@ export function CapVideoPlayer({
 	const [markersReady, setMarkersReady] = useState(false);
 	const [hoveredComment, setHoveredComment] = useState<string | null>(null);
 
+	// Memoize hover handlers to prevent render loops
+	const handleMouseEnter = useCallback((commentId: string) => {
+		setHoveredComment(commentId);
+	}, []);
+
+	const handleMouseLeave = useCallback(() => {
+		setHoveredComment(null);
+	}, []);
+
 	useEffect(() => {
 		// Only show markers when we have duration, comments, and video element
 		if (duration > 0 && comments.length > 0 && videoRef.current) {
@@ -596,7 +605,9 @@ export function CapVideoPlayer({
 
 			{markersReady &&
 				comments
-					.filter((comment) => comment.timestamp !== null)
+					.filter(
+						(comment) => comment && comment.timestamp !== null && comment.id,
+					)
 					.map((comment) => {
 						const position = (Number(comment.timestamp) / duration) * 100;
 						const containerPadding = 20;
@@ -612,8 +623,8 @@ export function CapVideoPlayer({
 									transform: "translateX(-50%)",
 									bottom: "65px",
 								}}
-								onMouseEnter={() => setHoveredComment(comment.id)}
-								onMouseLeave={() => setHoveredComment(null)}
+								onMouseEnter={() => handleMouseEnter(comment.id)}
+								onMouseLeave={handleMouseLeave}
 							>
 								{/* Comment marker */}
 								<button
