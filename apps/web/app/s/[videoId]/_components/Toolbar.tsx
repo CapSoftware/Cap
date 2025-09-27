@@ -54,6 +54,8 @@ export const Toolbar = ({
 	};
 
 	const handleEmojiClick = async (emoji: string) => {
+		const videoElement = document.querySelector("video");
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -63,7 +65,7 @@ export const Toolbar = ({
 			videoId: data.id,
 			parentCommentId: "",
 			type: "emoji",
-			timestamp: null,
+			timestamp: currentTime,
 			updatedAt: new Date(),
 			sending: true,
 		};
@@ -76,6 +78,7 @@ export const Toolbar = ({
 				videoId: data.id,
 				parentCommentId: "",
 				type: "emoji",
+				timestamp: currentTime,
 			});
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);
@@ -92,7 +95,8 @@ export const Toolbar = ({
 		if (comment.length === 0) {
 			return;
 		}
-
+		const videoElement = document.querySelector("video");
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -102,7 +106,7 @@ export const Toolbar = ({
 			videoId: data.id,
 			parentCommentId: "",
 			type: "text",
-			timestamp: null,
+			timestamp: currentTime,
 			updatedAt: new Date(),
 			sending: true,
 		};
@@ -115,6 +119,7 @@ export const Toolbar = ({
 				videoId: data.id,
 				parentCommentId: "",
 				type: "text",
+				timestamp: currentTime,
 			});
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);

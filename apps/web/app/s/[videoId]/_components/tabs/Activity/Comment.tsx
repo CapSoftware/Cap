@@ -98,7 +98,7 @@ const Comment: React.FC<{
 						<p className="text-sm font-medium truncate text-gray-12">
 							{comment.authorName || "Anonymous"}
 						</p>
-						<div className="flex gap-2 items-center">
+						<div className="flex gap-2 items-center text-nowrap min-w-fit">
 							<Tooltip content={formatTimestamp(commentDate)}>
 								<p className="text-xs text-gray-8">
 									{formatTimeAgo(commentDate)}

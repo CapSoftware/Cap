@@ -13,7 +13,7 @@ export async function newComment(data: {
 	videoId: Video.VideoId;
 	type: "text" | "emoji";
 	parentCommentId: string;
-	timestamp?: number;
+	timestamp: number;
 }) {
 	const user = await getCurrentUser();
 

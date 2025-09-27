@@ -178,6 +178,7 @@ export const ShareVideo = forwardRef<
 						hasActiveUpload={data.hasActiveUpload}
 						comments={commentsData.map((comment) => ({
 							id: comment.id,
+							type: comment.type,
 							timestamp: comment.timestamp,
 							content: comment.content,
 							authorName: comment.authorName,
