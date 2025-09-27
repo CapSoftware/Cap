@@ -526,12 +526,12 @@ export function CapVideoPlayer({
 					playsInline
 					autoPlay={autoplay}
 				>
-					<track default kind="chapters" src={chaptersSrc || ""} />
+					<track default kind="chapters" src={chaptersSrc || undefined} />
 					<track
 						label="English"
 						kind="captions"
 						srcLang="en"
-						src={captionsSrc || ""}
+						src={captionsSrc || undefined}
 					/>
 				</MediaPlayerVideo>
 			)}
