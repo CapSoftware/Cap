@@ -1364,6 +1364,15 @@ function computeFreeResize(
 		let newW = expLeft + expRight;
 		let newH = expTop + expBottom;
 
+		if (min) {
+			newW = Math.max(newW, min.x);
+			newH = Math.max(newH, min.y);
+		}
+		if (max) {
+			newW = Math.min(newW, max.x);
+			newH = Math.min(newH, max.y);
+		}
+
 		if (!shiftKey && handle.isCorner && snapToRatioEnabled) {
 			const closest = findClosestRatio(newW, newH);
 			if (closest) {
@@ -1372,15 +1381,6 @@ function computeFreeResize(
 				else newH = newW / r;
 				snappedRatio = closest;
 			}
-		}
-
-		if (min) {
-			newW = Math.max(newW, min.x);
-			newH = Math.max(newH, min.y);
-		}
-		if (max) {
-			newW = Math.min(newW, max.x);
-			newH = Math.min(newH, max.y);
 		}
 
 		bounds = {
@@ -1418,18 +1418,6 @@ function computeFreeResize(
 		let newW = Math.abs(x1 - x2);
 		let newH = Math.abs(y1 - y2);
 
-		if (!shiftKey && handle.isCorner && snapToRatioEnabled) {
-			const closest = findClosestRatio(newW, newH);
-			if (closest) {
-				const r = ratioToValue(closest);
-				if (handle.movable.top || handle.movable.bottom) newW = newH * r;
-				else newH = newW / r;
-				if (clampedX < anchor.x) newX = anchor.x - newW;
-				if (clampedY < anchor.y) newY = anchor.y - newH;
-				snappedRatio = closest;
-			}
-		}
-
 		if (min) {
 			if (newW < min.x) {
 				const diff = min.x - newW;
@@ -1452,6 +1440,18 @@ function computeFreeResize(
 				const diff = newH - max.y;
 				newH = max.y;
 				if (clampedY < anchor.y) newY += diff;
+			}
+		}
+
+		if (!shiftKey && handle.isCorner && snapToRatioEnabled) {
+			const closest = findClosestRatio(newW, newH);
+			if (closest) {
+				const r = ratioToValue(closest);
+				if (handle.movable.top || handle.movable.bottom) newW = newH * r;
+				else newH = newW / r;
+				if (clampedX < anchor.x) newX = anchor.x - newW;
+				if (clampedY < anchor.y) newY = anchor.y - newH;
+				snappedRatio = closest;
 			}
 		}
 

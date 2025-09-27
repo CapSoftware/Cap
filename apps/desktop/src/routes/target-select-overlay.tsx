@@ -244,8 +244,6 @@ function Inner() {
 					const [aspect, setAspect] = createSignal<Ratio | null>(null);
 					const [snapToRatioEnabled, setSnapToRatioEnabled] =
 						createSignal(true);
-					const [shouldHideControls, setShouldHideControls] =
-						createSignal(false);
 
 					async function showCropOptionsMenu(e: UIEvent) {
 						e.preventDefault();
@@ -357,8 +355,8 @@ function Inner() {
 							<Cropper
 								ref={cropperRef}
 								onCropChange={setCrop}
-								onInteraction={setShouldHideControls}
 								initialCrop={initialAreaBounds()}
+								minSize={{ x: 150, y: 150 }}
 								showBounds={true}
 								aspectRatio={aspect() ?? undefined}
 								snapToRatioEnabled={snapToRatioEnabled()}
