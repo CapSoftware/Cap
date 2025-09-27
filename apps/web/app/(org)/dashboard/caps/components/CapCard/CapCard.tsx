@@ -402,13 +402,15 @@ export const CapCard = ({
 					{isOwner && (
 						<DropdownMenu modal={false} onOpenChange={setIsDropdownOpen}>
 							<DropdownMenuTrigger asChild>
-								<CapCardButton
-									tooltipContent="More options"
-									className="delay-75"
-									icon={() => (
-										<FontAwesomeIcon className="size-4" icon={faEllipsis} />
-									)}
-								/>
+								<div>
+									<CapCardButton
+										tooltipContent="More options"
+										className="delay-75"
+										icon={() => (
+											<FontAwesomeIcon className="size-4" icon={faEllipsis} />
+										)}
+									/>
+								</div>
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end" sideOffset={5}>
 								<DropdownMenuItem
