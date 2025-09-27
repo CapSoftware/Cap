@@ -213,11 +213,11 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
-	const handleSeek = (time: number) => {
+	const handleSeek = useCallback((time: number) => {
 		if (playerRef.current) {
 			playerRef.current.currentTime = time;
 		}
-	};
+	}, []);
 
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
@@ -250,6 +250,7 @@ export const Share = ({
 								comments={comments}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
+								onSeek={handleSeek}
 								ref={playerRef}
 							/>
 						</div>

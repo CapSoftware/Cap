@@ -13,6 +13,7 @@ export async function newComment(data: {
 	videoId: Video.VideoId;
 	type: "text" | "emoji";
 	parentCommentId: string;
+	timestamp?: number;
 }) {
 	const user = await getCurrentUser();
 
@@ -24,6 +25,7 @@ export async function newComment(data: {
 	const videoId = data.videoId;
 	const type = data.type;
 	const parentCommentId = data.parentCommentId;
+	const timestamp = data.timestamp;
 	const conditionalType = parentCommentId
 		? "reply"
 		: type === "emoji"
@@ -41,7 +43,7 @@ export async function newComment(data: {
 		type: type,
 		content: content,
 		videoId: videoId,
-		timestamp: null,
+		timestamp: timestamp || null,
 		parentCommentId: parentCommentId,
 		createdAt: new Date(),
 		updatedAt: new Date(),

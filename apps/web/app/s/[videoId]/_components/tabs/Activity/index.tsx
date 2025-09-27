@@ -64,6 +64,7 @@ export const Activity = Object.assign(
 							user={user}
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
+							onSeek={props.onSeek}
 						/>
 					)}
 				</Activity.Shell>

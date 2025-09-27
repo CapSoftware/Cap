@@ -2,7 +2,7 @@
 
 import { LogoSpinner } from "@cap/ui";
 import type { Video } from "@cap/web-domain";
-import { faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faComment, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
@@ -39,6 +39,13 @@ interface Props {
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
+	comments?: Array<{
+		id: string;
+		timestamp: number | null;
+		content: string;
+		authorName?: string | null;
+	}>;
+	onSeek?: (time: number) => void;
 }
 
 export function CapVideoPlayer({
@@ -51,6 +58,8 @@ export function CapVideoPlayer({
 	autoplay = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
+	comments = [],
+	onSeek,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
@@ -69,6 +78,7 @@ export function CapVideoPlayer({
 	const [isRetrying, setIsRetrying] = useState(false);
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
+	const [duration, setDuration] = useState(0);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -217,6 +227,32 @@ export function CapVideoPlayer({
 	useEffect(() => {
 		fetchNewUrl();
 	}, [fetchNewUrl]);
+
+	// Track video duration for comment markers
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+
+		const handleLoadedMetadata = () => {
+			setDuration(video.duration);
+		};
+
+		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+		return () => {
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		};
+	}, [urlResolved]);
+
+	// Track when all data is ready for comment markers
+	const [markersReady, setMarkersReady] = useState(false);
+
+	useEffect(() => {
+		// Only show markers when we have duration, comments, and video element
+		if (duration > 0 && comments.length > 0 && videoRef.current) {
+			setMarkersReady(true);
+		}
+	}, [duration, comments.length]);
 
 	useEffect(() => {
 		const video = videoRef.current;
@@ -484,13 +520,15 @@ export function CapVideoPlayer({
 					playsInline
 					autoPlay={autoplay}
 				>
-					<track default kind="chapters" src={chaptersSrc} />
-					<track
-						label="English"
-						kind="captions"
-						srcLang="en"
-						src={captionsSrc}
-					/>
+					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
+					{captionsSrc && (
+						<track
+							label="English"
+							kind="captions"
+							srcLang="en"
+							src={captionsSrc}
+						/>
+					)}
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
@@ -551,6 +589,41 @@ export function CapVideoPlayer({
 				<MediaPlayerError />
 			)}
 			<MediaPlayerVolumeIndicator />
+
+			{markersReady &&
+				comments
+					.filter((comment) => comment.timestamp !== null)
+					.map((comment) => {
+						const position = (Number(comment.timestamp) / duration) * 100;
+						const containerPadding = 20;
+						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
+						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
+
+						return (
+							<button
+								type="button"
+								key={comment.id}
+								onClick={() => {
+									if (onSeek && comment.timestamp !== null) {
+										onSeek(Number(comment.timestamp));
+									}
+								}}
+								className="flex absolute z-20 justify-center items-center bg-black rounded-full transition-all cursor-pointer size-6"
+								style={{
+									left: adjustedPosition,
+									transform: "translateX(-50%)",
+									bottom: "65px",
+								}}
+								title={`${comment.authorName || "Anonymous"}: ${comment.content}`}
+							>
+								<FontAwesomeIcon
+									icon={faComment}
+									className="text-white size-3"
+								/>
+							</button>
+						);
+					})}
+
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
 				isUploadingOrFailed={isUploading || isUploadFailed}

@@ -94,25 +94,32 @@ const Comment: React.FC<{
 					transition={{ duration: 0.75, ease: "easeInOut", delay: 0.15 }}
 					className={"flex-1 p-3 rounded-xl border border-gray-3 bg-gray-2"}
 				>
-					<div className="flex items-center space-x-2">
-						<p className="text-base font-medium text-gray-12">
+					<div className="flex justify-between items-center">
+						<p className="text-sm font-medium truncate text-gray-12">
 							{comment.authorName || "Anonymous"}
 						</p>
-						<Tooltip content={formatTimestamp(commentDate)}>
-							<p className="text-sm text-gray-8">
-								{formatTimeAgo(commentDate)}
-							</p>
-						</Tooltip>
-						{comment.timestamp && (
-							<button
-								onClick={() => onSeek?.(comment.timestamp!)}
-								className="text-sm text-blue-500 cursor-pointer hover:text-blue-700"
-							>
-								{new Date(comment.timestamp * 1000).toISOString().substr(11, 8)}
-							</button>
-						)}
+						<div className="flex gap-2 items-center">
+							<Tooltip content={formatTimestamp(commentDate)}>
+								<p className="text-xs text-gray-8">
+									{formatTimeAgo(commentDate)}
+								</p>
+							</Tooltip>
+							{comment.timestamp !== null && (
+								<button
+									type="button"
+									onClick={() => {
+										onSeek?.(Number(comment.timestamp));
+									}}
+									className="text-xs text-blue-500 cursor-pointer hover:text-blue-700"
+								>
+									{new Date(comment.timestamp * 1000)
+										.toISOString()
+										.substr(11, 8)}
+								</button>
+							)}
+						</div>
 					</div>
-					<p className="text-sm text-gray-11">{comment.content}</p>
+					<p className="mt-2 text-sm text-gray-11">{comment.content}</p>
 					<div className="flex items-center pt-2 mt-2.5 space-x-3 border-t border-gray-3">
 						{user && !isReplying && canReply && (
 							<Tooltip content="Reply">
