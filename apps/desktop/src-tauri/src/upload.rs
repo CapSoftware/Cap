@@ -217,10 +217,7 @@ impl UploadProgressUpdater {
     }
 
     async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
-        debug!(
-            "Sending progress update to API: {}/{} bytes for video {}",
-            uploaded, total, video_id
-        );
+        debug!("\tUploadProgressUpdater::send_api_update({video_id}, {uploaded}, {total})");
 
         let response = app
             .authed_api_request("/api/desktop/video/progress", |client, url| {
@@ -725,19 +722,6 @@ impl InstantMultipartUpload {
         let mut last_uploaded_position: u64 = 0;
         let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
 
-        // Initialize progress with proper values
-        if let Ok(metadata) = tokio::fs::metadata(&file_path).await {
-            let initial_file_size = metadata.len();
-            debug!("Initial file size: {} bytes", initial_file_size);
-            if initial_file_size > 0 {
-                progress.update(0, initial_file_size);
-            } else {
-                debug!("Initial file size is 0, will wait for file to grow");
-            }
-        } else {
-            warn!("Could not get initial file metadata for progress tracking");
-        }
-
         // --------------------------------------------
         // initiate the multipart upload
         // --------------------------------------------
@@ -951,6 +935,7 @@ impl InstantMultipartUpload {
         let remaining = file_size - *last_uploaded_position;
         let bytes_to_read = std::cmp::min(chunk_size, remaining);
 
+        // TODO: Surely we can reuse this
         let mut file = tokio::fs::File::open(file_path)
             .await
             .map_err(|e| format!("Failed to open file: {e}"))?;
@@ -1010,6 +995,7 @@ impl InstantMultipartUpload {
             );
         }
 
+        // TODO: Shouldn't this be inferable?
         let file_size = tokio::fs::metadata(file_path)
             .await
             .map(|m| m.len())
