@@ -93,6 +93,8 @@ pub struct UploadedPart {
     pub part_number: u32,
     pub etag: String,
     pub size: usize,
+    #[serde(skip)]
+    pub total_size: u64,
 }
 
 #[derive(Serialize, Debug, Clone)]

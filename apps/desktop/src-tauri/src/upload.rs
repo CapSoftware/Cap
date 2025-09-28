@@ -595,12 +595,16 @@ impl InstantMultipartUpload {
         let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
         // TODO: Will it be a problem that `ReaderStream` doesn't have a fixed chunk size??? We should fix that!!!!
-        let parts = progress(uploader(
+        let parts = progress(
             app.clone(),
             video_id.clone(),
-            upload_id.clone(),
-            from_pending_file(file_path.clone(), realtime_video_done),
-        ))
+            uploader(
+                app.clone(),
+                video_id.clone(),
+                upload_id.clone(),
+                from_pending_file(file_path.clone(), realtime_video_done),
+            ),
+        )
         .try_collect::<Vec<_>>()
         .await?;
 
@@ -622,13 +626,23 @@ impl InstantMultipartUpload {
     }
 }
 
+struct Chunk {
+    /// The total size of the file to be uploaded.
+    /// This can change as the recording grows.
+    total_size: u64,
+    /// The part number. `FILE_OFFSET = PART_NUMBER * CHUNK_SIZE`.
+    part_number: u32,
+    /// Actual data bytes of this chunk
+    chunk: Bytes,
+}
+
 /// Creates a stream that reads chunks from a potentially growing file,
 /// yielding (part_number, chunk_data) pairs. The first chunk is yielded last
 /// to allow for header rewriting after recording completion.
 pub fn from_pending_file(
     path: PathBuf,
     realtime_upload_done: Option<Receiver<()>>,
-) -> impl Stream<Item = io::Result<(u32, Bytes)>> {
+) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
         let mut part_number = 2; // Start at 2 since part 1 will be yielded last
         let mut last_read_position: u64 = 0;
@@ -703,7 +717,11 @@ pub fn from_pending_file(
                         first_chunk_size = Some(total_read as u64);
                     } else {
                         // Yield non-first chunks immediately
-                        yield (part_number, Bytes::from(chunk));
+                        yield Chunk {
+                            total_size: file_size,
+                            part_number,
+                            chunk: Bytes::from(chunk),
+                        };
                         part_number += 1;
                     }
 
@@ -728,7 +746,11 @@ pub fn from_pending_file(
 
                     if total_read > 0 {
                         first_chunk.truncate(total_read);
-                        yield (1, Bytes::from(first_chunk));
+                        yield Chunk {
+                            total_size: file_size,
+                            part_number: 1,
+                            chunk: Bytes::from(first_chunk),
+                        };
                     }
                 }
                 break;
@@ -747,7 +769,7 @@ fn uploader(
     app: AppHandle,
     video_id: String,
     upload_id: String,
-    stream: impl Stream<Item = io::Result<(u32, Bytes)>>,
+    stream: impl Stream<Item = io::Result<Chunk>>,
 ) -> impl Stream<Item = Result<UploadedPart, String>> {
     let client = reqwest::Client::default();
 
@@ -755,7 +777,7 @@ fn uploader(
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
         while let Some(item) = stream.next().await {
-            let (part_number, chunk) = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+            let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
             prev_part_number = Some(part_number);
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
@@ -786,6 +808,7 @@ fn uploader(
                 etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
                 part_number,
                 size,
+                total_size
             };
         }
     }
@@ -793,24 +816,29 @@ fn uploader(
 
 /// Monitor the stream to report the upload progress
 fn progress(
+    app: AppHandle,
+    video_id: String,
     stream: impl Stream<Item = Result<UploadedPart, String>>,
 ) -> impl Stream<Item = Result<UploadedPart, String>> {
-    // TODO: Reenable progress reporting to the backend but build it on streams directly here.
-    // let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
+    // TODO: Flatten this implementation into here
+    let mut progress = UploadProgressUpdater::new(app.clone(), video_id.clone());
+    let mut uploaded = 0;
 
     stream! {
         let mut stream = pin!(stream);
 
         while let Some(part) = stream.next().await {
             if let Ok(part) = &part {
-                // progress.update(expected_pos, file_size);
-                // UploadProgressEvent {
-                //     video_id: video_id.to_string(),
-                //     uploaded: last_uploaded_position.to_string(),
-                //     total: file_size.to_string(),
-                // }
-                // .emit(app)
-                // .ok();
+                uploaded += part.size as u64;
+
+                progress.update(uploaded, part.total_size);
+                UploadProgressEvent {
+                    video_id: video_id.to_string(),
+                    uploaded: uploaded.to_string(),
+                    total: part.total_size.to_string(),
+                }
+                .emit(&app)
+                .ok();
             }
 
             yield part;
