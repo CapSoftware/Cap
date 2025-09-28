@@ -3,13 +3,14 @@
 use crate::api::{S3VideoMeta, UploadedPart};
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo, api};
+use async_stream::{stream, try_stream};
 use axum::body::Body;
 use bytes::Bytes;
 use cap_project::{RecordingMeta, RecordingMetaInner, UploadState};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt, TryStreamExt, stream};
 use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
@@ -20,6 +21,7 @@ use specta::Type;
 use std::error::Error;
 use std::io;
 use std::path::Path;
+use std::pin::pin;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -305,6 +307,7 @@ pub async fn do_presigned_upload(
 
     let response = client
         .put(presigned_url)
+        .header("Content-Length", total_size)
         .body(reqwest::Body::wrap_stream(stream))
         .send()
         .await
@@ -585,392 +588,232 @@ impl InstantMultipartUpload {
         project_meta.upload = Some(UploadState::MultipartUpload);
         project_meta.save_for_project().unwrap();
 
-        // --------------------------------------------
-        // basic constants and info for chunk approach
-        // --------------------------------------------
-        let client = reqwest::Client::new();
-        let s3_config = pre_created_video.config;
+        // TODO: Allow injecting this for Studio mode upload
+        // let file = File::open(path).await.unwrap(); // TODO: Error handling
+        // ReaderStream::new(file) // TODO: Map into part numbers
 
-        let mut uploaded_parts = Vec::new();
-        let mut part_number = 1;
-        let mut last_uploaded_position: u64 = 0;
-        let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
+        let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
-        let upload_id = api::upload_multipart_initiate(&app, s3_config.id()).await?;
-        debug!("Multipart upload initiated with ID: {upload_id}");
+        // TODO: Will it be a problem that `ReaderStream` doesn't have a fixed chunk size??? We should fix that!!!!
+        let parts = progress(uploader(
+            app.clone(),
+            video_id.clone(),
+            upload_id.clone(),
+            from_pending_file(file_path.clone(), realtime_video_done),
+        ))
+        .try_collect::<Vec<_>>()
+        .await?;
 
-        let mut realtime_is_done = realtime_video_done.as_ref().map(|_| false);
+        let metadata = build_video_meta(&file_path)
+            .map_err(|e| error!("Failed to get video metadata: {e}"))
+            .ok();
 
-        // --------------------------------------------
-        // Main loop while upload not complete:
-        //   - If we have >= CHUNK_SIZE new data, upload.
-        //   - If recording hasn't stopped, keep waiting.
-        //   - If recording stopped, do leftover final(s).
-        // --------------------------------------------
-        loop {
-            if !realtime_is_done.unwrap_or(true)
-                && let Some(realtime_video_done) = &realtime_video_done
-            {
-                match realtime_video_done.try_recv() {
-                    Ok(_) => {
-                        realtime_is_done = Some(true);
-                    }
-                    Err(flume::TryRecvError::Empty) => {}
-                    _ => {
-                        warn!("cancelling upload as realtime generation failed");
-                        return Err("cancelling upload as realtime generation failed".to_string());
-                    }
-                }
-            }
-
-            // Check the file's current size
-            if !file_path.exists() {
-                debug!("File no longer exists, aborting upload");
-                return Err("File no longer exists".to_string());
-            }
-
-            let file_size = match tokio::fs::metadata(&file_path).await {
-                Ok(md) => md.len(),
-                Err(e) => {
-                    debug!("Failed to get file metadata: {e}");
-                    sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
-            };
-
-            let new_data_size = file_size - last_uploaded_position;
-
-            if ((new_data_size >= CHUNK_SIZE)
-                || new_data_size > 0 && realtime_is_done.unwrap_or(false))
-                || (realtime_is_done.is_none() && new_data_size > 0)
-            {
-                // We have a full chunk to send
-                match Self::upload_chunk(
-                    &app,
-                    &client,
-                    &file_path,
-                    s3_config.id(),
-                    &upload_id,
-                    &mut part_number,
-                    &mut last_uploaded_position,
-                    new_data_size.min(CHUNK_SIZE),
-                    &mut progress,
-                )
-                .await
-                {
-                    Ok(part) => {
-                        uploaded_parts.push(part);
-                    }
-                    Err(e) => {
-                        debug!(
-                            "Error uploading chunk (part {part_number}): {e}. Retrying in 1s..."
-                        );
-                        sleep(Duration::from_secs(1)).await;
-                    }
-                }
-            } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
-                if realtime_is_done.unwrap_or(false) {
-                    info!("realtime video done, uploading header chunk");
-
-                    let part = Self::upload_chunk(
-                        &app,
-                        &client,
-                        &file_path,
-                        s3_config.id(),
-                        &upload_id,
-                        &mut 1,
-                        &mut 0,
-                        uploaded_parts[0].size as u64,
-                        &mut progress,
-                    )
-                    .await
-                    .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
-
-                    uploaded_parts[0] = part;
-                    debug!("Successfully re-uploaded first chunk",);
-                }
-
-                // All leftover chunks are now uploaded. We finalize.
-                debug!(
-                    "Completing multipart upload with {} parts",
-                    uploaded_parts.len()
-                );
-                Self::finalize_upload(
-                    &app,
-                    &file_path,
-                    s3_config.id(),
-                    &upload_id,
-                    &uploaded_parts,
-                )
-                .await?;
-
-                break;
-            } else {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
-        }
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
+        info!("Multipart upload complete for {video_id}.");
 
         // TODO: Reuse this + error handling
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
         project_meta.upload = Some(UploadState::Complete);
         project_meta.save_for_project().unwrap();
 
-        // Copy link to clipboard early
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
         Ok(())
     }
+}
 
-    /// Upload a single chunk from the file at `last_uploaded_position` for `chunk_size` bytes.
-    /// Advances `last_uploaded_position` accordingly. Returns JSON { PartNumber, ETag, Size }.
-    #[allow(clippy::too_many_arguments)]
-    async fn upload_chunk(
-        app: &AppHandle,
-        client: &reqwest::Client,
-        file_path: &PathBuf,
-        video_id: &str,
-        upload_id: &str,
-        part_number: &mut u32,
-        last_uploaded_position: &mut u64,
-        chunk_size: u64,
-        progress: &mut UploadProgressUpdater,
-    ) -> Result<UploadedPart, String> {
-        let file_size = match tokio::fs::metadata(file_path).await {
-            Ok(metadata) => metadata.len(),
-            Err(e) => return Err(format!("Failed to get file metadata: {e}")),
-        };
+/// Creates a stream that reads chunks from a potentially growing file,
+/// yielding (part_number, chunk_data) pairs. The first chunk is yielded last
+/// to allow for header rewriting after recording completion.
+pub fn from_pending_file(
+    path: PathBuf,
+    realtime_upload_done: Option<Receiver<()>>,
+) -> impl Stream<Item = io::Result<(u32, Bytes)>> {
+    try_stream! {
+        let mut part_number = 2; // Start at 2 since part 1 will be yielded last
+        let mut last_read_position: u64 = 0;
+        let mut realtime_is_done = realtime_upload_done.as_ref().map(|_| false);
+        let mut first_chunk_size: Option<u64> = None;
 
-        // Check if we're at the end of the file
-        if *last_uploaded_position >= file_size {
-            return Err("No more data to read - already at end of file".to_string());
-        }
-
-        // Calculate how much we can actually read
-        let remaining = file_size - *last_uploaded_position;
-        let bytes_to_read = std::cmp::min(chunk_size, remaining);
-
-        let mut file = tokio::fs::File::open(file_path)
-            .await
-            .map_err(|e| format!("Failed to open file: {e}"))?;
-
-        // Log before seeking
-        debug!(
-            "Seeking to offset {} for part {} (file size: {}, remaining: {})",
-            *last_uploaded_position, *part_number, file_size, remaining
-        );
-
-        // Seek to the position we left off
-        if let Err(e) = file
-            .seek(std::io::SeekFrom::Start(*last_uploaded_position))
-            .await
-        {
-            return Err(format!("Failed to seek in file: {e}"));
-        }
-
-        // Read exactly bytes_to_read
-        let mut chunk = vec![0u8; bytes_to_read as usize];
-        let mut total_read = 0;
-
-        while total_read < bytes_to_read as usize {
-            match file.read(&mut chunk[total_read..]).await {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    total_read += n;
-                    debug!("Read {n} bytes, total so far: {total_read}/{bytes_to_read}");
-                }
-                Err(e) => return Err(format!("Failed to read chunk from file: {e}")),
-            }
-        }
-
-        if total_read == 0 {
-            return Err("No data to upload for this part.".to_string());
-        }
-
-        // Truncate the buffer to the actual bytes read
-        chunk.truncate(total_read);
-
-        // Basic content‑MD5 for data integrity
-        let md5_sum = {
-            let digest = md5::compute(&chunk);
-            base64::encode(digest.0)
-        };
-
-        // Verify file position to ensure we're not experiencing file handle issues
-        let pos_after_read = file
-            .seek(std::io::SeekFrom::Current(0))
-            .await
-            .map_err(|e| format!("Failed to get current file position: {e}"))?;
-
-        let expected_pos = *last_uploaded_position + total_read as u64;
-        if pos_after_read != expected_pos {
-            warn!(
-                "WARNING: File position after read ({pos_after_read}) doesn't match expected position ({expected_pos})"
-            );
-        }
-
-        let file_size = tokio::fs::metadata(file_path)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
-        let remaining = file_size - *last_uploaded_position;
-
-        debug!(
-            "File size: {}, Last uploaded: {}, Remaining: {}, chunk_size: {}, part: {}",
-            file_size, *last_uploaded_position, remaining, chunk_size, *part_number
-        );
-        debug!(
-            "Uploading part {} ({} bytes), MD5: {}",
-            *part_number, total_read, md5_sum
-        );
-
-        let presigned_url =
-            api::upload_multipart_presign_part(app, video_id, upload_id, *part_number, &md5_sum)
-                .await?;
-
-        // Upload the chunk with retry
-        let mut retry_count = 0;
-        let max_retries = 3;
-        let mut etag: Option<String> = None;
-
-        while retry_count < max_retries && etag.is_none() {
-            debug!(
-                "Sending part {} (attempt {}/{}): {} bytes",
-                *part_number,
-                retry_count + 1,
-                max_retries,
-                total_read
-            );
-
-            match client
-                .put(&presigned_url)
-                .header("Content-MD5", &md5_sum)
-                .timeout(Duration::from_secs(120))
-                .body(chunk.clone())
-                .send()
-                .await
-            {
-                Ok(upload_response) => {
-                    if upload_response.status().is_success() {
-                        if let Some(etag_val) = upload_response.headers().get("ETag") {
-                            let e = etag_val
-                                .to_str()
-                                .unwrap_or("")
-                                .trim_matches('"')
-                                .to_string();
-                            debug!("Received ETag {} for part {}", e, *part_number);
-                            etag = Some(e);
-                        } else {
-                            error!("No ETag in response for part {}", *part_number);
-                            retry_count += 1;
-                            sleep(Duration::from_secs(2)).await;
+        loop {
+            // Check if realtime recording is done
+            if !realtime_is_done.unwrap_or(true) {
+                if let Some(ref realtime_receiver) = realtime_upload_done {
+                    match realtime_receiver.try_recv() {
+                        Ok(_) => realtime_is_done = Some(true),
+                        Err(flume::TryRecvError::Empty) => {},
+                        Err(_) => {
+                            todo!(); // TODO
+                            // return Err(std::io::Error::new(
+                            //     std::io::ErrorKind::Interrupted,
+                            //     "Realtime generation failed"
+                            // ));
                         }
-                    } else {
-                        error!(
-                            "Failed part {} (status {}). Will retry if possible.",
-                            *part_number,
-                            upload_response.status()
-                        );
-                        if let Ok(body) = upload_response.text().await {
-                            error!("Error response: {body}");
-                        }
-                        retry_count += 1;
-                        sleep(Duration::from_secs(2)).await;
                     }
                 }
+            }
+
+            // Check file existence and size
+            if !path.exists() {
+                todo!();
+                // return Err(std::io::Error::new(
+                //     std::io::ErrorKind::NotFound,
+                //     "File no longer exists"
+                // ));
+            }
+
+            let file_size = match tokio::fs::metadata(&path).await {
+                Ok(metadata) => metadata.len(),
                 Err(e) => {
-                    debug!(
-                        "Part {} upload error (attempt {}/{}): {}",
-                        *part_number,
-                        retry_count + 1,
-                        max_retries,
-                        e
-                    );
-                    retry_count += 1;
-                    sleep(Duration::from_secs(2)).await;
+                    // Retry on metadata errors (file might be temporarily locked)
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    continue;
                 }
+            };
+
+            let new_data_size = file_size.saturating_sub(last_read_position);
+
+            // Determine if we should read a chunk
+            let should_read_chunk = (new_data_size >= CHUNK_SIZE)
+                || (new_data_size > 0 && realtime_is_done.unwrap_or(false))
+                || (realtime_is_done.is_none() && new_data_size > 0);
+
+            if should_read_chunk {
+                let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE);
+
+                let mut file = tokio::fs::File::open(&path).await?;
+                file.seek(std::io::SeekFrom::Start(last_read_position)).await?;
+
+                let mut chunk = vec![0u8; chunk_size as usize];
+                let mut total_read = 0;
+
+                while total_read < chunk_size as usize {
+                    match file.read(&mut chunk[total_read..]).await {
+                        Ok(0) => break, // EOF
+                        Ok(n) => total_read += n,
+                        Err(e) => todo!(), // TODO: return Err(e),
+                    }
+                }
+
+                if total_read > 0 {
+                    chunk.truncate(total_read);
+
+                    if last_read_position == 0 {
+                        // This is the first chunk - remember its size but don't yield yet
+                        first_chunk_size = Some(total_read as u64);
+                    } else {
+                        // Yield non-first chunks immediately
+                        yield (part_number, Bytes::from(chunk));
+                        part_number += 1;
+                    }
+
+                    last_read_position += total_read as u64;
+                }
+            } else if new_data_size == 0 && realtime_is_done.unwrap_or(true) {
+                // Recording is done and no new data - now yield the first chunk
+                if let Some(first_size) = first_chunk_size {
+                    let mut file = tokio::fs::File::open(&path).await?;
+                    file.seek(std::io::SeekFrom::Start(0)).await?;
+
+                    let mut first_chunk = vec![0u8; first_size as usize];
+                    let mut total_read = 0;
+
+                    while total_read < first_size as usize {
+                        match file.read(&mut first_chunk[total_read..]).await {
+                            Ok(0) => break,
+                            Ok(n) => total_read += n,
+                            Err(e) => todo!(), // TODO: return Err(e),
+                        }
+                    }
+
+                    if total_read > 0 {
+                        first_chunk.truncate(total_read);
+                        yield (1, Bytes::from(first_chunk));
+                    }
+                }
+                break;
+            } else {
+                // Wait for more data
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
-
-        let etag = match etag {
-            Some(e) => e,
-            None => {
-                return Err(format!(
-                    "Failed to upload part {} after {} attempts",
-                    *part_number, max_retries
-                ));
-            }
-        };
-
-        // Advance the global progress
-        *last_uploaded_position += total_read as u64;
-        debug!(
-            "After upload: new last_uploaded_position is {} ({}% of file)",
-            *last_uploaded_position,
-            (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
-        );
-
-        progress.update(expected_pos, file_size);
-        UploadProgressEvent {
-            video_id: video_id.to_string(),
-            uploaded: last_uploaded_position.to_string(),
-            total: file_size.to_string(),
-        }
-        .emit(app)
-        .ok();
-
-        let part = UploadedPart {
-            part_number: *part_number,
-            etag,
-            size: total_read,
-        };
-        *part_number += 1;
-        Ok(part)
     }
+}
 
-    /// Completes the multipart upload with the stored parts.
-    /// Logs a final location if the complete call is successful.
-    async fn finalize_upload(
-        app: &AppHandle,
-        file_path: &PathBuf,
-        video_id: &str,
-        upload_id: &str,
-        uploaded_parts: &[UploadedPart],
-    ) -> Result<(), String> {
-        debug!(
-            "Completing multipart upload with {} parts",
-            uploaded_parts.len()
-        );
+/// Takes an incoming stream of bytes and individually uploads them to S3.
+///
+/// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
+fn uploader(
+    app: AppHandle,
+    video_id: String,
+    upload_id: String,
+    stream: impl Stream<Item = io::Result<(u32, Bytes)>>,
+) -> impl Stream<Item = Result<UploadedPart, String>> {
+    let client = reqwest::Client::default();
 
-        if uploaded_parts.is_empty() {
-            return Err("No parts uploaded before finalizing.".to_string());
+    try_stream! {
+        let mut stream = pin!(stream);
+        let mut prev_part_number = None;
+        while let Some(item) = stream.next().await {
+            let (part_number, chunk) = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+            prev_part_number = Some(part_number);
+            let md5_sum = base64::encode(md5::compute(&chunk).0);
+            let size = chunk.len();
+
+            let presigned_url =
+                api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
+                    .await?;
+
+            // TODO: Retries
+            let resp = client
+                .put(&presigned_url)
+                .header("Content-MD5", &md5_sum)
+                .header("Content-Length", chunk.len())
+                .timeout(Duration::from_secs(120))
+                .body(chunk)
+                .send()
+                .await
+                .map_err(|err| format!("uploader/part/{part_number}/error: {err:?}"))?;
+
+            let etag = resp.headers().get("ETag").as_ref().and_then(|etag| etag.to_str().ok()).map(|v| v.trim_matches('"').to_string());
+
+            match !resp.status().is_success() {
+                true => Err(format!("uploader/part/{part_number}/error: {}", resp.text().await.unwrap_or_default())),
+                false => Ok(()),
+            }?;
+
+            yield UploadedPart {
+                etag: etag.ok_or_else(|| format!("uploader/part/{part_number}/error: ETag header not found"))?,
+                part_number,
+                size,
+            };
         }
+    }
+}
 
-        let mut total_bytes_in_parts = 0;
-        for part in uploaded_parts {
-            let pn = part.part_number;
-            let size = part.size;
-            let etag = &part.etag;
-            total_bytes_in_parts += part.size;
-            debug!("Part {pn}: {size} bytes (ETag: {etag})");
+/// Monitor the stream to report the upload progress
+fn progress(
+    stream: impl Stream<Item = Result<UploadedPart, String>>,
+) -> impl Stream<Item = Result<UploadedPart, String>> {
+    // TODO: Reenable progress reporting to the backend but build it on streams directly here.
+    // let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
+
+    stream! {
+        let mut stream = pin!(stream);
+
+        while let Some(part) = stream.next().await {
+            if let Ok(part) = &part {
+                // progress.update(expected_pos, file_size);
+                // UploadProgressEvent {
+                //     video_id: video_id.to_string(),
+                //     uploaded: last_uploaded_position.to_string(),
+                //     total: file_size.to_string(),
+                // }
+                // .emit(app)
+                // .ok();
+            }
+
+            yield part;
         }
-
-        let file_final_size = tokio::fs::metadata(file_path)
-            .await
-            .map(|md| md.len())
-            .unwrap_or(0);
-
-        debug!("Sum of all parts: {total_bytes_in_parts} bytes");
-        debug!("File size on disk: {file_final_size} bytes");
-        debug!("Proceeding with multipart upload completion...");
-
-        let metadata = build_video_meta(file_path)
-            .map_err(|e| error!("Failed to get video metadata: {e}"))
-            .ok();
-
-        api::upload_multipart_complete(&app, &video_id, &upload_id, &uploaded_parts, metadata)
-            .await?;
-
-        info!("Multipart upload complete for {video_id}.");
-        Ok(())
     }
 }
