@@ -30,7 +30,11 @@ use crate::{
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
-    upload::{InstantMultipartUpload, build_video_meta, create_or_get_video, upload_video},
+    upload::{
+        InstantMultipartUpload, PresignedS3PutRequest, PresignedS3PutRequestMethod,
+        build_video_meta, bytes_into_stream, compress_image, create_or_get_video,
+        do_presigned_upload, upload_video,
+    },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -754,7 +758,6 @@ async fn handle_recording_finish(
                 let video_upload_info = video_upload_info.clone();
 
                 async move {
-                    // if let Some(progressive_upload) = progressive_upload {
                     let video_upload_succeeded = match progressive_upload
                         .handle
                         .await
@@ -776,27 +779,30 @@ async fn handle_recording_finish(
                     let _ = screenshot_task.await;
 
                     if video_upload_succeeded {
-                        // let resp = prepare_screenshot_upload(
-                        //     &app,
-                        //     &video_upload_info.config.clone(),
-                        //     display_screenshot,
-                        // )
-                        // .await;
-
-                        // match resp {
-                        //     Ok(r)
-                        //         if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
-                        //     {
-                        //         info!("Screenshot uploaded successfully");
-                        //     }
-                        //     Ok(r) => {
-                        //         error!("Failed to upload screenshot: {}", r.status());
-                        //     }
-                        //     Err(e) => {
-                        //         error!("Failed to upload screenshot: {e}");
-                        //     }
-                        // }
-                        todo!();
+                        if let Ok(result) =
+                            compress_image(display_screenshot).await
+                            .map_err(|err|
+                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                            ) {
+                                let (stream, total_size) = bytes_into_stream(result);
+                                do_presigned_upload(
+                                    &app,
+                                    stream,
+                                    total_size,
+                                    crate::upload::PresignedS3PutRequest {
+                                        video_id: video_upload_info.id.clone(),
+                                        subpath: "screenshot/screen-capture.jpg".to_string(),
+                                        method: PresignedS3PutRequestMethod::Put,
+                                        meta: None,
+                                    },
+                                    |p| {} // TODO: Progress reporting
+                                )
+                                .await
+                                .map_err(|err| {
+                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
+                                })
+                                .ok();
+                            }
                     } else {
                         if let Ok(meta) = build_video_meta(&output_path)
                             .map_err(|err| error!("Error getting video metdata: {}", err))
@@ -824,7 +830,6 @@ async fn handle_recording_finish(
                             }
                         }
                     }
-                    // }
                 }
             });
 

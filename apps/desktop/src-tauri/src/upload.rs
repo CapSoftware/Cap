@@ -278,7 +278,7 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
-async fn do_presigned_upload(
+pub async fn do_presigned_upload(
     app: &AppHandle,
     stream: impl Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
     total_size: u64,
@@ -422,11 +422,11 @@ pub async fn create_or_get_video(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PresignedS3PutRequest {
-    video_id: String,
-    subpath: String,
-    method: PresignedS3PutRequestMethod,
+    pub video_id: String,
+    pub subpath: String,
+    pub method: PresignedS3PutRequestMethod,
     #[serde(flatten)]
-    meta: Option<S3VideoMeta>,
+    pub meta: Option<S3VideoMeta>,
 }
 
 #[derive(Serialize)]
@@ -493,7 +493,7 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
-async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
+pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
         let img = ImageReader::open(&path)
             .map_err(|e| format!("Failed to open image: {e}"))?
@@ -523,7 +523,9 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     .map_err(|e| format!("Failed to compress image: {e}"))?
 }
 
-fn bytes_into_stream(bytes: Vec<u8>) -> (impl Stream<Item = Result<Bytes, std::io::Error>>, u64) {
+pub fn bytes_into_stream(
+    bytes: Vec<u8>,
+) -> (impl Stream<Item = Result<Bytes, std::io::Error>>, u64) {
     let total_size = bytes.len();
     let stream = stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) });
     (stream, total_size as u64)
