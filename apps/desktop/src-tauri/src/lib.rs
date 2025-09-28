@@ -1,3 +1,4 @@
+mod api;
 mod audio;
 mod audio_meter;
 mod auth;

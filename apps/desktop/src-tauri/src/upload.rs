@@ -1,7 +1,8 @@
 // credit @filleduchaos
 
+use crate::api::{S3VideoMeta, UploadedPart};
 use crate::web_api::ManagerExt;
-use crate::{UploadProgress, VideoUploadInfo};
+use crate::{UploadProgress, VideoUploadInfo, api};
 use axum::body::Body;
 use bytes::Bytes;
 use cap_project::{RecordingMeta, RecordingMetaInner, UploadState};
@@ -50,17 +51,6 @@ impl S3UploadMeta {
     }
 }
 
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct S3VideoMeta {
-    #[serde(rename = "durationInSecs")]
-    pub duration_in_secs: f64,
-    pub width: u32,
-    pub height: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fps: Option<f32>,
-}
-
 pub struct UploadedVideo {
     pub link: String,
     pub id: String,
@@ -71,6 +61,15 @@ pub struct UploadedVideo {
 pub struct UploadedImage {
     pub link: String,
     pub id: String,
+}
+
+pub fn upload_v2(app: AppHandle) {
+    // TODO: Progress reporting
+    // TODO: Multipart or regular upload automatically sorted out
+    // TODO: Allow either FS derived or Rust progress derived multipart upload source
+    // TODO: Support screenshots, or videos
+
+    todo!();
 }
 
 pub struct UploadProgressUpdater {
@@ -544,16 +543,6 @@ pub struct UploadProgressEvent {
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MultipartCompleteResponse<'a> {
-    video_id: &'a str,
-    upload_id: &'a str,
-    parts: &'a [UploadedPart],
-    #[serde(flatten)]
-    meta: Option<S3VideoMeta>,
-}
-
 pub struct InstantMultipartUpload {
     pub handle: tokio::task::JoinHandle<Result<(), String>>,
 }
@@ -589,6 +578,8 @@ impl InstantMultipartUpload {
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
     ) -> Result<(), String> {
+        debug!("Initiating multipart upload for {video_id}...");
+
         // TODO: Reuse this + error handling
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
         project_meta.upload = Some(UploadState::MultipartUpload);
@@ -605,57 +596,8 @@ impl InstantMultipartUpload {
         let mut last_uploaded_position: u64 = 0;
         let mut progress = UploadProgressUpdater::new(app.clone(), pre_created_video.id.clone());
 
-        // --------------------------------------------
-        // initiate the multipart upload
-        // --------------------------------------------
-        debug!("Initiating multipart upload for {video_id}...");
-        let initiate_response = match app
-            .authed_api_request("/api/upload/multipart/initiate", |c, url| {
-                c.post(url)
-                    .header("Content-Type", "application/json")
-                    .json(&serde_json::json!({
-                        "videoId": s3_config.id(),
-                        "contentType": "video/mp4"
-                    }))
-            })
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!("Failed to initiate multipart upload: {e}"));
-            }
-        };
-
-        if !initiate_response.status().is_success() {
-            let status = initiate_response.status();
-            let error_body = initiate_response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<no response body>".to_string());
-            return Err(format!(
-                "Failed to initiate multipart upload. Status: {status}. Body: {error_body}"
-            ));
-        }
-
-        let initiate_data = match initiate_response.json::<serde_json::Value>().await {
-            Ok(d) => d,
-            Err(e) => {
-                return Err(format!("Failed to parse initiate response: {e}"));
-            }
-        };
-
-        let upload_id = match initiate_data.get("uploadId") {
-            Some(val) => val.as_str().unwrap_or("").to_string(),
-            None => {
-                return Err("No uploadId returned from initiate endpoint".to_string());
-            }
-        };
-
-        if upload_id.is_empty() {
-            return Err("Empty uploadId returned from initiate endpoint".to_string());
-        }
-
-        println!("Multipart upload initiated with ID: {upload_id}");
+        let upload_id = api::upload_multipart_initiate(&app, s3_config.id()).await?;
+        debug!("Multipart upload initiated with ID: {upload_id}");
 
         let mut realtime_is_done = realtime_video_done.as_ref().map(|_| false);
 
@@ -683,14 +625,14 @@ impl InstantMultipartUpload {
 
             // Check the file's current size
             if !file_path.exists() {
-                println!("File no longer exists, aborting upload");
+                debug!("File no longer exists, aborting upload");
                 return Err("File no longer exists".to_string());
             }
 
             let file_size = match tokio::fs::metadata(&file_path).await {
                 Ok(md) => md.len(),
                 Err(e) => {
-                    println!("Failed to get file metadata: {e}");
+                    debug!("Failed to get file metadata: {e}");
                     sleep(Duration::from_millis(500)).await;
                     continue;
                 }
@@ -720,7 +662,7 @@ impl InstantMultipartUpload {
                         uploaded_parts.push(part);
                     }
                     Err(e) => {
-                        println!(
+                        debug!(
                             "Error uploading chunk (part {part_number}): {e}. Retrying in 1s..."
                         );
                         sleep(Duration::from_secs(1)).await;
@@ -745,11 +687,11 @@ impl InstantMultipartUpload {
                     .map_err(|err| format!("Failed to re-upload first chunk: {err}"))?;
 
                     uploaded_parts[0] = part;
-                    println!("Successfully re-uploaded first chunk",);
+                    debug!("Successfully re-uploaded first chunk",);
                 }
 
                 // All leftover chunks are now uploaded. We finalize.
-                println!(
+                debug!(
                     "Completing multipart upload with {} parts",
                     uploaded_parts.len()
                 );
@@ -788,7 +730,7 @@ impl InstantMultipartUpload {
         file_path: &PathBuf,
         video_id: &str,
         upload_id: &str,
-        part_number: &mut i32,
+        part_number: &mut u32,
         last_uploaded_position: &mut u64,
         chunk_size: u64,
         progress: &mut UploadProgressUpdater,
@@ -812,7 +754,7 @@ impl InstantMultipartUpload {
             .map_err(|e| format!("Failed to open file: {e}"))?;
 
         // Log before seeking
-        println!(
+        debug!(
             "Seeking to offset {} for part {} (file size: {}, remaining: {})",
             *last_uploaded_position, *part_number, file_size, remaining
         );
@@ -834,7 +776,7 @@ impl InstantMultipartUpload {
                 Ok(0) => break, // EOF
                 Ok(n) => {
                     total_read += n;
-                    println!("Read {n} bytes, total so far: {total_read}/{bytes_to_read}");
+                    debug!("Read {n} bytes, total so far: {total_read}/{bytes_to_read}");
                 }
                 Err(e) => return Err(format!("Failed to read chunk from file: {e}")),
             }
@@ -861,7 +803,7 @@ impl InstantMultipartUpload {
 
         let expected_pos = *last_uploaded_position + total_read as u64;
         if pos_after_read != expected_pos {
-            println!(
+            warn!(
                 "WARNING: File position after read ({pos_after_read}) doesn't match expected position ({expected_pos})"
             );
         }
@@ -872,64 +814,18 @@ impl InstantMultipartUpload {
             .unwrap_or(0);
         let remaining = file_size - *last_uploaded_position;
 
-        println!(
+        debug!(
             "File size: {}, Last uploaded: {}, Remaining: {}, chunk_size: {}, part: {}",
             file_size, *last_uploaded_position, remaining, chunk_size, *part_number
         );
-        println!(
+        debug!(
             "Uploading part {} ({} bytes), MD5: {}",
             *part_number, total_read, md5_sum
         );
 
-        // Request presigned URL for this part
-        let presign_response = match app
-            .authed_api_request("/api/upload/multipart/presign-part", |c, url| {
-                c.post(url)
-                    .header("Content-Type", "application/json")
-                    .json(&serde_json::json!({
-                        "videoId": video_id,
-                        "uploadId": upload_id,
-                        "partNumber": *part_number,
-                        "md5Sum": &md5_sum
-                    }))
-            })
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(format!(
-                    "Failed to request presigned URL for part {}: {}",
-                    *part_number, e
-                ));
-            }
-        };
-
-        if !presign_response.status().is_success() {
-            let status = presign_response.status();
-            let error_body = presign_response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<no response body>".to_string());
-            return Err(format!(
-                "Presign-part failed for part {}: status={}, body={}",
-                *part_number, status, error_body
-            ));
-        }
-
-        let presign_data = match presign_response.json::<serde_json::Value>().await {
-            Ok(d) => d,
-            Err(e) => return Err(format!("Failed to parse presigned URL response: {e}")),
-        };
-
-        let presigned_url = presign_data
-            .get("presignedUrl")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-
-        if presigned_url.is_empty() {
-            return Err(format!("Empty presignedUrl for part {}", *part_number));
-        }
+        let presigned_url =
+            api::upload_multipart_presign_part(app, video_id, upload_id, *part_number, &md5_sum)
+                .await?;
 
         // Upload the chunk with retry
         let mut retry_count = 0;
@@ -937,7 +833,7 @@ impl InstantMultipartUpload {
         let mut etag: Option<String> = None;
 
         while retry_count < max_retries && etag.is_none() {
-            println!(
+            debug!(
                 "Sending part {} (attempt {}/{}): {} bytes",
                 *part_number,
                 retry_count + 1,
@@ -961,28 +857,28 @@ impl InstantMultipartUpload {
                                 .unwrap_or("")
                                 .trim_matches('"')
                                 .to_string();
-                            println!("Received ETag {} for part {}", e, *part_number);
+                            debug!("Received ETag {} for part {}", e, *part_number);
                             etag = Some(e);
                         } else {
-                            println!("No ETag in response for part {}", *part_number);
+                            error!("No ETag in response for part {}", *part_number);
                             retry_count += 1;
                             sleep(Duration::from_secs(2)).await;
                         }
                     } else {
-                        println!(
+                        error!(
                             "Failed part {} (status {}). Will retry if possible.",
                             *part_number,
                             upload_response.status()
                         );
                         if let Ok(body) = upload_response.text().await {
-                            println!("Error response: {body}");
+                            error!("Error response: {body}");
                         }
                         retry_count += 1;
                         sleep(Duration::from_secs(2)).await;
                     }
                 }
                 Err(e) => {
-                    println!(
+                    debug!(
                         "Part {} upload error (attempt {}/{}): {}",
                         *part_number,
                         retry_count + 1,
@@ -1007,7 +903,7 @@ impl InstantMultipartUpload {
 
         // Advance the global progress
         *last_uploaded_position += total_read as u64;
-        println!(
+        debug!(
             "After upload: new last_uploaded_position is {} ({}% of file)",
             *last_uploaded_position,
             (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
@@ -1040,7 +936,7 @@ impl InstantMultipartUpload {
         upload_id: &str,
         uploaded_parts: &[UploadedPart],
     ) -> Result<(), String> {
-        println!(
+        debug!(
             "Completing multipart upload with {} parts",
             uploaded_parts.len()
         );
@@ -1055,7 +951,7 @@ impl InstantMultipartUpload {
             let size = part.size;
             let etag = &part.etag;
             total_bytes_in_parts += part.size;
-            println!("Part {pn}: {size} bytes (ETag: {etag})");
+            debug!("Part {pn}: {size} bytes (ETag: {etag})");
         }
 
         let file_final_size = tokio::fs::metadata(file_path)
@@ -1063,66 +959,18 @@ impl InstantMultipartUpload {
             .map(|md| md.len())
             .unwrap_or(0);
 
-        println!("Sum of all parts: {total_bytes_in_parts} bytes");
-        println!("File size on disk: {file_final_size} bytes");
-        println!("Proceeding with multipart upload completion...");
+        debug!("Sum of all parts: {total_bytes_in_parts} bytes");
+        debug!("File size on disk: {file_final_size} bytes");
+        debug!("Proceeding with multipart upload completion...");
 
         let metadata = build_video_meta(file_path)
             .map_err(|e| error!("Failed to get video metadata: {e}"))
             .ok();
 
-        let complete_response = match app
-            .authed_api_request("/api/upload/multipart/complete", |c, url| {
-                c.post(url).header("Content-Type", "application/json").json(
-                    &MultipartCompleteResponse {
-                        video_id,
-                        upload_id,
-                        parts: uploaded_parts,
-                        meta: metadata,
-                    },
-                )
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => {
-                return Err(format!("Failed to complete multipart upload: {e}"));
-            }
-        };
+        api::upload_multipart_complete(&app, &video_id, &upload_id, &uploaded_parts, metadata)
+            .await?;
 
-        if !complete_response.status().is_success() {
-            let status = complete_response.status();
-            let error_body = complete_response
-                .text()
-                .await
-                .unwrap_or_else(|_| "<no response body>".to_string());
-            return Err(format!(
-                "Failed to complete multipart upload. Status: {status}. Body: {error_body}"
-            ));
-        }
-
-        let complete_data = match complete_response.json::<serde_json::Value>().await {
-            Ok(d) => d,
-            Err(e) => {
-                return Err(format!("Failed to parse completion response: {e}"));
-            }
-        };
-
-        if let Some(location) = complete_data.get("location") {
-            println!("Multipart upload complete. Final S3 location: {location}");
-        } else {
-            println!("Multipart upload complete. No 'location' in response.");
-        }
-
-        println!("Multipart upload complete for {video_id}.");
+        info!("Multipart upload complete for {video_id}.");
         Ok(())
     }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct UploadedPart {
-    part_number: i32,
-    etag: String,
-    size: usize,
 }
