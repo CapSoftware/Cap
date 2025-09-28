@@ -291,7 +291,8 @@ requestNewScreenshot: RequestNewScreenshot,
 requestOpenRecordingPicker: RequestOpenRecordingPicker,
 requestOpenSettings: RequestOpenSettings,
 requestStartRecording: RequestStartRecording,
-targetUnderCursor: TargetUnderCursor
+targetUnderCursor: TargetUnderCursor,
+uploadProgressEvent: UploadProgressEvent
 }>({
 audioInputLevelChange: "audio-input-level-change",
 authenticationInvalid: "authentication-invalid",
@@ -312,7 +313,8 @@ requestNewScreenshot: "request-new-screenshot",
 requestOpenRecordingPicker: "request-open-recording-picker",
 requestOpenSettings: "request-open-settings",
 requestStartRecording: "request-start-recording",
-targetUnderCursor: "target-under-cursor"
+targetUnderCursor: "target-under-cursor",
+uploadProgressEvent: "upload-progress-event"
 })
 
 /** user-defined constants **/
@@ -451,8 +453,9 @@ export type TimelineConfiguration = { segments: TimelineSegment[]; zoomSegments:
 export type TimelineSegment = { recordingSegment?: number; timescale: number; start: number; end: number }
 export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null } } | "Reupload"
 export type UploadProgress = { progress: number }
+export type UploadProgressEvent = { video_id: string; uploaded: string; total: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
-export type UploadState = "Uploading" | { Failed: string } | "Complete"
+export type UploadState = "MultipartUpload" | "SinglePartUpload" | { Failed: string } | "Complete"
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
 export type VideoMeta = { path: string; fps?: number; 
 /**

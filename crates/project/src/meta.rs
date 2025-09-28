@@ -75,7 +75,9 @@ pub struct RecordingMeta {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub enum UploadState {
-    Uploading,
+    // TODO: Do we care about what sort of upload it is???
+    MultipartUpload,
+    SinglePartUpload,
     Failed(String),
     Complete,
 }
@@ -146,8 +148,8 @@ impl RecordingMeta {
             RecordingMetaInner::Studio(_) => {
                 Some(self.project_path.join("output").join("result.mp4"))
             }
-            RecordingMetaInner::InProgress { recording } => None,
-            RecordingMetaInner::Failed { error } => None,
+            RecordingMetaInner::InProgress { .. } => None,
+            RecordingMetaInner::Failed { .. } => None,
         }
     }
 

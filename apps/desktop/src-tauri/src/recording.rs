@@ -436,6 +436,7 @@ pub async fn start_recording(
                             recording_dir.join("content/output.mp4"),
                             video_upload_info.clone(),
                             Some(finish_upload_rx),
+                            recording_dir.clone(),
                         );
 
                         let mut builder = instant_recording::Actor::builder(
@@ -685,7 +686,7 @@ async fn handle_recording_end(
         // we delay reporting errors here so that everything else happens first
         Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
         Err(error) => {
-            // TODO: Error handling
+            // TODO: Error handling -> Can we reuse `RecordingMeta` too?
             let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
             project_meta.inner = RecordingMetaInner::Failed { error };
             project_meta.save_for_project().unwrap();
@@ -805,58 +806,58 @@ async fn handle_recording_finish(
 
                     let _ = screenshot_task.await;
 
-                    // if video_upload_succeeded {
-                    //     if let Ok(result) =
-                    //         compress_image(display_screenshot).await
-                    //         .map_err(|err|
-                    //             error!("Error compressing thumbnail for instant mode progressive upload: {err}")
-                    //         ) {
-                    //             let (stream, total_size) = bytes_into_stream(result);
-                    //             do_presigned_upload(
-                    //                 &app,
-                    //                 stream,
-                    //                 total_size,
-                    //                 crate::upload::PresignedS3PutRequest {
-                    //                     video_id: video_upload_info.id.clone(),
-                    //                     subpath: "screenshot/screen-capture.jpg".to_string(),
-                    //                     method: PresignedS3PutRequestMethod::Put,
-                    //                     meta: None,
-                    //                 },
-                    //                 |p| {} // TODO: Progress reporting
-                    //             )
-                    //             .await
-                    //             .map_err(|err| {
-                    //                 error!("Error updating thumbnail for instant mode progressive upload: {err}")
-                    //             })
-                    //             .ok();
-                    //         }
-                    // } else {
-                    //     if let Ok(meta) = build_video_meta(&output_path)
-                    //         .map_err(|err| error!("Error getting video metdata: {}", err))
-                    //     {
-                    //         // The upload_video function handles screenshot upload, so we can pass it along
-                    //         match upload_video(
-                    //             &app,
-                    //             video_upload_info.id.clone(),
-                    //             output_path,
-                    //             display_screenshot.clone(),
-                    //             video_upload_info.config.clone(),
-                    //             meta,
-                    //             None,
-                    //         )
-                    //         .await
-                    //         {
-                    //             Ok(_) => {
-                    //                 info!(
-                    //                     "Final video upload with screenshot completed successfully"
-                    //                 )
-                    //             }
-                    //             Err(e) => {
-                    //                 error!("Error in final upload with screenshot: {}", e)
-                    //             }
-                    //         }
-                    //     }
-                    // }
+                    if video_upload_succeeded {
+                        if let Ok(result) =
+                            compress_image(display_screenshot).await
+                            .map_err(|err|
+                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                            ) {
+                                let (stream, total_size) = bytes_into_stream(result);
+                                do_presigned_upload(
+                                    &app,
+                                    stream,
+                                    total_size,
+                                    crate::upload::PresignedS3PutRequest {
+                                        video_id: video_upload_info.id.clone(),
+                                        subpath: "screenshot/screen-capture.jpg".to_string(),
+                                        method: PresignedS3PutRequestMethod::Put,
+                                        meta: None,
+                                    },
+                                    |p| {} // TODO: Progress reporting
+                                )
+                                .await
+                                .map_err(|err| {
+                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
+                                })
+                                .ok();
+                            }
+                    } else {
+                        if let Ok(meta) = build_video_meta(&output_path)
+                            .map_err(|err| error!("Error getting video metdata: {}", err))
+                        {
+                            // The upload_video function handles screenshot upload, so we can pass it along
+                            match upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                display_screenshot.clone(),
+                                video_upload_info.config.clone(),
+                                meta,
+                                None,
+                            )
+                            .await
+                            {
+                                Ok(_) => {
+                                    info!(
+                                        "Final video upload with screenshot completed successfully"
+                                    )
+                                }
+                                Err(e) => {
+                                    error!("Error in final upload with screenshot: {}", e)
+                                }
+                            }
+                        }
+                    }
                 }
             });
 

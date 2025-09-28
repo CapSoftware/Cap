@@ -20,6 +20,7 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
+import { createStore } from "solid-js/store";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -117,6 +118,17 @@ export default function Recordings() {
 		});
 	};
 
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record<string, number>
+	>({});
+	// TODO: Cleanup subscription
+	events.uploadProgressEvent.listen((e) => {
+		setUploadProgress(
+			e.payload.video_id,
+			Number(e.payload.uploaded) / Number(e.payload.total),
+		);
+	});
+
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
 			<div class="flex flex-col">
@@ -133,6 +145,8 @@ export default function Recordings() {
 					</p>
 				}
 			>
+				<pre>{JSON.stringify(uploadProgress)}</pre>
+
 				<div class="flex gap-3 items-center pb-4 w-full border-b border-gray-2">
 					<For each={Tabs}>
 						{(tab) => (
@@ -211,6 +225,8 @@ function RecordingItem(props: {
 				</Show>
 				<div class="flex flex-col gap-2">
 					{"recording" in props.recording.meta ? "TRUE" : "FALSE"}
+					{"error" in props.recording.meta ? props.recording.meta.error : ""}
+					{JSON.stringify(props.recording.meta?.upload || {})}
 
 					<span>{props.recording.prettyName}</span>
 					<div

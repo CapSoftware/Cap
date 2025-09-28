@@ -4,6 +4,7 @@ use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use axum::body::Body;
 use bytes::Bytes;
+use cap_project::{RecordingMeta, RecordingMetaInner, UploadState};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
@@ -24,6 +25,7 @@ use std::{
 };
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_specta::Event;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::sync::watch;
@@ -531,9 +533,16 @@ pub fn bytes_into_stream(
     (stream, total_size as u64)
 }
 
+#[derive(Clone, Serialize, Type, tauri_specta::Event)]
+pub struct UploadProgressEvent {
+    video_id: String,
+    // TODO: Account for different states -> Eg. uploading video vs thumbnail
+    uploaded: String,
+    total: String,
+}
+
 // a typical recommended chunk size is 5MB (AWS min part size).
 const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
-// const MIN_PART_SIZE: u64 = 5 * 1024 * 1024; // For non-final parts
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -558,6 +567,7 @@ impl InstantMultipartUpload {
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         realtime_upload_done: Option<Receiver<()>>,
+        recording_dir: PathBuf,
     ) -> Self {
         Self {
             handle: spawn_actor(Self::run(
@@ -566,6 +576,7 @@ impl InstantMultipartUpload {
                 file_path,
                 pre_created_video,
                 realtime_upload_done,
+                recording_dir,
             )),
         }
     }
@@ -576,7 +587,13 @@ impl InstantMultipartUpload {
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
+        recording_dir: PathBuf,
     ) -> Result<(), String> {
+        // TODO: Reuse this + error handling
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+        project_meta.upload = Some(UploadState::MultipartUpload);
+        project_meta.save_for_project().unwrap();
+
         // --------------------------------------------
         // basic constants and info for chunk approach
         // --------------------------------------------
@@ -751,6 +768,11 @@ impl InstantMultipartUpload {
             }
         }
 
+        // TODO: Reuse this + error handling
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+        project_meta.upload = Some(UploadState::Complete);
+        project_meta.save_for_project().unwrap();
+
         // Copy link to clipboard early
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 
@@ -882,8 +904,6 @@ impl InstantMultipartUpload {
             }
         };
 
-        progress.update(expected_pos, file_size);
-
         if !presign_response.status().is_success() {
             let status = presign_response.status();
             let error_body = presign_response
@@ -992,6 +1012,15 @@ impl InstantMultipartUpload {
             *last_uploaded_position,
             (*last_uploaded_position as f64 / file_size as f64 * 100.0) as u32
         );
+
+        progress.update(expected_pos, file_size);
+        UploadProgressEvent {
+            video_id: video_id.to_string(),
+            uploaded: last_uploaded_position.to_string(),
+            total: file_size.to_string(),
+        }
+        .emit(app)
+        .ok();
 
         let part = UploadedPart {
             part_number: *part_number,

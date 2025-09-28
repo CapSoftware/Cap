@@ -1969,6 +1969,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingDeleted,
             target_select_overlay::TargetUnderCursor,
             hotkeys::OnEscapePress,
+            upload::UploadProgressEvent,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
