@@ -32,7 +32,6 @@ export async function createNotification(
 	notification: CreateNotificationInput,
 ) {
 	try {
-		// First, check if the video exists
 		const [videoExists] = await db()
 			.select({ id: videos.id, ownerId: videos.ownerId })
 			.from(videos)
@@ -44,7 +43,6 @@ export async function createNotification(
 			throw new Error(`Video not found for videoId: ${notification.videoId}`);
 		}
 
-		// Then get the owner data
 		const [ownerResult] = await db()
 			.select({
 				id: users.id,
@@ -63,8 +61,6 @@ export async function createNotification(
 				videoExists.ownerId,
 				"- skipping notification creation",
 			);
-			// Don't throw an error, just skip notification creation
-			// This handles cases where the video exists but the owner was deleted
 			return;
 		}
 
