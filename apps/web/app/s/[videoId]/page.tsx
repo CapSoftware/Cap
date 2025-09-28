@@ -372,7 +372,6 @@ async function AuthorizedContent({
 			});
 		} catch (error) {
 			console.warn("Failed to create view notification:", error);
-			// Don't throw the error, just log it since this is not critical for the page to function
 		}
 	}
 

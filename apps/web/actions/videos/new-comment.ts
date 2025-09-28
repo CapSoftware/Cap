@@ -43,7 +43,7 @@ export async function newComment(data: {
 		type: type,
 		content: content,
 		videoId: videoId,
-		timestamp: timestamp || null,
+		timestamp: timestamp ?? null,
 		parentCommentId: parentCommentId,
 		createdAt: new Date(),
 		updatedAt: new Date(),

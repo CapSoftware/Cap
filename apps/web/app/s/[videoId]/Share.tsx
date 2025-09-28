@@ -214,55 +214,39 @@ export const Share = ({
 	const aiLoading = shouldShowLoading();
 
 	const handleSeek = useCallback((time: number) => {
-		let video = playerRef.current;
-
-		// Fallback to DOM query if ref is not available
-		if (!video) {
-			video = document.querySelector("video") as HTMLVideoElement;
-			if (!video) {
-				console.warn("Video player not ready");
-				return;
-			}
+		const v =
+			playerRef.current ??
+			(document.querySelector("video") as HTMLVideoElement | null);
+		if (!v) {
+			console.warn("Video player not ready");
+			return;
 		}
-
-		// Try to seek immediately if video has metadata
-		if (video.readyState >= 1) {
-			// HAVE_METADATA
+		const seekOnce = (t: number) => {
+			const dur =
+				Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+			const clamped = dur ? Math.max(0, Math.min(dur - 0.001, t)) : t;
 			try {
-				video.currentTime = time;
-				return;
-			} catch (error) {
-				console.error("Failed to seek video:", error);
+				v.currentTime = clamped;
+			} catch (e) {
+				console.error("Failed to seek video:", e);
 			}
+		};
+		if (v.readyState >= 1) {
+			seekOnce(time);
+			return;
 		}
-
-		// If video isn't ready, wait for it to be ready
-		const handleCanPlay = () => {
-			try {
-				video.currentTime = time;
-			} catch (error) {
-				console.error("Failed to seek video after canplay:", error);
-			}
-			video.removeEventListener("canplay", handleCanPlay);
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const handleReady = () => {
+			seekOnce(time);
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
+			if (timeoutId) clearTimeout(timeoutId);
 		};
-
-		const handleLoadedMetadata = () => {
-			try {
-				video.currentTime = time;
-			} catch (error) {
-				console.error("Failed to seek video after loadedmetadata:", error);
-			}
-			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-		};
-
-		// Listen for multiple events to ensure we catch when the video is ready
-		video.addEventListener("canplay", handleCanPlay);
-		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-
-		// Cleanup after 3 seconds if events don't fire
-		setTimeout(() => {
-			video.removeEventListener("canplay", handleCanPlay);
-			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		v.addEventListener("canplay", handleReady, { once: true });
+		v.addEventListener("loadedmetadata", handleReady, { once: true });
+		timeoutId = setTimeout(() => {
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
 		}, 3000);
 	}, []);
 
