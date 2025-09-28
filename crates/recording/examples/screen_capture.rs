@@ -1,5 +1,5 @@
 use cap_recording::{
-    pipeline::{control::PipelineControlSignal, task::PipelineSourceTask},
+    pipeline::control::PipelineControlSignal,
     sources::{CMSampleBufferCapture, ScreenCaptureSource, ScreenCaptureTarget},
 };
 use scap_targets::Window;

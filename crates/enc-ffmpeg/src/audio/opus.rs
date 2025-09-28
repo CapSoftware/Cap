@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
     codec::{context, encoder},
@@ -17,6 +19,7 @@ pub struct OpusEncoder {
     packet: ffmpeg::Packet,
     resampler: BufferedResampler,
     stream_index: usize,
+    first_pts: Option<i64>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -108,6 +111,7 @@ impl OpusEncoder {
             stream_index,
             packet: ffmpeg::Packet::empty(),
             resampler,
+            first_pts: None,
         })
     }
 
@@ -115,7 +119,27 @@ impl OpusEncoder {
         self.encoder.time_base()
     }
 
-    pub fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
+    pub fn queue_frame(
+        &mut self,
+        mut frame: frame::Audio,
+        timestamp: Duration,
+        output: &mut format::context::Output,
+    ) {
+        if timestamp != Duration::MAX {
+            let Some(pts) = frame.pts() else {
+                tracing::error!("Frame has no pts");
+                return;
+            };
+
+            let time_base = self.input_time_base();
+            let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
+            frame.set_pts(Some((timestamp.as_secs_f64() * rate).round() as i64));
+
+            let first_pts = self.first_pts.get_or_insert(pts);
+
+            frame.set_pts(Some(pts - *first_pts));
+        }
+
         self.resampler.add_frame(frame);
 
         let frame_size = self.encoder.frame_size() as usize;
@@ -153,7 +177,7 @@ impl OpusEncoder {
 
 impl AudioEncoder for OpusEncoder {
     fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        self.queue_frame(frame, output);
+        self.queue_frame(frame, Duration::MAX, output);
     }
 
     fn finish(&mut self, output: &mut format::context::Output) {

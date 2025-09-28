@@ -1,13 +1,14 @@
+mod audio_buffer;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;
 pub mod instant_recording;
-pub mod pipeline;
+mod output_pipeline;
 pub mod sources;
 pub mod studio_recording;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
-pub use sources::{camera, screen_capture};
+pub use sources::screen_capture;
 
 use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;

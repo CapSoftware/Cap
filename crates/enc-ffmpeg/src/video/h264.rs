@@ -155,14 +155,16 @@ impl H264Encoder {
         H264EncoderBuilder::new(name, input_config)
     }
 
-    pub fn queue_frame(&mut self, frame: frame::Video, output: &mut format::context::Output) {
-        let frame = if let Some(converter) = &mut self.converter {
+    pub fn queue_frame(
+        &mut self,
+        frame: frame::Video,
+        timestamp: Duration,
+        output: &mut format::context::Output,
+    ) {
+        let mut frame = if let Some(converter) = &mut self.converter {
             let mut new_frame = frame::Video::empty();
             match converter.run(&frame, &mut new_frame) {
-                Ok(_) => {
-                    new_frame.set_pts(frame.pts());
-                    new_frame
-                }
+                Ok(_) => new_frame,
                 Err(e) => {
                     tracing::error!(
                         "Failed to convert frame: {} from format {:?} to {:?}",
@@ -177,6 +179,8 @@ impl H264Encoder {
         } else {
             frame
         };
+
+        frame.set_pts(Some(self.get_pts(timestamp)));
 
         if let Err(e) = self.encoder.send_frame(&frame) {
             tracing::error!("Failed to send frame to encoder: {:?}", e);
@@ -208,7 +212,7 @@ impl H264Encoder {
         self.process_frame(output);
     }
 
-    pub fn get_pts(&self, duration: Duration) -> i64 {
+    fn get_pts(&self, duration: Duration) -> i64 {
         (duration.as_secs_f32() * self.config.time_base.denominator() as f32
             / self.config.time_base.numerator() as f32) as i64
     }

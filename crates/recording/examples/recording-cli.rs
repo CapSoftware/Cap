@@ -1,5 +1,4 @@
-use cap_recording::{feeds::microphone, screen_capture::ScreenCaptureTarget, *};
-use kameo::Actor;
+use cap_recording::{screen_capture::ScreenCaptureTarget, *};
 use scap_targets::Display;
 use std::time::Duration;
 use tracing::info;
@@ -60,13 +59,13 @@ pub async fn main() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let (handle, _ready_rx) = instant_recording::Actor::builder(
+    let handle = instant_recording::Actor::builder(
         dir.path().into(),
         ScreenCaptureTarget::Display {
             id: Display::primary().id(),
         },
     )
-    // .with_system_audio(true)
+    .with_system_audio(true)
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
@@ -77,6 +76,8 @@ pub async fn main() {
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     let _ = handle.stop().await;
+
+    info!("Recording finished");
 
     std::mem::forget(dir);
 }

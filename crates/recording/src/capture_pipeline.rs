@@ -1,229 +1,150 @@
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::{AudioFrame, NewOutputPipeline};
 use crate::{
-    RecordingError,
     feeds::microphone::MicrophoneFeedLock,
-    pipeline::builder::PipelineBuilder,
-    sources::{
-        AudioInputSource, ScreenCaptureFormat, ScreenCaptureSource, ScreenCaptureTarget,
-        audio_mixer::AudioMixer, screen_capture,
-    },
+    output_pipeline::{Muxer, OutputPipeline},
+    sources::{ScreenCaptureFormat, ScreenCaptureSource, ScreenCaptureTarget, screen_capture},
 };
-use cap_media::MediaError;
-use cap_media_info::AudioInfo;
-use cap_timestamp::{Timestamp, Timestamps};
-use flume::{Receiver, Sender};
+use anyhow::anyhow;
+use cap_media_info::{AudioInfo, VideoInfo};
+use cap_timestamp::Timestamps;
+use futures::{SinkExt, StreamExt, channel::mpsc};
+use kameo::{
+    actor::{ActorID, ActorRef, Recipient},
+    prelude::*,
+};
 use std::{
-    future::Future,
+    ops::ControlFlow,
     path::PathBuf,
-    sync::{Arc, atomic::AtomicBool},
-    time::SystemTime,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+    time::{Duration, SystemTime},
 };
+use tracing::*;
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
-    fn make_studio_mode_pipeline(
-        builder: PipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, Timestamp)>,
-        ),
+    async fn make_studio_mode_pipeline(
+        source: ScreenCaptureSource<Self>,
         output_path: PathBuf,
         start_time: Timestamps,
-    ) -> Result<(PipelineBuilder, flume::Receiver<Timestamp>), MediaError>
+    ) -> anyhow::Result<NewOutputPipeline>
     where
         Self: Sized;
 
-    fn make_instant_mode_pipeline(
-        builder: PipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, Timestamp)>,
-        ),
-        audio: Option<Arc<MicrophoneFeedLock>>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, Timestamp)>, AudioInfo)>,
+    async fn make_instant_mode_pipeline(
+        source: ScreenCaptureSource<Self>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> impl Future<Output = Result<PipelineBuilder, MediaError>> + Send
+    ) -> anyhow::Result<NewOutputPipeline>
     where
         Self: Sized;
 }
 
+struct RecordingSource {
+    name: String,
+    id: ActorID,
+    stop: Recipient<Stop>,
+}
+
+#[derive(Default)]
+pub struct RecordingSupervisor {
+    sources: Vec<RecordingSource>,
+    has_stopped: bool,
+}
+
+impl kameo::Actor for RecordingSupervisor {
+    type Args = Self;
+    type Error = ();
+
+    async fn on_start(args: Self::Args, _: ActorRef<Self>) -> Result<Self, Self::Error> {
+        Ok(args)
+    }
+
+    async fn on_link_died(
+        &mut self,
+        _: WeakActorRef<Self>,
+        id: ActorID,
+        reason: ActorStopReason,
+    ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
+        let Some(source) = self.sources.iter().find(|s| s.id == id) else {
+            warn!("Actor linked to supervisor not found in sources: {:?}", id);
+            return Ok(ControlFlow::Continue(()));
+        };
+
+        error!("Source {} died: {}", &source.name, reason);
+
+        for source in &self.sources {
+            let _ = source.stop.tell(Stop).await;
+        }
+
+        Ok(ControlFlow::Continue(()))
+    }
+}
+
+pub struct SuperviseSource<A: kameo::Actor> {
+    pub name: String,
+    pub actor_ref: ActorRef<A>,
+}
+
+impl<A: kameo::Actor + Message<Stop>> Message<SuperviseSource<A>> for RecordingSupervisor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: SuperviseSource<A>,
+        ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let id = msg.actor_ref.id();
+        ctx.actor_ref().link(&msg.actor_ref).await;
+
+        self.sources.push(RecordingSource {
+            id,
+            name: msg.name,
+            stop: msg.actor_ref.recipient(),
+        });
+    }
+}
+
+pub struct Start;
+pub struct Stop;
+
 #[cfg(target_os = "macos")]
 impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
-    fn make_studio_mode_pipeline(
-        mut builder: PipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, Timestamp)>,
-        ),
+    async fn make_studio_mode_pipeline(
+        source: ScreenCaptureSource<Self>,
         output_path: PathBuf,
-        _start_time: Timestamps,
-    ) -> Result<(PipelineBuilder, flume::Receiver<Timestamp>), MediaError> {
-        let screen_config = source.0.info();
-        tracing::info!("screen config: {:?}", screen_config);
+        start_time: Timestamps,
+    ) -> anyhow::Result<NewOutputPipeline> {
+        let mut output_builder =
+            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
 
-        let mut screen_encoder = cap_enc_avfoundation::MP4Encoder::init(
-            "screen",
-            screen_config,
-            None,
-            output_path,
-            None,
-        )
-        .map_err(|e| MediaError::Any(e.to_string().into()))?;
+        output_builder.set_timestamps(start_time);
 
-        let (timestamp_tx, timestamp_rx) = flume::bounded(1);
-
-        builder.spawn_source("screen_capture", source.0);
-
-        builder.spawn_task("screen_capture_encoder", move |ready| {
-            let mut timestamp_tx = Some(timestamp_tx);
-            let _ = ready.send(Ok(()));
-
-            let Ok((frame, timestamp)) = source.1.recv() else {
-                return Ok(());
-            };
-
-            if let Some(timestamp_tx) = timestamp_tx.take() {
-                let _ = timestamp_tx.send(timestamp);
-                let _ = screen_encoder.queue_video_frame(frame.as_ref());
-            }
-
-            let result = loop {
-                match source.1.recv() {
-                    Ok((frame, _)) => {
-                        let _ = screen_encoder.queue_video_frame(frame.as_ref());
-                    }
-                    // Err(RecvTimeoutError::Timeout) => {
-                    //     break Err("Frame receive timeout".to_string());
-                    // }
-                    Err(_) => {
-                        break Ok(());
-                    }
-                }
-            };
-
-            screen_encoder.finish();
-
-            result
-        });
-
-        Ok((builder, timestamp_rx))
+        output_builder
+            .build::<AVFoundationMuxer>(AVFoundationMuxerConfig {
+                output_height: None,
+            })
+            .await
     }
 
     async fn make_instant_mode_pipeline(
-        mut builder: PipelineBuilder,
-        source: (
-            ScreenCaptureSource<Self>,
-            flume::Receiver<(Self::VideoFormat, Timestamp)>,
-        ),
-        audio: Option<Arc<MicrophoneFeedLock>>,
-        system_audio: Option<(Receiver<(ffmpeg::frame::Audio, Timestamp)>, AudioInfo)>,
+        source: ScreenCaptureSource<Self>,
+        mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> Result<PipelineBuilder, MediaError> {
-        let start_time = Timestamps::now();
+    ) -> anyhow::Result<NewOutputPipeline> {
+        let mut output_builder =
+            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
 
-        let (audio_tx, audio_rx) = flume::bounded(64);
-        let mut audio_mixer = AudioMixer::builder(audio_tx);
-
-        if let Some(system_audio) = system_audio {
-            audio_mixer.add_source(system_audio.1, system_audio.0);
+        if let Some(mic_feed) = mic_feed {
+            output_builder.add_audio_source(mic_feed);
         }
 
-        if let Some(audio) = audio {
-            let (tx, rx) = flume::bounded(32);
-            audio_mixer.add_source(*audio.audio_info(), rx);
-            let source = AudioInputSource::init(audio, tx);
-
-            builder.spawn_source("microphone_capture", source);
-        }
-
-        let has_audio_sources = audio_mixer.has_sources();
-
-        let mp4 = Arc::new(std::sync::Mutex::new(
-            cap_enc_avfoundation::MP4Encoder::init(
-                "mp4",
-                source.0.info(),
-                has_audio_sources.then_some(AudioMixer::INFO),
-                output_path,
-                Some(1080),
-            )
-            .map_err(|e| MediaError::Any(e.to_string().into()))?,
-        ));
-
-        use cidre::cm;
-        use tracing::error;
-
-        let (first_frame_tx, mut first_frame_rx) =
-            tokio::sync::oneshot::channel::<(cm::Time, Timestamp)>();
-
-        if has_audio_sources {
-            builder.spawn_source("audio_mixer", audio_mixer);
-
-            let mp4 = mp4.clone();
-            builder.spawn_task("audio_encoding", move |ready| {
-                let _ = ready.send(Ok(()));
-                let mut time = None;
-
-                while let Ok((mut frame, timestamp)) = audio_rx.recv() {
-                    if let Ok(first_time) = first_frame_rx.try_recv() {
-                        time = Some(first_time);
-                    };
-
-                    let Some(time) = time else {
-                        continue;
-                    };
-
-                    let ts_offset = timestamp.duration_since(start_time);
-                    let screen_first_offset = time.1.duration_since(start_time);
-
-                    let Some(ts_offset) = ts_offset.checked_sub(screen_first_offset) else {
-                        continue;
-                    };
-
-                    let pts = (ts_offset.as_secs_f64() * frame.rate() as f64) as i64;
-                    frame.set_pts(Some(pts));
-
-                    if let Ok(mut mp4) = mp4.lock()
-                        && let Err(e) = mp4.queue_audio_frame(frame)
-                    {
-                        error!("{e}");
-                        return Ok(());
-                    }
-                }
-
-                Ok(())
-            });
-        }
-
-        let mut first_frame_tx = Some(first_frame_tx);
-        builder.spawn_task("screen_capture_encoder", move |ready| {
-            let _ = ready.send(Ok(()));
-            while let Ok((frame, timestamp)) = source.1.recv() {
-                if let Ok(mut mp4) = mp4.lock() {
-                    if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        mp4.pause();
-                    } else {
-                        mp4.resume();
-                    }
-
-                    if let Some(first_frame_tx) = first_frame_tx.take() {
-                        let _ = first_frame_tx.send((frame.pts(), timestamp));
-                    }
-
-                    mp4.queue_video_frame(frame.as_ref())
-                        .map_err(|err| error!("Error queueing video frame: {err}"))
-                        .ok();
-                }
-            }
-            if let Ok(mut mp4) = mp4.lock() {
-                mp4.finish();
-            }
-
-            Ok(())
-        });
-
-        builder.spawn_source("screen_capture", source.0);
-
-        Ok(builder)
+        output_builder
+            .build::<AVFoundationMuxer>(AVFoundationMuxerConfig {
+                output_height: Some(1080),
+            })
+            .await
     }
 }
 
@@ -766,11 +687,6 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     }
 }
 
-type ScreenCaptureReturn<T> = (
-    ScreenCaptureSource<T>,
-    Receiver<(<T as ScreenCaptureFormat>::VideoFormat, Timestamp)>,
-);
-
 #[cfg(target_os = "macos")]
 pub type ScreenCaptureMethod = screen_capture::CMSampleBufferCapture;
 
@@ -781,26 +697,20 @@ pub async fn create_screen_capture(
     capture_target: &ScreenCaptureTarget,
     force_show_cursor: bool,
     max_fps: u32,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
     start_time: SystemTime,
+    system_audio: bool,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
-    let (video_tx, video_rx) = flume::bounded(16);
-
-    ScreenCaptureSource::<ScreenCaptureMethod>::init(
+) -> anyhow::Result<ScreenCaptureSource<ScreenCaptureMethod>> {
+    Ok(ScreenCaptureSource::<ScreenCaptureMethod>::init(
         capture_target,
         force_show_cursor,
         max_fps,
-        video_tx,
-        audio_tx,
         start_time,
-        tokio::runtime::Handle::current(),
+        system_audio,
         #[cfg(windows)]
         d3d_device,
     )
-    .await
-    .map(|v| (v, video_rx))
-    .map_err(|e| RecordingError::Media(MediaError::TaskLaunch(e.to_string())))
+    .await?)
 }
 
 #[cfg(windows)]
@@ -861,4 +771,62 @@ pub fn create_d3d_device()
     }
 
     Ok(device.unwrap())
+}
+
+#[derive(Clone)]
+struct AVFoundationMuxer(Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>);
+
+struct AVFoundationMuxerConfig {
+    pub output_height: Option<u32>,
+}
+
+impl Muxer for AVFoundationMuxer {
+    type VideoFrame = screen_capture::VideoFrame;
+    type Config = AVFoundationMuxerConfig;
+
+    fn setup(
+        config: Self::Config,
+        output_path: PathBuf,
+        video_config: VideoInfo,
+        audio_config: Option<AudioInfo>,
+    ) -> anyhow::Result<Self> {
+        Ok(Self(Arc::new(Mutex::new(
+            cap_enc_avfoundation::MP4Encoder::init(
+                output_path,
+                video_config,
+                audio_config,
+                config.output_height,
+            )
+            .map_err(|e| anyhow!("{e}"))?,
+        ))))
+    }
+
+    fn send_audio_frame(
+        &mut self,
+        frame: ffmpeg::frame::Audio,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .map_err(|e| anyhow!("{e}"))?
+            .queue_audio_frame(frame, timestamp)
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    fn send_video_frame(
+        &mut self,
+        frame: Self::VideoFrame,
+        timestamp: Duration,
+    ) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .map_err(|e| anyhow!("{e}"))?
+            .queue_video_frame(&frame.sample_buf, timestamp)
+            .map_err(|e| anyhow!("{e}"))
+    }
+
+    fn finish(&mut self) -> anyhow::Result<()> {
+        self.0.lock().map_err(|e| anyhow!("{e}"))?.finish();
+        Ok(())
+    }
 }

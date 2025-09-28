@@ -1,4 +1,3 @@
-use crate::pipeline::{control::Control, task::PipelineSourceTask};
 use cap_cursor_capture::CursorCropBounds;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
@@ -21,8 +20,9 @@ pub use macos::*;
 
 pub struct StopCapturing;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum StopCapturingError {
+    #[error("NotCapturing")]
     NotCapturing,
 }
 
@@ -192,10 +192,8 @@ impl ScreenCaptureTarget {
 pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
     video_info: VideoInfo,
-    tokio_handle: tokio::runtime::Handle,
-    video_tx: Sender<(TCaptureFormat::VideoFormat, Timestamp)>,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
     start_time: SystemTime,
+    pub system_audio: bool,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     #[cfg(windows)]
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
@@ -208,10 +206,6 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
             // .field("output_resolution", &self.output_resolution)
             .field("fps", &self.config.fps)
             .field("video_info", &self.video_info)
-            .field(
-                "audio_info",
-                &self.audio_tx.as_ref().map(|_| self.audio_info()),
-            )
             .finish()
     }
 }
@@ -232,10 +226,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCapture
         Self {
             config: self.config.clone(),
             video_info: self.video_info,
-            video_tx: self.video_tx.clone(),
-            audio_tx: self.audio_tx.clone(),
-            tokio_handle: self.tokio_handle.clone(),
             start_time: self.start_time,
+            system_audio: self.system_audio,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device: self.d3d_device.clone(),
@@ -276,10 +268,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
         target: &ScreenCaptureTarget,
         show_cursor: bool,
         max_fps: u32,
-        video_tx: Sender<(TCaptureFormat::VideoFormat, Timestamp)>,
-        audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
         start_time: SystemTime,
-        tokio_handle: tokio::runtime::Handle,
+        system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
@@ -400,10 +390,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
                 output_size.height() as u32,
                 fps,
             ),
-            video_tx,
-            audio_tx,
-            tokio_handle,
             start_time,
+            system_audio,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device,

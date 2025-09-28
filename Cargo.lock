@@ -1415,6 +1415,7 @@ dependencies = [
 name = "cap-recording"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cap-audio",
  "cap-camera",
  "cap-camera-ffmpeg",

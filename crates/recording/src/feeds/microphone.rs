@@ -11,9 +11,14 @@ use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
     ops::Deref,
-    sync::mpsc::{self, SyncSender},
+    sync::{
+        Arc,
+        mpsc::{self, SyncSender},
+    },
 };
 use tracing::{debug, error, info, trace, warn};
+
+use crate::output_pipeline::{AudioFrame, AudioSource};
 
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 
@@ -523,5 +528,30 @@ impl Message<Unlock> for MicrophoneFeed {
                 state
             }
         });
+    }
+}
+
+impl AudioSource for Arc<MicrophoneFeedLock> {
+    fn setup(
+        self,
+        mut out_tx: futures::channel::mpsc::Sender<AudioFrame>,
+    ) -> anyhow::Result<AudioInfo> {
+        let audio_info = *self.audio_info();
+        let (tx, rx) = flume::bounded(32);
+
+        self.actor.ask(AddSender(tx)).blocking_send()?;
+
+        tokio::spawn(async move {
+            while let Ok(frame) = rx.recv_async().await {
+                if let Err(_) = out_tx.try_send(AudioFrame {
+                    inner: audio_info.wrap_frame(&frame.data),
+                    timestamp: frame.timestamp,
+                }) {
+                    return;
+                }
+            }
+        });
+
+        Ok(audio_info)
     }
 }

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use cap_media_info::{AudioInfo, FFRational};
 use ffmpeg::{
     codec::{context, encoder},
