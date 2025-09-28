@@ -1146,6 +1146,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytemuck",
+ "bytes",
  "cap-audio",
  "cap-camera",
  "cap-editor",

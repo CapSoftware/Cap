@@ -2,10 +2,12 @@
 
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
+use axum::body::Body;
+use bytes::Bytes;
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
-use futures::StreamExt;
+use futures::{Stream, StreamExt, stream};
 use image::ImageReader;
 use image::codecs::jpeg::JpegEncoder;
 use reqwest::StatusCode;
@@ -13,15 +15,21 @@ use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
+use std::error::Error;
+use std::io;
+use std::path::Path;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::sync::watch;
 use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
+use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, trace, warn};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
@@ -159,6 +167,24 @@ impl UploadProgressUpdater {
     }
 }
 
+#[derive(Default, Debug)]
+pub enum UploadPartProgress {
+    #[default]
+    Presigning,
+    Uploading {
+        uploaded: i64,
+        total: i64,
+    },
+    Done,
+    Error(String),
+}
+
+#[derive(Default, Debug)]
+pub struct UploadVideoProgress {
+    video: UploadPartProgress,
+    thumbnail: UploadPartProgress,
+}
+
 pub async fn upload_video(
     app: &AppHandle,
     video_id: String,
@@ -166,24 +192,81 @@ pub async fn upload_video(
     screenshot_path: PathBuf,
     s3_config: S3UploadMeta,
     meta: S3VideoMeta,
+    // TODO: Hook this back up?
     channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedVideo, String> {
+    let (tx, mut rx) = watch::channel(UploadVideoProgress::default());
+
+    // TODO: Hook this up properly
+    tokio::spawn(async move {
+        loop {
+            println!("STATUS: {:?}", *rx.borrow_and_update());
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
+    });
+
     info!("Uploading video {video_id}...");
 
-    let client = reqwest::Client::new();
-
-    let presigned_put = presigned_s3_put(
+    let (stream, total_size) = file_reader_stream(file_path).await?;
+    let video_upload_fut = do_presigned_upload(
         app,
+        stream,
+        total_size,
         PresignedS3PutRequest {
             video_id: video_id.clone(),
             subpath: "result.mp4".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: Some(meta),
         },
-    )
-    .await?;
+        {
+            let tx = tx.clone();
+            move |p| tx.send_modify(|v| v.video = p)
+        },
+    );
 
-    let file = tokio::fs::File::open(&file_path)
+    let (stream, total_size) = bytes_into_stream(compress_image(screenshot_path).await?);
+    let thumbnail_upload_fut = do_presigned_upload(
+        app,
+        stream,
+        total_size,
+        PresignedS3PutRequest {
+            video_id: s3_config.id.clone(),
+            subpath: "screenshot/screen-capture.jpg".to_string(),
+            method: PresignedS3PutRequestMethod::Put,
+            meta: None,
+        },
+        {
+            let tx = tx.clone();
+            move |p| tx.send_modify(|v| v.thumbnail = p)
+        },
+    );
+
+    let (video_result, thumbnail_result): (Result<(), String>, Result<(), String>) =
+        tokio::join!(video_upload_fut, thumbnail_upload_fut);
+
+    if let Some(err) = video_result.err() {
+        error!("Failed to upload video for {video_id}: {err}");
+        tx.send_modify(|v| v.video = UploadPartProgress::Error(err.clone()));
+        return Err(err); // TODO: Maybe don't do this
+    }
+    if let Some(err) = thumbnail_result.err() {
+        error!("Failed to upload thumbnail for video {video_id}: {err}");
+        tx.send_modify(|v| v.thumbnail = UploadPartProgress::Error(err.clone()));
+        return Err(err); // TODO: Maybe don't do this
+    }
+
+    Ok(UploadedVideo {
+        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
+        id: s3_config.id.clone(),
+        config: s3_config,
+    })
+}
+
+/// Open a file and construct a stream to it.
+async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File>, u64), String> {
+    let file = File::open(path)
         .await
         .map_err(|e| format!("Failed to open file: {e}"))?;
 
@@ -192,79 +275,52 @@ pub async fn upload_video(
         .await
         .map_err(|e| format!("Failed to get file metadata: {e}"))?;
 
-    let total_size = metadata.len();
+    Ok((ReaderStream::new(file), metadata.len()))
+}
 
-    let reader_stream = tokio_util::io::ReaderStream::new(file);
+async fn do_presigned_upload(
+    app: &AppHandle,
+    stream: impl Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
+    total_size: u64,
+    request: PresignedS3PutRequest,
+    mut set_progress: impl FnMut(UploadPartProgress) + Send + 'static,
+) -> Result<(), String> {
+    set_progress(UploadPartProgress::Presigning);
+    let client = reqwest::Client::new();
+    let presigned_url = presigned_s3_put(app, request).await?;
 
-    let mut bytes_uploaded = 0u64;
-    let mut progress = UploadProgressUpdater::new(app.clone(), video_id);
-
-    let progress_stream = reader_stream.inspect(move |chunk| {
+    set_progress(UploadPartProgress::Uploading {
+        uploaded: 0,
+        total: 0,
+    });
+    let mut uploaded = 0i64;
+    let total = total_size as i64;
+    let stream = stream.inspect(move |chunk| {
         if let Ok(chunk) = chunk {
-            bytes_uploaded += chunk.len() as u64;
-        }
-
-        if bytes_uploaded > 0 {
-            if let Some(channel) = &channel {
-                channel
-                    .send(UploadProgress {
-                        progress: bytes_uploaded as f64 / total_size as f64,
-                    })
-                    .ok();
-            }
-
-            progress.update(bytes_uploaded, total_size);
+            uploaded += chunk.len() as i64;
+            set_progress(UploadPartProgress::Uploading { uploaded, total });
         }
     });
 
-    let screenshot_upload = prepare_screenshot_upload(app, &s3_config, screenshot_path);
+    let response = client
+        .put(presigned_url)
+        .body(reqwest::Body::wrap_stream(stream))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to upload file: {e}"))?;
 
-    let video_upload = client
-        .put(presigned_put)
-        .body(reqwest::Body::wrap_stream(progress_stream))
-        .header(CONTENT_LENGTH, metadata.len());
-
-    let (video_upload, screenshot_result): (
-        Result<reqwest::Response, reqwest::Error>,
-        Result<reqwest::Response, String>,
-    ) = tokio::join!(video_upload.send(), screenshot_upload);
-
-    let response = video_upload.map_err(|e| format!("Failed to send upload file request: {e}"))?;
-
-    if response.status().is_success() {
-        println!("Video uploaded successfully");
-
-        if let Ok(screenshot_response) = screenshot_result {
-            if screenshot_response.status().is_success() {
-                println!("Screenshot uploaded successfully");
-            } else {
-                println!(
-                    "Failed to upload screenshot: {}",
-                    screenshot_response.status()
-                );
-            }
-        }
-
-        return Ok(UploadedVideo {
-            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
-            id: s3_config.id.clone(),
-            config: s3_config,
-        });
+    if !response.status().is_success() {
+        let status = response.status();
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!(
+            "Failed to upload file. Status: {status}. Body: {error_body}"
+        ));
     }
 
-    let status = response.status();
-    let error_body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<no response body>".to_string());
-    tracing::error!(
-        "Failed to upload file. Status: {}. Body: {}",
-        status,
-        error_body
-    );
-    Err(format!(
-        "Failed to upload file. Status: {status}. Body: {error_body}"
-    ))
+    Ok(())
 }
 
 pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedImage, String> {
@@ -274,53 +330,29 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .ok_or("Invalid file path")?
         .to_string();
 
-    let client = reqwest::Client::new();
     let s3_config = create_or_get_video(app, true, None, None, None).await?;
 
-    let presigned_put = presigned_s3_put(
+    let (stream, total_size) = file_reader_stream(file_path).await?;
+    do_presigned_upload(
         app,
+        stream,
+        total_size as u64,
         PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: file_name,
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
+        |p| {
+            // TODO
+        },
     )
     .await?;
 
-    let file_content = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read file: {e}"))?;
-
-    let response = client
-        .put(presigned_put)
-        .header(CONTENT_LENGTH, file_content.len())
-        .body(file_content)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to send upload file request: {e}"))?;
-
-    if response.status().is_success() {
-        println!("File uploaded successfully");
-        return Ok(UploadedImage {
-            link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
-            id: s3_config.id,
-        });
-    }
-
-    let status = response.status();
-    let error_body = response
-        .text()
-        .await
-        .unwrap_or_else(|_| "<no response body>".to_string());
-    tracing::error!(
-        "Failed to upload file. Status: {}. Body: {}",
-        status,
-        error_body
-    );
-    Err(format!(
-        "Failed to upload file. Status: {status}. Body: {error_body}"
-    ))
+    Ok(UploadedImage {
+        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
+        id: s3_config.id,
+    })
 }
 
 pub async fn create_or_get_video(
@@ -461,60 +493,6 @@ pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
     })
 }
 
-// fn build_audio_upload_body(
-//     path: &PathBuf,
-//     base: S3UploadBody,
-// ) -> Result<S3AudioUploadBody, String> {
-//     let input =
-//         ffmpeg::format::input(path).map_err(|e| format!("Failed to read input file: {e}"))?;
-//     let stream = input
-//         .streams()
-//         .best(ffmpeg::media::Type::Audio)
-//         .ok_or_else(|| "Failed to find appropriate audio stream in file".to_string())?;
-
-//     let duration_millis = input.duration() as f64 / 1000.;
-
-//     let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-//         .map_err(|e| format!("Unable to read audio codec information: {e}"))?;
-//     let codec_name = codec.id();
-
-//     let is_mp3 = path.extension().is_some_and(|ext| ext == "mp3");
-
-//     Ok(S3AudioUploadBody {
-//         base,
-//         duration: duration_millis.to_string(),
-//         audio_codec: format!("{codec_name:?}").replace("Id::", "").to_lowercase(),
-//         is_mp3,
-//     })
-// }
-
-pub async fn prepare_screenshot_upload(
-    app: &AppHandle,
-    s3_config: &S3UploadMeta,
-    screenshot_path: PathBuf,
-) -> Result<reqwest::Response, String> {
-    let presigned_put = presigned_s3_put(
-        app,
-        PresignedS3PutRequest {
-            video_id: s3_config.id.clone(),
-            subpath: "screenshot/screen-capture.jpg".to_string(),
-            method: PresignedS3PutRequestMethod::Put,
-            meta: None,
-        },
-    )
-    .await?;
-
-    let compressed_image = compress_image(screenshot_path).await?;
-
-    reqwest::Client::new()
-        .put(presigned_put)
-        .header(CONTENT_LENGTH, compressed_image.len())
-        .body(compressed_image)
-        .send()
-        .await
-        .map_err(|e| format!("Error uploading screenshot: {e}"))
-}
-
 async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     task::spawn_blocking(move || {
         let img = ImageReader::open(&path)
@@ -522,18 +500,19 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
             .decode()
             .map_err(|e| format!("Failed to decode image: {e}"))?;
 
-        let new_width = img.width() / 2;
-        let new_height = img.height() / 2;
-
-        let resized_img = img.resize(new_width, new_height, image::imageops::FilterType::Nearest);
+        let resized_img = img.resize(
+            img.width() / 2,
+            img.height() / 2,
+            image::imageops::FilterType::Nearest,
+        );
 
         let mut buffer = Vec::new();
         let mut encoder = JpegEncoder::new_with_quality(&mut buffer, 30);
         encoder
             .encode(
                 resized_img.as_bytes(),
-                new_width,
-                new_height,
+                resized_img.width(),
+                resized_img.height(),
                 resized_img.color().into(),
             )
             .map_err(|e| format!("Failed to compress image: {e}"))?;
@@ -542,6 +521,12 @@ async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     })
     .await
     .map_err(|e| format!("Failed to compress image: {e}"))?
+}
+
+fn bytes_into_stream(bytes: Vec<u8>) -> (impl Stream<Item = Result<Bytes, std::io::Error>>, u64) {
+    let total_size = bytes.len();
+    let stream = stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) });
+    (stream, total_size as u64)
 }
 
 // a typical recommended chunk size is 5MB (AWS min part size).

@@ -30,10 +30,7 @@ use crate::{
     general_settings::{GeneralSettingsStore, PostDeletionBehaviour, PostStudioRecordingBehaviour},
     open_external_link,
     presets::PresetsStore,
-    upload::{
-        InstantMultipartUpload, build_video_meta, create_or_get_video, prepare_screenshot_upload,
-        upload_video,
-    },
+    upload::{InstantMultipartUpload, build_video_meta, create_or_get_video, upload_video},
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
 };
@@ -782,26 +779,27 @@ async fn handle_recording_finish(
                         let _ = screenshot_task.await;
 
                         if video_upload_succeeded {
-                            let resp = prepare_screenshot_upload(
-                                &app,
-                                &video_upload_info.config.clone(),
-                                display_screenshot,
-                            )
-                            .await;
+                            // let resp = prepare_screenshot_upload(
+                            //     &app,
+                            //     &video_upload_info.config.clone(),
+                            //     display_screenshot,
+                            // )
+                            // .await;
 
-                            match resp {
-                                Ok(r)
-                                    if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
-                                {
-                                    info!("Screenshot uploaded successfully");
-                                }
-                                Ok(r) => {
-                                    error!("Failed to upload screenshot: {}", r.status());
-                                }
-                                Err(e) => {
-                                    error!("Failed to upload screenshot: {e}");
-                                }
-                            }
+                            // match resp {
+                            //     Ok(r)
+                            //         if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
+                            //     {
+                            //         info!("Screenshot uploaded successfully");
+                            //     }
+                            //     Ok(r) => {
+                            //         error!("Failed to upload screenshot: {}", r.status());
+                            //     }
+                            //     Err(e) => {
+                            //         error!("Failed to upload screenshot: {e}");
+                            //     }
+                            // }
+                            todo!();
                         } else {
                             if let Ok(meta) = build_video_meta(&output_path)
                                 .map_err(|err| error!("Error getting video metdata: {}", err))
