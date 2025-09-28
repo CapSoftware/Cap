@@ -397,73 +397,64 @@ mod win {
             let audio_encoder = audio_config
                 .map(|config| AACEncoder::init("mic_audio", config, &mut output))
                 .transpose()?;
-            let output = Arc::new(Mutex::new(output));
 
             let (first_frame_tx, first_frame_rx) = sync_channel::<Duration>(1);
 
+            let video_encoder = {
+                cap_mediafoundation_utils::thread_init();
+
+                let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+                    &config.d3d_device,
+                    config.pixel_format,
+                    SizeInt32 {
+                        Width: video_config.width as i32,
+                        Height: video_config.height as i32,
+                    },
+                    SizeInt32 {
+                        Width: video_config.width as i32,
+                        Height: video_config.height as i32,
+                    },
+                    config.frame_rate,
+                    config.bitrate_multiplier,
+                );
+
+                match native_encoder {
+                    Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+                        &mut output,
+                        cap_mediafoundation_ffmpeg::MuxerConfig {
+                            width: video_config.width,
+                            height: video_config.height,
+                            fps: config.frame_rate,
+                            bitrate: encoder.bitrate(),
+                        },
+                    )
+                    .map(|muxer| either::Left((encoder, muxer)))
+                    .map_err(|e| anyhow!("{e}")),
+                    Err(e) => {
+                        use tracing::{error, info};
+
+                        error!("Failed to create native encoder: {e}");
+                        info!("Falling back to software H264 encoder");
+
+                        cap_enc_ffmpeg::H264Encoder::builder("screen", video_config)
+                            .build(&mut output)
+                            .map(either::Right)
+                            .map_err(|e| anyhow!("{e}"))
+                    }
+                }?
+            };
+
+            output.write_header()?;
+
+            let output = Arc::new(Mutex::new(output));
+
             {
-                let (ready_tx, ready_rx) = oneshot::channel();
                 let output = output.clone();
+
                 std::thread::spawn(move || {
                     cap_mediafoundation_utils::thread_init();
 
-                    let encoder = {
-                        let mut output = output.lock().unwrap();
-
-                        let native_encoder =
-                            cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                                &config.d3d_device,
-                                config.pixel_format,
-                                SizeInt32 {
-                                    Width: video_config.width as i32,
-                                    Height: video_config.height as i32,
-                                },
-                                SizeInt32 {
-                                    Width: video_config.width as i32,
-                                    Height: video_config.height as i32,
-                                },
-                                config.frame_rate,
-                                config.bitrate_multiplier,
-                            );
-
-                        match native_encoder {
-                            Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                                &mut output,
-                                cap_mediafoundation_ffmpeg::MuxerConfig {
-                                    width: video_config.width,
-                                    height: video_config.height,
-                                    fps: config.frame_rate,
-                                    bitrate: encoder.bitrate(),
-                                },
-                            )
-                            .map(|muxer| either::Left((encoder, muxer)))
-                            .map_err(|e| anyhow!("{e}")),
-                            Err(e) => {
-                                use tracing::{error, info};
-
-                                error!("Failed to create native encoder: {e}");
-                                info!("Falling back to software H264 encoder");
-
-                                cap_enc_ffmpeg::H264Encoder::builder("screen", video_config)
-                                    .build(&mut output)
-                                    .map(either::Right)
-                                    .map_err(|e| anyhow!("{e}"))
-                            }
-                        }
-                    };
-
-                    let encoder = match encoder {
-                        Ok(encoder) => {
-                            ready_tx.send(Ok(()));
-                            encoder
-                        }
-                        Err(e) => {
-                            ready_tx.send(Err(e));
-                            return;
-                        }
-                    };
-
-                    match encoder {
+                    match video_encoder {
                         either::Left((mut encoder, mut muxer)) => {
                             trace!("Running native encoder");
                             let mut first_timestamp = None;
@@ -523,8 +514,6 @@ mod win {
                         }
                     }
                 });
-
-                ready_rx.await??;
             }
 
             let audio_tx = audio_encoder.map(|mut audio_encoder| {
@@ -576,6 +565,10 @@ mod win {
             frame: Self::VideoFrame,
             timestamp: Duration,
         ) -> anyhow::Result<()> {
+            if let Some(first_frame_tx) = self.first_frame_tx.take() {
+                let _ = first_frame_tx.send(timestamp);
+            }
+
             Ok(self.video_tx.send((frame.frame, timestamp))?)
         }
 

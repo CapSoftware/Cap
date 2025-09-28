@@ -246,6 +246,8 @@ pub async fn spawn_instant_recording_actor(
 
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
+    cap_mediafoundation_utils::thread_init();
+
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device()?;
 

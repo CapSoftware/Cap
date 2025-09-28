@@ -215,11 +215,17 @@ impl VideoSource for Source {
     }
 
     fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
-        async {
+        let res = (|| {
             self.0.start()?;
+            if let Some(audio) = &self.2 {
+                audio
+                    .play()
+                    .map(|_| anyhow!("Audio capture start failed"))?;
+            }
             Ok(())
-        }
-        .boxed()
+        })();
+
+        futures::future::ready(res).boxed()
     }
 }
 
