@@ -154,7 +154,7 @@ impl SetupCtx {
 }
 
 pub type AudioSourceSetupFn =
-    Box<dyn FnOnce(mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo>>;
+    Box<dyn FnOnce(mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> + Send>;
 
 pub trait VideoSource: Send + 'static {
     type Config;
@@ -365,7 +365,7 @@ impl NewOutputPipeline {
     }
 }
 
-pub trait AudioSource {
+pub trait AudioSource: Send {
     fn setup(self, tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo>;
 
     fn start(&mut self) -> anyhow::Result<()> {

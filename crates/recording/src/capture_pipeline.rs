@@ -287,9 +287,9 @@ mod macos {
     use super::*;
 
     #[derive(Clone)]
-    struct AVFoundationMuxer(Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>);
+    pub struct AVFoundationMuxer(Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>);
 
-    struct AVFoundationMuxerConfig {
+    pub struct AVFoundationMuxerConfig {
         pub output_height: Option<u32>,
     }
 
