@@ -69,11 +69,9 @@ pub struct RecordingMeta {
     pub sharing: Option<SharingMeta>,
     #[serde(flatten)]
     pub inner: RecordingMetaInner,
-    // #[serde(default)]
-    // pub upload: UploadState, // TODO: Put in `StudioRecordingMeta`, etc
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upload: Option<UploadState>,
 }
-
-// impl specta::Flatten for RecordingMetaInner {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub enum UploadState {
@@ -85,11 +83,10 @@ pub enum UploadState {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RecordingMetaInner {
+    InProgress { recording: bool },
+    Failed { error: String },
     Studio(StudioRecordingMeta),
     Instant(InstantRecordingMeta),
-    // This is set while the recording is still active.
-    InProgress { recording: bool },
-    // Failed { error: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -143,11 +140,14 @@ impl RecordingMeta {
         config
     }
 
-    pub fn output_path(&self) -> PathBuf {
+    pub fn output_path(&self) -> Option<PathBuf> {
         match &self.inner {
-            RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
-            RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
-            RecordingMetaInner::InProgress { recording } => todo!(),
+            RecordingMetaInner::Instant(_) => Some(self.project_path.join("content/output.mp4")),
+            RecordingMetaInner::Studio(_) => {
+                Some(self.project_path.join("output").join("result.mp4"))
+            }
+            RecordingMetaInner::InProgress { recording } => None,
+            RecordingMetaInner::Failed { error } => None,
         }
     }
 

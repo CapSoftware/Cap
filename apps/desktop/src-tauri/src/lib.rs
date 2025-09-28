@@ -910,7 +910,12 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
                 .map(|s| recording_meta.path(&s.display.path))
                 .collect(),
         },
-        RecordingMetaInner::InProgress { .. } => todo!(),
+        RecordingMetaInner::InProgress { .. } => {
+            return Err(format!("Unable to get metadata on in-progress recording"));
+        }
+        RecordingMetaInner::Failed { .. } => {
+            return Err(format!("Unable to get metadata on failed recording"));
+        }
     };
 
     let duration = display_paths
@@ -1063,7 +1068,11 @@ async fn upload_exported_video(
 
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
-    let output_path = meta.output_path();
+    let Some(output_path) = meta.output_path() else {
+        notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
+        return Err("Failed to upload video: Recording failed to complete".to_string());
+    };
+
     if !output_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
@@ -1304,6 +1313,7 @@ async fn take_screenshot(app: AppHandle, _state: MutableState<'_, App>) -> Resul
                     cursor: None,
                 },
             }),
+            upload: None,
         }
         .save_for_project()
         .unwrap();
@@ -1415,6 +1425,7 @@ impl RecordingMetaWithMode {
                 RecordingMetaInner::Studio(_) => Some(RecordingMode::Studio),
                 RecordingMetaInner::Instant(_) => Some(RecordingMode::Instant),
                 RecordingMetaInner::InProgress { .. } => None,
+                RecordingMetaInner::Failed { .. } => None,
             },
             inner,
         }
@@ -2502,7 +2513,10 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                 }
             }
         }
-        RecordingMetaInner::InProgress { recording } => todo!(),
+        RecordingMetaInner::InProgress { .. } => return Err(format!("Recording in progress")),
+        RecordingMetaInner::Failed { .. } => {
+            return Err(format!("Unable to open failed recording"));
+        }
     }
 
     Ok(())

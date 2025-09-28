@@ -298,6 +298,7 @@ pub async fn start_recording(
         sharing: None, // TODO: Is this gonna be problematic as it was previously always set
         pretty_name: format!("{target_name} {date_time}"),
         inner: RecordingMetaInner::InProgress { recording: true },
+        upload: None,
     };
 
     meta.save_for_project()
@@ -370,6 +371,7 @@ pub async fn start_recording(
         spawn_actor({
             let state_mtx = Arc::clone(&state_mtx);
             let general_settings = general_settings.cloned();
+            let recording_dir = recording_dir.clone();
             async move {
                 fail!("recording::spawn_actor");
                 let mut state = state_mtx.write().await;
@@ -477,13 +479,13 @@ pub async fn start_recording(
 
     let actor_done_rx = match spawn_actor_res {
         Ok(rx) => rx,
-        Err(e) => {
-            let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+        Err(err) => {
+            let _ = RecordingEvent::Failed { error: err.clone() }.emit(&app);
 
             let mut dialog = MessageDialogBuilder::new(
                 app.dialog().clone(),
                 "An error occurred".to_string(),
-                e.clone(),
+                err.clone(),
             )
             .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -494,9 +496,9 @@ pub async fn start_recording(
             dialog.blocking_show();
 
             let mut state = state_mtx.write().await;
-            let _ = handle_recording_end(app, None, &mut state).await;
+            let _ = handle_recording_end(app, Err(err.clone()), &mut state, recording_dir).await;
 
-            return Err(e);
+            return Err(err);
         }
     };
 
@@ -522,7 +524,7 @@ pub async fn start_recording(
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e,
+                        e.clone(),
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -533,7 +535,9 @@ pub async fn start_recording(
                     dialog.blocking_show();
 
                     // this clears the current recording for us
-                    handle_recording_end(app, None, &mut state).await.ok();
+                    handle_recording_end(app, Err(e), &mut state, recording_dir)
+                        .await
+                        .ok();
                 }
                 // Actor hasn't errored, it's just finished
                 v => {
@@ -581,8 +585,9 @@ pub async fn stop_recording(app: AppHandle, state: MutableState<'_, App>) -> Res
     };
 
     let completed_recording = current_recording.stop().await.map_err(|e| e.to_string())?;
+    let recording_dir = completed_recording.project_path().clone();
 
-    handle_recording_end(app, Some(completed_recording), &mut state).await?;
+    handle_recording_end(app, Ok(completed_recording), &mut state, recording_dir).await?;
 
     Ok(())
 }
@@ -669,17 +674,24 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
 // runs when a recording ends, whether from success or failure
 async fn handle_recording_end(
     handle: AppHandle,
-    recording: Option<CompletedRecording>,
+    recording: Result<CompletedRecording, String>,
     app: &mut App,
+    recording_dir: PathBuf,
 ) -> Result<(), String> {
     // Clear current recording, just in case :)
     app.clear_current_recording();
 
-    let res = if let Some(recording) = recording {
+    let res = match recording {
         // we delay reporting errors here so that everything else happens first
-        Some(handle_recording_finish(&handle, recording).await)
-    } else {
-        None
+        Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
+        Err(error) => {
+            // TODO: Error handling
+            let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+            project_meta.inner = RecordingMetaInner::Failed { error };
+            project_meta.save_for_project().unwrap();
+
+            None
+        }
     };
 
     let _ = RecordingStopped.emit(&handle);
@@ -743,8 +755,6 @@ async fn handle_recording_finish(
         None,
     ));
 
-    let target_name = completed_recording.target_name().clone();
-
     let (meta_inner, sharing) = match completed_recording {
         CompletedRecording::Studio { recording, .. } => {
             let recordings = ProjectRecordingsMeta::new(&recording_dir, &recording.meta)?;
@@ -766,7 +776,6 @@ async fn handle_recording_finish(
             video_upload_info,
             ..
         } => {
-            // shareable_link = Some(video_upload_info.link.clone());
             let app = app.clone();
             let output_path = recording_dir.join("content/output.mp4");
 
@@ -796,58 +805,58 @@ async fn handle_recording_finish(
 
                     let _ = screenshot_task.await;
 
-                    if video_upload_succeeded {
-                        if let Ok(result) =
-                            compress_image(display_screenshot).await
-                            .map_err(|err|
-                                error!("Error compressing thumbnail for instant mode progressive upload: {err}")
-                            ) {
-                                let (stream, total_size) = bytes_into_stream(result);
-                                do_presigned_upload(
-                                    &app,
-                                    stream,
-                                    total_size,
-                                    crate::upload::PresignedS3PutRequest {
-                                        video_id: video_upload_info.id.clone(),
-                                        subpath: "screenshot/screen-capture.jpg".to_string(),
-                                        method: PresignedS3PutRequestMethod::Put,
-                                        meta: None,
-                                    },
-                                    |p| {} // TODO: Progress reporting
-                                )
-                                .await
-                                .map_err(|err| {
-                                    error!("Error updating thumbnail for instant mode progressive upload: {err}")
-                                })
-                                .ok();
-                            }
-                    } else {
-                        if let Ok(meta) = build_video_meta(&output_path)
-                            .map_err(|err| error!("Error getting video metdata: {}", err))
-                        {
-                            // The upload_video function handles screenshot upload, so we can pass it along
-                            match upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                display_screenshot.clone(),
-                                video_upload_info.config.clone(),
-                                meta,
-                                None,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    info!(
-                                        "Final video upload with screenshot completed successfully"
-                                    )
-                                }
-                                Err(e) => {
-                                    error!("Error in final upload with screenshot: {}", e)
-                                }
-                            }
-                        }
-                    }
+                    // if video_upload_succeeded {
+                    //     if let Ok(result) =
+                    //         compress_image(display_screenshot).await
+                    //         .map_err(|err|
+                    //             error!("Error compressing thumbnail for instant mode progressive upload: {err}")
+                    //         ) {
+                    //             let (stream, total_size) = bytes_into_stream(result);
+                    //             do_presigned_upload(
+                    //                 &app,
+                    //                 stream,
+                    //                 total_size,
+                    //                 crate::upload::PresignedS3PutRequest {
+                    //                     video_id: video_upload_info.id.clone(),
+                    //                     subpath: "screenshot/screen-capture.jpg".to_string(),
+                    //                     method: PresignedS3PutRequestMethod::Put,
+                    //                     meta: None,
+                    //                 },
+                    //                 |p| {} // TODO: Progress reporting
+                    //             )
+                    //             .await
+                    //             .map_err(|err| {
+                    //                 error!("Error updating thumbnail for instant mode progressive upload: {err}")
+                    //             })
+                    //             .ok();
+                    //         }
+                    // } else {
+                    //     if let Ok(meta) = build_video_meta(&output_path)
+                    //         .map_err(|err| error!("Error getting video metdata: {}", err))
+                    //     {
+                    //         // The upload_video function handles screenshot upload, so we can pass it along
+                    //         match upload_video(
+                    //             &app,
+                    //             video_upload_info.id.clone(),
+                    //             output_path,
+                    //             display_screenshot.clone(),
+                    //             video_upload_info.config.clone(),
+                    //             meta,
+                    //             None,
+                    //         )
+                    //         .await
+                    //         {
+                    //             Ok(_) => {
+                    //                 info!(
+                    //                     "Final video upload with screenshot completed successfully"
+                    //                 )
+                    //             }
+                    //             Err(e) => {
+                    //                 error!("Error in final upload with screenshot: {}", e)
+                    //             }
+                    //         }
+                    //     }
+                    // }
                 }
             });
 
@@ -864,6 +873,7 @@ async fn handle_recording_finish(
     // TODO: Can we avoid reloading it from disk by parsing as arg?
     let mut meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
     meta.inner = meta_inner;
+    meta.sharing = sharing;
     meta.save_for_project()
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 
@@ -973,6 +983,7 @@ pub fn generate_zoom_segments_from_clicks(
         pretty_name: String::new(),
         sharing: None,
         inner: RecordingMetaInner::Studio(recording.meta.clone()),
+        upload: None,
     };
 
     generate_zoom_segments_for_project(&recording_meta, recordings)

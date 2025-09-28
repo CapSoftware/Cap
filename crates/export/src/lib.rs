@@ -39,6 +39,8 @@ pub enum ExporterBuildError {
     MetaLoad(#[source] Box<dyn std::error::Error>),
     #[error("Recording is not a studio recording")]
     NotStudioRecording,
+    #[error("Unable to export a failed recording")]
+    RecordingFailed,
     #[error("Failed to load recordings meta: {0}")]
     RecordingsMeta(String),
     #[error("Failed to setup renderer: {0}")]
@@ -97,7 +99,8 @@ impl ExporterBuilder {
 
         let output_path = self
             .output_path
-            .unwrap_or_else(|| recording_meta.output_path());
+            .or_else(|| recording_meta.output_path())
+            .ok_or(Error::RecordingFailed)?;
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)

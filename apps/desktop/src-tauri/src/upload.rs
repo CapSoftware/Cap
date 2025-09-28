@@ -577,10 +577,6 @@ impl InstantMultipartUpload {
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
     ) -> Result<(), String> {
-        use std::time::Duration;
-
-        use tokio::time::sleep;
-
         // --------------------------------------------
         // basic constants and info for chunk approach
         // --------------------------------------------
