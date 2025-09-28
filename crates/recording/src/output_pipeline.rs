@@ -234,7 +234,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
             path.clone(),
             video_source.video_info(),
             has_audio_sources.then_some(AudioMixer::INFO),
-        )?;
+        )
+        .await?;
 
         tasks.push((
             tokio::spawn({
@@ -418,7 +419,7 @@ pub trait Muxer: Clone + Send + 'static {
     type VideoFrame;
     type Config;
 
-    fn setup(
+    async fn setup(
         config: Self::Config,
         output_path: PathBuf,
         video_config: VideoInfo,

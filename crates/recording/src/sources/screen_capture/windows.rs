@@ -1,11 +1,15 @@
+use crate::output_pipeline::{self, AudioFrame, ChannelAudioSource, VideoSource};
+
 use super::*;
 use ::windows::{
     Graphics::Capture::GraphicsCaptureItem,
     Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device},
 };
+use anyhow::anyhow;
 use cap_fail::fail_err;
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamps};
 use cpal::traits::{DeviceTrait, HostTrait};
+use futures::{FutureExt, SinkExt, channel::mpsc};
 use kameo::prelude::*;
 use scap_ffmpeg::*;
 use std::{
@@ -45,174 +49,12 @@ impl ScreenCaptureFormat for Direct3DCapture {
     }
 }
 
-struct FrameHandler {
-    capturer: WeakActorRef<ScreenCaptureActor>,
-    frames_dropped: u32,
-    last_cleanup: Instant,
-    last_log: Instant,
-    frame_events: VecDeque<(Instant, bool)>,
-    video_tx: Sender<(scap_direct3d::Frame, Timestamp)>,
-    target_fps: u32,
-    last_timestamp: Option<Timestamp>,
-    timestamps: Timestamps,
-}
-
-impl Actor for FrameHandler {
-    type Args = Self;
-    type Error = ();
-
-    async fn on_start(args: Self::Args, self_actor: ActorRef<Self>) -> Result<Self, Self::Error> {
-        if let Some(capturer) = args.capturer.upgrade() {
-            self_actor.link(&capturer).await;
-        }
-
-        Ok(args)
-    }
-
-    async fn on_link_died(
-        &mut self,
-        actor_ref: WeakActorRef<Self>,
-        id: ActorID,
-        _: ActorStopReason,
-    ) -> Result<std::ops::ControlFlow<ActorStopReason>, Self::Error> {
-        if self.capturer.id() == id
-            && let Some(self_actor) = actor_ref.upgrade()
-        {
-            let _ = self_actor.stop_gracefully().await;
-
-            return Ok(std::ops::ControlFlow::Break(ActorStopReason::Normal));
-        }
-
-        Ok(std::ops::ControlFlow::Continue(()))
-    }
-}
-
-impl FrameHandler {
-    // Helper function to clean up old frame events
-    fn cleanup_old_events(&mut self, now: Instant) {
-        let cutoff = now - WINDOW_DURATION;
-        while let Some(&(timestamp, _)) = self.frame_events.front() {
-            if timestamp < cutoff {
-                self.frame_events.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    // Helper function to calculate current drop rate
-    fn calculate_drop_rate(&mut self) -> (f64, usize, usize) {
-        let now = Instant::now();
-        self.cleanup_old_events(now);
-
-        if self.frame_events.is_empty() {
-            return (0.0, 0, 0);
-        }
-
-        let total_frames = self.frame_events.len();
-        let dropped_frames = self
-            .frame_events
-            .iter()
-            .filter(|(_, dropped)| *dropped)
-            .count();
-        let drop_rate = dropped_frames as f64 / total_frames as f64;
-
-        (drop_rate, dropped_frames, total_frames)
-    }
-}
-
-impl Message<NewFrame> for FrameHandler {
-    type Reply = ();
-
-    async fn handle(
-        &mut self,
-        msg: NewFrame,
-        ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let Ok(timestamp) = msg.0.inner().SystemRelativeTime() else {
-            return;
-        };
-
-        let timestamp =
-            Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(timestamp.Duration));
-
-        // manual FPS limiter
-        if let Some(last_timestamp) = self.last_timestamp
-            && let Some(time_since_last) = timestamp
-                .duration_since(self.timestamps)
-                .checked_sub(last_timestamp.duration_since(self.timestamps))
-        {
-            let target_interval = 1.0 / self.target_fps as f32;
-            let tolerance = target_interval * 0.8; // Allow 20% early arrival
-
-            if time_since_last.as_secs_f32() < tolerance {
-                return;
-            }
-        }
-
-        self.last_timestamp = Some(timestamp);
-
-        let frame_dropped = match self.video_tx.try_send((msg.0, timestamp)) {
-            Err(flume::TrySendError::Disconnected(_)) => {
-                warn!("Pipeline disconnected");
-                let _ = ctx.actor_ref().stop_gracefully().await;
-                return;
-            }
-            Err(flume::TrySendError::Full(_)) => {
-                warn!("Screen capture sender is full, dropping frame");
-                self.frames_dropped += 1;
-                true
-            }
-            _ => false,
-        };
-
-        let now = Instant::now();
-
-        self.frame_events.push_back((now, frame_dropped));
-
-        if now.duration_since(self.last_cleanup) > Duration::from_millis(100) {
-            self.cleanup_old_events(now);
-            self.last_cleanup = now;
-        }
-
-        // Check drop rate and potentially exit
-        let (drop_rate, dropped_count, total_count) = self.calculate_drop_rate();
-
-        if drop_rate > MAX_DROP_RATE_THRESHOLD && total_count >= 10 {
-            error!(
-                "High frame drop rate detected: {:.1}% ({}/{} frames in last {}s). Exiting capture.",
-                drop_rate * 100.0,
-                dropped_count,
-                total_count,
-                WINDOW_DURATION.as_secs()
-            );
-            let _ = ctx.actor_ref().stop_gracefully().await;
-            return;
-            // return ControlFlow::Break(Err("Recording can't keep up with screen capture. Try reducing your display's resolution or refresh rate.".to_string()));
-        }
-
-        // Periodic logging of drop rate
-        if now.duration_since(self.last_log) > LOG_INTERVAL && total_count > 0 {
-            info!(
-                "Frame drop rate: {:.1}% ({}/{} frames, total dropped: {})",
-                drop_rate * 100.0,
-                dropped_count,
-                total_count,
-                self.frames_dropped
-            );
-            self.last_log = now;
-        }
-    }
-}
-
 #[derive(Clone, Debug, thiserror::Error)]
 enum SourceError {
     #[error("NoDisplay: Id '{0}'")]
     NoDisplay(DisplayId),
     #[error("AsCaptureItem: {0}")]
     AsCaptureItem(::windows::core::Error),
-    #[error("StartCapturingVideo/{0}")]
-    StartCapturingVideo(SendError<StartCapturing, StartCapturingError>),
     #[error("CreateAudioCapture/{0}")]
     CreateAudioCapture(scap_cpal::CapturerError),
     #[error("StartCapturingAudio/{0}")]
@@ -223,172 +65,162 @@ enum SourceError {
     Closed,
 }
 
-impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
-    // #[instrument(skip_all)]
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) -> Result<(), String> {
-        let video_tx = self.video_tx.clone();
-        let audio_tx = self.audio_tx.clone();
+struct CapturerHandle {}
 
-        let d3d_device = self.d3d_device.clone();
+pub struct VideoFrame {
+    pub frame: scap_direct3d::Frame,
+    pub timestamp: Timestamp,
+}
 
-        // Frame drop rate tracking state
-        let config = self.config.clone();
-
-        self.tokio_handle
-            .block_on(async move {
-                let (error_tx, error_rx) = flume::bounded(1);
-                let capturer =
-                    ScreenCaptureActor::spawn(ScreenCaptureActor::new(error_tx, d3d_device));
-
-                let frame_handler = FrameHandler::spawn(FrameHandler {
-                    capturer: capturer.downgrade(),
-                    video_tx,
-                    frame_events: Default::default(),
-                    frames_dropped: Default::default(),
-                    last_cleanup: Instant::now(),
-                    last_log: Instant::now(),
-                    target_fps: config.fps,
-                    last_timestamp: None,
-                    timestamps: Timestamps::now(),
-                });
-
-                let mut settings = scap_direct3d::Settings {
-                    pixel_format: Direct3DCapture::PIXEL_FORMAT,
-                    crop: config.crop_bounds.map(|b| {
-                        let position = b.position();
-                        let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
-
-                        D3D11_BOX {
-                            left: position.x() as u32,
-                            top: position.y() as u32,
-                            right: (position.x() + size.width()) as u32,
-                            bottom: (position.y() + size.height()) as u32,
-                            front: 0,
-                            back: 1,
-                        }
-                    }),
-                    ..Default::default()
-                };
-
-                if let Ok(true) = scap_direct3d::Settings::can_is_border_required() {
-                    settings.is_border_required = Some(false);
-                }
-
-                if let Ok(true) = scap_direct3d::Settings::can_is_cursor_capture_enabled() {
-                    settings.is_cursor_capture_enabled = Some(config.show_cursor);
-                }
-
-                if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
-                    settings.min_update_interval =
-                        Some(Duration::from_secs_f64(1.0 / config.fps as f64));
-                }
-
-                let display = Display::from_id(&config.display)
-                    .ok_or_else(|| SourceError::NoDisplay(config.display))?;
-
-                let capture_item = display
-                    .raw_handle()
-                    .try_as_capture_item()
-                    .map_err(SourceError::AsCaptureItem)?;
-
-                capturer
-                    .ask(StartCapturing {
-                        target: capture_item,
-                        settings,
-                        frame_handler: frame_handler.clone().recipient(),
-                    })
-                    .await
-                    .map_err(SourceError::StartCapturingVideo)?;
-
-                let audio_capture = if let Some(audio_tx) = audio_tx {
-                    let audio_capture = WindowsAudioCapture::spawn(
-                        WindowsAudioCapture::new(audio_tx)
-                            .map_err(SourceError::CreateAudioCapture)?,
-                    );
-
-                    audio_capture
-                        .ask(audio::StartCapturing)
-                        .await
-                        .map_err(|v| SourceError::StartCapturingAudio(v.to_string()))?;
-
-                    Some(audio_capture)
-                } else {
-                    None
-                };
-
-                let _ = ready_signal.send(Ok(()));
-
-                let stop = async move {
-                    let _ = capturer.ask(StopCapturing).await;
-                    let _ = capturer.stop_gracefully().await;
-
-                    if let Some(audio_capture) = audio_capture {
-                        let _ = audio_capture.ask(StopCapturing).await;
-                        let _ = audio_capture.stop_gracefully().await;
-                    }
-                };
-
-                loop {
-                    use futures::future::Either;
-
-                    match futures::future::select(
-                        error_rx.recv_async(),
-                        control_signal.receiver().recv_async(),
-                    )
-                    .await
-                    {
-                        Either::Left((Ok(_), _)) => {
-                            error!("Screen capture closed");
-                            stop.await;
-                            return Err(SourceError::Closed);
-                        }
-                        Either::Right((Ok(ctrl), _)) => {
-                            if let Control::Shutdown = ctrl {
-                                stop.await;
-                                return Ok(());
-                            }
-                        }
-                        _ => {
-                            warn!("Screen capture recv channels shutdown, exiting.");
-
-                            stop.await;
-
-                            return Ok(());
-                        }
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())
+impl output_pipeline::VideoFrame for VideoFrame {
+    fn timestamp(&self) -> Timestamp {
+        self.timestamp
     }
 }
 
-#[derive(Actor)]
-struct ScreenCaptureActor {
-    capture_handle: Option<scap_direct3d::Capturer>,
-    error_tx: Sender<()>,
-    d3d_device: ID3D11Device,
+pub fn create_capturer(
+    source: ScreenCaptureSource<Direct3DCapture>,
+    mut video_tx: mpsc::Sender<VideoFrame>,
+    mut error_tx: mpsc::Sender<anyhow::Error>,
+) -> anyhow::Result<scap_direct3d::Capturer> {
+    // let (error_tx, error_rx) = flume::bounded(1);
+    // let capturer =
+    //     ScreenCaptureActor::spawn(ScreenCaptureActor::new(error_tx, source.d3d_device.clone()));
+
+    // let frame_handler = FrameHandler::spawn(FrameHandler {
+    //     capturer: capturer.downgrade(),
+    //     video_tx,
+    //     frame_events: Default::default(),
+    //     frames_dropped: Default::default(),
+    //     last_cleanup: Instant::now(),
+    //     last_log: Instant::now(),
+    //     target_fps: source.config.fps,
+    //     last_timestamp: None,
+    //     timestamps: Timestamps::now(),
+    // });
+
+    let mut settings = scap_direct3d::Settings {
+        pixel_format: Direct3DCapture::PIXEL_FORMAT,
+        crop: source.config.crop_bounds.map(|b| {
+            let position = b.position();
+            let size = b.size().map(|v| (v / 2.0).floor() * 2.0);
+
+            D3D11_BOX {
+                left: position.x() as u32,
+                top: position.y() as u32,
+                right: (position.x() + size.width()) as u32,
+                bottom: (position.y() + size.height()) as u32,
+                front: 0,
+                back: 1,
+            }
+        }),
+        ..Default::default()
+    };
+
+    if let Ok(true) = scap_direct3d::Settings::can_is_border_required() {
+        settings.is_border_required = Some(false);
+    }
+
+    if let Ok(true) = scap_direct3d::Settings::can_is_cursor_capture_enabled() {
+        settings.is_cursor_capture_enabled = Some(source.config.show_cursor);
+    }
+
+    if let Ok(true) = scap_direct3d::Settings::can_min_update_interval() {
+        settings.min_update_interval =
+            Some(Duration::from_secs_f64(1.0 / source.config.fps as f64));
+    }
+
+    let display = Display::from_id(&source.config.display)
+        .ok_or_else(|| SourceError::NoDisplay(source.config.display))?;
+
+    let capture_item = display
+        .raw_handle()
+        .try_as_capture_item()
+        .map_err(SourceError::AsCaptureItem)?;
+
+    Ok(scap_direct3d::Capturer::new(
+        capture_item,
+        settings,
+        move |frame| {
+            let timestamp = frame.inner().SystemRelativeTime()?;
+            let timestamp =
+                Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(timestamp.Duration));
+            let _ = video_tx.try_send(VideoFrame { frame, timestamp });
+
+            Ok(())
+        },
+        move || {
+            let _ = error_tx.try_send(anyhow!("Screen capture closed"));
+
+            Ok(())
+        },
+        Some(source.d3d_device.clone()),
+    )
+    .map_err(StartCapturingError::CreateCapturer)?)
 }
 
-impl ScreenCaptureActor {
-    pub fn new(error_tx: Sender<()>, d3d_device: ID3D11Device) -> Self {
-        Self {
-            capture_handle: None,
-            error_tx,
-            d3d_device,
+pub struct Source(
+    scap_direct3d::Capturer,
+    VideoInfo,
+    Option<scap_cpal::Capturer>,
+);
+
+impl VideoSource for Source {
+    type Config = ScreenCaptureSource<Direct3DCapture>;
+    type Frame = VideoFrame;
+
+    async fn setup(
+        config: Self::Config,
+        video_tx: mpsc::Sender<Self::Frame>,
+        ctx: &mut output_pipeline::SetupCtx,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        let system_audio = if config.system_audio {
+            let (mut tx, rx) = mpsc::channel(64);
+            ctx.add_audio_source(ChannelAudioSource::new(config.audio_info(), rx));
+
+            let capturer = scap_cpal::create_capturer(
+                move |data, info, config| {
+                    use scap_ffmpeg::*;
+
+                    let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+
+                    let _ = tx.try_send(AudioFrame::new(data.as_ffmpeg(config), timestamp));
+                },
+                move |e| {
+                    dbg!(e);
+                },
+            )?;
+
+            Some(capturer)
+        } else {
+            None
+        };
+
+        let error_tx = ctx.add_error_source("Windows Screen Capture");
+
+        let video_info = config.video_info;
+
+        Ok(Self(
+            create_capturer(config, video_tx, error_tx)?,
+            video_info,
+            system_audio,
+        ))
+    }
+
+    fn video_info(&self) -> VideoInfo {
+        self.1
+    }
+
+    fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
+        async {
+            self.0.start()?;
+            Ok(())
         }
+        .boxed()
     }
-}
-
-#[derive(Clone)]
-pub struct StartCapturing {
-    pub target: GraphicsCaptureItem,
-    pub settings: scap_direct3d::Settings,
-    pub frame_handler: Recipient<NewFrame>,
-    // error_handler: Option<Recipient<CaptureError>>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -399,80 +231,6 @@ pub enum StartCapturingError {
     CreateCapturer(scap_direct3d::NewCapturerError),
     #[error("StartCapturer/{0}")]
     StartCapturer(::windows::core::Error),
-}
-
-pub struct NewFrame(pub scap_direct3d::Frame);
-
-impl Message<StartCapturing> for ScreenCaptureActor {
-    type Reply = Result<(), StartCapturingError>;
-
-    async fn handle(
-        &mut self,
-        msg: StartCapturing,
-        _: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        if self.capture_handle.is_some() {
-            return Err(StartCapturingError::AlreadyCapturing);
-        }
-
-        fail_err!(
-            "WindowsScreenCapture.StartCapturing",
-            StartCapturingError::CreateCapturer(scap_direct3d::NewCapturerError::NotSupported)
-        );
-
-        trace!("Starting capturer with settings: {:?}", &msg.settings);
-
-        let error_tx = self.error_tx.clone();
-
-        let mut capture_handle = scap_direct3d::Capturer::new(
-            msg.target,
-            msg.settings,
-            move |frame| {
-                let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
-
-                Ok(())
-            },
-            move || {
-                let _ = error_tx.send(());
-
-                Ok(())
-            },
-            Some(self.d3d_device.clone()),
-        )
-        .map_err(StartCapturingError::CreateCapturer)?;
-
-        capture_handle
-            .start()
-            .map_err(StartCapturingError::StartCapturer)?;
-
-        info!("Capturer started");
-
-        self.capture_handle = Some(capture_handle);
-
-        Ok(())
-    }
-}
-
-impl Message<StopCapturing> for ScreenCaptureActor {
-    type Reply = Result<(), StopCapturingError>;
-
-    async fn handle(
-        &mut self,
-        _: StopCapturing,
-        _: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let Some(mut capturer) = self.capture_handle.take() else {
-            return Err(StopCapturingError::NotCapturing);
-        };
-
-        if let Err(e) = capturer.stop() {
-            error!("Silently failed to stop Windows capturer: {}", e);
-        }
-
-        info!("stopped windows capturer");
-
-        Ok(())
-    }
 }
 
 use audio::WindowsAudioCapture;

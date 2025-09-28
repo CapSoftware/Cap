@@ -6,7 +6,7 @@ use crate::{
         camera::{self, CameraFeedLock},
         microphone::{self, MicrophoneFeedLock},
     },
-    output_pipeline::{NewOutputPipeline, OutputPipeline},
+    output_pipeline::{AudioFrame, NewOutputPipeline, OutputPipeline},
     sources::{ScreenCaptureFormat, ScreenCaptureTarget},
 };
 use cap_enc_ffmpeg::{H264Encoder, MP4File, OggFile, OpusEncoder};
@@ -733,7 +733,7 @@ async fn create_segment_pipeline(
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
     let system_audio = if capture_system_audio {
-        let (tx, rx) = mpsc::channel(64);
+        let (tx, rx) = mpsc::channel::<AudioFrame>(64);
         (Some(tx), Some(rx))
     } else {
         (None, None)
