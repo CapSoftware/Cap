@@ -285,6 +285,24 @@ pub async fn start_recording(
         RecordingMode::Studio => None,
     };
 
+    let date_time = if cfg!(windows) {
+        // Windows doesn't support colon in file paths
+        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
+    } else {
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+    };
+
+    let meta = RecordingMeta {
+        platform: Some(Platform::default()),
+        project_path: recording_dir.clone(),
+        sharing: None, // TODO: Is this gonna be problematic as it was previously always set
+        pretty_name: format!("{target_name} {date_time}"),
+        inner: RecordingMetaInner::InProgress { recording: true },
+    };
+
+    meta.save_for_project()
+        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+
     match &inputs.capture_target {
         ScreenCaptureTarget::Window { id: _id } => {
             if let Some(show) = inputs
@@ -843,21 +861,9 @@ async fn handle_recording_finish(
         }
     };
 
-    let date_time = if cfg!(windows) {
-        // Windows doesn't support colon in file paths
-        chrono::Local::now().format("%Y-%m-%d %H.%M.%S")
-    } else {
-        chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-    };
-
-    let meta = RecordingMeta {
-        platform: Some(Platform::default()),
-        project_path: recording_dir.clone(),
-        sharing,
-        pretty_name: format!("{target_name} {date_time}"),
-        inner: meta_inner,
-    };
-
+    // TODO: Can we avoid reloading it from disk by parsing as arg?
+    let mut meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+    meta.inner = meta_inner;
     meta.save_for_project()
         .map_err(|e| format!("Failed to save recording meta: {e}"))?;
 

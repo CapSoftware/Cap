@@ -910,6 +910,7 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
                 .map(|s| recording_meta.path(&s.display.path))
                 .collect(),
         },
+        RecordingMetaInner::InProgress { .. } => todo!(),
     };
 
     let duration = display_paths
@@ -1389,19 +1390,31 @@ async fn save_file_dialog(
     }
 }
 
+// #[derive(Serialize, specta::Type)]
+// #[serde(tag = "status")]
+// pub enum RecordingStatus {
+//     Recording,
+//     Failed { error: String },
+//     Complete { mode: RecordingMode },
+// }
+//
+// #[serde(flatten)]
+// pub status: RecordingStatus,
+
 #[derive(Serialize, specta::Type)]
 pub struct RecordingMetaWithMode {
     #[serde(flatten)]
     pub inner: RecordingMeta,
-    pub mode: RecordingMode,
+    pub mode: Option<RecordingMode>,
 }
 
 impl RecordingMetaWithMode {
     fn new(inner: RecordingMeta) -> Self {
         Self {
             mode: match &inner.inner {
-                RecordingMetaInner::Studio(_) => RecordingMode::Studio,
-                RecordingMetaInner::Instant(_) => RecordingMode::Instant,
+                RecordingMetaInner::Studio(_) => Some(RecordingMode::Studio),
+                RecordingMetaInner::Instant(_) => Some(RecordingMode::Instant),
+                RecordingMetaInner::InProgress { .. } => None,
             },
             inner,
         }
@@ -2489,6 +2502,7 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                 }
             }
         }
+        RecordingMetaInner::InProgress { recording } => todo!(),
     }
 
     Ok(())

@@ -8,7 +8,6 @@ use std::{
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
-// use tracing::{debug, warn};
 
 use crate::{CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY};
 
@@ -70,15 +69,27 @@ pub struct RecordingMeta {
     pub sharing: Option<SharingMeta>,
     #[serde(flatten)]
     pub inner: RecordingMetaInner,
+    // #[serde(default)]
+    // pub upload: UploadState, // TODO: Put in `StudioRecordingMeta`, etc
 }
 
-impl specta::Flatten for RecordingMetaInner {}
+// impl specta::Flatten for RecordingMetaInner {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub enum UploadState {
+    Uploading,
+    Failed(String),
+    Complete,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RecordingMetaInner {
     Studio(StudioRecordingMeta),
     Instant(InstantRecordingMeta),
+    // This is set while the recording is still active.
+    InProgress { recording: bool },
+    // Failed { error: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -91,6 +102,7 @@ impl RecordingMeta {
     pub fn path(&self, relative: &RelativePathBuf) -> PathBuf {
         relative.to_path(&self.project_path)
     }
+
     pub fn load_for_project(project_path: &Path) -> Result<Self, Box<dyn Error>> {
         let meta_path = project_path.join("recording-meta.json");
         let mut meta: Self = serde_json::from_str(&std::fs::read_to_string(&meta_path)?)?;
@@ -135,6 +147,7 @@ impl RecordingMeta {
         match &self.inner {
             RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
             RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
+            RecordingMetaInner::InProgress { recording } => todo!(),
         }
     }
 

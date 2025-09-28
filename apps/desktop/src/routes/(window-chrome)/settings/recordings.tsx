@@ -187,7 +187,7 @@ function RecordingItem(props: {
 	onCopyVideoToClipboard: () => void;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
-	const mode = () => props.recording.meta.mode;
+	const mode = () => props.recording.meta.mode || "other"; // TODO: Fix this
 	const firstLetterUpperCase = () =>
 		mode().charAt(0).toUpperCase() + mode().slice(1);
 
@@ -210,6 +210,8 @@ function RecordingItem(props: {
 					/>
 				</Show>
 				<div class="flex flex-col gap-2">
+					{"recording" in props.recording.meta ? "TRUE" : "FALSE"}
+
 					<span>{props.recording.prettyName}</span>
 					<div
 						class={cx(
