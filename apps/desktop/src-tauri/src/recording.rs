@@ -39,7 +39,7 @@ pub enum InProgressRecording {
     Instant {
         target_name: String,
         handle: instant_recording::ActorHandle,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
         inputs: StartRecordingInputs,
         recording_dir: PathBuf,
@@ -132,7 +132,7 @@ pub enum CompletedRecording {
     Instant {
         recording: instant_recording::CompletedRecording,
         target_name: String,
-        progressive_upload: Option<InstantMultipartUpload>,
+        progressive_upload: InstantMultipartUpload,
         video_upload_info: VideoUploadInfo,
     },
     Studio {
@@ -339,22 +339,11 @@ pub async fn start_recording(
     }
 
     let (finish_upload_tx, finish_upload_rx) = flume::bounded(1);
-    let progressive_upload = video_upload_info
-        .as_ref()
-        .filter(|_| matches!(inputs.mode, RecordingMode::Instant))
-        .map(|video_upload_info| {
-            InstantMultipartUpload::spawn(
-                app.clone(),
-                id.clone(),
-                recording_dir.join("content/output.mp4"),
-                video_upload_info.clone(),
-                Some(finish_upload_rx),
-            )
-        });
 
     debug!("spawning start_recording actor");
 
     // done in spawn to catch panics just in case
+    let app_handle = app.clone();
     let spawn_actor_res = async {
         spawn_actor({
             let state_mtx = Arc::clone(&state_mtx);
@@ -416,6 +405,14 @@ pub async fn start_recording(
                         let Some(video_upload_info) = video_upload_info.clone() else {
                             return Err("Video upload info not found".to_string());
                         };
+
+                        let progressive_upload = InstantMultipartUpload::spawn(
+                            app_handle,
+                            id.clone(),
+                            recording_dir.join("content/output.mp4"),
+                            video_upload_info.clone(),
+                            Some(finish_upload_rx),
+                        );
 
                         let mut builder = instant_recording::Actor::builder(
                             recording_dir.clone(),
@@ -757,77 +754,77 @@ async fn handle_recording_finish(
                 let video_upload_info = video_upload_info.clone();
 
                 async move {
-                    if let Some(progressive_upload) = progressive_upload {
-                        let video_upload_succeeded = match progressive_upload
-                            .handle
-                            .await
-                            .map_err(|e| e.to_string())
-                            .and_then(|r| r)
+                    // if let Some(progressive_upload) = progressive_upload {
+                    let video_upload_succeeded = match progressive_upload
+                        .handle
+                        .await
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r)
+                    {
+                        Ok(()) => {
+                            info!(
+                                "Not attempting instant recording upload as progressive upload succeeded"
+                            );
+                            true
+                        }
+                        Err(e) => {
+                            error!("Progressive upload failed: {}", e);
+                            false
+                        }
+                    };
+
+                    let _ = screenshot_task.await;
+
+                    if video_upload_succeeded {
+                        // let resp = prepare_screenshot_upload(
+                        //     &app,
+                        //     &video_upload_info.config.clone(),
+                        //     display_screenshot,
+                        // )
+                        // .await;
+
+                        // match resp {
+                        //     Ok(r)
+                        //         if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
+                        //     {
+                        //         info!("Screenshot uploaded successfully");
+                        //     }
+                        //     Ok(r) => {
+                        //         error!("Failed to upload screenshot: {}", r.status());
+                        //     }
+                        //     Err(e) => {
+                        //         error!("Failed to upload screenshot: {e}");
+                        //     }
+                        // }
+                        todo!();
+                    } else {
+                        if let Ok(meta) = build_video_meta(&output_path)
+                            .map_err(|err| error!("Error getting video metdata: {}", err))
                         {
-                            Ok(()) => {
-                                info!(
-                                    "Not attempting instant recording upload as progressive upload succeeded"
-                                );
-                                true
-                            }
-                            Err(e) => {
-                                error!("Progressive upload failed: {}", e);
-                                false
-                            }
-                        };
-
-                        let _ = screenshot_task.await;
-
-                        if video_upload_succeeded {
-                            // let resp = prepare_screenshot_upload(
-                            //     &app,
-                            //     &video_upload_info.config.clone(),
-                            //     display_screenshot,
-                            // )
-                            // .await;
-
-                            // match resp {
-                            //     Ok(r)
-                            //         if r.status().as_u16() >= 200 && r.status().as_u16() < 300 =>
-                            //     {
-                            //         info!("Screenshot uploaded successfully");
-                            //     }
-                            //     Ok(r) => {
-                            //         error!("Failed to upload screenshot: {}", r.status());
-                            //     }
-                            //     Err(e) => {
-                            //         error!("Failed to upload screenshot: {e}");
-                            //     }
-                            // }
-                            todo!();
-                        } else {
-                            if let Ok(meta) = build_video_meta(&output_path)
-                                .map_err(|err| error!("Error getting video metdata: {}", err))
+                            // The upload_video function handles screenshot upload, so we can pass it along
+                            match upload_video(
+                                &app,
+                                video_upload_info.id.clone(),
+                                output_path,
+                                display_screenshot.clone(),
+                                video_upload_info.config.clone(),
+                                meta,
+                                None,
+                            )
+                            .await
                             {
-                                // The upload_video function handles screenshot upload, so we can pass it along
-                                match upload_video(
-                                    &app,
-                                    video_upload_info.id.clone(),
-                                    output_path,
-                                    display_screenshot.clone(),
-                                    video_upload_info.config.clone(),
-                                    meta,
-                                    None,
-                                )
-                                .await
-                                {
-                                    Ok(_) => {
-                                        info!(
-                                            "Final video upload with screenshot completed successfully"
-                                        )
-                                    }
-                                    Err(e) => {
-                                        error!("Error in final upload with screenshot: {}", e)
-                                    }
+                                Ok(_) => {
+                                    info!(
+                                        "Final video upload with screenshot completed successfully"
+                                    )
+                                }
+                                Err(e) => {
+                                    error!("Error in final upload with screenshot: {}", e)
                                 }
                             }
                         }
                     }
+                    // }
                 }
             });
 
