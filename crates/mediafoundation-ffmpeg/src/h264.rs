@@ -1,6 +1,6 @@
 use cap_mediafoundation_utils::*;
 use ffmpeg::{Rational, ffi::av_rescale_q, packet};
-use tracing::info;
+use tracing::{info, trace};
 use windows::Win32::Media::MediaFoundation::{IMFSample, MFSampleExtension_CleanPoint};
 
 /// Configuration for H264 muxing
@@ -92,11 +92,16 @@ impl H264StreamMuxer {
         let mut packet = self.mf_sample_to_avpacket(sample)?;
 
         packet.rescale_ts(
-            self.time_base,
-            output.stream(self.stream_index).unwrap().time_base(),
+            dbg!(self.time_base),
+            dbg!(output.stream(self.stream_index).unwrap().time_base()),
         );
 
+        dbg!(packet.pts());
+
+        dbg!(packet.time_base());
         packet.write_interleaved(output)?;
+
+        dbg!(packet.pts());
 
         Ok(())
     }

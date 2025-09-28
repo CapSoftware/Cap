@@ -355,6 +355,7 @@ mod win {
     use cap_enc_ffmpeg::AACEncoder;
     use futures::channel::oneshot;
     use windows::{
+        Foundation::TimeSpan,
         Graphics::SizeInt32,
         Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::Common::DXGI_FORMAT},
     };
@@ -464,27 +465,37 @@ mod win {
 
                     match encoder {
                         either::Left((mut encoder, mut muxer)) => {
-                            encoder.run(
-                                Arc::new(AtomicBool::default()),
-                                || {
-                                    let Ok((frame, _)) = video_rx.recv() else {
-                                        return Ok(None);
-                                    };
+                            trace!("Running native encoder");
+                            let mut first_timestamp = None;
+                            encoder
+                                .run(
+                                    Arc::new(AtomicBool::default()),
+                                    || {
+                                        let Ok((frame, _)) = video_rx.recv() else {
+                                            return Ok(None);
+                                        };
 
-                                    let frame_time = frame.inner().SystemRelativeTime()?;
+                                        let frame_time = frame.inner().SystemRelativeTime()?;
+                                        let first_timestamp =
+                                            first_timestamp.get_or_insert(frame_time);
+                                        let frame_time = TimeSpan {
+                                            Duration: frame_time.Duration
+                                                - first_timestamp.Duration,
+                                        };
 
-                                    Ok(Some((frame.texture().clone(), frame_time)))
-                                },
-                                |output_sample| {
-                                    let mut output = output.lock().unwrap();
+                                        Ok(Some((frame.texture().clone(), frame_time)))
+                                    },
+                                    |output_sample| {
+                                        let mut output = output.lock().unwrap();
 
-                                    let _ = muxer
-                                        .write_sample(&output_sample, &mut *output)
-                                        .map_err(|e| format!("WriteSample: {e}"));
+                                        let _ = muxer
+                                            .write_sample(&output_sample, &mut *output)
+                                            .map_err(|e| format!("WriteSample: {e}"));
 
-                                    Ok(())
-                                },
-                            );
+                                        Ok(())
+                                    },
+                                )
+                                .unwrap();
                         }
                         either::Right(mut encoder) => {
                             while let Ok((frame, time)) = video_rx.recv() {

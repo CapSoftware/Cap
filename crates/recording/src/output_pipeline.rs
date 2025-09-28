@@ -256,6 +256,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
                         .run_until_cancelled(async {
                             while let Some(frame) = video_rx.next().await {
                                 let timestamp = frame.timestamp();
+                                dbg!(timestamp);
 
                                 if let Some(first_tx) = first_tx.take() {
                                     let _ = first_tx.send(timestamp);
@@ -274,7 +275,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
 
                     tracing::info!("Encoder done receiving frames");
 
-                    muxer.finish();
+                    muxer.finish()?;
 
                     tracing::info!("Encoder finished");
 

@@ -60,7 +60,7 @@ pub struct Actor {
 }
 
 impl Actor {
-    fn stop(&mut self) {
+    async fn stop(&mut self) {
         let pipeline = replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
             (
                 match state {
@@ -73,7 +73,7 @@ impl Actor {
         });
 
         if let Some(mut pipeline) = pipeline {
-            pipeline.output.stop();
+            pipeline.output.stop().await;
         }
     }
 }
@@ -82,7 +82,7 @@ impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.stop();
+        self.stop().await;
 
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
@@ -149,7 +149,7 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.stop();
+        self.stop().await;
 
         Ok(())
     }
@@ -299,47 +299,6 @@ enum InstantRecordingActorError {
     #[error("{0}")]
     Other(String),
 }
-
-// async fn run_actor_iteration(
-//     state: ActorState,
-//     ctrl_rx: &Receiver<ActorControlMessage>,
-//     actor: Actor,
-// ) -> Result<Option<(ActorState, Actor)>, InstantRecordingActorError> {
-//     // Receive event based on current state
-//     let event = match state {
-//         State::Recording {
-//             // mut pipeline_done_rx,
-//             pipeline,
-//             segment_start_time,
-//         } => {
-//             tokio::select! {
-//                 // result = &mut pipeline_done_rx => {
-//                 //     return match result {
-//                 //         Ok(Ok(())) => Ok(None),
-//                 //         Ok(Err(e)) => Err(InstantRecordingActorError::Other(e)),
-//                 //         Err(_) => Err(InstantRecordingActorError::PipelineReceiverDropped),
-//                 //     }
-//                 // },
-//                 msg = ctrl_rx.recv_async() => {
-//                     match msg {
-//                         Ok(msg) => {
-//                             info!("received control message: {msg:?}");
-//                             (msg, State::Recording { pipeline, /* pipeline_done_rx,*/ segment_start_time })
-//                         },
-//                         Err(_) => return Err(InstantRecordingActorError::ControlReceiverDropped),
-//                     }
-//                 }
-//             }
-//         }
-//         paused_state @ State::Paused { .. } => match ctrl_rx.recv_async().await {
-//             Ok(msg) => {
-//                 info!("received control message: {msg:?}");
-//                 (msg, paused_state)
-//             }
-//             Err(_) => return Err(InstantRecordingActorError::ControlReceiverDropped),
-//         },
-//     };
-// }
 
 fn current_time_f64() -> f64 {
     SystemTime::now()

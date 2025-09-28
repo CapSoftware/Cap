@@ -422,6 +422,7 @@ impl H264Encoder {
                                 let mf_sample = MFCreateSample()?;
                                 mf_sample.AddBuffer(&input_buffer)?;
                                 mf_sample.SetSampleTime(timestamp.Duration)?;
+                                dbg!(timestamp.Duration);
                                 self.transform
                                     .ProcessInput(self.input_stream_id, &mf_sample, 0)?;
                                 should_exit = false;
@@ -441,6 +442,8 @@ impl H264Encoder {
                                 .ProcessOutput(0, &mut output_buffers, &mut status)?;
                             output_buffers[0].pSample.as_ref().unwrap().clone()
                         };
+
+                        println!("calling on_sample");
 
                         on_sample(sample)?;
                     }
