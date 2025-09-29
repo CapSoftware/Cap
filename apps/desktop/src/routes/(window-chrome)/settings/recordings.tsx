@@ -13,26 +13,27 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
-	createEffect,
 	createMemo,
 	createSignal,
 	For,
 	type JSX,
+	onCleanup,
 	type ParentProps,
 	Show,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
 	commands,
 	events,
-	type RecordingMetaWithMode,
+	type RecordingMetaWithMetadata,
 	type UploadProgress,
 } from "~/utils/tauri";
+import CapTooltip from "~/components/Tooltip";
 
 type Recording = {
-	meta: RecordingMetaWithMode;
+	meta: RecordingMetaWithMetadata;
 	path: string;
 	prettyName: string;
 	thumbnailPath: string;
@@ -81,7 +82,20 @@ export default function Recordings() {
 	const [activeTab, setActiveTab] = createSignal<(typeof Tabs)[number]["id"]>(
 		Tabs[0].id,
 	);
+	const [uploadProgress, setUploadProgress] = createStore<
+		Record</* video_id */ string, number>
+	>({});
 	const recordings = createQuery(() => recordingsQuery);
+
+	createTauriEventListener(events.uploadProgressEvent, (e) => {
+		setUploadProgress(e.video_id, (Number(e.uploaded) / Number(e.total)) * 100);
+		if (e.uploaded === e.total)
+			setUploadProgress(
+				produce((s) => {
+					delete s[e.video_id];
+				}),
+			);
+	});
 
 	createTauriEventListener(events.recordingDeleted, () => recordings.refetch());
 
@@ -118,23 +132,6 @@ export default function Recordings() {
 			Editor: { project_path: path },
 		});
 	};
-
-	const [uploadProgress, setUploadProgress] = createStore<
-		Record</* video_id */ string, number>
-	>({});
-	// TODO: Cleanup subscription
-	events.uploadProgressEvent.listen((e) => {
-		// TODO: Make this cleanup
-		// if (e.payload.uploaded === e.payload.total) {
-		// 	setUploadProgress(e.payload.video_id, undefined);
-		// }
-
-		setUploadProgress(
-			e.payload.video_id,
-			(Number(e.payload.uploaded) / Number(e.payload.total)) * 100,
-		);
-	});
-	createEffect(() => console.log({ ...uploadProgress }));
 
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
@@ -214,7 +211,7 @@ function RecordingItem(props: {
 	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
-	const mode = () => props.recording.meta.mode || "other"; // TODO: Fix this
+	const mode = () => props.recording.meta.mode;
 	const firstLetterUpperCase = () =>
 		mode().charAt(0).toUpperCase() + mode().slice(1);
 
@@ -253,77 +250,52 @@ function RecordingItem(props: {
 							<p>{firstLetterUpperCase()}</p>
 						</div>
 
-						<Show
-							when={
-								"recording" in props.recording.meta
-									? props.recording.meta.recording
-									: undefined
-							}
-						>
+						<Show when={props.recording.meta.status.status === "InProgress"}>
 							<div
 								class={cx(
-									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-orange-600",
+									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-blue-500",
 								)}
 							>
-								{/* TODO: Get a proper icon here */}
-								<IconCapInstant class="invert size-2.5 dark:invert-0" />
-								<p>RECORDING</p>
+								<IconPhRecordFill class="invert size-2.5 dark:invert-0" />
+								<p>Recording in progress</p>
 							</div>
 						</Show>
 
-						{/* TODO: Account for studio mode vs instant mode error */}
-						<Show
-							when={
-								"error" in props.recording.meta
-									? props.recording.meta.error
-									: undefined
-							}
-						>
-							{(error) => (
+						<Show when={props.recording.meta.status.status === "Failed"}>
+							<CapTooltip
+								content={
+									<span>
+										{props.recording.meta.status.status === "Failed"
+											? props.recording.meta.status.error
+											: ""}
+									</span>
+								}
+							>
 								<div
 									class={cx(
-										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-600",
+										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-9",
 									)}
 								>
-									{/* TODO: Get a proper icon here */}
-									{/* TODO: Show the error in a tooltip */}
-									<IconCapInstant class="invert size-2.5 dark:invert-0" />
-									<p>FAILED: {error()}</p>
+									<IconPhWarningBold class="invert size-2.5 dark:invert-0" />
+									<p>Recording failed</p>
 								</div>
-							)}
+							</CapTooltip>
 						</Show>
-
-						{/* TODO: Show a badge for when recording fails */}
 					</div>
 				</div>
 			</div>
 			<div class="flex gap-2 items-center">
-				{/*TODO*/}
-				{/*{JSON.stringify(props.recording.meta.upload || "none")}
-				{JSON.stringify(props.uploadProgress || "none")}*/}
-
 				<Show when={mode() === "studio"}>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
 							<>
-								{/* // TODO: Add something here like instant mode */}
-								{/*<Show
-									when={props.uploadProgress || reupload.isPending}
-									fallback={
-										<TooltipIconButton
-											tooltipText="Reupload"
-											onClick={() => reupload.mutate()}
-										>
-											<IconLucideRotateCcw class="size-4" />
-										</TooltipIconButton>
-									}
-								>
+								<Show when={props.uploadProgress}>
 									<ProgressCircle
 										variant="primary"
 										progress={props.uploadProgress || 0}
 										size="sm"
 									/>
-								</Show>*/}
+								</Show>
 
 								<TooltipIconButton
 									tooltipText="Open link"
@@ -374,31 +346,12 @@ function RecordingItem(props: {
 
 								<Show when={props.recording.meta.sharing}>
 									{(sharing) => (
-										<>
-											{/*<Show
-										when={props.uploadProgress || reupload.isPending}
-										fallback={
-											<TooltipIconButton
-												tooltipText="Reupload"
-												onClick={() => reupload.mutate()}
-											>
-												<IconLucideRotateCcw class="size-4" />
-											</TooltipIconButton>
-										}
-									>
-										<ProgressCircle
-											variant="primary"
-											progress={props.uploadProgress || 0}
-											size="sm"
-										/>
-									</Show>*/}
-											<TooltipIconButton
-												tooltipText="Open link"
-												onClick={() => shell.open(sharing().link)}
-											>
-												<IconCapLink class="size-4" />
-											</TooltipIconButton>
-										</>
+										<TooltipIconButton
+											tooltipText="Open link"
+											onClick={() => shell.open(sharing().link)}
+										>
+											<IconCapLink class="size-4" />
+										</TooltipIconButton>
 									)}
 								</Show>
 							</>

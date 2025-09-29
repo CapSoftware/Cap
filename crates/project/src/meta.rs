@@ -186,11 +186,11 @@ pub enum StudioRecordingMeta {
 impl StudioRecordingMeta {
     pub fn status(&self) -> StudioRecordingStatus {
         match self {
-            StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Completed,
+            StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Complete,
             StudioRecordingMeta::MultipleSegments { inner } => inner
                 .status
                 .clone()
-                .unwrap_or(StudioRecordingStatus::Completed),
+                .unwrap_or(StudioRecordingStatus::Complete),
         }
     }
 
@@ -247,11 +247,11 @@ pub struct MultipleSegments {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-#[serde(rename_all = "camelCase")]
+#[serde(tag = "status")]
 pub enum StudioRecordingStatus {
     InProgress,
     Failed { error: String },
-    Completed,
+    Complete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

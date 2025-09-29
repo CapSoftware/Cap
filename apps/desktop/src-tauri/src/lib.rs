@@ -30,8 +30,8 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
-    StudioRecordingStatus, XY, ZoomSegment,
+    InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
+    StudioRecordingMeta, StudioRecordingStatus, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -1397,18 +1397,43 @@ async fn save_file_dialog(
 }
 
 #[derive(Serialize, specta::Type)]
-pub struct RecordingMetaWithMode {
+pub struct RecordingMetaWithMetadata {
     #[serde(flatten)]
     pub inner: RecordingMeta,
-    pub mode: Option<RecordingMode>,
+    // Easier accessors for within webview
+    // THESE MUST COME AFTER `inner` to override flattened fields with the same name
+    pub mode: RecordingMode,
+    pub status: StudioRecordingStatus,
 }
 
-impl RecordingMetaWithMode {
+impl RecordingMetaWithMetadata {
     fn new(inner: RecordingMeta) -> Self {
         Self {
             mode: match &inner.inner {
-                RecordingMetaInner::Studio(_) => Some(RecordingMode::Studio),
-                RecordingMetaInner::Instant(_) => Some(RecordingMode::Instant),
+                RecordingMetaInner::Studio(_) => RecordingMode::Studio,
+                RecordingMetaInner::Instant(_) => RecordingMode::Instant,
+            },
+            status: match &inner.inner {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
+                    inner
+                        .status
+                        .clone()
+                        .unwrap_or(StudioRecordingStatus::Complete)
+                }
+                RecordingMetaInner::Studio(StudioRecordingMeta::SingleSegment { .. }) => {
+                    StudioRecordingStatus::Complete
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+                    StudioRecordingStatus::InProgress
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::Failed { error }) => {
+                    StudioRecordingStatus::Failed {
+                        error: error.clone(),
+                    }
+                }
+                RecordingMetaInner::Instant(InstantRecordingMeta::Complete { .. }) => {
+                    StudioRecordingStatus::Complete
+                }
             },
             inner,
         }
@@ -1427,15 +1452,15 @@ pub enum FileType {
 fn get_recording_meta(
     path: PathBuf,
     _file_type: FileType,
-) -> Result<RecordingMetaWithMode, String> {
+) -> Result<RecordingMetaWithMetadata, String> {
     RecordingMeta::load_for_project(&path)
-        .map(RecordingMetaWithMode::new)
+        .map(RecordingMetaWithMetadata::new)
         .map_err(|e| format!("Failed to load recording meta: {e}"))
 }
 
 #[tauri::command]
 #[specta::specta]
-fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMode)>, String> {
+fn list_recordings(app: AppHandle) -> Result<Vec<(PathBuf, RecordingMetaWithMetadata)>, String> {
     let recordings_dir = recordings_path(&app);
 
     if !recordings_dir.exists() {
