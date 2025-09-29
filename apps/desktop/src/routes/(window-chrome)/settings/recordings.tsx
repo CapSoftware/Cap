@@ -353,35 +353,55 @@ function RecordingItem(props: {
 						}));
 
 						return (
-							<Show when={props.recording.meta.sharing}>
-								{(sharing) => (
-									<>
-										<Show
-											when={props.uploadProgress || reupload.isPending}
-											fallback={
-												<TooltipIconButton
-													tooltipText="Reupload"
-													onClick={() => reupload.mutate()}
-												>
-													<IconLucideRotateCcw class="size-4" />
-												</TooltipIconButton>
-											}
-										>
-											<ProgressCircle
-												variant="primary"
-												progress={props.uploadProgress || 0}
-												size="sm"
-											/>
-										</Show>
+							<>
+								<Show
+									when={props.uploadProgress || reupload.isPending}
+									fallback={
 										<TooltipIconButton
-											tooltipText="Open link"
-											onClick={() => shell.open(sharing().link)}
+											tooltipText="Reupload"
+											onClick={() => reupload.mutate()}
 										>
-											<IconCapLink class="size-4" />
+											<IconLucideRotateCcw class="size-4" />
 										</TooltipIconButton>
-									</>
-								)}
-							</Show>
+									}
+								>
+									<ProgressCircle
+										variant="primary"
+										progress={props.uploadProgress || 0}
+										size="sm"
+									/>
+								</Show>
+
+								<Show when={props.recording.meta.sharing}>
+									{(sharing) => (
+										<>
+											{/*<Show
+										when={props.uploadProgress || reupload.isPending}
+										fallback={
+											<TooltipIconButton
+												tooltipText="Reupload"
+												onClick={() => reupload.mutate()}
+											>
+												<IconLucideRotateCcw class="size-4" />
+											</TooltipIconButton>
+										}
+									>
+										<ProgressCircle
+											variant="primary"
+											progress={props.uploadProgress || 0}
+											size="sm"
+										/>
+									</Show>*/}
+											<TooltipIconButton
+												tooltipText="Open link"
+												onClick={() => shell.open(sharing().link)}
+											>
+												<IconCapLink class="size-4" />
+											</TooltipIconButton>
+										</>
+									)}
+								</Show>
+							</>
 						);
 					}}
 				</Show>
