@@ -74,11 +74,12 @@ pub struct RecordingMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "state")]
 pub enum UploadState {
     // TODO: Do we care about what sort of upload it is???
-    MultipartUpload,
-    SinglePartUpload,
-    Failed(String),
+    MultipartUpload { cap_id: String },
+    SinglePartUpload { cap_id: String },
+    Failed { error: String },
     Complete,
 }
 

@@ -50,7 +50,6 @@ pub struct UploadedItem {
 #[derive(Clone, Serialize, Type, tauri_specta::Event)]
 pub struct UploadProgressEvent {
     video_id: String,
-    // TODO: Account for different states -> Eg. uploading video vs thumbnail
     uploaded: String,
     total: String,
 }
@@ -63,7 +62,6 @@ pub async fn upload_video(
     video_id: String,
     file_path: PathBuf,
     screenshot_path: PathBuf,
-    s3_config: S3UploadMeta,
     meta: S3VideoMeta,
 ) -> Result<UploadedItem, String> {
     info!("Uploading video {video_id}...");
@@ -80,7 +78,7 @@ pub async fn upload_video(
         total_size,
         progress(
             app.clone(),
-            video_id,
+            video_id.clone(),
             stream.map(move |v| v.map(move |v| (total_size, v))),
         )
         .and_then(|(_, c)| async move { Ok(c) }),
@@ -91,7 +89,7 @@ pub async fn upload_video(
     let thumbnail_fut = singlepart_uploader(
         app.clone(),
         PresignedS3PutRequest {
-            video_id: s3_config.id.clone(),
+            video_id: video_id.clone(),
             subpath: "screenshot/screen-capture.jpg".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
@@ -107,8 +105,8 @@ pub async fn upload_video(
     let _ = (video_result?, thumbnail_result?);
 
     Ok(UploadedItem {
-        link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
-        id: s3_config.id.clone(),
+        link: app.make_app_url(format!("/s/{video_id}")).await,
+        id: video_id,
     })
 }
 
@@ -288,7 +286,6 @@ impl InstantMultipartUpload {
     /// and the file has stabilized (no additional data is being written).
     pub fn spawn(
         app: AppHandle,
-        video_id: String,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         realtime_upload_done: Option<Receiver<()>>,
@@ -297,7 +294,6 @@ impl InstantMultipartUpload {
         Self {
             handle: spawn_actor(Self::run(
                 app,
-                video_id,
                 file_path,
                 pre_created_video,
                 realtime_upload_done,
@@ -308,17 +304,19 @@ impl InstantMultipartUpload {
 
     pub async fn run(
         app: AppHandle,
-        video_id: String,
         file_path: PathBuf,
         pre_created_video: VideoUploadInfo,
         realtime_video_done: Option<Receiver<()>>,
         recording_dir: PathBuf,
     ) -> Result<(), String> {
+        let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
         // TODO: Reuse this + error handling
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-        project_meta.upload = Some(UploadState::MultipartUpload);
+        project_meta.upload = Some(UploadState::MultipartUpload {
+            cap_id: video_id.clone(),
+        });
         project_meta.save_for_project().unwrap();
 
         // TODO: Allow injecting this for Studio mode upload
@@ -523,11 +521,14 @@ fn multipart_uploader(
     upload_id: String,
     stream: impl Stream<Item = io::Result<Chunk>>,
 ) -> impl Stream<Item = Result<UploadedPart, String>> {
+    debug!("Initializing multipart uploader for video {video_id:?}");
+
     try_stream! {
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
         while let Some(item) = stream.next().await {
             let Chunk { total_size, part_number, chunk } = item.map_err(|err| format!("uploader/part/{:?}/fs: {err:?}", prev_part_number.map(|p| p + 1)))?;
+            debug!("Uploading chunk {part_number} for video {video_id:?}");
             prev_part_number = Some(part_number);
             let md5_sum = base64::encode(md5::compute(&chunk).0);
             let size = chunk.len();
@@ -663,6 +664,7 @@ fn progress<T: UploadedChunk, E>(
 ) -> impl Stream<Item = Result<T, E>> {
     let mut uploaded = 0u64;
     let mut pending_task: Option<JoinHandle<()>> = None;
+    let (video_id2, app_handle) = (video_id.clone(), app.clone());
 
     stream! {
         let mut stream = pin!(stream);
@@ -709,4 +711,18 @@ fn progress<T: UploadedChunk, E>(
             yield chunk;
         }
     }
+    .map(Some)
+    .chain(stream::once(async move {
+        // This will trigger the frontend to remove the event from the SolidJS store.
+        UploadProgressEvent {
+            video_id: video_id2,
+            uploaded: "0".into(),
+            total: "0".into(),
+        }
+        .emit(&app_handle)
+        .ok();
+
+        None
+    }))
+    .filter_map(|item| async move { item })
 }

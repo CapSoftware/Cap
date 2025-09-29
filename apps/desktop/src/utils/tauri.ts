@@ -456,7 +456,7 @@ export type UploadMode = { Initial: { pre_created_video: VideoUploadInfo | null 
 export type UploadProgress = { progress: number }
 export type UploadProgressEvent = { video_id: string; uploaded: string; total: string }
 export type UploadResult = { Success: string } | "NotAuthenticated" | "PlanCheckFailed" | "UpgradeRequired"
-export type UploadState = "MultipartUpload" | "SinglePartUpload" | { Failed: string } | "Complete"
+export type UploadState = { state: "MultipartUpload"; cap_id: string } | { state: "SinglePartUpload"; cap_id: string } | { state: "Failed"; error: string } | { state: "Complete" }
 export type Video = { duration: number; width: number; height: number; fps: number; start_time: number }
 export type VideoMeta = { path: string; fps?: number; 
 /**

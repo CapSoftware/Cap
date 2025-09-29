@@ -296,7 +296,6 @@ pub async fn start_recording(
     let meta = RecordingMeta {
         platform: Some(Platform::default()),
         project_path: recording_dir.clone(),
-        sharing: None, // TODO: Is this gonna be problematic as it was previously always set
         pretty_name: format!("{target_name} {date_time}"),
         inner: match inputs.mode {
             RecordingMode::Studio => {
@@ -312,6 +311,7 @@ pub async fn start_recording(
                 RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
             }
         },
+        sharing: None,
         upload: None,
     };
 
@@ -446,7 +446,6 @@ pub async fn start_recording(
 
                         let progressive_upload = InstantMultipartUpload::spawn(
                             app_handle,
-                            id.clone(),
                             recording_dir.join("content/output.mp4"),
                             video_upload_info.clone(),
                             Some(finish_upload_rx),
@@ -863,7 +862,6 @@ async fn handle_recording_finish(
                                 video_upload_info.id.clone(),
                                 output_path,
                                 display_screenshot.clone(),
-                                video_upload_info.config.clone(),
                                 meta,
                             )
                             .await

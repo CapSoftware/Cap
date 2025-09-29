@@ -131,7 +131,7 @@ export default function Recordings() {
 
 		setUploadProgress(
 			e.payload.video_id,
-			Number(e.payload.uploaded) / Number(e.payload.total),
+			(Number(e.payload.uploaded) / Number(e.payload.total)) * 100,
 		);
 	});
 	createEffect(() => console.log({ ...uploadProgress }));
@@ -189,11 +189,11 @@ export default function Recordings() {
 										handleCopyVideoToClipboard(recording.path)
 									}
 									uploadProgress={
-										// TODO: Fix this
-										Object.values(uploadProgress)[0]
-										// recording.meta.sharing?.id
-										// 	? uploadProgress[recording.meta.sharing.id]
-										// 	: undefined
+										recording.meta.upload &&
+										(recording.meta.upload.state === "MultipartUpload" ||
+											recording.meta.upload.state === "SinglePartUpload")
+											? uploadProgress[recording.meta.upload.cap_id]
+											: undefined
 									}
 								/>
 							)}
@@ -298,6 +298,10 @@ function RecordingItem(props: {
 				</div>
 			</div>
 			<div class="flex gap-2 items-center">
+				{/*TODO*/}
+				{/*{JSON.stringify(props.recording.meta.upload || "none")}
+				{JSON.stringify(props.uploadProgress || "none")}*/}
+
 				<Show when={mode() === "studio"}>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
@@ -369,7 +373,6 @@ function RecordingItem(props: {
 												size="sm"
 											/>
 										</Show>
-
 										<TooltipIconButton
 											tooltipText="Open link"
 											onClick={() => shell.open(sharing().link)}
