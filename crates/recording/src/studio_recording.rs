@@ -603,6 +603,7 @@ async fn stop_recording(
                     })
                     .collect(),
             ),
+            status: Some(StudioRecordingStatus::Completed),
         },
     };
 

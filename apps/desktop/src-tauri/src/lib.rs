@@ -30,8 +30,8 @@ use auth::{AuthStore, AuthenticationInvalid, Plan};
 use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
-    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, XY,
-    ZoomSegment,
+    ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta,
+    StudioRecordingStatus, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -901,21 +901,24 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         RecordingMetaInner::Instant(_) => {
             vec![path.join("content/output.mp4")]
         }
-        RecordingMetaInner::Studio(meta) => match meta {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                vec![recording_meta.path(&segment.display.path)]
+        RecordingMetaInner::Studio(meta) => {
+            let status = meta.status();
+            if let StudioRecordingStatus::Failed { .. } = status {
+                return Err(format!("Unable to get metadata on failed recording"));
+            } else if let StudioRecordingStatus::InProgress = status {
+                return Err(format!("Unable to get metadata on in-progress recording"));
             }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
-                .segments
-                .iter()
-                .map(|s| recording_meta.path(&s.display.path))
-                .collect(),
-        },
-        RecordingMetaInner::InProgress { .. } => {
-            return Err(format!("Unable to get metadata on in-progress recording"));
-        }
-        RecordingMetaInner::Failed { .. } => {
-            return Err(format!("Unable to get metadata on failed recording"));
+
+            match meta {
+                StudioRecordingMeta::SingleSegment { segment } => {
+                    vec![recording_meta.path(&segment.display.path)]
+                }
+                StudioRecordingMeta::MultipleSegments { inner } => inner
+                    .segments
+                    .iter()
+                    .map(|s| recording_meta.path(&s.display.path))
+                    .collect(),
+            }
         }
     };
 
@@ -1069,11 +1072,7 @@ async fn upload_exported_video(
 
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
-    let Some(output_path) = meta.output_path() else {
-        notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
-        return Err("Failed to upload video: Recording failed to complete".to_string());
-    };
-
+    let output_path = meta.output_path();
     if !output_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
@@ -1401,17 +1400,6 @@ async fn save_file_dialog(
     }
 }
 
-// #[derive(Serialize, specta::Type)]
-// #[serde(tag = "status")]
-// pub enum RecordingStatus {
-//     Recording,
-//     Failed { error: String },
-//     Complete { mode: RecordingMode },
-// }
-//
-// #[serde(flatten)]
-// pub status: RecordingStatus,
-
 #[derive(Serialize, specta::Type)]
 pub struct RecordingMetaWithMode {
     #[serde(flatten)]
@@ -1425,8 +1413,6 @@ impl RecordingMetaWithMode {
             mode: match &inner.inner {
                 RecordingMetaInner::Studio(_) => Some(RecordingMode::Studio),
                 RecordingMetaInner::Instant(_) => Some(RecordingMode::Instant),
-                RecordingMetaInner::InProgress { .. } => None,
-                RecordingMetaInner::Failed { .. } => None,
             },
             inner,
         }
@@ -2498,9 +2484,15 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
     let meta = RecordingMeta::load_for_project(path).map_err(|v| v.to_string())?;
 
     match &meta.inner {
-        RecordingMetaInner::Studio(_) => {
-            let project_path = path.to_path_buf();
+        RecordingMetaInner::Studio(meta) => {
+            let status = meta.status();
+            if let StudioRecordingStatus::Failed { .. } = status {
+                return Err(format!("Unable to open failed recording"));
+            } else if let StudioRecordingStatus::InProgress = status {
+                return Err(format!("Recording in progress"));
+            }
 
+            let project_path = path.to_path_buf();
             tokio::spawn(async move { ShowCapWindow::Editor { project_path }.show(&app).await });
         }
         RecordingMetaInner::Instant(_) => {
@@ -2514,10 +2506,6 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
                     main_window.close().ok();
                 }
             }
-        }
-        RecordingMetaInner::InProgress { .. } => return Err(format!("Recording in progress")),
-        RecordingMetaInner::Failed { .. } => {
-            return Err(format!("Unable to open failed recording"));
         }
     }
 

@@ -99,8 +99,7 @@ impl ExporterBuilder {
 
         let output_path = self
             .output_path
-            .or_else(|| recording_meta.output_path())
-            .ok_or(Error::RecordingFailed)?;
+            .unwrap_or_else(|| recording_meta.output_path());
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent)

@@ -480,7 +480,7 @@ async fn stop_recording(actor: Actor) -> CompletedRecording {
 
     CompletedRecording {
         project_path: actor.recording_dir.clone(),
-        meta: InstantRecordingMeta {
+        meta: InstantRecordingMeta::Complete {
             fps: actor.video_info.fps(),
             sample_rate: None,
         },

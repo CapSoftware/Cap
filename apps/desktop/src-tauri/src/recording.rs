@@ -1,8 +1,8 @@
 use cap_fail::fail;
 use cap_project::{
-    CursorClickEvent, Platform, ProjectConfiguration, RecordingMeta, RecordingMetaInner,
-    SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment, ZoomMode,
-    ZoomSegment, cursor::CursorEvents,
+    CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
+    RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
+    TimelineConfiguration, TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
 use cap_recording::{
     RecordingError, RecordingMode,
@@ -297,7 +297,20 @@ pub async fn start_recording(
         project_path: recording_dir.clone(),
         sharing: None, // TODO: Is this gonna be problematic as it was previously always set
         pretty_name: format!("{target_name} {date_time}"),
-        inner: RecordingMetaInner::InProgress { recording: true },
+        inner: match inputs.mode {
+            RecordingMode::Studio => {
+                RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments {
+                    inner: MultipleSegments {
+                        segments: Default::default(),
+                        cursors: Default::default(),
+                        status: Some(StudioRecordingStatus::InProgress),
+                    },
+                })
+            }
+            RecordingMode::Instant => {
+                RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { recording: true })
+            }
+        },
         upload: None,
     };
 
@@ -688,7 +701,16 @@ async fn handle_recording_end(
         Err(error) => {
             // TODO: Error handling -> Can we reuse `RecordingMeta` too?
             let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-            project_meta.inner = RecordingMetaInner::Failed { error };
+            match &mut project_meta.inner {
+                RecordingMetaInner::Studio(meta) => {
+                    if let StudioRecordingMeta::MultipleSegments { inner } = meta {
+                        inner.status = Some(StudioRecordingStatus::Failed { error });
+                    }
+                }
+                RecordingMetaInner::Instant(meta) => {
+                    *meta = InstantRecordingMeta::Failed { error };
+                }
+            }
             project_meta.save_for_project().unwrap();
 
             None

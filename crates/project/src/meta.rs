@@ -85,16 +85,26 @@ pub enum UploadState {
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(untagged, rename_all = "camelCase")]
 pub enum RecordingMetaInner {
-    InProgress { recording: bool },
-    Failed { error: String },
     Studio(StudioRecordingMeta),
     Instant(InstantRecordingMeta),
 }
 
+impl specta::Flatten for RecordingMetaInner {}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct InstantRecordingMeta {
-    pub fps: u32,
-    pub sample_rate: Option<u32>,
+#[serde(untagged, rename_all = "camelCase")]
+pub enum InstantRecordingMeta {
+    InProgress {
+        // This field means nothing and is just because this enum is untagged.
+        recording: bool,
+    },
+    Failed {
+        error: String,
+    },
+    Complete {
+        fps: u32,
+        sample_rate: Option<u32>,
+    },
 }
 
 impl RecordingMeta {
@@ -142,14 +152,10 @@ impl RecordingMeta {
         config
     }
 
-    pub fn output_path(&self) -> Option<PathBuf> {
+    pub fn output_path(&self) -> PathBuf {
         match &self.inner {
-            RecordingMetaInner::Instant(_) => Some(self.project_path.join("content/output.mp4")),
-            RecordingMetaInner::Studio(_) => {
-                Some(self.project_path.join("output").join("result.mp4"))
-            }
-            RecordingMetaInner::InProgress { .. } => None,
-            RecordingMetaInner::Failed { .. } => None,
+            RecordingMetaInner::Instant(_) => self.project_path.join("content/output.mp4"),
+            RecordingMetaInner::Studio(_) => self.project_path.join("output").join("result.mp4"),
         }
     }
 
@@ -177,12 +183,20 @@ pub enum StudioRecordingMeta {
 }
 
 impl StudioRecordingMeta {
+    pub fn status(&self) -> StudioRecordingStatus {
+        match self {
+            StudioRecordingMeta::SingleSegment { .. } => StudioRecordingStatus::Completed,
+            StudioRecordingMeta::MultipleSegments { inner } => inner
+                .status
+                .clone()
+                .unwrap_or(StudioRecordingStatus::Completed),
+        }
+    }
+
     pub fn camera_path(&self) -> Option<RelativePathBuf> {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => {
-                segment.camera.as_ref().map(|c| c.path.clone())
-            }
-            StudioRecordingMeta::MultipleSegments { inner, .. } => inner
+            Self::SingleSegment { segment } => segment.camera.as_ref().map(|c| c.path.clone()),
+            Self::MultipleSegments { inner, .. } => inner
                 .segments
                 .first()
                 .and_then(|s| s.camera.as_ref().map(|c| c.path.clone())),
@@ -191,8 +205,8 @@ impl StudioRecordingMeta {
 
     pub fn min_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).min().unwrap()
             }
         }
@@ -200,8 +214,8 @@ impl StudioRecordingMeta {
 
     pub fn max_fps(&self) -> u32 {
         match self {
-            StudioRecordingMeta::SingleSegment { segment } => segment.display.fps,
-            StudioRecordingMeta::MultipleSegments { inner, .. } => {
+            Self::SingleSegment { segment } => segment.display.fps,
+            Self::MultipleSegments { inner, .. } => {
                 inner.segments.iter().map(|s| s.display.fps).max().unwrap()
             }
         }
@@ -227,6 +241,16 @@ pub struct MultipleSegments {
     pub segments: Vec<MultipleSegment>,
     #[serde(default, skip_serializing_if = "Cursors::is_empty")]
     pub cursors: Cursors,
+    #[serde(default)]
+    pub status: Option<StudioRecordingStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub enum StudioRecordingStatus {
+    InProgress,
+    Failed { error: String },
+    Completed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
