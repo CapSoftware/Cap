@@ -10,6 +10,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
@@ -36,6 +37,7 @@ export const ShareVideo = forwardRef<
 		data: typeof videos.$inferSelect & {
 			ownerIsPro?: boolean;
 			hasActiveUpload?: boolean;
+			orgSettings?: OrganizationSettings | null;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
@@ -176,6 +178,7 @@ export const ShareVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
+							disableCaptions={areCaptionsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}
@@ -195,6 +198,7 @@ export const ShareVideo = forwardRef<
 							videoId={data.id}
 							mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 							videoSrc={videoSrc}
+							disableCaptions={areCaptionsDisabled ?? false}
 							chaptersSrc={areChaptersDisabled ? "" : chaptersUrl || ""}
 							captionsSrc={areCaptionsDisabled ? "" : subtitleUrl || ""}
 							videoRef={videoRef}

@@ -12,23 +12,17 @@ import type { Video } from "@cap/web-domain";
 import { faGear } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
-import { useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { updateVideoSettings } from "@/actions/videos/settings";
 import { useDashboardContext } from "../../Contexts";
+import type { OrganizationSettings } from "../../dashboard-data";
 
 interface SettingsDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
 	capId: Video.VideoId;
-	settingsData?: {
-		disableComments?: boolean;
-		disableSummary?: boolean;
-		disableCaptions?: boolean;
-		disableChapters?: boolean;
-		disableReactions?: boolean;
-		disableTranscript?: boolean;
-	};
+	settingsData?: OrganizationSettings;
 }
 
 const options = [
@@ -75,7 +69,7 @@ export const SettingsDialog = ({
 }: SettingsDialogProps) => {
 	const { user } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
-	const [settings, setSettings] = useState<typeof settingsData>({
+	const [settings, setSettings] = useState<OrganizationSettings>({
 		disableComments: settingsData?.disableComments,
 		disableSummary: settingsData?.disableSummary,
 		disableCaptions: settingsData?.disableCaptions,
@@ -101,6 +95,13 @@ export const SettingsDialog = ({
 		onClose();
 	};
 
+	const toggleSettingHandler = useCallback((value: string) => {
+		setSettings((prev) => ({
+			...prev,
+			[value as keyof typeof settings]: !prev?.[value as keyof typeof settings],
+		}));
+	}, []);
+
 	return (
 		<Dialog open={isOpen} onOpenChange={onClose}>
 			<DialogContent className="max-w-md min-w-fit">
@@ -114,7 +115,7 @@ export const SettingsDialog = ({
 					{options.map((option) => (
 						<div
 							key={option.value}
-							className="flex gap-10 justify-between items-center p-4 rounded-xl border min-w-fit border-gray-3 bg-gray-1"
+							className="flex gap-10 justify-between items-center p-4 rounded-xl border transition-colors min-w-fit border-gray-3 bg-gray-1"
 						>
 							<div
 								className={clsx("flex flex-col flex-1", option.pro && "gap-1")}
@@ -131,13 +132,8 @@ export const SettingsDialog = ({
 							</div>
 							<Switch
 								disabled={option.pro && !isUserPro}
+								onCheckedChange={() => toggleSettingHandler(option.value)}
 								checked={settings?.[option.value as keyof typeof settings]}
-								onCheckedChange={(checked) =>
-									setSettings({
-										...settings,
-										[option.value as keyof typeof settings]: checked,
-									})
-								}
 							/>
 						</div>
 					))}

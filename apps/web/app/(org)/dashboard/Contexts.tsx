@@ -6,11 +6,17 @@ import Cookies from "js-cookie";
 import { usePathname } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
-import type { Organization, Spaces, UserPreferences } from "./dashboard-data";
+import type {
+	Organization,
+	OrganizationSettings,
+	Spaces,
+	UserPreferences,
+} from "./dashboard-data";
 
 type SharedContext = {
 	organizationData: Organization[] | null;
 	activeOrganization: Organization | null;
+	organizationSettings: OrganizationSettings | null;
 	spacesData: Spaces[] | null;
 	userSpaces: Spaces[] | null;
 	sharedSpaces: Spaces[] | null;
@@ -50,6 +56,7 @@ export function DashboardContexts({
 	spacesData,
 	user,
 	isSubscribed,
+	organizationSettings,
 	userPreferences,
 	anyNewNotifications,
 	initialTheme,
@@ -62,6 +69,7 @@ export function DashboardContexts({
 	spacesData: SharedContext["spacesData"];
 	user: SharedContext["user"];
 	isSubscribed: SharedContext["isSubscribed"];
+	organizationSettings: SharedContext["organizationSettings"];
 	userPreferences: SharedContext["userPreferences"];
 	anyNewNotifications: boolean;
 	initialTheme: ITheme;
@@ -154,6 +162,7 @@ export function DashboardContexts({
 					spacesData,
 					anyNewNotifications,
 					userPreferences,
+					organizationSettings,
 					userSpaces,
 					sharedSpaces,
 					activeSpace,

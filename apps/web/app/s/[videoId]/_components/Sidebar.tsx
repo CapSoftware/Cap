@@ -2,8 +2,10 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
 import type { Video } from "@cap/web-domain";
+import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { Activity } from "./tabs/Activity";
 import { Settings } from "./tabs/Settings";
 import { Summary } from "./tabs/Summary";
@@ -18,6 +20,7 @@ type CommentType = typeof commentsSchema.$inferSelect & {
 type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	organizationMembers?: string[];
 	organizationId?: string;
+	orgSettings?: OrganizationSettings | null;
 };
 
 interface SidebarProps {
@@ -30,14 +33,7 @@ interface SidebarProps {
 	setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
-	settings?: {
-		disableSummary?: boolean;
-		disableCaptions?: boolean;
-		disableChapters?: boolean;
-		disableReactions?: boolean;
-		disableTranscript?: boolean;
-		disableComments?: boolean;
-	};
+	videoSettings?: OrganizationSettings | null;
 	videoId: Video.VideoId;
 	aiData?: {
 		title?: string | null;
@@ -83,7 +79,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			handleCommentSuccess,
 			setOptimisticComments,
 			views,
-			settings,
+			videoSettings,
 			onSeek,
 			videoId,
 			aiData,
@@ -104,13 +100,21 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			{
 				id: "activity",
 				label: "Comments",
-				disabled: settings?.disableComments,
+				disabled:
+					videoSettings?.disableComments ?? data.orgSettings?.disableComments,
 			},
-			{ id: "summary", label: "Summary", disabled: settings?.disableSummary },
+			{
+				id: "summary",
+				label: "Summary",
+				disabled:
+					videoSettings?.disableSummary ?? data.orgSettings?.disableSummary,
+			},
 			{
 				id: "transcript",
 				label: "Transcript",
-				disabled: settings?.disableTranscript,
+				disabled:
+					videoSettings?.disableTranscript ??
+					data.orgSettings?.disableTranscript,
 			},
 		];
 
@@ -155,7 +159,7 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 						<Summary
 							videoId={videoId}
 							onSeek={onSeek}
-							isSummaryDisabled={settings?.disableSummary}
+							isSummaryDisabled={videoSettings?.disableSummary}
 							initialAiData={aiData || undefined}
 							aiGenerationEnabled={aiGenerationEnabled}
 							user={user}
@@ -170,14 +174,22 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 			}
 		};
 
+		const allTabsDisabled = tabs.every((tab) => tab.disabled);
+
 		return (
 			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
 				<div className="flex-none">
-					<div className="flex border-b border-gray-5">
+					<div
+						className={clsx(
+							"flex border-b border-gray-5",
+							allTabsDisabled && "hidden",
+						)}
+					>
 						{tabs
 							.filter((tab) => !tab.disabled)
 							.map((tab) => (
 								<button
+									type="button"
 									key={tab.id}
 									onClick={() => paginate(tab.id as TabType)}
 									className={classNames(

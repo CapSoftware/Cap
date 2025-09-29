@@ -336,17 +336,19 @@ export const CapCard = ({
 						"top-2 right-2 flex-col gap-2 z-[20]",
 					)}
 				>
-					<CapCardButton
-						tooltipContent="Settings"
-						onClick={(e) => {
-							e.stopPropagation();
-							setIsSettingsDialogOpen(true);
-						}}
-						className="delay-0"
-						icon={() => {
-							return <FontAwesomeIcon className="size-4" icon={faGear} />;
-						}}
-					/>
+					{isOwner && (
+						<CapCardButton
+							tooltipContent="Settings"
+							onClick={(e) => {
+								e.stopPropagation();
+								setIsSettingsDialogOpen(true);
+							}}
+							className="delay-0"
+							icon={() => {
+								return <FontAwesomeIcon className="size-4" icon={faGear} />;
+							}}
+						/>
+					)}
 					<CapCardButton
 						tooltipContent="Copy link"
 						onClick={(e) => {

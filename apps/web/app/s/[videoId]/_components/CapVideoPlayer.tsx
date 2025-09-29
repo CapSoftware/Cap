@@ -8,6 +8,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import CommentStamp from "./CommentStamp";
 import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
@@ -35,6 +36,7 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
+	disableCaptions: boolean;
 	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
@@ -55,6 +57,7 @@ export function CapVideoPlayer({
 	videoId,
 	chaptersSrc,
 	captionsSrc,
+	disableCaptions,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
@@ -650,10 +653,12 @@ export function CapVideoPlayer({
 						<MediaPlayerTime />
 					</div>
 					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
+						{!disableCaptions && (
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
+							/>
+						)}
 						<MediaPlayerSettings />
 						<MediaPlayerPiP />
 						<MediaPlayerFullscreen />

@@ -119,6 +119,15 @@ export async function transcribeVideo(
 
 		// Note: Empty transcription is valid for silent videos (just contains "WEBVTT\n\n")
 		if (transcription === "") {
+			if (serverEnv().NODE_ENV === "development") {
+				console.log(
+					"[transcribeVideo] Development mode, skipping transcription",
+				);
+				return {
+					success: true,
+					message: "Transcription skipped in development mode",
+				};
+			}
 			throw new Error("Failed to transcribe audio");
 		}
 
@@ -247,6 +256,12 @@ function formatTimestamp(seconds: number): string {
 }
 
 async function transcribeAudio(videoUrl: string): Promise<string> {
+	//if dev - don't transcribe
+	if (serverEnv().NODE_ENV === "development") {
+		console.log("[transcribeAudio] Development mode, skipping transcription");
+		return "";
+	}
+
 	console.log("[transcribeAudio] Starting transcription for URL:", videoUrl);
 	const deepgram = createClient(serverEnv().DEEPGRAM_API_KEY as string);
 

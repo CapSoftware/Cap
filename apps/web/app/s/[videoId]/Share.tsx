@@ -17,6 +17,7 @@ import {
 	getVideoStatus,
 	type VideoStatusResult,
 } from "@/actions/videos/get-status";
+import type { OrganizationSettings } from "@/app/(org)/dashboard/dashboard-data";
 import { ShareVideo } from "./_components/ShareVideo";
 import { Sidebar } from "./_components/Sidebar";
 import { Toolbar } from "./_components/Toolbar";
@@ -44,14 +45,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
 	ownerIsPro?: boolean;
-	settings?: {
-		disableSummary?: boolean;
-		disableCaptions?: boolean;
-		disableChapters?: boolean;
-		disableReactions?: boolean;
-		disableTranscript?: boolean;
-		disableComments?: boolean;
-	};
+	orgSettings?: OrganizationSettings | null;
 };
 
 interface ShareProps {
@@ -61,6 +55,7 @@ interface ShareProps {
 	views: MaybePromise<number>;
 	customDomain: string | null;
 	domainVerified: boolean;
+	videoSettings?: OrganizationSettings | null;
 	userOrganizations?: { id: string; name: string }[];
 	initialAiData?: {
 		title?: string | null;
@@ -154,6 +149,7 @@ export const Share = ({
 	views,
 	initialAiData,
 	aiGenerationEnabled,
+	videoSettings,
 }: ShareProps) => {
 	const effectiveDate: Date = data.metadata?.customCreatedAt
 		? new Date(data.metadata.customCreatedAt)
@@ -279,6 +275,15 @@ export const Share = ({
 		}, 100);
 	}, []);
 
+	const areChaptersDisabled =
+		videoSettings?.disableChapters ??
+		data.orgSettings?.disableChapters ??
+		false;
+	const areCaptionsDisabled =
+		videoSettings?.disableCaptions ??
+		data.orgSettings?.disableCaptions ??
+		false;
+
 	return (
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
@@ -289,8 +294,8 @@ export const Share = ({
 								data={{ ...data, transcriptionStatus }}
 								user={user}
 								comments={comments}
-								areChaptersDisabled={data.settings?.disableChapters}
-								areCaptionsDisabled={data.settings?.disableCaptions}
+								areChaptersDisabled={areChaptersDisabled}
+								areCaptionsDisabled={areCaptionsDisabled}
 								chapters={aiData?.chapters || []}
 								aiProcessing={aiData?.processing || false}
 								ref={playerRef}
@@ -314,6 +319,7 @@ export const Share = ({
 							createdAt: effectiveDate,
 							transcriptionStatus,
 						}}
+						videoSettings={videoSettings}
 						user={user}
 						commentsData={commentsData}
 						setCommentsData={setCommentsData}
@@ -321,7 +327,6 @@ export const Share = ({
 						setOptimisticComments={setOptimisticComments}
 						handleCommentSuccess={handleCommentSuccess}
 						views={views}
-						settings={data.settings}
 						onSeek={handleSeek}
 						videoId={data.id}
 						aiData={aiData}

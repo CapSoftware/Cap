@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 
 export async function updateVideoSettings(
 	videoId: Video.VideoId,
-	settings: {
+	videoSettings: {
 		disableSummary?: boolean;
 		disableCaptions?: boolean;
 		disableChapters?: boolean;
@@ -19,7 +19,7 @@ export async function updateVideoSettings(
 ) {
 	const user = await getCurrentUser();
 
-	if (!user || !videoId || !settings) {
+	if (!user || !videoId || !videoSettings) {
 		throw new Error("Missing required data for updating video settings");
 	}
 
@@ -36,7 +36,10 @@ export async function updateVideoSettings(
 		throw new Error("You don't have permission to update this video settings");
 	}
 
-	await db().update(videos).set({ settings }).where(eq(videos.id, videoId));
+	await db()
+		.update(videos)
+		.set({ settings: videoSettings })
+		.where(eq(videos.id, videoId));
 
 	return { success: true };
 }
