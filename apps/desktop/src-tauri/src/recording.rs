@@ -13,6 +13,7 @@ use cap_recording::{
 };
 use cap_rendering::ProjectRecordingsMeta;
 use cap_utils::{ensure_dir, spawn_actor};
+use futures::stream;
 use serde::Deserialize;
 use specta::Type;
 use std::{path::PathBuf, str::FromStr, sync::Arc, time::Duration};
@@ -24,7 +25,7 @@ use tracing::{debug, error, info};
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
-    api::{PresignedS3PutRequest, PresignedS3PutRequestMethod},
+    api::PresignedS3PutRequestMethod,
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -32,8 +33,7 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        InstantMultipartUpload, build_video_meta, bytes_into_stream, compress_image,
-        create_or_get_video, do_presigned_upload, upload_video,
+        InstantMultipartUpload, build_video_meta, compress_image, create_or_get_video, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
@@ -263,11 +263,11 @@ pub async fn start_recording(
                     )
                     .await
                     {
-                        let link = app.make_app_url(format!("/s/{}", s3_config.id())).await;
+                        let link = app.make_app_url(format!("/s/{}", s3_config.id)).await;
                         info!("Pre-created shareable link: {}", link);
 
                         Some(VideoUploadInfo {
-                            id: s3_config.id().to_string(),
+                            id: s3_config.id.to_string(),
                             link: link.clone(),
                             config: s3_config,
                         })
@@ -807,23 +807,22 @@ async fn handle_recording_finish(
                     let _ = screenshot_task.await;
 
                     if video_upload_succeeded {
-                        if let Ok(result) =
+                        if let Ok(bytes) =
                             compress_image(display_screenshot).await
                             .map_err(|err|
                                 error!("Error compressing thumbnail for instant mode progressive upload: {err}")
                             ) {
-                                let (stream, total_size) = bytes_into_stream(result);
-                                do_presigned_upload(
-                                    &app,
-                                    stream,
-                                    total_size,
+                                crate::upload::singlepart_uploader(
+                                    app.clone(),
                                     crate::api::PresignedS3PutRequest {
                                         video_id: video_upload_info.id.clone(),
                                         subpath: "screenshot/screen-capture.jpg".to_string(),
                                         method: PresignedS3PutRequestMethod::Put,
                                         meta: None,
                                     },
-                                    |p| {} // TODO: Progress reporting
+                                    bytes.len() as u64,
+                                    stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
+
                                 )
                                 .await
                                 .map_err(|err| {
@@ -843,7 +842,6 @@ async fn handle_recording_finish(
                                 display_screenshot.clone(),
                                 video_upload_info.config.clone(),
                                 meta,
-                                None,
                             )
                             .await
                             {

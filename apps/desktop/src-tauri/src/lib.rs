@@ -1116,7 +1116,7 @@ async fn upload_exported_video(
     }
     .await?;
 
-    let upload_id = s3_config.id().to_string();
+    let upload_id = s3_config.id.to_string();
 
     match upload_video(
         &app,
@@ -1125,7 +1125,7 @@ async fn upload_exported_video(
         meta.project_path.join("screenshots/display.jpg"),
         s3_config,
         metadata,
-        Some(channel.clone()),
+        // Some(channel.clone()),
     )
     .await
     {

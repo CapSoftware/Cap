@@ -1,12 +1,12 @@
 // credit @filleduchaos
 
 use crate::{
-    UploadProgress, VideoUploadInfo, api,
+    VideoUploadInfo, api,
     api::{PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     web_api::ManagerExt,
 };
 use async_stream::{stream, try_stream};
-use axum::http::{self, Uri};
+use axum::http::Uri;
 use bytes::Bytes;
 use cap_project::{RecordingMeta, UploadState};
 use cap_utils::spawn_actor;
@@ -22,137 +22,41 @@ use std::{
     path::{Path, PathBuf},
     pin::pin,
     str::FromStr,
-    time::{Duration, Instant},
+    time::Duration,
 };
-use tauri::{AppHandle, ipc::Channel};
+use tauri::AppHandle;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
-    sync::watch,
     task::{self, JoinHandle},
 };
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
-    id: String,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct CreateErrorResponse {
-    error: String,
-}
-
-impl S3UploadMeta {
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-}
-
-pub struct UploadedVideo {
-    pub link: String,
-    pub id: String,
-    #[allow(unused)]
-    pub config: S3UploadMeta,
-}
-
-pub struct UploadedImage {
-    pub link: String,
     pub id: String,
 }
 
-pub struct UploadProgressUpdater {
-    video_state: Option<VideoProgressState>,
-    app: AppHandle,
+pub struct UploadedItem {
+    pub link: String,
+    pub id: String,
+    // #[allow(unused)]
+    // pub config: S3UploadMeta,
+}
+
+#[derive(Clone, Serialize, Type, tauri_specta::Event)]
+pub struct UploadProgressEvent {
     video_id: String,
+    // TODO: Account for different states -> Eg. uploading video vs thumbnail
+    uploaded: String,
+    total: String,
 }
 
-struct VideoProgressState {
-    uploaded: u64,
-    total: u64,
-    pending_task: Option<JoinHandle<()>>,
-    last_update_time: Instant,
-}
-
-impl UploadProgressUpdater {
-    pub fn new(app: AppHandle, video_id: String) -> Self {
-        Self {
-            video_state: None,
-            app,
-            video_id,
-        }
-    }
-
-    pub fn update(&mut self, uploaded: u64, total: u64) {
-        let should_send_immediately = {
-            let state = self.video_state.get_or_insert_with(|| VideoProgressState {
-                uploaded,
-                total,
-                pending_task: None,
-                last_update_time: Instant::now(),
-            });
-
-            // Cancel any pending task
-            if let Some(handle) = state.pending_task.take() {
-                handle.abort();
-            }
-
-            state.uploaded = uploaded;
-            state.total = total;
-            state.last_update_time = Instant::now();
-
-            // Send immediately if upload is complete
-            uploaded >= total
-        };
-
-        let app = self.app.clone();
-        if should_send_immediately {
-            tokio::spawn({
-                let video_id = self.video_id.clone();
-                async move {
-                    api::desktop_video_progress(&app, &video_id, uploaded, total).await;
-                }
-            });
-
-            // Clear state since upload is complete
-            self.video_state = None;
-        } else {
-            // Schedule delayed update
-            let handle = {
-                let video_id = self.video_id.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                    api::desktop_video_progress(&app, &video_id, uploaded, total).await;
-                })
-            };
-
-            if let Some(state) = &mut self.video_state {
-                state.pending_task = Some(handle);
-            }
-        }
-    }
-}
-
-#[derive(Default, Debug)]
-pub enum UploadPartProgress {
-    #[default]
-    Presigning,
-    Uploading {
-        uploaded: i64,
-        total: i64,
-    },
-    Done,
-    Error(String),
-}
-
-#[derive(Default, Debug)]
-pub struct UploadVideoProgress {
-    video: UploadPartProgress,
-    thumbnail: UploadPartProgress,
-}
+// a typical recommended chunk size is 5MB (AWS min part size).
+const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
 
 pub async fn upload_video(
     app: &AppHandle,
@@ -161,75 +65,50 @@ pub async fn upload_video(
     screenshot_path: PathBuf,
     s3_config: S3UploadMeta,
     meta: S3VideoMeta,
-    // TODO: Hook this back up?
-    channel: Option<Channel<UploadProgress>>,
-) -> Result<UploadedVideo, String> {
-    let (tx, mut rx) = watch::channel(UploadVideoProgress::default());
-
-    // TODO: Hook this up properly
-    tokio::spawn(async move {
-        loop {
-            println!("STATUS: {:?}", *rx.borrow_and_update());
-            if rx.changed().await.is_err() {
-                break;
-            }
-        }
-    });
-
+) -> Result<UploadedItem, String> {
     info!("Uploading video {video_id}...");
 
     let (stream, total_size) = file_reader_stream(file_path).await?;
-    let video_upload_fut = do_presigned_upload(
-        app,
-        stream,
-        total_size,
+    let video_fut = singlepart_uploader(
+        app.clone(),
         PresignedS3PutRequest {
             video_id: video_id.clone(),
             subpath: "result.mp4".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: Some(meta),
         },
-        {
-            let tx = tx.clone();
-            move |p| tx.send_modify(|v| v.video = p)
-        },
+        total_size,
+        progress(
+            app.clone(),
+            video_id,
+            stream.map(move |v| v.map(move |v| (total_size, v))),
+        )
+        .and_then(|(_, c)| async move { Ok(c) }),
     );
 
-    let (stream, total_size) = bytes_into_stream(compress_image(screenshot_path).await?);
-    let thumbnail_upload_fut = do_presigned_upload(
-        app,
-        stream,
-        total_size,
+    // TODO: We don't report progress on image upload
+    let bytes = compress_image(screenshot_path).await?;
+    let thumbnail_fut = singlepart_uploader(
+        app.clone(),
         PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: "screenshot/screen-capture.jpg".to_string(),
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
-        {
-            let tx = tx.clone();
-            move |p| tx.send_modify(|v| v.thumbnail = p)
-        },
+        bytes.len() as u64,
+        stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) }),
     );
 
-    let (video_result, thumbnail_result): (Result<(), String>, Result<(), String>) =
-        tokio::join!(video_upload_fut, thumbnail_upload_fut);
+    let (video_result, thumbnail_result): (Result<_, String>, Result<_, String>) =
+        tokio::join!(video_fut, thumbnail_fut);
 
-    if let Some(err) = video_result.err() {
-        error!("Failed to upload video for {video_id}: {err}");
-        tx.send_modify(|v| v.video = UploadPartProgress::Error(err.clone()));
-        return Err(err); // TODO: Maybe don't do this
-    }
-    if let Some(err) = thumbnail_result.err() {
-        error!("Failed to upload thumbnail for video {video_id}: {err}");
-        tx.send_modify(|v| v.thumbnail = UploadPartProgress::Error(err.clone()));
-        return Err(err); // TODO: Maybe don't do this
-    }
+    // TODO: Reporting errors to the frontend???
+    let _ = (video_result?, thumbnail_result?);
 
-    Ok(UploadedVideo {
+    Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
         id: s3_config.id.clone(),
-        config: s3_config,
     })
 }
 
@@ -247,53 +126,7 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
     Ok((ReaderStream::new(file), metadata.len()))
 }
 
-pub async fn do_presigned_upload(
-    app: &AppHandle,
-    stream: impl Stream<Item = Result<Bytes, io::Error>> + Send + 'static,
-    total_size: u64,
-    request: PresignedS3PutRequest,
-    mut set_progress: impl FnMut(UploadPartProgress) + Send + 'static,
-) -> Result<(), String> {
-    set_progress(UploadPartProgress::Presigning);
-    let client = reqwest::Client::new();
-    let presigned_url = api::upload_signed(app, request).await?;
-
-    set_progress(UploadPartProgress::Uploading {
-        uploaded: 0,
-        total: 0,
-    });
-    let mut uploaded = 0i64;
-    let total = total_size as i64;
-    let stream = stream.inspect(move |chunk| {
-        if let Ok(chunk) = chunk {
-            uploaded += chunk.len() as i64;
-            set_progress(UploadPartProgress::Uploading { uploaded, total });
-        }
-    });
-
-    let response = client
-        .put(presigned_url)
-        .header("Content-Length", total_size)
-        .body(reqwest::Body::wrap_stream(stream))
-        .send()
-        .await
-        .map_err(|e| format!("Failed to upload file: {e}"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "<no response body>".to_string());
-        return Err(format!(
-            "Failed to upload file. Status: {status}. Body: {error_body}"
-        ));
-    }
-
-    Ok(())
-}
-
-pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedImage, String> {
+pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedItem, String> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -303,23 +136,20 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
     let s3_config = create_or_get_video(app, true, None, None, None).await?;
 
     let (stream, total_size) = file_reader_stream(file_path).await?;
-    do_presigned_upload(
-        app,
-        stream,
-        total_size as u64,
+    singlepart_uploader(
+        app.clone(),
         PresignedS3PutRequest {
             video_id: s3_config.id.clone(),
             subpath: file_name,
             method: PresignedS3PutRequestMethod::Put,
             meta: None,
         },
-        |p| {
-            // TODO
-        },
+        total_size,
+        stream,
     )
     .await?;
 
-    Ok(UploadedImage {
+    Ok(UploadedItem {
         link: app.make_app_url(format!("/s/{}", &s3_config.id)).await,
         id: s3_config.id,
     })
@@ -363,6 +193,11 @@ pub async fn create_or_get_video(
     }
 
     if response.status() != StatusCode::OK {
+        #[derive(Deserialize, Clone, Debug)]
+        pub struct CreateErrorResponse {
+            error: String,
+        }
+
         if let Ok(error) = response.json::<CreateErrorResponse>().await {
             if error.error == "upgrade_required" {
                 return Err(
@@ -444,25 +279,6 @@ pub async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
     .map_err(|e| format!("Failed to compress image: {e}"))?
 }
 
-pub fn bytes_into_stream(
-    bytes: Vec<u8>,
-) -> (impl Stream<Item = Result<Bytes, std::io::Error>>, u64) {
-    let total_size = bytes.len();
-    let stream = stream::once(async move { Ok::<_, std::io::Error>(bytes::Bytes::from(bytes)) });
-    (stream, total_size as u64)
-}
-
-#[derive(Clone, Serialize, Type, tauri_specta::Event)]
-pub struct UploadProgressEvent {
-    video_id: String,
-    // TODO: Account for different states -> Eg. uploading video vs thumbnail
-    uploaded: String,
-    total: String,
-}
-
-// a typical recommended chunk size is 5MB (AWS min part size).
-const CHUNK_SIZE: u64 = 5 * 1024 * 1024; // 5MB
-
 pub struct InstantMultipartUpload {
     pub handle: tokio::task::JoinHandle<Result<(), String>>,
 }
@@ -515,11 +331,11 @@ impl InstantMultipartUpload {
         let parts = progress(
             app.clone(),
             video_id.clone(),
-            uploader(
+            multipart_uploader(
                 app.clone(),
                 video_id.clone(),
                 upload_id.clone(),
-                from_pending_file(file_path.clone(), realtime_video_done),
+                from_pending_file_to_chunks(file_path.clone(), realtime_video_done),
             ),
         )
         .try_collect::<Vec<_>>()
@@ -554,7 +370,8 @@ pub struct Chunk {
 }
 
 /// Creates a stream that reads chunks from a file, yielding [Chunk]'s.
-pub fn from_file(path: PathBuf) -> impl Stream<Item = io::Result<Chunk>> {
+#[allow(unused)]
+pub fn from_file_to_chunks(path: PathBuf) -> impl Stream<Item = io::Result<Chunk>> {
     try_stream! {
         let file = File::open(path).await?;
         let total_size = file.metadata().await?.len();
@@ -578,7 +395,7 @@ pub fn from_file(path: PathBuf) -> impl Stream<Item = io::Result<Chunk>> {
 /// Creates a stream that reads chunks from a potentially growing file, yielding [Chunk]'s.
 /// The first chunk of the file is yielded last to allow for header rewriting after recording completion.
 /// This uploader will continually poll the filesystem and wait for the file to stop uploading before flushing the rest.
-pub fn from_pending_file(
+pub fn from_pending_file_to_chunks(
     path: PathBuf,
     realtime_upload_done: Option<Receiver<()>>,
 ) -> impl Stream<Item = io::Result<Chunk>> {
@@ -700,7 +517,7 @@ pub fn from_pending_file(
 /// Takes an incoming stream of bytes and individually uploads them to S3.
 ///
 /// Note: It's on the caller to ensure the chunks are sized correctly within S3 limits.
-fn uploader(
+fn multipart_uploader(
     app: AppHandle,
     video_id: String,
     upload_id: String,
@@ -756,34 +573,140 @@ fn uploader(
     }
 }
 
+/// Takes an incoming stream of bytes and streams them to an S3 object.
+pub async fn singlepart_uploader(
+    app: AppHandle,
+    request: PresignedS3PutRequest,
+    total_size: u64,
+    stream: impl Stream<Item = io::Result<Bytes>> + Send + 'static,
+) -> Result<(), String> {
+    let presigned_url = api::upload_signed(&app, request).await?;
+
+    let url = Uri::from_str(&presigned_url)
+        .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
+    let resp = reqwest::Client::builder()
+        .retry(
+            reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(
+                |req_rep| {
+                    if req_rep.status().map_or(false, |s| s.is_server_error()) {
+                        req_rep.retryable()
+                    } else {
+                        req_rep.success()
+                    }
+                },
+            ),
+        )
+        .build()
+        .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
+        .put(&presigned_url)
+        .header("Content-Length", total_size)
+        .timeout(Duration::from_secs(120))
+        .body(reqwest::Body::wrap_stream(stream))
+        .send()
+        .await
+        .map_err(|err| format!("singlepart_uploader/error: {err:?}"))?;
+
+    match !resp.status().is_success() {
+        true => Err(format!(
+            "singlepart_uploader/error: {}",
+            resp.text().await.unwrap_or_default()
+        )),
+        false => Ok(()),
+    }?;
+
+    Ok(())
+}
+
+pub trait UploadedChunk {
+    /// total size of the file
+    fn total(&self) -> u64;
+
+    /// size of the current chunk
+    fn size(&self) -> u64;
+}
+
+impl UploadedChunk for UploadedPart {
+    fn total(&self) -> u64 {
+        self.total_size
+    }
+
+    fn size(&self) -> u64 {
+        self.size as u64
+    }
+}
+
+impl UploadedChunk for Chunk {
+    fn total(&self) -> u64 {
+        self.total_size
+    }
+
+    fn size(&self) -> u64 {
+        self.chunk.len() as u64
+    }
+}
+
+impl UploadedChunk for (u64, Bytes) {
+    fn total(&self) -> u64 {
+        self.0
+    }
+
+    fn size(&self) -> u64 {
+        self.1.len() as u64
+    }
+}
+
 /// Monitor the stream to report the upload progress
-fn progress(
+fn progress<T: UploadedChunk, E>(
     app: AppHandle,
     video_id: String,
-    stream: impl Stream<Item = Result<UploadedPart, String>>,
-) -> impl Stream<Item = Result<UploadedPart, String>> {
-    // TODO: Flatten this implementation into here
-    let mut progress = UploadProgressUpdater::new(app.clone(), video_id.clone());
-    let mut uploaded = 0;
+    stream: impl Stream<Item = Result<T, E>>,
+) -> impl Stream<Item = Result<T, E>> {
+    let mut uploaded = 0u64;
+    let mut pending_task: Option<JoinHandle<()>> = None;
 
     stream! {
         let mut stream = pin!(stream);
 
-        while let Some(part) = stream.next().await {
-            if let Ok(part) = &part {
-                uploaded += part.size as u64;
+        while let Some(chunk) = stream.next().await {
+            if let Ok(chunk) = &chunk {
+                uploaded += chunk.size();
+                let total = chunk.total();
 
-                progress.update(uploaded, part.total_size);
+                // Cancel any pending task
+                if let Some(handle) = pending_task.take() {
+                    handle.abort();
+                }
+
+                let should_send_immediately = uploaded >= total;
+
+                if should_send_immediately {
+                    // Send immediately if upload is complete
+                    let app_clone = app.clone();
+                    let video_id_clone = video_id.clone();
+                    tokio::spawn(async move {
+                        api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
+                    });
+                } else {
+                    // Schedule delayed update
+                    let app_clone = app.clone();
+                    let video_id_clone = video_id.clone();
+                    pending_task = Some(tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
+                    }));
+                }
+
+                // Emit progress event for the app frontend
                 UploadProgressEvent {
-                    video_id: video_id.to_string(),
+                    video_id: video_id.clone(),
                     uploaded: uploaded.to_string(),
-                    total: part.total_size.to_string(),
+                    total: total.to_string(),
                 }
                 .emit(&app)
                 .ok();
             }
 
-            yield part;
+            yield chunk;
         }
     }
 }
