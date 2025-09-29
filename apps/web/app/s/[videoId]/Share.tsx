@@ -221,15 +221,48 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
-	const handleSeek = (time: number) => {
-		if (playerRef.current) {
-			playerRef.current.currentTime = time;
+	const handleSeek = useCallback((time: number) => {
+		const v =
+			playerRef.current ??
+			(document.querySelector("video") as HTMLVideoElement | null);
+		if (!v) {
+			console.warn("Video player not ready");
+			return;
 		}
-	};
+		const seekOnce = (t: number) => {
+			const dur =
+				Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+			const clamped = dur ? Math.max(0, Math.min(dur - 0.001, t)) : t;
+			try {
+				v.currentTime = clamped;
+			} catch (e) {
+				console.error("Failed to seek video:", e);
+			}
+		};
+		if (v.readyState >= 1) {
+			seekOnce(time);
+			return;
+		}
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const handleReady = () => {
+			seekOnce(time);
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
+			if (timeoutId) clearTimeout(timeoutId);
+		};
+		v.addEventListener("canplay", handleReady, { once: true });
+		v.addEventListener("loadedmetadata", handleReady, { once: true });
+		timeoutId = setTimeout(() => {
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
+		}, 3000);
+	}, []);
 
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
-			setOptimisticComments(comment);
+			startTransition(() => {
+				setOptimisticComments(comment);
+			});
 			setTimeout(() => {
 				activityRef.current?.scrollToBottom();
 			}, 100);

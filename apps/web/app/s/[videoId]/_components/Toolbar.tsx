@@ -28,34 +28,10 @@ export const Toolbar = ({
 	const [commentBoxOpen, setCommentBoxOpen] = useState(false);
 	const [comment, setComment] = useState("");
 	const [showAuthOverlay, setShowAuthOverlay] = useState(false);
-	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(
-		null,
-	);
-
-	useEffect(() => {
-		const checkForVideoElement = () => {
-			const element = document.getElementById(
-				"video-player",
-			) as HTMLVideoElement | null;
-			if (element) {
-				setVideoElement(element);
-			} else {
-				setTimeout(checkForVideoElement, 100); // Check again after 100ms
-			}
-		};
-
-		checkForVideoElement();
-	}, []);
-
-	const getTimestamp = (): number => {
-		if (videoElement) {
-			return videoElement.currentTime;
-		}
-		console.warn("Video element not available, using default timestamp");
-		return 0;
-	};
 
 	const handleEmojiClick = async (emoji: string) => {
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -65,7 +41,7 @@ export const Toolbar = ({
 			videoId: data.id,
 			parentCommentId: "",
 			type: "emoji",
-			timestamp: null,
+			timestamp: currentTime,
 			updatedAt: new Date(),
 			sending: true,
 		};
@@ -78,6 +54,7 @@ export const Toolbar = ({
 				videoId: data.id,
 				parentCommentId: "",
 				type: "emoji",
+				timestamp: currentTime,
 			});
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);
@@ -94,7 +71,8 @@ export const Toolbar = ({
 		if (comment.length === 0) {
 			return;
 		}
-
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
+		const currentTime = videoElement?.currentTime || 0;
 		const optimisticComment: CommentType = {
 			id: `temp-${Date.now()}`,
 			authorId: user?.id || "anonymous",
@@ -104,7 +82,7 @@ export const Toolbar = ({
 			videoId: data.id,
 			parentCommentId: "",
 			type: "text",
-			timestamp: null,
+			timestamp: currentTime,
 			updatedAt: new Date(),
 			sending: true,
 		};
@@ -117,6 +95,7 @@ export const Toolbar = ({
 				videoId: data.id,
 				parentCommentId: "",
 				type: "text",
+				timestamp: currentTime,
 			});
 			startTransition(() => {
 				onCommentSuccess?.(newCommentData);
@@ -163,6 +142,9 @@ export const Toolbar = ({
 					setShowAuthOverlay(true);
 					return;
 				}
+				const videoElement = document.querySelector(
+					"video",
+				) as HTMLVideoElement;
 				if (videoElement) {
 					videoElement.pause();
 				}
@@ -174,13 +156,14 @@ export const Toolbar = ({
 		return () => {
 			window.removeEventListener("keydown", handleKeyPress);
 		};
-	}, [commentBoxOpen, user, videoElement]);
+	}, [commentBoxOpen, user]);
 
 	const handleCommentClick = () => {
 		if (!user) {
 			setShowAuthOverlay(true);
 			return;
 		}
+		const videoElement = document.querySelector("video") as HTMLVideoElement;
 		if (videoElement) {
 			videoElement.pause();
 		}
@@ -239,9 +222,7 @@ export const Toolbar = ({
 										handleCommentSubmit();
 									}}
 								>
-									{videoElement && getTimestamp() > 0
-										? `Comment at ${getTimestamp().toFixed(2)}`
-										: "Comment"}
+									Comment
 								</MotionButton>
 								<MotionButton
 									variant="gray"
