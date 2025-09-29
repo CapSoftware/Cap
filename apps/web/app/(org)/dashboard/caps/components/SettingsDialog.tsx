@@ -70,12 +70,12 @@ export const SettingsDialog = ({
 	const { user } = useDashboardContext();
 	const [saveLoading, setSaveLoading] = useState(false);
 	const [settings, setSettings] = useState<OrganizationSettings>({
-		disableComments: settingsData?.disableComments,
-		disableSummary: settingsData?.disableSummary,
-		disableCaptions: settingsData?.disableCaptions,
-		disableChapters: settingsData?.disableChapters,
-		disableReactions: settingsData?.disableReactions,
-		disableTranscript: settingsData?.disableTranscript,
+		disableComments: settingsData?.disableComments ?? false,
+		disableSummary: settingsData?.disableSummary ?? false,
+		disableCaptions: settingsData?.disableCaptions ?? false,
+		disableChapters: settingsData?.disableChapters ?? false,
+		disableReactions: settingsData?.disableReactions ?? false,
+		disableTranscript: settingsData?.disableTranscript ?? false,
 	});
 
 	const isUserPro = userIsPro(user);
