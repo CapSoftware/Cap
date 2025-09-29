@@ -119,10 +119,15 @@ export default function Recordings() {
 	};
 
 	const [uploadProgress, setUploadProgress] = createStore<
-		Record<string, number>
+		Record</* video_id */ string, number>
 	>({});
 	// TODO: Cleanup subscription
 	events.uploadProgressEvent.listen((e) => {
+		// TODO: Make this cleanup
+		// if (e.payload.uploaded === e.payload.total) {
+		// 	setUploadProgress(e.payload.video_id, undefined);
+		// }
+
 		setUploadProgress(
 			e.payload.video_id,
 			Number(e.payload.uploaded) / Number(e.payload.total),
@@ -145,8 +150,6 @@ export default function Recordings() {
 					</p>
 				}
 			>
-				<pre>{JSON.stringify(uploadProgress)}</pre>
-
 				<div class="flex gap-3 items-center pb-4 w-full border-b border-gray-2">
 					<For each={Tabs}>
 						{(tab) => (
@@ -183,6 +186,11 @@ export default function Recordings() {
 									onCopyVideoToClipboard={() =>
 										handleCopyVideoToClipboard(recording.path)
 									}
+									uploadProgress={
+										recording.meta.sharing?.id
+											? uploadProgress[recording.meta.sharing.id]
+											: undefined
+									}
 								/>
 							)}
 						</For>
@@ -199,6 +207,7 @@ function RecordingItem(props: {
 	onOpenFolder: () => void;
 	onOpenEditor: () => void;
 	onCopyVideoToClipboard: () => void;
+	uploadProgress: number | undefined;
 }) {
 	const [imageExists, setImageExists] = createSignal(true);
 	const mode = () => props.recording.meta.mode || "other"; // TODO: Fix this
@@ -224,23 +233,45 @@ function RecordingItem(props: {
 					/>
 				</Show>
 				<div class="flex flex-col gap-2">
-					{"recording" in props.recording.meta ? "TRUE" : "FALSE"}
-					{"error" in props.recording.meta ? props.recording.meta.error : ""}
-					{JSON.stringify(props.recording.meta?.upload || {})}
-
 					<span>{props.recording.prettyName}</span>
-					<div
-						class={cx(
-							"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
-							mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
-						)}
-					>
-						{mode() === "instant" ? (
-							<IconCapInstant class="invert size-2.5 dark:invert-0" />
-						) : (
-							<IconCapFilmCut class="invert size-2.5 dark:invert-0" />
-						)}
-						<p>{firstLetterUpperCase()}</p>
+					<div class="flex">
+						<div
+							class={cx(
+								"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
+								mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+							)}
+						>
+							{mode() === "instant" ? (
+								<IconCapInstant class="invert size-2.5 dark:invert-0" />
+							) : (
+								<IconCapFilmCut class="invert size-2.5 dark:invert-0" />
+							)}
+							<p>{firstLetterUpperCase()}</p>
+						</div>
+
+						<Show
+							when={
+								"error" in props.recording.meta
+									? props.recording.meta.error
+									: undefined
+							}
+						>
+							{(error) => (
+								<div
+									class={cx(
+										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
+										mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+									)}
+								>
+									{/* TODO: Get a proper icon here */}
+									{/* TODO: Show the error in a tooltip */}
+									<IconCapInstant class="invert size-2.5 dark:invert-0" />
+									<p>FAILED: {error()}</p>
+								</div>
+							)}
+						</Show>
+
+						{/* TODO: Show a badge for when recording fails */}
 					</div>
 				</div>
 			</div>
@@ -248,12 +279,33 @@ function RecordingItem(props: {
 				<Show when={mode() === "studio"}>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
-							<TooltipIconButton
-								tooltipText="Open link"
-								onClick={() => shell.open(sharing().link)}
-							>
-								<IconCapLink class="size-4" />
-							</TooltipIconButton>
+							<>
+								{/* // TODO: Add something here like instant mode */}
+								{/*<Show
+									when={props.uploadProgress || reupload.isPending}
+									fallback={
+										<TooltipIconButton
+											tooltipText="Reupload"
+											onClick={() => reupload.mutate()}
+										>
+											<IconLucideRotateCcw class="size-4" />
+										</TooltipIconButton>
+									}
+								>
+									<ProgressCircle
+										variant="primary"
+										progress={props.uploadProgress || 0}
+										size="sm"
+									/>
+								</Show>*/}
+
+								<TooltipIconButton
+									tooltipText="Open link"
+									onClick={() => shell.open(sharing().link)}
+								>
+									<IconCapLink class="size-4" />
+								</TooltipIconButton>
+							</>
 						)}
 					</Show>
 					<TooltipIconButton
@@ -265,39 +317,37 @@ function RecordingItem(props: {
 				</Show>
 				<Show when={mode() === "instant"}>
 					{(_) => {
-						const [progress, setProgress] = createSignal(0);
 						const reupload = createMutation(() => ({
-							mutationFn: async () => {
-								setProgress(0);
-								return await commands.uploadExportedVideo(
+							mutationFn: () =>
+								commands.uploadExportedVideo(
 									props.recording.path,
 									"Reupload",
-									new Channel<UploadProgress>((progress) =>
-										setProgress(Math.round(progress.progress * 100)),
-									),
-								);
-							},
-							onSettled: () => setProgress(0),
+									new Channel<UploadProgress>((progress) => {}),
+								),
 						}));
 
 						return (
 							<Show when={props.recording.meta.sharing}>
 								{(sharing) => (
 									<>
-										<TooltipIconButton
-											tooltipText="Reupload"
-											onClick={() => reupload.mutate()}
+										<Show
+											when={props.uploadProgress || reupload.isPending}
+											fallback={
+												<TooltipIconButton
+													tooltipText="Reupload"
+													onClick={() => reupload.mutate()}
+												>
+													<IconLucideRotateCcw class="size-4" />
+												</TooltipIconButton>
+											}
 										>
-											{reupload.isPending ? (
-												<ProgressCircle
-													variant="primary"
-													progress={progress()}
-													size="sm"
-												/>
-											) : (
-												<IconLucideRotateCcw class="size-4" />
-											)}
-										</TooltipIconButton>
+											<ProgressCircle
+												variant="primary"
+												progress={props.uploadProgress || 0}
+												size="sm"
+											/>
+										</Show>
+
 										<TooltipIconButton
 											tooltipText="Open link"
 											onClick={() => shell.open(sharing().link)}
