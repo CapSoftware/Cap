@@ -4,14 +4,13 @@ use crate::{
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{
         camera::CameraFeedLock,
-        microphone::{self, MicrophoneFeedLock},
+        microphone::MicrophoneFeedLock,
     },
     ffmpeg::{Mp4Muxer, OggMuxer},
     output_pipeline::{AudioFrame, OutputPipeline},
     sources::{self, ScreenCaptureFormat, ScreenCaptureTarget},
 };
 use anyhow::{Context as _, anyhow};
-use cap_enc_ffmpeg::{OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::Timestamps;

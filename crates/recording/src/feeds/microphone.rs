@@ -11,14 +11,10 @@ use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
 use std::{
     ops::Deref,
-    sync::{
-        Arc,
-        mpsc::{self, SyncSender},
-    },
+    sync::mpsc::{self, SyncSender},
 };
 use tracing::{debug, error, info, trace, warn};
 
-use crate::output_pipeline::{AudioFrame, AudioSource};
 
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 

@@ -2,9 +2,8 @@ use crate::{
     RecordingBaseInputs,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
-    output_pipeline::{ChannelAudioSource, OutputPipeline},
-    screen_capture,
-    sources::{ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget},
+    output_pipeline::OutputPipeline,
+    sources::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;

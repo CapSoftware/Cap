@@ -7,7 +7,6 @@ use super::*;
 use crate::output_pipeline::{
     self, AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig, SetupCtx,
 };
-use anyhow::anyhow;
 use cidre::*;
 use futures::{FutureExt, SinkExt, channel::mpsc, future::BoxFuture};
 use kameo::prelude::*;

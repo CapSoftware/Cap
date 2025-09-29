@@ -1,5 +1,4 @@
 use cap_recording::{screen_capture::ScreenCaptureTarget, *};
-use kameo::Actor;
 use scap_targets::Display;
 use std::time::Duration;
 use tracing::info;

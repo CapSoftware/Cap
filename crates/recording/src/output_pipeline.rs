@@ -379,7 +379,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>, NoAudio> {
             timestamps,
         );
 
-        let SetupCtx { error_sources, .. } = setup_ctx;
+        let SetupCtx {  .. } = setup_ctx;
 
         let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
 
@@ -407,7 +407,7 @@ impl OutputPipelineBuilder<NoVideo, HasAudio> {
             ..
         } = self;
 
-        let mut setup_ctx = SetupCtx {
+        let setup_ctx = SetupCtx {
             error_sources,
             audio_sources,
         };

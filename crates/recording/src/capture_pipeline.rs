@@ -1,5 +1,3 @@
-#[cfg(target_os = "macos")]
-use crate::output_pipeline::ChannelAudioSource;
 use crate::sources;
 use crate::{
     feeds::microphone::MicrophoneFeedLock,
@@ -9,7 +7,6 @@ use crate::{
 use anyhow::anyhow;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamps;
-use kameo::actor::{ActorID, Recipient};
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
