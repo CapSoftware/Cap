@@ -24,6 +24,7 @@ use tracing::{debug, error, info};
 use crate::{
     App, CurrentRecordingChanged, MutableState, NewStudioRecordingAdded, RecordingState,
     RecordingStopped, VideoUploadInfo,
+    api::{PresignedS3PutRequest, PresignedS3PutRequestMethod},
     audio::AppSounds,
     auth::AuthStore,
     create_screenshot,
@@ -31,9 +32,8 @@ use crate::{
     open_external_link,
     presets::PresetsStore,
     upload::{
-        InstantMultipartUpload, PresignedS3PutRequest, PresignedS3PutRequestMethod,
-        build_video_meta, bytes_into_stream, compress_image, create_or_get_video,
-        do_presigned_upload, upload_video,
+        InstantMultipartUpload, build_video_meta, bytes_into_stream, compress_image,
+        create_or_get_video, do_presigned_upload, upload_video,
     },
     web_api::ManagerExt,
     windows::{CapWindowId, ShowCapWindow},
@@ -817,7 +817,7 @@ async fn handle_recording_finish(
                                     &app,
                                     stream,
                                     total_size,
-                                    crate::upload::PresignedS3PutRequest {
+                                    crate::api::PresignedS3PutRequest {
                                         video_id: video_upload_info.id.clone(),
                                         subpath: "screenshot/screen-capture.jpg".to_string(),
                                         method: PresignedS3PutRequestMethod::Put,

@@ -1,6 +1,6 @@
 // credit @filleduchaos
 
-use crate::api::{S3VideoMeta, UploadedPart};
+use crate::api::{PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart};
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo, api};
 use async_stream::{stream, try_stream};
@@ -290,7 +290,7 @@ pub async fn do_presigned_upload(
 ) -> Result<(), String> {
     set_progress(UploadPartProgress::Presigning);
     let client = reqwest::Client::new();
-    let presigned_url = presigned_s3_put(app, request).await?;
+    let presigned_url = api::upload_signed(app, request).await?;
 
     set_progress(UploadPartProgress::Uploading {
         uploaded: 0,
@@ -421,55 +421,6 @@ pub async fn create_or_get_video(
     })?;
 
     Ok(config)
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PresignedS3PutRequest {
-    pub video_id: String,
-    pub subpath: String,
-    pub method: PresignedS3PutRequestMethod,
-    #[serde(flatten)]
-    pub meta: Option<S3VideoMeta>,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PresignedS3PutRequestMethod {
-    #[allow(unused)]
-    Post,
-    Put,
-}
-
-async fn presigned_s3_put(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
-    #[derive(Deserialize, Debug)]
-    struct Data {
-        url: String,
-    }
-
-    #[derive(Deserialize, Debug)]
-    #[serde(rename_all = "camelCase")]
-    struct Wrapper {
-        presigned_put_data: Data,
-    }
-
-    let response = app
-        .authed_api_request("/api/upload/signed", |client, url| {
-            client.post(url).json(&body)
-        })
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
-
-    let Wrapper { presigned_put_data } = response
-        .json::<Wrapper>()
-        .await
-        .map_err(|e| format!("Failed to deserialize server response: {e}"))?;
-
-    Ok(presigned_put_data.url)
 }
 
 pub fn build_video_meta(path: &PathBuf) -> Result<S3VideoMeta, String> {
@@ -678,29 +629,25 @@ pub fn from_pending_file(
                     match realtime_receiver.try_recv() {
                         Ok(_) => realtime_is_done = Some(true),
                         Err(flume::TryRecvError::Empty) => {},
-                        Err(_) => {
-                            todo!(); // TODO
-                            // return Err(std::io::Error::new(
-                            //     std::io::ErrorKind::Interrupted,
-                            //     "Realtime generation failed"
-                            // ));
-                        }
-                    }
+                        Err(_) => yield Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Realtime generation failed"
+                        ))?,
+                    };
                 }
             }
 
             // Check file existence and size
             if !path.exists() {
-                todo!();
-                // return Err(std::io::Error::new(
-                //     std::io::ErrorKind::NotFound,
-                //     "File no longer exists"
-                // ));
+                yield Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "File no longer exists"
+                ))?;
             }
 
             let file_size = match tokio::fs::metadata(&path).await {
                 Ok(metadata) => metadata.len(),
-                Err(e) => {
+                Err(_) => {
                     // Retry on metadata errors (file might be temporarily locked)
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
@@ -727,7 +674,7 @@ pub fn from_pending_file(
                     match file.read(&mut chunk[total_read..]).await {
                         Ok(0) => break, // EOF
                         Ok(n) => total_read += n,
-                        Err(e) => todo!(), // TODO: return Err(e),
+                        Err(e) => yield Err(e)?,
                     }
                 }
 
@@ -762,7 +709,7 @@ pub fn from_pending_file(
                         match file.read(&mut first_chunk[total_read..]).await {
                             Ok(0) => break,
                             Ok(n) => total_read += n,
-                            Err(e) => todo!(), // TODO: return Err(e),
+                            Err(e) => yield Err(e)?,
                         }
                     }
 

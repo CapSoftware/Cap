@@ -160,3 +160,55 @@ pub async fn upload_multipart_complete(
         .map_err(|err| format!("api/upload_multipart_complete/response: {err}"))
         .map(|data| data.location)
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresignedS3PutRequestMethod {
+    #[allow(unused)]
+    Post,
+    Put,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresignedS3PutRequest {
+    pub video_id: String,
+    pub subpath: String,
+    pub method: PresignedS3PutRequestMethod,
+    #[serde(flatten)]
+    pub meta: Option<S3VideoMeta>,
+}
+
+pub async fn upload_signed(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Data {
+        url: String,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Response {
+        presigned_put_data: Data,
+    }
+
+    let resp = app
+        .authed_api_request("/api/upload/signed", |client, url| {
+            client.post(url).json(&body)
+        })
+        .await
+        .map_err(|err| format!("api/upload_signed/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/upload_signed/{status}: {error_body}"));
+    }
+
+    resp.json::<Response>()
+        .await
+        .map_err(|err| format!("api/upload_signed/response: {err}"))
+        .map(|data| data.presigned_put_data.url)
+}
