@@ -2,6 +2,7 @@ mod audio_buffer;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;
+mod ffmepg;
 pub mod instant_recording;
 mod output_pipeline;
 pub mod sources;

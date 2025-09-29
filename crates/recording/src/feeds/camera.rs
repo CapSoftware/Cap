@@ -2,8 +2,6 @@ use cap_camera::CameraInfo;
 use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
-#[cfg(windows)]
-use cap_timestamp::PerformanceCounterTimestamp;
 use cap_timestamp::Timestamp;
 use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};
@@ -18,6 +16,8 @@ use std::{
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
 use tracing::{debug, error, info, trace, warn};
 
+use crate::{ffmepg::FFmpegVideoFrame, output_pipeline::VideoSource};
+
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Clone)]
@@ -29,7 +29,7 @@ pub struct RawCameraFrame {
 #[derive(Actor)]
 pub struct CameraFeed {
     state: State,
-    senders: Vec<flume::Sender<RawCameraFrame>>,
+    senders: Vec<flume::Sender<FFmpegVideoFrame>>,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
 }
@@ -159,7 +159,7 @@ pub struct SetInput {
 
 pub struct RemoveInput;
 
-pub struct AddSender(pub flume::Sender<RawCameraFrame>);
+pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
 
 pub struct ListenForReady(pub oneshot::Sender<()>);
 
@@ -180,7 +180,7 @@ struct InputConnectFailed {
     id: DeviceOrModelID,
 }
 
-struct NewFrame(RawCameraFrame);
+struct NewFrame(FFmpegVideoFrame);
 
 struct Unlock;
 
@@ -288,12 +288,14 @@ async fn setup_camera(
             }
 
             let _ = recipient
-                .tell(NewFrame(RawCameraFrame {
-                    frame: ff_frame,
+                .tell(NewFrame(FFmpegVideoFrame {
+                    inner: ff_frame,
                     #[cfg(windows)]
-                    timestamp: Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
-                        frame.native().perf_counter,
-                    )),
+                    timestamp: Timestamp::PerformanceCounter(
+                        cap_timestamp::PerformanceCounterTimestamp::new(
+                            frame.native().perf_counter,
+                        ),
+                    ),
                     #[cfg(target_os = "macos")]
                     timestamp: Timestamp::MachAbsoluteTime(
                         cap_timestamp::MachAbsoluteTimestamp::new(

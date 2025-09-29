@@ -246,6 +246,7 @@ pub async fn spawn_instant_recording_actor(
 
     let content_dir = ensure_dir(&recording_dir.join("content"))?;
 
+    #[cfg(windows)]
     cap_mediafoundation_utils::thread_init();
 
     #[cfg(windows)]

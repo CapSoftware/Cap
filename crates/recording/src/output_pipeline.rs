@@ -6,12 +6,14 @@ use futures::{
     FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
     future::BoxFuture,
+    lock::Mutex,
 };
 use kameo::prelude::*;
 use std::{
     future,
     path::{Path, PathBuf},
     pin::pin,
+    sync::Arc,
     time::Duration,
 };
 use tokio::{sync::broadcast, task::JoinHandle};
@@ -225,17 +227,20 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
 
         let (video_tx, mut video_rx) = mpsc::channel(4);
         let mut video_source = TVideo::setup(video_config, video_tx, &mut setup_ctx).await?;
+        let video_info = video_source.video_info();
 
         let has_audio_sources = !setup_ctx.audio_sources.is_empty();
         let (first_tx, first_rx) = oneshot::channel();
 
-        let muxer = TMuxer::setup(
-            muxer_config,
-            path.clone(),
-            video_source.video_info(),
-            has_audio_sources.then_some(AudioMixer::INFO),
-        )
-        .await?;
+        let muxer = Arc::new(Mutex::new(
+            TMuxer::setup(
+                muxer_config,
+                path.clone(),
+                video_info,
+                has_audio_sources.then_some(AudioMixer::INFO),
+            )
+            .await?,
+        ));
 
         tasks.push((
             tokio::spawn({
@@ -262,6 +267,8 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
                                 }
 
                                 muxer
+                                    .lock()
+                                    .await
                                     .send_video_frame(frame, timestamp.duration_since(timestamps))
                                     .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
                             }
@@ -274,7 +281,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
 
                     tracing::info!("Encoder done receiving frames");
 
-                    muxer.finish()?;
+                    muxer.lock().await.finish()?;
 
                     tracing::info!("Encoder finished");
 
@@ -315,11 +322,11 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
                 "audio-mixer-stop",
             ));
 
-            let mut muxer = muxer.clone();
+            let muxer = muxer.clone();
             tasks.push((
                 tokio::spawn(async move {
                     while let Some(frame) = audio_rx.next().await {
-                        if let Err(e) = muxer.send_audio_frame(
+                        if let Err(e) = muxer.lock().await.send_audio_frame(
                             frame.inner,
                             frame.timestamp.duration_since(timestamps),
                         ) {
@@ -341,6 +348,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
             stop_token: Some(stop_token.drop_guard()),
             task_names,
             tasks: task_futures,
+            video_info,
         })
     }
 }
@@ -351,6 +359,7 @@ pub struct NewOutputPipeline {
     stop_token: Option<DropGuard>,
     task_names: Vec<&'static str>,
     tasks: Vec<JoinHandle<()>>,
+    video_info: VideoInfo,
 }
 
 impl NewOutputPipeline {
@@ -362,6 +371,10 @@ impl NewOutputPipeline {
         drop(self.stop_token.take());
 
         futures::future::join_all(&mut self.tasks).await;
+    }
+
+    pub fn video_info(&self) -> VideoInfo {
+        self.video_info
     }
 }
 
@@ -415,7 +428,7 @@ pub trait VideoFrame: Send + 'static {
     fn timestamp(&self) -> Timestamp;
 }
 
-pub trait Muxer: Clone + Send + 'static {
+pub trait Muxer: Send + 'static {
     type VideoFrame;
     type Config;
 

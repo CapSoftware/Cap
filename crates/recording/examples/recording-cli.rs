@@ -1,4 +1,5 @@
 use cap_recording::{screen_capture::ScreenCaptureTarget, *};
+use kameo::Actor;
 use scap_targets::Display;
 use std::time::Duration;
 use tracing::info;
@@ -24,20 +25,18 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    // let camera_info = cap_camera::list_cameras()
-    //     .find(|c| c.display_name().contains("NVIDIA"))
-    //     .unwrap();
+    let camera_info = cap_camera::list_cameras().next().unwrap();
 
-    // let camera_feed = CameraFeed::spawn(CameraFeed::default());
+    let camera_feed = CameraFeed::spawn(CameraFeed::default());
 
-    // camera_feed
-    //     .ask(feeds::camera::SetInput {
-    //         id: feeds::camera::DeviceOrModelID::from_info(&camera_info),
-    //     })
-    //     .await
-    //     .unwrap()
-    //     .await
-    //     .unwrap();
+    camera_feed
+        .ask(feeds::camera::SetInput {
+            id: feeds::camera::DeviceOrModelID::from_info(&camera_info),
+        })
+        .await
+        .unwrap()
+        .await
+        .unwrap();
 
     // let (error_tx, _) = flume::bounded(1);
     // let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
@@ -59,16 +58,16 @@ pub async fn main() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let handle = instant_recording::Actor::builder(
+    let handle = studio_recording::Actor::builder(
         dir.path().into(),
         ScreenCaptureTarget::Display {
             id: Display::primary().id(),
         },
     )
-    .with_system_audio(true)
-    // .with_camera_feed(std::sync::Arc::new(
-    //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
-    // ))
+    // .with_system_audio(true)
+    .with_camera_feed(std::sync::Arc::new(
+        camera_feed.ask(feeds::camera::Lock).await.unwrap(),
+    ))
     .build()
     .await
     .unwrap();

@@ -45,65 +45,6 @@ struct RecordingSource {
     stop: Recipient<Stop>,
 }
 
-#[derive(Default)]
-pub struct RecordingSupervisor {
-    sources: Vec<RecordingSource>,
-    has_stopped: bool,
-}
-
-impl kameo::Actor for RecordingSupervisor {
-    type Args = Self;
-    type Error = ();
-
-    async fn on_start(args: Self::Args, _: ActorRef<Self>) -> Result<Self, Self::Error> {
-        Ok(args)
-    }
-
-    async fn on_link_died(
-        &mut self,
-        _: WeakActorRef<Self>,
-        id: ActorID,
-        reason: ActorStopReason,
-    ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
-        let Some(source) = self.sources.iter().find(|s| s.id == id) else {
-            warn!("Actor linked to supervisor not found in sources: {:?}", id);
-            return Ok(ControlFlow::Continue(()));
-        };
-
-        error!("Source {} died: {}", &source.name, reason);
-
-        for source in &self.sources {
-            let _ = source.stop.tell(Stop).await;
-        }
-
-        Ok(ControlFlow::Continue(()))
-    }
-}
-
-pub struct SuperviseSource<A: kameo::Actor> {
-    pub name: String,
-    pub actor_ref: ActorRef<A>,
-}
-
-impl<A: kameo::Actor + Message<Stop>> Message<SuperviseSource<A>> for RecordingSupervisor {
-    type Reply = ();
-
-    async fn handle(
-        &mut self,
-        msg: SuperviseSource<A>,
-        ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let id = msg.actor_ref.id();
-        ctx.actor_ref().link(&msg.actor_ref).await;
-
-        self.sources.push(RecordingSource {
-            id,
-            name: msg.name,
-            stop: msg.actor_ref.recipient(),
-        });
-    }
-}
-
 pub struct Start;
 pub struct Stop;
 

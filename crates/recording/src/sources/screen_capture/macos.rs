@@ -1,6 +1,4 @@
-use crate::output_pipeline::{
-        self, AudioFrame, ChannelAudioSource, SetupCtx, VideoSource,
-    };
+use crate::output_pipeline::{self, AudioFrame, ChannelAudioSource, SetupCtx, VideoSource};
 
 use super::*;
 use cidre::*;

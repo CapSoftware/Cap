@@ -139,7 +139,7 @@ pub enum CompletedRecording {
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: studio_recording::CompletedStudioRecording,
+        recording: studio_recording::CompletedRecording,
         target_name: String,
     },
 }
@@ -954,7 +954,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &studio_recording::CompletedStudioRecording,
+    recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -1001,7 +1001,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &studio_recording::CompletedStudioRecording,
+    completed_recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {
