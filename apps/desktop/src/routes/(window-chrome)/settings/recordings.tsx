@@ -234,7 +234,7 @@ function RecordingItem(props: {
 				</Show>
 				<div class="flex flex-col gap-2">
 					<span>{props.recording.prettyName}</span>
-					<div class="flex">
+					<div class="flex space-x-1">
 						<div
 							class={cx(
 								"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
@@ -251,6 +251,25 @@ function RecordingItem(props: {
 
 						<Show
 							when={
+								"recording" in props.recording.meta
+									? props.recording.meta.recording
+									: undefined
+							}
+						>
+							<div
+								class={cx(
+									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-orange-600",
+								)}
+							>
+								{/* TODO: Get a proper icon here */}
+								<IconCapInstant class="invert size-2.5 dark:invert-0" />
+								<p>RECORDING</p>
+							</div>
+						</Show>
+
+						{/* TODO: Account for studio mode vs instant mode error */}
+						<Show
+							when={
 								"error" in props.recording.meta
 									? props.recording.meta.error
 									: undefined
@@ -259,8 +278,7 @@ function RecordingItem(props: {
 							{(error) => (
 								<div
 									class={cx(
-										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit",
-										mode() === "instant" ? "bg-blue-100" : "bg-gray-3",
+										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-600",
 									)}
 								>
 									{/* TODO: Get a proper icon here */}
