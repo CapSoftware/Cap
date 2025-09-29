@@ -2,11 +2,10 @@
 //! This will come part of the EffectTS rewrite work.
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use tauri::AppHandle;
 
 use crate::web_api::ManagerExt;
-
-// TODO: Adding retry and backoff logic to everything!
 
 pub async fn upload_multipart_initiate(app: &AppHandle, video_id: &str) -> Result<String, String> {
     #[derive(Deserialize)]
@@ -211,4 +210,34 @@ pub async fn upload_signed(app: &AppHandle, body: PresignedS3PutRequest) -> Resu
         .await
         .map_err(|err| format!("api/upload_signed/response: {err}"))
         .map(|data| data.presigned_put_data.url)
+}
+
+pub async fn desktop_video_progress(
+    app: &AppHandle,
+    video_id: &str,
+    uploaded: u64,
+    total: u64,
+) -> Result<(), String> {
+    let resp = app
+        .authed_api_request("/api/desktop/video/progress", |client, url| {
+            client.post(url).json(&json!({
+                "videoId": video_id,
+                "uploaded": uploaded,
+                "total": total,
+                "updatedAt": chrono::Utc::now().to_rfc3339()
+            }))
+        })
+        .await
+        .map_err(|err| format!("api/desktop_video_progress/request: {err}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let error_body = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no response body>".to_string());
+        return Err(format!("api/desktop_video_progress/{status}: {error_body}"));
+    }
+
+    Ok(())
 }

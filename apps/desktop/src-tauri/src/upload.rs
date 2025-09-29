@@ -1,41 +1,40 @@
 // credit @filleduchaos
 
-use crate::api::{PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart};
-use crate::web_api::ManagerExt;
-use crate::{UploadProgress, VideoUploadInfo, api};
+use crate::{
+    UploadProgress, VideoUploadInfo, api,
+    api::{PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    web_api::ManagerExt,
+};
 use async_stream::{stream, try_stream};
-use axum::body::Body;
+use axum::http::{self, Uri};
 use bytes::Bytes;
-use cap_project::{RecordingMeta, RecordingMetaInner, UploadState};
+use cap_project::{RecordingMeta, UploadState};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
 use futures::{Stream, StreamExt, TryStreamExt, stream};
-use image::ImageReader;
-use image::codecs::jpeg::JpegEncoder;
+use image::{ImageReader, codecs::jpeg::JpegEncoder};
 use reqwest::StatusCode;
-use reqwest::header::CONTENT_LENGTH;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use specta::Type;
-use std::error::Error;
-use std::io;
-use std::path::Path;
-use std::pin::pin;
 use std::{
-    path::PathBuf,
+    io,
+    path::{Path, PathBuf},
+    pin::pin,
+    str::FromStr,
     time::{Duration, Instant},
 };
 use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
-use tokio::sync::watch;
-use tokio::task::{self, JoinHandle};
-use tokio::time::sleep;
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, BufReader},
+    sync::watch,
+    task::{self, JoinHandle},
+};
 use tokio_util::io::ReaderStream;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 #[derive(Deserialize, Serialize, Clone, Type, Debug)]
 pub struct S3UploadMeta {
@@ -63,15 +62,6 @@ pub struct UploadedVideo {
 pub struct UploadedImage {
     pub link: String,
     pub id: String,
-}
-
-pub fn upload_v2(app: AppHandle) {
-    // TODO: Progress reporting
-    // TODO: Multipart or regular upload automatically sorted out
-    // TODO: Allow either FS derived or Rust progress derived multipart upload source
-    // TODO: Support screenshots, or videos
-
-    todo!();
 }
 
 pub struct UploadProgressUpdater {
@@ -123,7 +113,7 @@ impl UploadProgressUpdater {
             tokio::spawn({
                 let video_id = self.video_id.clone();
                 async move {
-                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                    api::desktop_video_progress(&app, &video_id, uploaded, total).await;
                 }
             });
 
@@ -135,37 +125,13 @@ impl UploadProgressUpdater {
                 let video_id = self.video_id.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_secs(2)).await;
-                    Self::send_api_update(&app, video_id, uploaded, total).await;
+                    api::desktop_video_progress(&app, &video_id, uploaded, total).await;
                 })
             };
 
             if let Some(state) = &mut self.video_state {
                 state.pending_task = Some(handle);
             }
-        }
-    }
-
-    async fn send_api_update(app: &AppHandle, video_id: String, uploaded: u64, total: u64) {
-        let response = app
-            .authed_api_request("/api/desktop/video/progress", |client, url| {
-                client
-                    .post(url)
-                    .header("X-Cap-Desktop-Version", env!("CARGO_PKG_VERSION"))
-                    .json(&json!({
-                        "videoId": video_id,
-                        "uploaded": uploaded,
-                        "total": total,
-                        "updatedAt": chrono::Utc::now().to_rfc3339()
-                    }))
-            })
-            .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                trace!("Progress update sent successfully");
-            }
-            Ok(resp) => error!("Failed to send progress update: {}", resp.status()),
-            Err(err) => error!("Failed to send progress update: {err}"),
         }
     }
 }
@@ -740,8 +706,6 @@ fn uploader(
     upload_id: String,
     stream: impl Stream<Item = io::Result<Chunk>>,
 ) -> impl Stream<Item = Result<UploadedPart, String>> {
-    let client = reqwest::Client::default();
-
     try_stream! {
         let mut stream = pin!(stream);
         let mut prev_part_number = None;
@@ -755,8 +719,17 @@ fn uploader(
                 api::upload_multipart_presign_part(&app, &video_id, &upload_id, part_number, &md5_sum)
                     .await?;
 
-            // TODO: Retries
-            let resp = client
+            let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
+            let resp = reqwest::Client::builder()
+                .retry(reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(|req_rep| {
+                    if req_rep.status().map_or(false, |s| s.is_server_error()) {
+                        req_rep.retryable()
+                    } else {
+                        req_rep.success()
+                    }
+                }))
+                .build()
+                .map_err(|err| format!("uploader/part/{part_number}/client: {err:?}"))?
                 .put(&presigned_url)
                 .header("Content-MD5", &md5_sum)
                 .header("Content-Length", chunk.len())
