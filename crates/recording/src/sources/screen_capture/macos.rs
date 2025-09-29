@@ -360,7 +360,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn start(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            if self.1.started.fetch_and(true, atomic::Ordering::Relaxed) {
+            if !self.1.started.fetch_xor(true, atomic::Ordering::Relaxed) {
                 self.1.capturer.start().await?;
             }
 
@@ -371,7 +371,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            if self.1.started.fetch_and(false, atomic::Ordering::Relaxed) {
+            if self.1.started.fetch_xor(true, atomic::Ordering::Relaxed) {
                 self.1.capturer.stop().await?;
             }
 

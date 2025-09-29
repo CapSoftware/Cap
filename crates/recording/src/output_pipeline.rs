@@ -379,7 +379,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>, NoAudio> {
             timestamps,
         );
 
-        let SetupCtx {  .. } = setup_ctx;
+        let SetupCtx { .. } = setup_ctx;
 
         let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
 

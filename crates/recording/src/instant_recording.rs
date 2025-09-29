@@ -296,16 +296,6 @@ pub async fn spawn_instant_recording_actor(
     })
 }
 
-#[derive(thiserror::Error, Debug)]
-enum InstantRecordingActorError {
-    #[error("Pipeline receiver dropped")]
-    PipelineReceiverDropped,
-    #[error("Control receiver dropped")]
-    ControlReceiverDropped,
-    #[error("{0}")]
-    Other(String),
-}
-
 fn current_time_f64() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
