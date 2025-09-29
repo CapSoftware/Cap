@@ -30,7 +30,7 @@ use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio::sync::watch;
 use tokio::task::{self, JoinHandle};
 use tokio::time::sleep;
@@ -626,7 +626,7 @@ impl InstantMultipartUpload {
     }
 }
 
-struct Chunk {
+pub struct Chunk {
     /// The total size of the file to be uploaded.
     /// This can change as the recording grows.
     total_size: u64,
@@ -636,9 +636,31 @@ struct Chunk {
     chunk: Bytes,
 }
 
-/// Creates a stream that reads chunks from a potentially growing file,
-/// yielding (part_number, chunk_data) pairs. The first chunk is yielded last
-/// to allow for header rewriting after recording completion.
+/// Creates a stream that reads chunks from a file, yielding [Chunk]'s.
+pub fn from_file(path: PathBuf) -> impl Stream<Item = io::Result<Chunk>> {
+    try_stream! {
+        let file = File::open(path).await?;
+        let total_size = file.metadata().await?.len();
+        let mut file = BufReader::new(file);
+
+        let mut buf = vec![0u8; CHUNK_SIZE as usize];
+        let mut part_number = 0;
+        loop {
+            part_number += 1;
+            let n = file.read(&mut buf).await?;
+            if n == 0 { break; }
+            yield Chunk {
+                total_size,
+                part_number,
+                chunk: Bytes::copy_from_slice(&buf[..n]),
+            };
+        }
+    }
+}
+
+/// Creates a stream that reads chunks from a potentially growing file, yielding [Chunk]'s.
+/// The first chunk of the file is yielded last to allow for header rewriting after recording completion.
+/// This uploader will continually poll the filesystem and wait for the file to stop uploading before flushing the rest.
 pub fn from_pending_file(
     path: PathBuf,
     realtime_upload_done: Option<Receiver<()>>,
