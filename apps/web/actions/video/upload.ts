@@ -164,6 +164,7 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot = false,
 	isUpload = false,
 	folderId,
+	supportsUploadProgress = false,
 }: {
 	videoId?: Video.VideoId;
 	duration?: number;
@@ -173,17 +174,16 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot?: boolean;
 	isUpload?: boolean;
 	folderId?: Folder.FolderId;
+	// TODO: Remove this once we are happy with it's stability
+	supportsUploadProgress?: boolean;
 }) {
 	const user = await getCurrentUser();
 
-	if (!user) {
-		throw new Error("Unauthorized");
-	}
+	if (!user) throw new Error("Unauthorized");
 
 	try {
-		if (!userIsPro(user) && duration && duration > 300) {
+		if (!userIsPro(user) && duration && duration > 300)
 			throw new Error("upgrade_required");
-		}
 
 		const [customBucket] = await db()
 			.select()
@@ -237,9 +237,10 @@ export async function createVideoAndGetUploadUrl({
 
 		await db().insert(videos).values(videoData);
 
-		await db().insert(videoUploads).values({
-			videoId: idToUse,
-		});
+		if (supportsUploadProgress)
+			await db().insert(videoUploads).values({
+				videoId: idToUse,
+			});
 
 		const fileKey = `${user.id}/${idToUse}/${
 			isScreenshot ? "screenshot/screen-capture.jpg" : "result.mp4"

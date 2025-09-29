@@ -292,7 +292,7 @@ export const CapCard = ({
 				onDragStart={handleDragStart}
 				onDragEnd={handleDragEnd}
 				className={clsx(
-					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group",
+					"flex relative overflow-hidden transition-colors duration-200 flex-col gap-4 w-full h-full rounded-xl cursor-default bg-gray-1 border border-gray-3 group z-10",
 					isSelected
 						? "!border-blue-10"
 						: anyCapSelected
@@ -314,7 +314,7 @@ export const CapCard = ({
 							: isDropdownOpen
 								? "opacity-100"
 								: "opacity-0 group-hover:opacity-100",
-						"top-2 right-2 flex-col gap-2 z-[20]",
+						"top-2 right-2 flex-col gap-2 z-20",
 					)}
 				>
 					<CapCardButton
@@ -363,7 +363,7 @@ export const CapCard = ({
 							e.stopPropagation();
 							handleDownload();
 						}}
-						disabled={downloadMutation.isPending}
+						disabled={downloadMutation.isPending || cap.hasActiveUpload}
 						className="delay-25"
 						icon={() => {
 							return downloadMutation.isPending ? (
@@ -421,7 +421,7 @@ export const CapCard = ({
 											error: "Failed to duplicate cap",
 										});
 									}}
-									disabled={duplicateMutation.isPending}
+									disabled={duplicateMutation.isPending || cap.hasActiveUpload}
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faCopy} />
@@ -503,26 +503,53 @@ export const CapCard = ({
 							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
 						onClick={(e) => {
-							if (isDeleting) {
-								e.preventDefault();
-							}
+							if (isDeleting) e.preventDefault();
 						}}
 						href={`/s/${cap.id}`}
 					>
-						<VideoThumbnail
-							videoDuration={cap.duration}
-							imageClass={clsx(
-								anyCapSelected
-									? "opacity-50"
-									: isDropdownOpen
-										? "opacity-30"
-										: "group-hover:opacity-30",
-								"transition-opacity duration-200",
-								uploadProgress && "opacity-30",
-							)}
-							videoId={cap.id}
-							alt={`${cap.name} Thumbnail`}
-						/>
+						{uploadProgress ? (
+							<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-0">
+								<div className="flex absolute inset-0 z-50 justify-center items-center rounded-t-xl">
+									{uploadProgress.status === "failed" ? (
+										<div className="flex flex-col items-center">
+											<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
+												<FontAwesomeIcon
+													icon={faVideo}
+													className="text-white size-3"
+												/>
+											</div>
+											<p className="text-[13px] text-center text-white">
+												Upload failed
+											</p>
+										</div>
+									) : (
+										<div className="relative size-20 md:size-16">
+											<ProgressCircle
+												progressTextClassName="md:!text-[11px]"
+												subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
+												className="md:scale-[1.5] scale-[1.2]"
+												progress={uploadProgress.progress}
+											/>
+										</div>
+									)}
+								</div>
+							</div>
+						) : (
+							<VideoThumbnail
+								videoDuration={cap.duration}
+								imageClass={clsx(
+									anyCapSelected
+										? "opacity-50"
+										: isDropdownOpen
+											? "opacity-30"
+											: "group-hover:opacity-30",
+									"transition-opacity duration-200",
+									// uploadProgress && "opacity-30",
+								)}
+								videoId={cap.id}
+								alt={`${cap.name} Thumbnail`}
+							/>
+						)}
 					</Link>
 					{uploadProgress && (
 						<div className="flex absolute inset-0 z-50 justify-center items-center bg-black rounded-t-xl">

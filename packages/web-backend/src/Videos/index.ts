@@ -5,7 +5,6 @@ import { Array, Effect, Option, pipe } from "effect";
 
 import { Database } from "../Database.ts";
 import { S3Buckets } from "../S3Buckets/index.ts";
-import { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
 import { VideosPolicy } from "./VideosPolicy.ts";
 import { VideosRepo } from "./VideosRepo.ts";
 

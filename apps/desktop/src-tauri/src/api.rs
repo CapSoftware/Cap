@@ -9,6 +9,7 @@ use crate::web_api::ManagerExt;
 
 pub async fn upload_multipart_initiate(app: &AppHandle, video_id: &str) -> Result<String, String> {
     #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
     pub struct Response {
         upload_id: String,
     }

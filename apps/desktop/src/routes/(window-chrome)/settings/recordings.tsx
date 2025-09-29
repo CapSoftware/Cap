@@ -13,6 +13,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
@@ -133,6 +134,7 @@ export default function Recordings() {
 			Number(e.payload.uploaded) / Number(e.payload.total),
 		);
 	});
+	createEffect(() => console.log({ ...uploadProgress }));
 
 	return (
 		<div class="flex relative flex-col p-4 space-y-4 w-full h-full">
@@ -187,9 +189,11 @@ export default function Recordings() {
 										handleCopyVideoToClipboard(recording.path)
 									}
 									uploadProgress={
-										recording.meta.sharing?.id
-											? uploadProgress[recording.meta.sharing.id]
-											: undefined
+										// TODO: Fix this
+										Object.values(uploadProgress)[0]
+										// recording.meta.sharing?.id
+										// 	? uploadProgress[recording.meta.sharing.id]
+										// 	: undefined
 									}
 								/>
 							)}
