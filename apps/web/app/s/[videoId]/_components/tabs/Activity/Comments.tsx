@@ -7,6 +7,8 @@ import {
 	type ComponentProps,
 	forwardRef,
 	type PropsWithChildren,
+	startTransition,
+	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -38,6 +40,7 @@ export const Comments = Object.assign(
 			setOptimisticComments,
 			setComments,
 			handleCommentSuccess,
+			onSeek,
 		} = props;
 		const commentParams = useSearchParams().get("comment");
 		const replyParams = useSearchParams().get("reply");
@@ -53,24 +56,28 @@ export const Comments = Object.assign(
 				commentsContainerRef.current.scrollTop =
 					commentsContainerRef.current.scrollHeight;
 			}
-		}, []);
+		}, [commentParams, replyParams]);
 
-		const scrollToBottom = () => {
+		const scrollToBottom = useCallback(() => {
 			if (commentsContainerRef.current) {
 				commentsContainerRef.current.scrollTo({
 					top: commentsContainerRef.current.scrollHeight,
 					behavior: "smooth",
 				});
 			}
-		};
+		}, []);
 
-		useImperativeHandle(ref, () => ({ scrollToBottom }), []);
+		useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
 
 		const rootComments = optimisticComments.filter(
 			(comment) => !comment.parentCommentId || comment.parentCommentId === "",
 		);
 
 		const handleNewComment = async (content: string) => {
+			// Get current video time from the video element
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
+
 			const optimisticComment: CommentType = {
 				id: `temp-${Date.now()}`,
 				authorId: user?.id || "anonymous",
@@ -80,12 +87,14 @@ export const Comments = Object.assign(
 				videoId: props.videoId,
 				parentCommentId: "",
 				type: "text",
-				timestamp: null,
+				timestamp: currentTime,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			setOptimisticComments(optimisticComment);
+			startTransition(() => {
+				setOptimisticComments(optimisticComment);
+			});
 
 			try {
 				const data = await newComment({
@@ -93,6 +102,7 @@ export const Comments = Object.assign(
 					videoId: props.videoId,
 					parentCommentId: "",
 					type: "text",
+					timestamp: currentTime,
 				});
 				handleCommentSuccess(data);
 			} catch (error) {
@@ -102,6 +112,8 @@ export const Comments = Object.assign(
 
 		const handleReply = async (content: string) => {
 			if (!replyingTo) return;
+			const videoElement = document.querySelector("video") as HTMLVideoElement;
+			const currentTime = videoElement?.currentTime || 0;
 
 			const parentComment = optimisticComments.find((c) => c.id === replyingTo);
 			const actualParentId = parentComment?.parentCommentId
@@ -117,12 +129,14 @@ export const Comments = Object.assign(
 				videoId: props.videoId,
 				parentCommentId: actualParentId,
 				type: "text",
-				timestamp: null,
+				timestamp: currentTime,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			setOptimisticComments(optimisticReply);
+			startTransition(() => {
+				setOptimisticComments(optimisticReply);
+			});
 
 			try {
 				const data = await newComment({
@@ -130,6 +144,7 @@ export const Comments = Object.assign(
 					videoId: props.videoId,
 					parentCommentId: actualParentId,
 					type: "text",
+					timestamp: currentTime,
 				});
 
 				handleCommentSuccess(data);
@@ -195,7 +210,7 @@ export const Comments = Object.assign(
 								onCancelReply={handleCancelReply}
 								onDelete={handleDeleteComment}
 								user={user}
-								onSeek={props.onSeek}
+								onSeek={onSeek}
 							/>
 						))}
 					</div>

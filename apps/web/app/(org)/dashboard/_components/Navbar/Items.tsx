@@ -92,6 +92,9 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 	const router = useRouter();
 
 	const isPathActive = (path: string) => pathname.includes(path);
+	const isDomainSetupVerified =
+		activeOrg?.organization.customDomain &&
+		activeOrg?.organization.domainVerified;
 
 	return (
 		<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -179,33 +182,24 @@ const AdminNavItems = ({ toggleMobileNav }: Props) => {
 										{!sidebarCollapsed && (
 											<Link
 												href={
-													activeOrg?.organization.customDomain
+													isDomainSetupVerified
 														? `https://${activeOrg.organization.customDomain}`
 														: "/dashboard/settings/organization"
 												}
 												rel={
-													activeOrg?.organization.customDomain
+													isDomainSetupVerified
 														? "noopener noreferrer"
 														: undefined
 												}
-												target={
-													activeOrg?.organization.customDomain
-														? "_blank"
-														: "_self"
-												}
+												target={isDomainSetupVerified ? "_blank" : "_self"}
 												className="flex truncate w-full overflow-hidden flex-1 gap-1.5 items-center self-start"
 											>
 												<FontAwesomeIcon
-													icon={
-														activeOrg?.organization.customDomain
-															? faLink
-															: faCircleInfo
-													}
+													icon={isDomainSetupVerified ? faLink : faCircleInfo}
 													className="duration-200 size-3 text-gray-10"
 												/>
 												<p className="w-full text-[11px] flex-1 duration-200 truncate leading-0 text-gray-11">
-													{activeOrg?.organization.customDomain &&
-													activeOrg?.organization.domainVerified
+													{isDomainSetupVerified
 														? activeOrg?.organization.customDomain
 														: "No custom domain set"}
 												</p>

@@ -317,7 +317,7 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="flex flex-col min-h-screen bg-gray-2">
+			<div key={videoId} className="flex flex-col min-h-screen bg-gray-2">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
 					<AuthorizedContent video={data.video} searchParams={searchParams} />
@@ -327,7 +327,10 @@ export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed(
-					<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+					<div
+						key={videoId}
+						className="flex flex-col justify-center items-center p-4 min-h-screen text-center"
+					>
 						<Logo className="size-32" />
 						<h1 className="mb-2 text-2xl font-semibold">
 							This video is private
@@ -368,7 +371,7 @@ async function AuthorizedContent({
 				authorId: user.id,
 			});
 		} catch (error) {
-			console.error("Failed to create view notification:", error);
+			console.warn("Failed to create view notification:", error);
 		}
 	}
 
