@@ -1,14 +1,14 @@
 // credit @filleduchaos
 
 use crate::{
-    VideoUploadInfo, api,
-    api::{PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
+    UploadProgress, VideoUploadInfo,
+    api::{self, PresignedS3PutRequest, PresignedS3PutRequestMethod, S3VideoMeta, UploadedPart},
     web_api::ManagerExt,
 };
 use async_stream::{stream, try_stream};
 use axum::http::Uri;
 use bytes::Bytes;
-use cap_project::{RecordingMeta, UploadState};
+use cap_project::{RecordingMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
@@ -24,7 +24,7 @@ use std::{
     str::FromStr,
     time::Duration,
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, ipc::Channel};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_specta::Event;
 use tokio::{
@@ -63,10 +63,23 @@ pub async fn upload_video(
     file_path: PathBuf,
     screenshot_path: PathBuf,
     meta: S3VideoMeta,
+    channel: Option<Channel<UploadProgress>>,
 ) -> Result<UploadedItem, String> {
     info!("Uploading video {video_id}...");
 
     let (stream, total_size) = file_reader_stream(file_path).await?;
+    let stream = progress(
+        app.clone(),
+        video_id.clone(),
+        stream.map(move |v| v.map(move |v| (total_size, v))),
+    );
+
+    let stream = if let Some(channel) = channel {
+        tauri_progress(channel, stream).boxed()
+    } else {
+        stream.boxed()
+    };
+
     let video_fut = singlepart_uploader(
         app.clone(),
         PresignedS3PutRequest {
@@ -76,12 +89,7 @@ pub async fn upload_video(
             meta: Some(meta),
         },
         total_size,
-        progress(
-            app.clone(),
-            video_id.clone(),
-            stream.map(move |v| v.map(move |v| (total_size, v))),
-        )
-        .and_then(|(_, c)| async move { Ok(c) }),
+        stream.and_then(|(_, c)| async move { Ok(c) }),
     );
 
     // TODO: We don't report progress on image upload
@@ -314,10 +322,10 @@ impl InstantMultipartUpload {
 
         // TODO: Reuse this + error handling
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-        project_meta.upload = Some(UploadState::MultipartUpload {
-            cap_id: video_id.clone(),
+        project_meta.upload = Some(UploadMeta::MultipartUpload {
+            video_id: video_id.clone(),
         });
-        project_meta.save_for_project().unwrap();
+        project_meta.save_for_project().ok();
 
         // TODO: Allow injecting this for Studio mode upload
         // let file = File::open(path).await.unwrap(); // TODO: Error handling
@@ -348,7 +356,7 @@ impl InstantMultipartUpload {
 
         // TODO: Reuse this + error handling
         let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-        project_meta.upload = Some(UploadState::Complete);
+        project_meta.upload = Some(UploadMeta::Complete);
         project_meta.save_for_project().unwrap();
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
@@ -725,4 +733,29 @@ fn progress<T: UploadedChunk, E>(
         None
     }))
     .filter_map(|item| async move { item })
+}
+
+/// Track the upload progress into a Tauri channel
+fn tauri_progress<T: UploadedChunk, E>(
+    channel: Channel<UploadProgress>,
+    stream: impl Stream<Item = Result<T, E>>,
+) -> impl Stream<Item = Result<T, E>> {
+    let mut uploaded = 0u64;
+
+    stream! {
+        let mut stream = pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            if let Ok(chunk) = &chunk {
+                uploaded += chunk.size();
+
+                channel.send(UploadProgress {
+                    progress: uploaded as f64 / chunk.total() as f64
+                })
+                .ok();
+            }
+
+            yield chunk;
+        }
+    }
 }

@@ -253,7 +253,7 @@ function RecordingItem(props: {
 						<Show when={props.recording.meta.status.status === "InProgress"}>
 							<div
 								class={cx(
-									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-blue-500",
+									"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-blue-500 leading-none text-center",
 								)}
 							>
 								<IconPhRecordFill class="invert size-2.5 dark:invert-0" />
@@ -273,7 +273,7 @@ function RecordingItem(props: {
 							>
 								<div
 									class={cx(
-										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-9",
+										"px-2 py-0.5 flex items-center gap-1.5 font-medium text-[11px] text-gray-12 rounded-full w-fit bg-red-9 leading-none text-center",
 									)}
 								>
 									<IconPhWarningBold class="invert size-2.5 dark:invert-0" />
@@ -290,11 +290,13 @@ function RecordingItem(props: {
 						{(sharing) => (
 							<>
 								<Show when={props.uploadProgress}>
-									<ProgressCircle
-										variant="primary"
-										progress={props.uploadProgress || 0}
-										size="sm"
-									/>
+									<CapTooltip content={`${props.uploadProgress || 0}%`}>
+										<ProgressCircle
+											variant="primary"
+											progress={props.uploadProgress || 0}
+											size="sm"
+										/>
+									</CapTooltip>
 								</Show>
 
 								<TooltipIconButton
@@ -309,6 +311,7 @@ function RecordingItem(props: {
 					<TooltipIconButton
 						tooltipText="Edit"
 						onClick={() => props.onOpenEditor()}
+						disabled={props.recording.meta.status.status !== "Complete"}
 					>
 						<IconLucideEdit class="size-4" />
 					</TooltipIconButton>
@@ -396,7 +399,7 @@ function TooltipIconButton(
 					props.onClick();
 				}}
 				disabled={props.disabled}
-				class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5"
+				class="p-2.5 opacity-70 will-change-transform hover:opacity-100 rounded-full transition-all duration-200 hover:bg-gray-3 dark:hover:bg-gray-5 disabled:pointer-events-none disabled:opacity-45 disabled:hover:opacity-45"
 			>
 				{props.children}
 			</Tooltip.Trigger>

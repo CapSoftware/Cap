@@ -70,16 +70,27 @@ pub struct RecordingMeta {
     #[serde(flatten)]
     pub inner: RecordingMetaInner,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub upload: Option<UploadState>,
+    pub upload: Option<UploadMeta>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "state")]
-pub enum UploadState {
-    // TODO: Do we care about what sort of upload it is???
-    MultipartUpload { cap_id: String },
-    SinglePartUpload { cap_id: String },
-    Failed { error: String },
+pub enum UploadMeta {
+    MultipartUpload {
+        // Cap web identifier
+        video_id: String,
+        // TODO
+    },
+    SinglePartUpload {
+        // Cap web identifier
+        video_id: String,
+        // Path to video and screenshot files for resuming
+        file_path: PathBuf,
+        screenshot_path: PathBuf,
+    },
+    Failed {
+        error: String,
+    },
     Complete,
 }
 

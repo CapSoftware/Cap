@@ -31,7 +31,7 @@ use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
     InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, XY, ZoomSegment,
+    StudioRecordingMeta, StudioRecordingStatus, UploadMeta, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -1072,13 +1072,13 @@ async fn upload_exported_video(
 
     let mut meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
-    let output_path = meta.output_path();
-    if !output_path.exists() {
+    let file_path = meta.output_path();
+    if !file_path.exists() {
         notifications::send_notification(&app, notifications::NotificationType::UploadFailed);
         return Err("Failed to upload video: Rendered video not found".to_string());
     }
 
-    let metadata = build_video_meta(&output_path)
+    let metadata = build_video_meta(&file_path)
         .map_err(|err| format!("Error getting output video meta: {err}"))?;
 
     if !auth.is_upgraded() && metadata.duration_in_secs > 300.0 {
@@ -1115,18 +1115,28 @@ async fn upload_exported_video(
     }
     .await?;
 
+    let screenshot_path = meta.project_path.join("screenshots/display.jpg");
+    meta.upload = Some(UploadMeta::SinglePartUpload {
+        video_id: s3_config.id.clone(),
+        file_path: file_path.clone(),
+        screenshot_path: screenshot_path.clone(),
+    });
+    meta.save_for_project().ok();
+
     match upload_video(
         &app,
         s3_config.id.clone(),
-        output_path,
-        meta.project_path.join("screenshots/display.jpg"),
+        file_path,
+        screenshot_path,
         metadata,
+        Some(channel.clone()),
     )
     .await
     {
         Ok(uploaded_video) => {
             channel.send(UploadProgress { progress: 1.0 }).ok();
 
+            meta.upload = Some(UploadMeta::Complete);
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
                 id: uploaded_video.id.clone(),

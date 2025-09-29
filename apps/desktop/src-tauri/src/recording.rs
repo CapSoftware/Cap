@@ -863,6 +863,7 @@ async fn handle_recording_finish(
                                 output_path,
                                 display_screenshot.clone(),
                                 meta,
+                                None,
                             )
                             .await
                             {
