@@ -21,6 +21,7 @@ interface SummaryProps {
 	};
 	aiGenerationEnabled?: boolean;
 	user: typeof userSelectProps | null;
+	isSummaryDisabled?: boolean;
 }
 
 const formatTime = (time: number) => {
@@ -34,24 +35,24 @@ const formatTime = (time: number) => {
 const SkeletonLoader = () => (
 	<div className="p-4 space-y-6 animate-pulse">
 		<div>
-			<div className="h-6 w-24 bg-gray-200 rounded mb-3"></div>
-			<div className="h-3 w-32 bg-gray-100 rounded mb-4"></div>
+			<div className="mb-3 w-24 h-6 bg-gray-200 rounded"></div>
+			<div className="mb-4 w-32 h-3 bg-gray-100 rounded"></div>
 			<div className="space-y-3">
-				<div className="h-4 bg-gray-200 rounded w-full"></div>
-				<div className="h-4 bg-gray-200 rounded w-5/6"></div>
-				<div className="h-4 bg-gray-200 rounded w-4/5"></div>
-				<div className="h-4 bg-gray-200 rounded w-full"></div>
-				<div className="h-4 bg-gray-200 rounded w-3/4"></div>
+				<div className="w-full h-4 bg-gray-200 rounded"></div>
+				<div className="w-5/6 h-4 bg-gray-200 rounded"></div>
+				<div className="w-4/5 h-4 bg-gray-200 rounded"></div>
+				<div className="w-full h-4 bg-gray-200 rounded"></div>
+				<div className="w-3/4 h-4 bg-gray-200 rounded"></div>
 			</div>
 		</div>
 
 		<div>
-			<div className="h-6 w-24 bg-gray-200 rounded mb-4"></div>
+			<div className="mb-4 w-24 h-6 bg-gray-200 rounded"></div>
 			<div className="space-y-2">
 				{[1, 2, 3, 4].map((i) => (
 					<div key={i} className="flex items-center p-2">
-						<div className="h-4 w-12 bg-gray-200 rounded mr-3"></div>
-						<div className="h-4 bg-gray-200 rounded flex-1"></div>
+						<div className="mr-3 w-12 h-4 bg-gray-200 rounded"></div>
+						<div className="flex-1 h-4 bg-gray-200 rounded"></div>
 					</div>
 				))}
 			</div>
@@ -62,6 +63,7 @@ const SkeletonLoader = () => (
 export const Summary: React.FC<SummaryProps> = ({
 	onSeek,
 	initialAiData,
+	isSummaryDisabled = false,
 	aiGenerationEnabled = false,
 	user,
 }) => {
@@ -100,8 +102,8 @@ export const Summary: React.FC<SummaryProps> = ({
 		return (
 			<div className="flex flex-col justify-center items-center p-8 h-full text-center">
 				<div className="space-y-4 max-w-sm">
-					<div className="bg-gradient-to-br from-blue-50 to-purple-50 p-6 rounded-lg border border-blue-100">
-						<div className="text-blue-600 mb-3">
+					<div className="p-6 bg-gradient-to-br from-blue-50 to-purple-50 rounded-lg border border-blue-100">
+						<div className="mb-3 text-blue-600">
 							<svg
 								xmlns="http://www.w3.org/2000/svg"
 								className="mx-auto w-12 h-12"
@@ -117,10 +119,10 @@ export const Summary: React.FC<SummaryProps> = ({
 								/>
 							</svg>
 						</div>
-						<h3 className="text-lg font-semibold text-gray-900 mb-2">
+						<h3 className="mb-2 text-lg font-semibold text-gray-900">
 							Unlock Cap AI
 						</h3>
-						<p className="text-sm text-gray-600 mb-4 leading-relaxed">
+						<p className="mb-4 text-sm leading-relaxed text-gray-600">
 							Upgrade to Cap Pro to access AI-powered features including
 							automatic titles, video summaries, and intelligent chapter
 							generation.
@@ -138,6 +140,8 @@ export const Summary: React.FC<SummaryProps> = ({
 			</div>
 		);
 	}
+
+	if (isSummaryDisabled) return null;
 
 	if (isLoading || aiData?.processing) {
 		return (
@@ -203,10 +207,10 @@ export const Summary: React.FC<SummaryProps> = ({
 								{aiData.chapters.map((chapter) => (
 									<div
 										key={chapter.start}
-										className="p-2 cursor-pointer hover:bg-gray-100 rounded transition-colors flex items-center"
+										className="flex items-center p-2 rounded transition-colors cursor-pointer hover:bg-gray-100"
 										onClick={() => handleSeek(chapter.start)}
 									>
-										<span className="text-xs text-gray-500 w-16">
+										<span className="w-16 text-xs text-gray-500">
 											{formatTime(chapter.start)}
 										</span>
 										<span className="ml-2 text-sm">{chapter.title}</span>
