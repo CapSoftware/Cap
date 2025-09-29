@@ -6,27 +6,19 @@ use crate::{
         camera::CameraFeedLock,
         microphone::{self, MicrophoneFeedLock},
     },
-    ffmepg::FFmpegMuxer,
-    output_pipeline::{AudioFrame, NewOutputPipeline, OutputPipeline},
+    ffmpeg::{Mp4Muxer, OggMuxer},
+    output_pipeline::{AudioFrame, OutputPipeline},
     sources::{self, ScreenCaptureFormat, ScreenCaptureTarget},
 };
-use anyhow::anyhow;
+use anyhow::{Context as _, anyhow};
 use cap_enc_ffmpeg::{OggFile, OpusEncoder};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::Timestamps;
-use cap_utils::spawn_actor;
-use flume::Receiver;
-use futures::{
-    FutureExt, SinkExt, StreamExt,
-    channel::{mpsc, oneshot},
-    future::OptionFuture,
-};
+use futures::{FutureExt, StreamExt, channel::mpsc, future::OptionFuture};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
-use replace_with::{replace_with, replace_with_and_return, replace_with_or_abort_and_return};
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -51,13 +43,13 @@ enum ActorState {
 
 #[derive(Clone)]
 pub struct ActorHandle {
-    actor_ref: kameo::actor::ActorRef<_Actor>,
+    actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: ScreenCaptureTarget,
     // pub bounds: Bounds,
 }
 
 #[derive(kameo::Actor)]
-pub struct _Actor {
+pub struct Actor {
     recording_dir: PathBuf,
     capture_target: ScreenCaptureTarget,
     video_info: VideoInfo,
@@ -67,7 +59,7 @@ pub struct _Actor {
     segments: Vec<RecordingSegment>,
 }
 
-impl _Actor {
+impl Actor {
     async fn stop_pipeline(
         &mut self,
         mut pipeline: Pipeline,
@@ -107,7 +99,7 @@ impl _Actor {
     }
 }
 
-impl Message<Stop> for _Actor {
+impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -143,7 +135,7 @@ impl Message<Stop> for _Actor {
 
 struct Pause;
 
-impl Message<Pause> for _Actor {
+impl Message<Pause> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Pause, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -172,7 +164,7 @@ impl Message<Pause> for _Actor {
 
 struct Resume;
 
-impl Message<Resume> for _Actor {
+impl Message<Resume> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Resume, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -204,7 +196,7 @@ impl Message<Resume> for _Actor {
 
 struct Cancel;
 
-impl Message<Cancel> for _Actor {
+impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
@@ -216,12 +208,6 @@ impl Message<Cancel> for _Actor {
     }
 }
 
-pub struct Actor {
-    recording_dir: PathBuf,
-    fps: u32,
-    segments: Vec<RecordingSegment>,
-}
-
 pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
@@ -229,7 +215,7 @@ pub struct RecordingSegment {
 }
 
 pub struct ScreenPipelineOutput {
-    pub inner: NewOutputPipeline,
+    pub inner: OutputPipeline,
     pub video_info: VideoInfo,
 }
 
@@ -248,7 +234,7 @@ impl Pipeline {
         self.screen.inner.stop().await;
 
         if let Some(mic) = self.microphone.as_mut() {
-            mic.stop();
+            mic.stop().await;
         }
 
         if let Some(camera) = self.camera.as_mut() {
@@ -256,7 +242,7 @@ impl Pipeline {
         }
 
         if let Some(system_audio) = self.system_audio.as_mut() {
-            system_audio.stop();
+            system_audio.stop().await;
         }
 
         if let Some(cursor) = self.cursor.as_mut() {
@@ -395,7 +381,7 @@ async fn spawn_studio_recording_actor(
     let base_inputs = base_inputs.clone();
     let fps = pipeline.screen.video_info.fps();
 
-    let actor_ref = _Actor::spawn(_Actor {
+    let actor_ref = Actor::spawn(Actor {
         recording_dir,
         fps,
         capture_target: base_inputs.capture_target.clone(),
@@ -417,28 +403,10 @@ async fn spawn_studio_recording_actor(
     })
 }
 
-#[derive(thiserror::Error, Debug)]
-enum StudioRecordingActorError {
-    #[error("Pipeline receiver dropped")]
-    PipelineReceiverDropped,
-    #[error("Control receiver dropped")]
-    ControlReceiverDropped,
-    #[error("{0}")]
-    Other(String),
-}
-
-// Helper macro for sending responses
-macro_rules! send_response {
-    ($tx:expr, $res:expr) => {
-        let _ = $tx.send($res);
-    };
-}
-
 pub struct CompletedRecording {
     pub project_path: PathBuf,
     pub meta: StudioRecordingMeta,
     pub cursor_data: cap_project::CursorImages,
-    // pub segments: Vec<RecordingSegment>,
 }
 
 async fn stop_recording(
@@ -455,20 +423,8 @@ async fn stop_recording(
     let meta = StudioRecordingMeta::MultipleSegments {
         inner: MultipleSegments {
             segments: futures::stream::iter(segments)
-                .then(async |mut s| {
+                .then(async |s| {
                     macro_rules! recv_timestamp {
-                        ($pipeline:expr) => {
-                            $pipeline
-                                .first_timestamp_rx
-                                .next()
-                                .map(|v| {
-                                    v.map(|v| v.duration_since(s.pipeline.start_time).as_secs_f64())
-                                })
-                                .await
-                        };
-                    }
-
-                    macro_rules! recv_timestamp2 {
                         ($pipeline:expr) => {
                             $pipeline
                                 .first_timestamp_rx
@@ -482,28 +438,26 @@ async fn stop_recording(
 
                     MultipleSegment {
                         display: VideoMeta {
-                            path: make_relative(&s.pipeline.screen.inner.path()),
+                            path: make_relative(s.pipeline.screen.inner.path()),
                             fps: s.pipeline.screen.video_info.fps(),
-                            start_time: recv_timestamp2!(s.pipeline.screen.inner),
+                            start_time: recv_timestamp!(s.pipeline.screen.inner),
                         },
                         camera: OptionFuture::from(s.pipeline.camera.map(async |camera| {
                             VideoMeta {
-                                path: make_relative(&camera.inner.path()),
+                                path: make_relative(camera.inner.path()),
                                 fps: camera.fps,
-                                start_time: recv_timestamp2!(camera.inner),
+                                start_time: recv_timestamp!(camera.inner),
                             }
                         }))
                         .await,
-                        mic: OptionFuture::from(s.pipeline.microphone.map(async |mut mic| {
-                            AudioMeta {
-                                path: make_relative(&mic.path),
-                                start_time: recv_timestamp!(mic),
-                            }
+                        mic: OptionFuture::from(s.pipeline.microphone.map(async |mic| AudioMeta {
+                            path: make_relative(mic.path()),
+                            start_time: recv_timestamp!(mic),
                         }))
                         .await,
                         system_audio: OptionFuture::from(s.pipeline.system_audio.map(
-                            async |mut audio| AudioMeta {
-                                path: make_relative(&audio.path),
+                            async |audio| AudioMeta {
+                                path: make_relative(audio.path()),
                                 start_time: recv_timestamp!(audio),
                             },
                         ))
@@ -654,7 +608,7 @@ async fn create_segment_pipeline(
     #[cfg(windows)]
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
-    let screen_source = create_screen_capture(
+    let screen_config = create_screen_capture(
         &capture_target,
         !custom_cursor_capture,
         120,
@@ -666,6 +620,8 @@ async fn create_segment_pipeline(
     .await
     .unwrap();
 
+    let (capture_source, system_audio) = screen_config.to_capturer_sources().await?;
+
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
     let screen_output_path = dir.join("display.mp4");
@@ -673,116 +629,32 @@ async fn create_segment_pipeline(
     trace!("preparing segment pipeline {index}");
 
     let screen = {
-        let video_info = screen_source.info();
-
         let output = ScreenCaptureMethod::make_studio_mode_pipeline(
-            screen_source,
+            capture_source,
             screen_output_path.clone(),
             start_time,
         )
         .await
         .unwrap();
 
-        info!(
-            r#"screen pipeline prepared, will output to "{}""#,
-            screen_output_path
-                .strip_prefix(segments_dir)
-                .unwrap()
-                .display()
-        );
-
         ScreenPipelineOutput {
             inner: output,
-            video_info,
+            video_info: screen_config.info(),
         }
-    };
-
-    let microphone = if let Some(mic_feed) = mic_feed {
-        let (tx, channel) = flume::bounded(8);
-        let _ = mic_feed.ask(microphone::AddSender(tx)).await;
-
-        let audio_info = *mic_feed.audio_info();
-        let output_path = dir.join("audio-input.ogg");
-
-        let mut encoder = OggFile::init(
-            output_path.clone(),
-            OpusEncoder::factory("microphone", audio_info),
-        )
-        .map_err(|e| MediaError::Any(e.to_string().into()))?;
-
-        let (output, output_internal) = OutputPipeline::new(output_path.clone());
-
-        tokio::spawn({
-            let mut output_stop_rx = output_internal.to_stop_rx();
-            let mut output_frame_handler = output_internal.to_frame_handler();
-
-            async move {
-                while let Some(Ok(samples)) = output_stop_rx.race(channel.recv_async()).await {
-                    output_frame_handler.handle_frame(samples.timestamp);
-
-                    encoder.queue_frame(
-                        audio_info.wrap_frame(&samples.data),
-                        samples.timestamp.duration_since(start_time),
-                    );
-                }
-
-                encoder.finish();
-            }
-        });
-
-        info!(
-            "mic pipeline prepared, will output to {}",
-            output_path.strip_prefix(segments_dir).unwrap().display()
-        );
-
-        Some(output)
-    } else {
-        None
-    };
-
-    let system_audio = if let Some((config, mut channel)) =
-        Some(ScreenCaptureMethod::audio_info()).zip(system_audio.1)
-    {
-        let output_path = dir.join("system_audio.ogg");
-
-        let mut output = OggFile::init(
-            output_path.clone(),
-            OpusEncoder::factory("system_audio", config),
-        )
-        .map_err(|e| MediaError::Any(e.to_string().into()))?;
-
-        let (pipeline_output, output_internal) = OutputPipeline::new(output_path);
-
-        tokio::spawn({
-            let mut output_stop_rx = output_internal.to_stop_rx();
-            let mut output_frame_handler = output_internal.to_frame_handler();
-
-            async move {
-                while let Some(Some(frame)) = output_stop_rx.race(channel.next()).await {
-                    let timestamp = frame.timestamp;
-                    output_frame_handler.handle_frame(timestamp);
-
-                    output.queue_frame(frame.inner, timestamp.duration_since(start_time));
-                }
-
-                output.finish();
-            }
-        });
-
-        Some(pipeline_output)
-    } else {
-        None
     };
 
     let camera = if let Some(camera_feed) = camera_feed {
         let output_path = dir.join("camera.mp4");
-        let mut output_builder =
-            OutputPipeline::builder::<sources::Camera>(output_path.clone(), camera_feed);
 
-        output_builder.set_timestamps(start_time);
+        let output = OutputPipeline::builder(output_path.clone())
+            .with_video::<sources::Camera>(camera_feed)
+            .with_timestamps(start_time)
+            .build::<Mp4Muxer>(())
+            .await?;
 
-        let output = output_builder.build::<FFmpegMuxer>(()).await?;
-        let video_info = output.video_info();
+        let video_info = output
+            .video_info()
+            .expect("Camera output has no video info!");
 
         info!(
             "camera pipeline prepared, will output to {}",
@@ -793,6 +665,32 @@ async fn create_segment_pipeline(
             inner: output,
             fps: (video_info.frame_rate.0 / video_info.frame_rate.1) as u32,
         })
+    } else {
+        None
+    };
+
+    let microphone = if let Some(mic_feed) = mic_feed {
+        Some(
+            OutputPipeline::builder(dir.join("audio-input.ogg"))
+                .with_audio_source(sources::Microphone(mic_feed))
+                .with_timestamps(start_time)
+                .build::<OggMuxer>(())
+                .await
+                .context("microphone")?,
+        )
+    } else {
+        None
+    };
+
+    let system_audio = if let Some(system_audio) = system_audio {
+        Some(
+            OutputPipeline::builder(dir.join("system_audio.ogg"))
+                .with_audio_source(system_audio)
+                .with_timestamps(start_time)
+                .build::<OggMuxer>(())
+                .await
+                .context("microphone")?,
+        )
     } else {
         None
     };
@@ -826,7 +724,7 @@ async fn create_segment_pipeline(
 }
 
 struct CameraPipelineInfo {
-    inner: NewOutputPipeline,
+    inner: OutputPipeline,
     fps: u32,
 }
 

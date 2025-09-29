@@ -1,5 +1,5 @@
 use crate::sources::audio_mixer::AudioMixer;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{
@@ -8,79 +8,10 @@ use futures::{
     future::BoxFuture,
     lock::Mutex,
 };
-use kameo::prelude::*;
-use std::{
-    future,
-    path::{Path, PathBuf},
-    pin::pin,
-    sync::Arc,
-    time::Duration,
-};
-use tokio::{sync::broadcast, task::JoinHandle};
+use std::{future, marker::PhantomData, path::PathBuf, sync::Arc, time::Duration};
+use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::*;
-
-pub struct OutputPipeline {
-    pub path: PathBuf,
-    pub first_timestamp_rx: mpsc::Receiver<Timestamp>,
-    pub stop_tx: broadcast::Sender<()>,
-    pub done_rx: oneshot::Receiver<anyhow::Result<()>>,
-}
-
-pub struct OutputPipelineInternal {
-    first_tx: mpsc::Sender<Timestamp>,
-    stop_rx: broadcast::Receiver<()>,
-    error_tx: mpsc::Sender<anyhow::Error>,
-}
-
-pub struct OutputPipelineStopRx(broadcast::Receiver<()>);
-
-pub struct OutputPipelineFrameHandler(mpsc::Sender<Timestamp>);
-
-impl OutputPipelineFrameHandler {
-    pub fn handle_frame(&mut self, timestamp: Timestamp) {
-        let _ = self.0.try_send(timestamp);
-    }
-}
-
-impl OutputPipelineStopRx {
-    pub async fn race<T>(&mut self, other: impl Future<Output = T>) -> Option<T> {
-        use futures::future::Either;
-        match futures::future::select(pin!(self.0.recv()), pin!(other)).await {
-            Either::Left(_) => None,
-            Either::Right((result, _)) => Some(result),
-        }
-    }
-
-    pub fn wait(self) -> impl Future<Output = Result<(), broadcast::error::RecvError>> {
-        let mut stop_rx = self.0.resubscribe();
-        async move { stop_rx.recv().await }
-    }
-}
-
-impl Clone for OutputPipelineInternal {
-    fn clone(&self) -> Self {
-        Self {
-            first_tx: self.first_tx.clone(),
-            stop_rx: self.stop_rx.resubscribe(),
-            error_tx: self.error_tx.clone(),
-        }
-    }
-}
-
-impl OutputPipelineInternal {
-    pub fn to_frame_handler(&self) -> OutputPipelineFrameHandler {
-        OutputPipelineFrameHandler(self.first_tx.clone())
-    }
-
-    pub fn to_error_tx(&self) -> mpsc::Sender<anyhow::Error> {
-        self.error_tx.clone()
-    }
-
-    pub fn to_stop_rx(&self) -> OutputPipelineStopRx {
-        OutputPipelineStopRx(self.stop_rx.resubscribe())
-    }
-}
 
 pub struct OnceSender<T>(Option<oneshot::Sender<T>>);
 
@@ -93,49 +24,20 @@ impl<T> OnceSender<T> {
 }
 
 impl OutputPipeline {
-    pub fn new(path: PathBuf) -> (Self, OutputPipelineInternal) {
-        let (first_tx, first_rx) = mpsc::channel(1);
-        let (error_tx, mut error_rx) = mpsc::channel(1);
-        let (stop_tx, stop_rx) = broadcast::channel(1);
-        let (done_tx, done_rx) = oneshot::channel();
-
-        tokio::spawn(async move {
-            let err = error_rx.next().await;
-
-            done_tx.send(err.map_or_else(|| Ok(()), |v| Err(v)))
-        });
-
-        (
-            Self {
-                path,
-                first_timestamp_rx: first_rx,
-                stop_tx,
-                done_rx,
-            },
-            OutputPipelineInternal {
-                first_tx,
-                stop_rx,
-                error_tx,
-            },
-        )
-    }
-
-    pub fn builder<TVideo: VideoSource>(
-        path: PathBuf,
-        video_config: TVideo::Config,
-    ) -> OutputPipelineBuilder<TVideo> {
-        OutputPipelineBuilder {
+    pub fn builder(path: PathBuf) -> OutputPipelineBuilder<NoVideo, NoAudio> {
+        OutputPipelineBuilder::<NoVideo, NoAudio> {
             path,
-            video_config,
+            video: NoVideo,
             audio_sources: vec![],
             error_sources: vec![],
             timestamps: Timestamps::now(),
+            phantom: PhantomData,
         }
     }
 
-    pub fn stop(&mut self) {
-        let _ = self.stop_tx.send(());
-    }
+    // pub fn stop(&mut self) {
+    //     let _ = self.stop_tx.send(());
+    // }
 }
 
 pub struct SetupCtx {
@@ -145,7 +47,8 @@ pub struct SetupCtx {
 
 impl SetupCtx {
     pub fn add_audio_source<TAudio: AudioSource + 'static>(&mut self, source: TAudio) {
-        self.audio_sources.push(Box::new(|tx| source.setup(tx)));
+        self.audio_sources
+            .push(Box::new(|tx| source.setup(tx).boxed()));
     }
 
     pub fn add_error_source(&mut self, name: &'static str) -> mpsc::Sender<anyhow::Error> {
@@ -155,8 +58,499 @@ impl SetupCtx {
     }
 }
 
-pub type AudioSourceSetupFn =
-    Box<dyn FnOnce(mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> + Send>;
+pub type AudioSourceSetupFn = Box<
+    dyn FnOnce(mpsc::Sender<AudioFrame>) -> BoxFuture<'static, anyhow::Result<AudioInfo>> + Send,
+>;
+
+pub struct OutputPipelineBuilder<TVideo, TAudio> {
+    path: PathBuf,
+    video: TVideo,
+    audio_sources: Vec<AudioSourceSetupFn>,
+    error_sources: Vec<(mpsc::Receiver<anyhow::Error>, &'static str)>,
+    timestamps: Timestamps,
+    phantom: PhantomData<TAudio>,
+}
+
+pub struct NoVideo;
+pub struct HasVideo<TVideo: VideoSource> {
+    config: TVideo::Config,
+}
+
+pub struct NoAudio;
+pub struct HasAudio;
+
+impl<THasVideo, THasAudio> OutputPipelineBuilder<THasVideo, THasAudio> {
+    pub fn with_audio_source<TAudio: AudioSource + 'static>(
+        mut self,
+        source: TAudio,
+    ) -> OutputPipelineBuilder<THasVideo, HasAudio> {
+        self.audio_sources
+            .push(Box::new(|tx| source.setup(tx).boxed()));
+
+        OutputPipelineBuilder {
+            path: self.path,
+            video: self.video,
+            audio_sources: self.audio_sources,
+            error_sources: self.error_sources,
+            timestamps: self.timestamps,
+            phantom: PhantomData,
+        }
+    }
+
+    pub fn add_error_source(&mut self, name: &'static str) -> mpsc::Sender<anyhow::Error> {
+        let (tx, rx) = mpsc::channel(1);
+        self.error_sources.push((rx, name));
+        tx
+    }
+
+    pub fn set_timestamps(&mut self, timestamps: Timestamps) {
+        self.timestamps = timestamps;
+    }
+
+    pub fn with_timestamps(mut self, timestamps: Timestamps) -> Self {
+        self.timestamps = timestamps;
+        self
+    }
+}
+
+async fn setup_video_source<TVideo: VideoSource>(
+    video_config: TVideo::Config,
+) -> anyhow::Result<(TVideo, mpsc::Receiver<TVideo::Frame>)> {
+    let (video_tx, video_rx) = mpsc::channel(4);
+    let video_source = TVideo::setup(
+        video_config,
+        video_tx,
+        &mut SetupCtx {
+            error_sources: vec![],
+            audio_sources: vec![],
+        },
+    )
+    .await?;
+
+    Ok((video_source, video_rx))
+}
+
+fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: VideoSource>(
+    tasks: &mut Vec<(JoinHandle<anyhow::Result<()>>, &'static str)>,
+    mut video_source: TVideo,
+    mut video_rx: mpsc::Receiver<TVideo::Frame>,
+    first_tx: oneshot::Sender<Timestamp>,
+    stop_token: CancellationToken,
+    muxer: Arc<Mutex<TMutex>>,
+    timestamps: Timestamps,
+) {
+    tasks.push((
+        tokio::spawn({
+            async move {
+                use futures::StreamExt;
+
+                let mut first_tx = Some(first_tx);
+
+                video_source.start().await?;
+
+                tracing::trace!("Encoder starting");
+
+                stop_token
+                    .run_until_cancelled(async {
+                        while let Some(frame) = video_rx.next().await {
+                            let timestamp = frame.timestamp();
+
+                            if let Some(first_tx) = first_tx.take() {
+                                let _ = first_tx.send(timestamp);
+                            }
+
+                            muxer
+                                .lock()
+                                .await
+                                .send_video_frame(frame, timestamp.duration_since(timestamps))
+                                .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
+                        }
+
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .await;
+
+                video_source.stop().await?;
+
+                tracing::info!("Encoder done receiving frames");
+
+                muxer.lock().await.finish()?;
+
+                tracing::info!("Encoder finished");
+
+                Ok(())
+            }
+            .in_current_span()
+        }),
+        "mux-video",
+    ));
+}
+
+async fn configure_audio<TMutex: AudioMuxer>(
+    tasks: &mut Vec<(JoinHandle<anyhow::Result<()>>, &'static str)>,
+    audio_sources: Vec<AudioSourceSetupFn>,
+    stop_token: CancellationToken,
+    muxer: Arc<Mutex<TMutex>>,
+    timestamps: Timestamps,
+) -> anyhow::Result<()> {
+    let mut audio_mixer = AudioMixer::builder();
+
+    for audio_source_setup in audio_sources {
+        let (tx, rx) = mpsc::channel(64);
+        let info = (audio_source_setup)(tx).await?;
+
+        audio_mixer.add_source(info, rx);
+    }
+
+    let (audio_tx, mut audio_rx) = mpsc::channel(64);
+    let audio_mixer_handle = audio_mixer.spawn(audio_tx).await?;
+
+    tasks.push((
+        tokio::spawn(stop_token.child_token().cancelled_owned().map(move |_| {
+            audio_mixer_handle.stop();
+            Ok(())
+        })),
+        "audio-mixer-stop",
+    ));
+
+    tasks.push((
+        tokio::spawn({
+            let stop_token = stop_token.child_token();
+            let muxer = muxer.clone();
+            async move {
+                stop_token
+                    .run_until_cancelled(async {
+                        while let Some(frame) = audio_rx.next().await {
+                            let timestamp = frame.timestamp.duration_since(timestamps);
+                            if let Err(e) = muxer.lock().await.send_audio_frame(frame, timestamp) {
+                                error!("Audio encoder: {e}");
+                            }
+                        }
+                    })
+                    .await;
+
+                info!("Audio encoder sender finished");
+
+                muxer.lock().await.finish()?;
+
+                Ok(())
+            }
+        }),
+        "mux-audio",
+    ));
+
+    Ok(())
+}
+
+impl<THasAudio> OutputPipelineBuilder<NoVideo, THasAudio> {
+    pub fn with_video<TVideo: VideoSource>(
+        self,
+        config: TVideo::Config,
+    ) -> OutputPipelineBuilder<HasVideo<TVideo>, THasAudio> {
+        OutputPipelineBuilder::<HasVideo<TVideo>, THasAudio> {
+            video: HasVideo { config },
+            path: self.path,
+            audio_sources: self.audio_sources,
+            error_sources: self.error_sources,
+            timestamps: self.timestamps,
+            phantom: PhantomData,
+        }
+    }
+}
+
+impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>, HasAudio> {
+    pub async fn build<TMuxer: VideoMuxer<VideoFrame = TVideo::Frame> + AudioMuxer>(
+        self,
+        muxer_config: TMuxer::Config,
+    ) -> anyhow::Result<OutputPipeline> {
+        let Self {
+            video,
+            error_sources,
+            audio_sources,
+            timestamps,
+            path,
+            ..
+        } = self;
+
+        let setup_ctx = SetupCtx {
+            error_sources,
+            audio_sources,
+        };
+
+        let stop_token = CancellationToken::new();
+
+        let mut tasks = vec![];
+
+        let (video_source, video_rx) = setup_video_source::<TVideo>(video.config).await?;
+        let video_info = video_source.video_info();
+        let (first_tx, first_rx) = oneshot::channel();
+
+        if setup_ctx.audio_sources.is_empty() {
+            return Err(anyhow!("Invariant: No audio sources"));
+        }
+
+        let muxer = Arc::new(Mutex::new(
+            TMuxer::setup(
+                muxer_config,
+                path.clone(),
+                Some(video_source.video_info()),
+                Some(AudioMixer::INFO),
+            )
+            .await?,
+        ));
+
+        spawn_video_encoder(
+            &mut tasks,
+            video_source,
+            video_rx,
+            first_tx,
+            stop_token.clone(),
+            muxer.clone(),
+            timestamps,
+        );
+
+        configure_audio(
+            &mut tasks,
+            setup_ctx.audio_sources,
+            stop_token.clone(),
+            muxer.clone(),
+            timestamps,
+        )
+        .await
+        .context("audio mixer setup")?;
+
+        let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
+
+        Ok(OutputPipeline {
+            path,
+            first_timestamp_rx: first_rx,
+            stop_token: Some(stop_token.drop_guard()),
+            task_names,
+            tasks: task_futures,
+            video_info: Some(video_info),
+        })
+    }
+}
+
+impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>, NoAudio> {
+    pub async fn build<TMuxer: VideoMuxer<VideoFrame = TVideo::Frame> + AudioMuxer>(
+        self,
+        muxer_config: TMuxer::Config,
+    ) -> anyhow::Result<OutputPipeline> {
+        let Self {
+            video,
+            error_sources,
+            audio_sources,
+            timestamps,
+            path,
+            ..
+        } = self;
+
+        let setup_ctx = SetupCtx {
+            error_sources,
+            audio_sources,
+        };
+
+        let stop_token = CancellationToken::new();
+
+        let mut tasks = vec![];
+
+        let (video_source, video_rx) = setup_video_source::<TVideo>(video.config).await?;
+        let video_info = video_source.video_info();
+        let (first_tx, first_rx) = oneshot::channel();
+
+        let muxer = Arc::new(Mutex::new(
+            TMuxer::setup(
+                muxer_config,
+                path.clone(),
+                Some(video_source.video_info()),
+                None,
+            )
+            .await?,
+        ));
+
+        spawn_video_encoder(
+            &mut tasks,
+            video_source,
+            video_rx,
+            first_tx,
+            stop_token.clone(),
+            muxer.clone(),
+            timestamps,
+        );
+
+        let SetupCtx { error_sources, .. } = setup_ctx;
+
+        let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
+
+        Ok(OutputPipeline {
+            path,
+            first_timestamp_rx: first_rx,
+            stop_token: Some(stop_token.drop_guard()),
+            task_names,
+            tasks: task_futures,
+            video_info: Some(video_info),
+        })
+    }
+}
+
+impl OutputPipelineBuilder<NoVideo, HasAudio> {
+    pub async fn build<TMuxer: AudioMuxer>(
+        self,
+        muxer_config: TMuxer::Config,
+    ) -> anyhow::Result<OutputPipeline> {
+        let Self {
+            error_sources,
+            audio_sources,
+            timestamps,
+            path,
+            ..
+        } = self;
+
+        let mut setup_ctx = SetupCtx {
+            error_sources,
+            audio_sources,
+        };
+
+        let stop_token = CancellationToken::new();
+
+        let mut tasks = vec![];
+
+        if setup_ctx.audio_sources.is_empty() {
+            return Err(anyhow!("Invariant: No audio sources"));
+        }
+
+        let (first_tx, first_rx) = oneshot::channel();
+
+        let muxer = Arc::new(Mutex::new(
+            TMuxer::setup(muxer_config, path.clone(), None, Some(AudioMixer::INFO)).await?,
+        ));
+
+        let SetupCtx {
+            error_sources,
+            audio_sources,
+        } = setup_ctx;
+
+        configure_audio(
+            &mut tasks,
+            audio_sources,
+            stop_token.clone(),
+            muxer.clone(),
+            timestamps,
+        )
+        .await
+        .context("audio mixer setup")?;
+
+        let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
+
+        Ok(OutputPipeline {
+            path,
+            first_timestamp_rx: first_rx,
+            stop_token: Some(stop_token.drop_guard()),
+            task_names,
+            tasks: task_futures,
+            video_info: None,
+        })
+    }
+}
+
+pub struct OutputPipeline {
+    path: PathBuf,
+    pub first_timestamp_rx: oneshot::Receiver<Timestamp>,
+    stop_token: Option<DropGuard>,
+    task_names: Vec<&'static str>,
+    tasks: Vec<JoinHandle<anyhow::Result<()>>>,
+    video_info: Option<VideoInfo>,
+}
+
+impl OutputPipeline {
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
+    pub async fn stop(&mut self) {
+        drop(self.stop_token.take());
+
+        futures::future::join_all(&mut self.tasks).await;
+    }
+
+    pub fn video_info(&self) -> Option<VideoInfo> {
+        self.video_info
+    }
+}
+
+pub struct ChannelVideoSourceConfig<TVideoFrame> {
+    info: VideoInfo,
+    rx: mpsc::Receiver<TVideoFrame>,
+}
+
+impl<TVideoFrame> ChannelVideoSourceConfig<TVideoFrame> {
+    pub fn new(info: VideoInfo, rx: mpsc::Receiver<TVideoFrame>) -> Self {
+        Self { info, rx }
+    }
+}
+
+pub struct ChannelVideoSource<TVideoFrame>(VideoInfo, PhantomData<TVideoFrame>);
+
+impl<TVideoFrame: VideoFrame> VideoSource for ChannelVideoSource<TVideoFrame> {
+    type Config = ChannelVideoSourceConfig<TVideoFrame>;
+    type Frame = TVideoFrame;
+
+    async fn setup(
+        mut config: Self::Config,
+        mut video_tx: mpsc::Sender<Self::Frame>,
+        _: &mut SetupCtx,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        tokio::spawn(async move {
+            while let Some(frame) = config.rx.next().await {
+                let _ = video_tx.send(frame).await;
+            }
+        });
+
+        Ok(Self(config.info, PhantomData))
+    }
+
+    fn video_info(&self) -> VideoInfo {
+        self.0
+    }
+}
+
+pub struct ChannelAudioSource {
+    info: AudioInfo,
+    rx: mpsc::Receiver<AudioFrame>,
+}
+
+impl ChannelAudioSource {
+    pub fn new(info: AudioInfo, rx: mpsc::Receiver<AudioFrame>) -> Self {
+        Self { info, rx }
+    }
+}
+
+impl AudioSource for ChannelAudioSource {
+    async fn setup(mut self, mut tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> {
+        tokio::spawn(async move {
+            while let Some(frame) = self.rx.next().await {
+                let _ = tx.send(frame).await;
+            }
+        });
+
+        Ok(self.info)
+    }
+}
+
+pub struct AudioFrame {
+    pub inner: ffmpeg::frame::Audio,
+    pub timestamp: Timestamp,
+}
+
+impl AudioFrame {
+    pub fn new(inner: ffmpeg::frame::Audio, timestamp: Timestamp) -> Self {
+        Self { inner, timestamp }
+    }
+}
 
 pub trait VideoSource: Send + 'static {
     type Config;
@@ -181,205 +575,11 @@ pub trait VideoSource: Send + 'static {
     }
 }
 
-pub struct OutputPipelineBuilder<TVideo: VideoSource> {
-    path: PathBuf,
-    video_config: TVideo::Config,
-    audio_sources: Vec<AudioSourceSetupFn>,
-    error_sources: Vec<(mpsc::Receiver<anyhow::Error>, &'static str)>,
-    timestamps: Timestamps,
-}
-
-impl<TVideo: VideoSource> OutputPipelineBuilder<TVideo> {
-    pub fn add_audio_source<TAudio: AudioSource + 'static>(&mut self, source: TAudio) {
-        self.audio_sources.push(Box::new(|tx| source.setup(tx)));
-    }
-
-    pub fn add_error_source(&mut self, name: &'static str) -> mpsc::Sender<anyhow::Error> {
-        let (tx, rx) = mpsc::channel(1);
-        self.error_sources.push((rx, name));
-        tx
-    }
-
-    pub fn set_timestamps(&mut self, timestamps: Timestamps) {
-        self.timestamps = timestamps;
-    }
-
-    pub async fn build<TMuxer: Muxer<VideoFrame = TVideo::Frame>>(
-        self,
-        muxer_config: TMuxer::Config,
-    ) -> anyhow::Result<NewOutputPipeline> {
-        let Self {
-            video_config,
-            error_sources,
-            audio_sources,
-            timestamps,
-            path,
-        } = self;
-
-        let mut setup_ctx = SetupCtx {
-            error_sources,
-            audio_sources,
-        };
-
-        let stop_token = CancellationToken::new();
-
-        let mut tasks = vec![];
-
-        let (video_tx, mut video_rx) = mpsc::channel(4);
-        let mut video_source = TVideo::setup(video_config, video_tx, &mut setup_ctx).await?;
-        let video_info = video_source.video_info();
-
-        let has_audio_sources = !setup_ctx.audio_sources.is_empty();
-        let (first_tx, first_rx) = oneshot::channel();
-
-        let muxer = Arc::new(Mutex::new(
-            TMuxer::setup(
-                muxer_config,
-                path.clone(),
-                video_info,
-                has_audio_sources.then_some(AudioMixer::INFO),
-            )
-            .await?,
-        ));
-
-        tasks.push((
-            tokio::spawn({
-                let mut muxer = muxer.clone();
-                let mut error_tx = setup_ctx.add_error_source("encoder");
-                let stop_token = stop_token.child_token();
-
-                async move {
-                    use futures::StreamExt;
-
-                    let mut first_tx = Some(first_tx);
-
-                    video_source.start().await?;
-
-                    tracing::trace!("Encoder starting");
-
-                    stop_token
-                        .run_until_cancelled(async {
-                            while let Some(frame) = video_rx.next().await {
-                                let timestamp = frame.timestamp();
-
-                                if let Some(first_tx) = first_tx.take() {
-                                    let _ = first_tx.send(timestamp);
-                                }
-
-                                muxer
-                                    .lock()
-                                    .await
-                                    .send_video_frame(frame, timestamp.duration_since(timestamps))
-                                    .map_err(|e| anyhow!("Error queueing video frame: {e}"))?;
-                            }
-
-                            Ok::<(), anyhow::Error>(())
-                        })
-                        .await;
-
-                    video_source.stop().await?;
-
-                    tracing::info!("Encoder done receiving frames");
-
-                    muxer.lock().await.finish()?;
-
-                    tracing::info!("Encoder finished");
-
-                    Ok(())
-                }
-                .then(async move |ret| {
-                    if let Err(e) = ret {
-                        let _ = error_tx.send(e).await;
-                    }
-                })
-                .in_current_span()
-            }),
-            "mux-video",
-        ));
-
-        let SetupCtx {
-            error_sources,
-            audio_sources,
-        } = setup_ctx;
-
-        if has_audio_sources {
-            let mut audio_mixer = AudioMixer::builder();
-
-            for audio_source_setup in audio_sources {
-                let (tx, rx) = mpsc::channel(64);
-                let info = (audio_source_setup)(tx)?;
-
-                audio_mixer.add_source(info, rx);
-            }
-
-            let (audio_tx, mut audio_rx) = mpsc::channel(64);
-            let audio_mixer_handle = audio_mixer.spawn(audio_tx).await?;
-
-            tasks.push((
-                tokio::spawn(stop_token.child_token().cancelled_owned().map(move |_| {
-                    audio_mixer_handle.stop();
-                })),
-                "audio-mixer-stop",
-            ));
-
-            let muxer = muxer.clone();
-            tasks.push((
-                tokio::spawn(async move {
-                    while let Some(frame) = audio_rx.next().await {
-                        if let Err(e) = muxer.lock().await.send_audio_frame(
-                            frame.inner,
-                            frame.timestamp.duration_since(timestamps),
-                        ) {
-                            error!("Audio encoder: {e}");
-                        }
-                    }
-
-                    info!("Audio encoder sender finished");
-                }),
-                "mux-audio",
-            ));
-        }
-
-        let (task_futures, task_names): (Vec<_>, Vec<_>) = tasks.into_iter().unzip();
-
-        Ok(NewOutputPipeline {
-            path,
-            first_timestamp_rx: first_rx,
-            stop_token: Some(stop_token.drop_guard()),
-            task_names,
-            tasks: task_futures,
-            video_info,
-        })
-    }
-}
-
-pub struct NewOutputPipeline {
-    path: PathBuf,
-    pub first_timestamp_rx: oneshot::Receiver<Timestamp>,
-    stop_token: Option<DropGuard>,
-    task_names: Vec<&'static str>,
-    tasks: Vec<JoinHandle<()>>,
-    video_info: VideoInfo,
-}
-
-impl NewOutputPipeline {
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
-
-    pub async fn stop(&mut self) {
-        drop(self.stop_token.take());
-
-        futures::future::join_all(&mut self.tasks).await;
-    }
-
-    pub fn video_info(&self) -> VideoInfo {
-        self.video_info
-    }
-}
-
 pub trait AudioSource: Send {
-    fn setup(self, tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo>;
+    fn setup(
+        self,
+        tx: mpsc::Sender<AudioFrame>,
+    ) -> impl Future<Output = anyhow::Result<AudioInfo>> + Send;
 
     fn start(&mut self) -> anyhow::Result<()> {
         Ok(())
@@ -390,68 +590,35 @@ pub trait AudioSource: Send {
     }
 }
 
-pub struct ChannelAudioSource {
-    info: AudioInfo,
-    rx: mpsc::Receiver<AudioFrame>,
-}
-
-impl ChannelAudioSource {
-    pub fn new(info: AudioInfo, rx: mpsc::Receiver<AudioFrame>) -> Self {
-        Self { info, rx }
-    }
-}
-
-impl AudioSource for ChannelAudioSource {
-    fn setup(mut self, mut tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> {
-        tokio::spawn(async move {
-            while let Some(frame) = self.rx.next().await {
-                let _ = tx.send(frame).await;
-            }
-        });
-
-        Ok(self.info)
-    }
-}
-
-pub struct AudioFrame {
-    pub inner: ffmpeg::frame::Audio,
-    pub timestamp: Timestamp,
-}
-
-impl AudioFrame {
-    pub fn new(inner: ffmpeg::frame::Audio, timestamp: Timestamp) -> Self {
-        Self { inner, timestamp }
-    }
-}
-
 pub trait VideoFrame: Send + 'static {
     fn timestamp(&self) -> Timestamp;
 }
 
 pub trait Muxer: Send + 'static {
-    type VideoFrame;
     type Config;
 
     async fn setup(
         config: Self::Config,
         output_path: PathBuf,
-        video_config: VideoInfo,
+        video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
     ) -> anyhow::Result<Self>
     where
         Self: Sized;
 
-    fn send_audio_frame(
-        &mut self,
-        frame: ffmpeg::frame::Audio,
-        timestamp: Duration,
-    ) -> anyhow::Result<()>;
+    fn finish(&mut self) -> anyhow::Result<()>;
+}
+
+pub trait AudioMuxer: Muxer {
+    fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()>;
+}
+
+pub trait VideoMuxer: Muxer {
+    type VideoFrame;
 
     fn send_video_frame(
         &mut self,
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()>;
-
-    fn finish(&mut self) -> anyhow::Result<()>;
 }

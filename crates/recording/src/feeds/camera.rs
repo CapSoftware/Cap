@@ -16,7 +16,7 @@ use std::{
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{ffmepg::FFmpegVideoFrame, output_pipeline::VideoSource};
+use crate::{ffmpeg::FFmpegVideoFrame, output_pipeline::VideoSource};
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
 

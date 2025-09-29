@@ -33,6 +33,12 @@ pub struct AudioMixerBuilder {
     sources: Vec<MixerSource>,
 }
 
+impl Default for AudioMixerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AudioMixerBuilder {
     pub fn new() -> Self {
         Self {
@@ -163,11 +169,8 @@ impl AudioMixerBuilder {
                     Ok::<(), anyhow::Error>(())
                 };
 
-                match run() {
-                    Err(e) => {
-                        tracing::error!("Audio mixer failed: {}", e);
-                    }
-                    Ok(_) => {}
+                if let Err(e) = run() {
+                    tracing::error!("Audio mixer failed: {}", e);
                 }
 
                 info!("Audio mixer processing thread complete");
@@ -304,7 +307,7 @@ impl AudioMixer {
             self.start_timestamp = self
                 .sources
                 .iter()
-                .filter_map(|s| s.buffer.get(0))
+                .filter_map(|s| s.buffer.front())
                 .min_by(|a, b| {
                     a.timestamp
                         .duration_since(self.timestamps)

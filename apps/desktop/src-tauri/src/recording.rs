@@ -381,7 +381,7 @@ pub async fn start_recording(
 
                 let (actor, actor_done_rx) = match inputs.mode {
                     RecordingMode::Studio => {
-                        let mut builder = studio_recording::_Actor::builder(
+                        let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
                             inputs.capture_target.clone(),
                         )

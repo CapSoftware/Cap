@@ -2,16 +2,15 @@ use std::time::Duration;
 
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
-    Dictionary,
     codec::{codec::Codec, context, encoder},
     format::{self},
     frame,
     threading::Config,
+    Dictionary,
 };
 use tracing::{debug, error};
 
 pub struct H264EncoderBuilder {
-    name: &'static str,
     bpp: f32,
     input_config: VideoInfo,
     preset: H264Preset,
@@ -37,9 +36,8 @@ pub enum H264EncoderError {
 impl H264EncoderBuilder {
     pub const QUALITY_BPP: f32 = 0.3;
 
-    pub fn new(name: &'static str, input_config: VideoInfo) -> Self {
+    pub fn new(input_config: VideoInfo) -> Self {
         Self {
-            name,
             input_config,
             bpp: Self::QUALITY_BPP,
             preset: H264Preset::Ultrafast,
@@ -128,7 +126,6 @@ impl H264EncoderBuilder {
         output_stream.set_parameters(&video_encoder);
 
         Ok(H264Encoder {
-            tag: self.name,
             encoder: video_encoder,
             stream_index,
             config: self.input_config,
@@ -139,8 +136,6 @@ impl H264EncoderBuilder {
 }
 
 pub struct H264Encoder {
-    #[allow(unused)]
-    tag: &'static str,
     encoder: encoder::Video,
     config: VideoInfo,
     converter: Option<ffmpeg::software::scaling::Context>,
@@ -151,8 +146,8 @@ pub struct H264Encoder {
 impl H264Encoder {
     const TIME_BASE: i32 = 90000;
 
-    pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
-        H264EncoderBuilder::new(name, input_config)
+    pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
+        H264EncoderBuilder::new(input_config)
     }
 
     pub fn queue_frame(

@@ -21,12 +21,11 @@ pub enum AACEncoderError {
 }
 
 pub struct AACEncoder {
-    #[allow(unused)]
-    tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
     resampler: BufferedResampler,
     stream_index: usize,
+    first_pts: Option<i64>,
 }
 
 impl AACEncoder {
@@ -34,14 +33,12 @@ impl AACEncoder {
     const SAMPLE_FORMAT: Sample = Sample::F32(Type::Planar);
 
     pub fn factory(
-        tag: &'static str,
         input_config: AudioInfo,
     ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, AACEncoderError> {
-        move |o| Self::init(tag, input_config, o)
+        move |o| Self::init(input_config, o)
     }
 
     pub fn init(
-        tag: &'static str,
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, AACEncoderError> {
@@ -103,15 +100,35 @@ impl AACEncoder {
         output_stream.set_parameters(&encoder);
 
         Ok(Self {
-            tag,
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
             resampler,
+            first_pts: None,
         })
     }
 
-    pub fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
+    pub fn queue_frame(
+        &mut self,
+        mut frame: frame::Audio,
+        timestamp: Duration,
+        output: &mut format::context::Output,
+    ) {
+        if timestamp != Duration::MAX {
+            let Some(pts) = frame.pts() else {
+                tracing::error!("Frame has no pts");
+                return;
+            };
+
+            let time_base = self.encoder.time_base();
+            let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
+            frame.set_pts(Some((timestamp.as_secs_f64() * rate).round() as i64));
+
+            let first_pts = self.first_pts.get_or_insert(pts);
+
+            frame.set_pts(Some(pts - *first_pts));
+        }
+
         self.resampler.add_frame(frame);
 
         let frame_size = self.encoder.frame_size() as usize;
@@ -149,7 +166,7 @@ impl AACEncoder {
 
 impl AudioEncoder for AACEncoder {
     fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        self.queue_frame(frame, output);
+        self.queue_frame(frame, Duration::MAX, output);
     }
 
     fn finish(&mut self, output: &mut format::context::Output) {

@@ -58,7 +58,7 @@ impl RecordStart {
             .path
             .unwrap_or_else(|| current_dir().unwrap().join(format!("{id}.cap")));
 
-        let actor = studio_recording::_Actor::builder(path, target_info)
+        let actor = studio_recording::Actor::builder(path, target_info)
             .with_system_audio(self.system_audio)
             .with_custom_cursor(false)
             .build()

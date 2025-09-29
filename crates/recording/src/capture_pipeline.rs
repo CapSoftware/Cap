@@ -1,102 +1,101 @@
-use crate::output_pipeline::{AudioFrame, NewOutputPipeline};
+#[cfg(target_os = "macos")]
+use crate::output_pipeline::ChannelAudioSource;
+use crate::sources;
 use crate::{
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{Muxer, OutputPipeline},
-    sources::{ScreenCaptureFormat, ScreenCaptureSource, ScreenCaptureTarget, screen_capture},
+    sources::{ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget, screen_capture},
 };
 use anyhow::anyhow;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamps;
-use futures::{SinkExt, StreamExt, channel::mpsc};
-use kameo::{
-    actor::{ActorID, ActorRef, Recipient},
-    prelude::*,
-};
+use kameo::actor::{ActorID, Recipient};
 use std::{
-    ops::ControlFlow,
     path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
     time::{Duration, SystemTime},
 };
-use tracing::*;
 
 pub trait MakeCapturePipeline: ScreenCaptureFormat + std::fmt::Debug + 'static {
     async fn make_studio_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
-    ) -> anyhow::Result<NewOutputPipeline>
+    ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
 
     async fn make_instant_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSource>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> anyhow::Result<NewOutputPipeline>
+    ) -> anyhow::Result<OutputPipeline>
     where
         Self: Sized;
 }
 
-struct RecordingSource {
-    name: String,
-    id: ActorID,
-    stop: Recipient<Stop>,
-}
-
-pub struct Start;
 pub struct Stop;
 
 #[cfg(target_os = "macos")]
 impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
     async fn make_studio_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        screen_capture: screen_capture::VideoSourceConfig,
         output_path: PathBuf,
         start_time: Timestamps,
-    ) -> anyhow::Result<NewOutputPipeline> {
-        let mut output_builder =
-            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
-
-        output_builder.set_timestamps(start_time);
-
-        output_builder
-            .build::<AVFoundationMuxer>(AVFoundationMuxerConfig {
-                output_height: None,
-            })
+    ) -> anyhow::Result<OutputPipeline> {
+        OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture)
+            .with_timestamps(start_time)
+            .build::<AVFoundationMp4Muxer>(Default::default())
             .await
     }
 
     async fn make_instant_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        screen_capture: screen_capture::VideoSourceConfig,
+        system_audio: Option<screen_capture::SystemAudioSource>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> anyhow::Result<NewOutputPipeline> {
-        let mut output_builder =
-            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
+    ) -> anyhow::Result<OutputPipeline> {
+        let output_builder = OutputPipeline::builder(output_path.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture);
 
-        if let Some(mic_feed) = mic_feed {
-            output_builder.add_audio_source(mic_feed);
-        }
+        let muxer_config = AVFoundationMp4MuxerConfig {
+            output_height: Some(1080),
+        };
 
-        output_builder
-            .build::<AVFoundationMuxer>(AVFoundationMuxerConfig {
-                output_height: Some(1080),
-            })
-            .await
+        let builder = match (system_audio, mic_feed) {
+            (None, None) => {
+                return output_builder
+                    .build::<AVFoundationMp4Muxer>(muxer_config)
+                    .await;
+            }
+            (Some(system_audio), Some(mic_feed)) => output_builder
+                .with_audio_source(sources::Microphone(mic_feed))
+                .with_audio_source(system_audio),
+            (Some(system_audio), None) => output_builder.with_audio_source(system_audio),
+            (None, Some(mic_feed)) => {
+                output_builder.with_audio_source(sources::Microphone(mic_feed))
+            }
+        };
+
+        builder.build::<AVFoundationMp4Muxer>(muxer_config).await
     }
 }
 
 #[cfg(windows)]
 impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     async fn make_studio_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        source: ScreenCaptureConfig<Self>,
         output_path: PathBuf,
         start_time: Timestamps,
-    ) -> anyhow::Result<NewOutputPipeline> {
-        let mut output_builder =
-            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
+    ) -> anyhow::Result<OutputPipeline> {
+        let mut output_builder = OutputPipeline::builder::<screen_capture::VideoSource>(
+            output_path.clone(),
+            source.clone(),
+        );
 
         output_builder.set_timestamps(start_time);
 
@@ -111,13 +110,15 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
     }
 
     async fn make_instant_mode_pipeline(
-        source: ScreenCaptureSource<Self>,
+        source: ScreenCaptureConfig<Self>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
-    ) -> anyhow::Result<NewOutputPipeline> {
-        let mut output_builder =
-            OutputPipeline::builder::<screen_capture::Source>(output_path.clone(), source.clone());
+    ) -> anyhow::Result<OutputPipeline> {
+        let mut output_builder = OutputPipeline::builder::<screen_capture::VideoSource>(
+            output_path.clone(),
+            source.clone(),
+        );
 
         if let Some(mic_feed) = mic_feed {
             output_builder.add_audio_source(mic_feed);
@@ -147,8 +148,8 @@ pub async fn create_screen_capture(
     start_time: SystemTime,
     system_audio: bool,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-) -> anyhow::Result<ScreenCaptureSource<ScreenCaptureMethod>> {
-    Ok(ScreenCaptureSource::<ScreenCaptureMethod>::init(
+) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
+    Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         capture_target,
         force_show_cursor,
         max_fps,
@@ -225,25 +226,30 @@ use macos::*;
 
 #[cfg(target_os = "macos")]
 mod macos {
+    use crate::output_pipeline::{AudioFrame, AudioMuxer, VideoMuxer};
+
     use super::*;
 
     #[derive(Clone)]
-    pub struct AVFoundationMuxer(Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>);
+    pub struct AVFoundationMp4Muxer(Arc<Mutex<cap_enc_avfoundation::MP4Encoder>>);
 
-    pub struct AVFoundationMuxerConfig {
+    #[derive(Default)]
+    pub struct AVFoundationMp4MuxerConfig {
         pub output_height: Option<u32>,
     }
 
-    impl Muxer for AVFoundationMuxer {
-        type VideoFrame = screen_capture::VideoFrame;
-        type Config = AVFoundationMuxerConfig;
+    impl Muxer for AVFoundationMp4Muxer {
+        type Config = AVFoundationMp4MuxerConfig;
 
         async fn setup(
             config: Self::Config,
             output_path: PathBuf,
-            video_config: VideoInfo,
+            video_config: Option<VideoInfo>,
             audio_config: Option<AudioInfo>,
         ) -> anyhow::Result<Self> {
+            let video_config =
+                video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;
+
             Ok(Self(Arc::new(Mutex::new(
                 cap_enc_avfoundation::MP4Encoder::init(
                     output_path,
@@ -255,17 +261,14 @@ mod macos {
             ))))
         }
 
-        fn send_audio_frame(
-            &mut self,
-            frame: ffmpeg::frame::Audio,
-            timestamp: Duration,
-        ) -> anyhow::Result<()> {
-            self.0
-                .lock()
-                .map_err(|e| anyhow!("{e}"))?
-                .queue_audio_frame(frame, timestamp)
-                .map_err(|e| anyhow!("{e}"))
+        fn finish(&mut self) -> anyhow::Result<()> {
+            self.0.lock().map_err(|e| anyhow!("{e}"))?.finish();
+            Ok(())
         }
+    }
+
+    impl VideoMuxer for AVFoundationMp4Muxer {
+        type VideoFrame = screen_capture::VideoFrame;
 
         fn send_video_frame(
             &mut self,
@@ -278,10 +281,19 @@ mod macos {
                 .queue_video_frame(&frame.sample_buf, timestamp)
                 .map_err(|e| anyhow!("{e}"))
         }
+    }
 
-        fn finish(&mut self) -> anyhow::Result<()> {
-            self.0.lock().map_err(|e| anyhow!("{e}"))?.finish();
-            Ok(())
+    impl AudioMuxer for AVFoundationMp4Muxer {
+        fn send_audio_frame(
+            &mut self,
+            frame: AudioFrame,
+            timestamp: Duration,
+        ) -> anyhow::Result<()> {
+            self.0
+                .lock()
+                .map_err(|e| anyhow!("{e}"))?
+                .queue_audio_frame(frame.inner, timestamp)
+                .map_err(|e| anyhow!("{e}"))
         }
     }
 }

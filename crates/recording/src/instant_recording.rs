@@ -1,9 +1,10 @@
 use crate::{
     RecordingBaseInputs,
-    capture_pipeline::{MakeCapturePipeline, Stop, create_screen_capture},
+    capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
-    output_pipeline::NewOutputPipeline,
-    sources::{ScreenCaptureSource, ScreenCaptureTarget},
+    output_pipeline::{ChannelAudioSource, OutputPipeline},
+    screen_capture,
+    sources::{ScreenCaptureConfig, ScreenCaptureFormat, ScreenCaptureTarget},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
@@ -20,7 +21,7 @@ use std::{
 use tracing::*;
 
 struct Pipeline {
-    output: NewOutputPipeline,
+    output: OutputPipeline,
     pub pause_flag: Arc<AtomicBool>,
 }
 
@@ -163,9 +164,9 @@ pub struct CompletedRecording {
 }
 
 #[tracing::instrument(skip_all, name = "instant")]
-async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
+async fn create_pipeline(
     output_path: PathBuf,
-    screen_source: ScreenCaptureSource<TCaptureFormat>,
+    screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
 ) -> anyhow::Result<Pipeline> {
     if let Some(mic_feed) = &mic_feed {
@@ -175,9 +176,12 @@ async fn create_pipeline<TCaptureFormat: MakeCapturePipeline>(
         );
     };
 
+    let (screen_capture, system_audio) = screen_source.to_capturer_sources().await?;
+
     let pause_flag = Arc::new(AtomicBool::new(false));
-    let output = TCaptureFormat::make_instant_mode_pipeline(
-        screen_source,
+    let output = ScreenCaptureMethod::make_instant_mode_pipeline(
+        screen_capture,
+        system_audio,
         mic_feed,
         output_path.clone(),
         pause_flag.clone(),

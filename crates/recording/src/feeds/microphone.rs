@@ -175,8 +175,8 @@ impl MicrophoneFeedLock {
         &self.config
     }
 
-    pub fn audio_info(&self) -> &AudioInfo {
-        &self.audio_info
+    pub fn audio_info(&self) -> AudioInfo {
+        self.audio_info
     }
 }
 
@@ -528,30 +528,5 @@ impl Message<Unlock> for MicrophoneFeed {
                 state
             }
         });
-    }
-}
-
-impl AudioSource for Arc<MicrophoneFeedLock> {
-    fn setup(
-        self,
-        mut out_tx: futures::channel::mpsc::Sender<AudioFrame>,
-    ) -> anyhow::Result<AudioInfo> {
-        let audio_info = *self.audio_info();
-        let (tx, rx) = flume::bounded(32);
-
-        self.actor.ask(AddSender(tx)).blocking_send()?;
-
-        tokio::spawn(async move {
-            while let Ok(frame) = rx.recv_async().await {
-                if let Err(_) = out_tx.try_send(AudioFrame {
-                    inner: audio_info.wrap_frame(&frame.data),
-                    timestamp: frame.timestamp,
-                }) {
-                    return;
-                }
-            }
-        });
-
-        Ok(audio_info)
     }
 }

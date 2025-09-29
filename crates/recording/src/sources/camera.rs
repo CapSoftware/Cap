@@ -1,13 +1,12 @@
-use std::sync::Arc;
-
-use anyhow::anyhow;
-use futures::SinkExt;
-
 use crate::{
     feeds::camera::{self, CameraFeedLock},
-    ffmepg::FFmpegVideoFrame,
-    output_pipeline::VideoSource,
+    ffmpeg::FFmpegVideoFrame,
+    output_pipeline::{SetupCtx, VideoSource},
 };
+use anyhow::anyhow;
+use cap_media_info::VideoInfo;
+use futures::{SinkExt, channel::mpsc};
+use std::sync::Arc;
 
 pub struct Camera(Arc<CameraFeedLock>);
 
@@ -17,8 +16,8 @@ impl VideoSource for Camera {
 
     async fn setup(
         config: Self::Config,
-        mut video_tx: futures::channel::mpsc::Sender<Self::Frame>,
-        ctx: &mut crate::output_pipeline::SetupCtx,
+        mut video_tx: mpsc::Sender<Self::Frame>,
+        _: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
@@ -39,7 +38,7 @@ impl VideoSource for Camera {
         Ok(Self(config))
     }
 
-    fn video_info(&self) -> cap_media_info::VideoInfo {
+    fn video_info(&self) -> VideoInfo {
         *self.0.video_info()
     }
 }

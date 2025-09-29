@@ -177,27 +177,28 @@ impl VideoSource for Source {
     where
         Self: Sized,
     {
-        let system_audio = if config.system_audio {
-            let (mut tx, rx) = mpsc::channel(64);
-            ctx.add_audio_source(ChannelAudioSource::new(config.audio_info(), rx));
+        let system_audio = None;
+        // if config.system_audio {
+        //     let (mut tx, rx) = mpsc::channel(64);
+        //     ctx.add_audio_source(ChannelAudioSource::new(config.audio_info(), rx));
 
-            let capturer = scap_cpal::create_capturer(
-                move |data, info, config| {
-                    use scap_ffmpeg::*;
+        //     let capturer = scap_cpal::create_capturer(
+        //         move |data, info, config| {
+        //             use scap_ffmpeg::*;
 
-                    let timestamp = Timestamp::from_cpal(info.timestamp().capture);
+        //             let timestamp = Timestamp::from_cpal(info.timestamp().capture);
 
-                    let _ = tx.try_send(AudioFrame::new(data.as_ffmpeg(config), timestamp));
-                },
-                move |e| {
-                    dbg!(e);
-                },
-            )?;
+        //             let _ = tx.try_send(AudioFrame::new(data.as_ffmpeg(config), timestamp));
+        //         },
+        //         move |e| {
+        //             dbg!(e);
+        //         },
+        //     )?;
 
-            Some(capturer)
-        } else {
-            None
-        };
+        //     Some(capturer)
+        // } else {
+        //     None
+        // };
 
         let error_tx = ctx.add_error_source("Windows Screen Capture");
 

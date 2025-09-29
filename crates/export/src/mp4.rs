@@ -79,13 +79,13 @@ impl Mp4ExportSettings {
                 "output",
                 base.output_path.clone(),
                 |o| {
-                    H264Encoder::builder("output_video", video_info)
+                    H264Encoder::builder(video_info)
                         .with_bpp(self.compression.bits_per_pixel())
                         .build(o)
                 },
                 |o| {
                     has_audio.then(|| {
-                        AACEncoder::init("output_audio", AudioRenderer::info(), o)
+                        AACEncoder::init(AudioRenderer::info(), o)
                             .map(|v| v.boxed())
                             .map_err(Into::into)
                     })

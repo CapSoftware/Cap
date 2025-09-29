@@ -189,7 +189,7 @@ impl ScreenCaptureTarget {
     }
 }
 
-pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
+pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
     video_info: VideoInfo,
     start_time: SystemTime,
@@ -199,7 +199,7 @@ pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
 }
 
-impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
+impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenCaptureSource")
             // .field("bounds", &self.bounds)
@@ -210,8 +210,8 @@ impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
     }
 }
 
-unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureSource<T> {}
-unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
+unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureConfig<T> {}
+unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureConfig<T> {}
 
 pub trait ScreenCaptureFormat {
     type VideoFormat;
@@ -221,7 +221,7 @@ pub trait ScreenCaptureFormat {
     fn audio_info() -> AudioInfo;
 }
 
-impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
+impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -262,7 +262,7 @@ pub enum ScreenCaptureInitError {
     NoBounds,
 }
 
-impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
+impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,

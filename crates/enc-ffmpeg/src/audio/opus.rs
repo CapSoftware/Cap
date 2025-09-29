@@ -13,8 +13,6 @@ use crate::audio::buffered_resampler::BufferedResampler;
 use super::AudioEncoder;
 
 pub struct OpusEncoder {
-    #[allow(unused)]
-    tag: &'static str,
     encoder: encoder::Audio,
     packet: ffmpeg::Packet,
     resampler: BufferedResampler,
@@ -37,14 +35,12 @@ impl OpusEncoder {
     const SAMPLE_FORMAT: Sample = Sample::F32(Type::Packed);
 
     pub fn factory(
-        tag: &'static str,
         input_config: AudioInfo,
     ) -> impl FnOnce(&mut format::context::Output) -> Result<Self, OpusEncoderError> {
-        move |o| Self::init(tag, input_config, o)
+        move |o| Self::init(input_config, o)
     }
 
     pub fn init(
-        tag: &'static str,
         input_config: AudioInfo,
         output: &mut format::context::Output,
     ) -> Result<Self, OpusEncoderError> {
@@ -106,17 +102,12 @@ impl OpusEncoder {
         output_stream.set_parameters(&encoder);
 
         Ok(Self {
-            tag,
             encoder,
             stream_index,
             packet: ffmpeg::Packet::empty(),
             resampler,
             first_pts: None,
         })
-    }
-
-    pub fn input_time_base(&self) -> FFRational {
-        self.encoder.time_base()
     }
 
     pub fn queue_frame(
@@ -131,7 +122,7 @@ impl OpusEncoder {
                 return;
             };
 
-            let time_base = self.input_time_base();
+            let time_base = self.encoder.time_base();
             let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
             frame.set_pts(Some((timestamp.as_secs_f64() * rate).round() as i64));
 
