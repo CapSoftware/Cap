@@ -49,6 +49,7 @@ export interface ButtonProps
 	href?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
+	target?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -62,6 +63,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			href,
 			kbd,
 			icon,
+			target,
 			...props
 		},
 		ref,
@@ -71,6 +73,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			<Comp
 				className={classNames(buttonVariants({ variant, size, className }))}
 				ref={ref as any}
+				target={target || undefined}
 				href={href || undefined}
 				{...props}
 			>
