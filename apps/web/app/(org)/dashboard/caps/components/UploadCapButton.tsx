@@ -460,6 +460,7 @@ async function legacyUploadCap(
 				videoId: uploadId,
 				isScreenshot: true,
 				isUpload: true,
+				orgId,
 			});
 
 			const screenshotFormData = new FormData();

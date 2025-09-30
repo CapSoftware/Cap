@@ -26,7 +26,7 @@ export const Settings = ({
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
 	const [defaultOrgId, setDefaultOrgId] = useState<string | undefined>(
-		user?.defaultOrgId,
+		user?.defaultOrgId || undefined,
 	);
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
