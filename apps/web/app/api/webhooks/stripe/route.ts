@@ -26,6 +26,7 @@ async function createGuestUser(
 		name: null,
 		image: null,
 		activeOrganizationId: "",
+		defaultOrgId: undefined,
 	});
 
 	const result = await db()
