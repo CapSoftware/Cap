@@ -140,6 +140,46 @@ pub async fn display_information(display_id: &str) -> Result<DisplayInformation,
     })
 }
 
+#[specta::specta]
+#[tauri::command]
+pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
+    let window = Window::from_id(&window_id).ok_or("Window not found")?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+        let pid = window
+            .raw_handle()
+            .owner_pid()
+            .ok_or("Could not get window owner PID")?;
+
+        if let Some(app) = unsafe {
+            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+        } {
+            unsafe {
+                app.activateWithOptions(
+                    NSApplicationActivationOptions::ActivateIgnoringOtherApps,
+                );
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+
+        let hwnd = window.raw_handle().inner();
+
+        unsafe {
+            ShowWindow(hwnd, SW_RESTORE);
+            SetForegroundWindow(hwnd);
+        }
+    }
+
+    Ok(())
+}
+
 // Windows doesn't have a proper concept of window z-index's so we implement them in userspace :(
 #[derive(Default)]
 pub struct WindowFocusManager {
