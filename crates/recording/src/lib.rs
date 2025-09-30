@@ -9,6 +9,8 @@ pub mod sources;
 pub mod studio_recording;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
+pub use ffmpeg::*;
+pub use output_pipeline::*;
 pub use sources::screen_capture;
 
 use cap_media::MediaError;

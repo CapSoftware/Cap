@@ -16,7 +16,7 @@ impl AudioSource for Microphone {
 
         self.0
             .ask(microphone::AddSender(tx))
-            .blocking_send()
+            .await
             .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
 
         tokio::spawn(async move {

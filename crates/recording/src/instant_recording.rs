@@ -2,12 +2,13 @@ use crate::{
     RecordingBaseInputs,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
-    output_pipeline::OutputPipeline,
+    output_pipeline::{self, OutputPipeline},
     sources::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
+use futures::FutureExt;
 use kameo::{Actor as _, prelude::*};
 use std::{
     path::PathBuf,
@@ -38,16 +39,28 @@ enum ActorState {
     Stopped,
 }
 
-#[derive(Clone)]
 pub struct ActorHandle {
     actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: ScreenCaptureTarget,
-    // pub bounds: Bounds,
+    done_fut: output_pipeline::DoneFut,
 }
 
 impl ActorHandle {
     pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
         Ok(self.actor_ref.ask(Stop).await?)
+    }
+
+    pub fn done_fut(&self) -> output_pipeline::DoneFut {
+        self.done_fut.clone()
+    }
+}
+
+impl Drop for ActorHandle {
+    fn drop(&mut self) {
+        let actor_ref = self.actor_ref.clone();
+        tokio::spawn(async move {
+            let _ = actor_ref.tell(Stop).await;
+        });
     }
 }
 
@@ -281,6 +294,7 @@ pub async fn spawn_instant_recording_actor(
 
     trace!("spawning recording actor");
 
+    let done_fut = pipeline.output.done_fut();
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         capture_target: inputs.capture_target.clone(),
@@ -292,10 +306,18 @@ pub async fn spawn_instant_recording_actor(
         },
     });
 
-    Ok(ActorHandle {
-        actor_ref,
+    let actor_handle = ActorHandle {
+        actor_ref: actor_ref.clone(),
         capture_target: inputs.capture_target,
-    })
+        done_fut: done_fut.clone(),
+    };
+
+    tokio::spawn(async move {
+        let _ = done_fut.await;
+        let _ = actor_ref.ask(Stop).await;
+    });
+
+    Ok(actor_handle)
 }
 
 fn current_time_f64() -> f64 {

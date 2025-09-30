@@ -5,7 +5,7 @@ use cap_timestamp::{Timestamp, Timestamps};
 use futures::{
     FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
-    future::BoxFuture,
+    future::{BoxFuture, Shared},
     lock::Mutex,
     stream::FuturesUnordered,
 };
@@ -173,7 +173,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
             first_timestamp_rx: first_rx,
             stop_token: Some(stop_token.drop_guard()),
             video_info: Some(video_info),
-            done_rx,
+            done_fut: done_rx,
         })
     }
 }
@@ -218,7 +218,7 @@ impl OutputPipelineBuilder<NoVideo> {
             first_timestamp_rx: first_rx,
             stop_token: Some(stop_token.drop_guard()),
             video_info: None,
-            done_rx,
+            done_fut: done_rx,
         })
     }
 }
@@ -227,7 +227,7 @@ fn setup_build() -> (
     TaskPool,
     CancellationToken,
     oneshot::Sender<anyhow::Result<()>>,
-    oneshot::Receiver<anyhow::Result<()>>,
+    DoneFut,
 ) {
     let tasks = TaskPool(vec![]);
 
@@ -235,7 +235,19 @@ fn setup_build() -> (
 
     let (done_tx, done_rx) = oneshot::channel();
 
-    (tasks, stop_token, done_tx, done_rx)
+    (
+        tasks,
+        stop_token,
+        done_tx,
+        done_rx
+            .map(|v| {
+                v.map_err(|s| anyhow::Error::from(s))
+                    .and_then(|v| v)
+                    .map_err(|e| PipelineDoneError(Arc::new(e)))
+            })
+            .boxed()
+            .shared(),
+    )
 }
 
 async fn finish_build(
@@ -411,18 +423,35 @@ async fn configure_audio<TMutex: AudioMuxer>(
     Ok(())
 }
 
+pub type DoneFut = Shared<BoxFuture<'static, Result<(), PipelineDoneError>>>;
+
 pub struct OutputPipeline {
     path: PathBuf,
     pub first_timestamp_rx: oneshot::Receiver<Timestamp>,
     stop_token: Option<DropGuard>,
     video_info: Option<VideoInfo>,
-    done_rx: oneshot::Receiver<anyhow::Result<()>>,
+    done_fut: DoneFut,
 }
 
 pub struct FinishedOutputPipeline {
     pub path: PathBuf,
     pub first_timestamp: Timestamp,
     pub video_info: Option<VideoInfo>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PipelineDoneError(Arc<anyhow::Error>);
+
+impl std::fmt::Display for PipelineDoneError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for PipelineDoneError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.as_ref().source()
+    }
 }
 
 impl OutputPipeline {
@@ -433,7 +462,7 @@ impl OutputPipeline {
     pub async fn stop(mut self) -> anyhow::Result<FinishedOutputPipeline> {
         drop(self.stop_token.take());
 
-        let _ = self.done_rx.await??;
+        self.done_fut.await?;
 
         Ok(FinishedOutputPipeline {
             path: self.path,
@@ -444,6 +473,10 @@ impl OutputPipeline {
 
     pub fn video_info(&self) -> Option<VideoInfo> {
         self.video_info
+    }
+
+    pub fn done_fut(&self) -> DoneFut {
+        self.done_fut.clone()
     }
 }
 

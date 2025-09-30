@@ -3,7 +3,6 @@ use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
 use cap_timestamp::Timestamp;
-use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
@@ -16,15 +15,9 @@ use std::{
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{ffmpeg::FFmpegVideoFrame, output_pipeline::VideoSource};
+use crate::ffmpeg::FFmpegVideoFrame;
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
-
-#[derive(Clone)]
-pub struct RawCameraFrame {
-    pub frame: frame::Video,
-    pub timestamp: Timestamp,
-}
 
 #[derive(Actor)]
 pub struct CameraFeed {
@@ -219,7 +212,6 @@ struct SetupCameraResult {
     handle: cap_camera::CaptureHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
-    // frame_rx: mpsc::Receiver<RawCameraFrame>,
 }
 
 async fn setup_camera(
