@@ -8,6 +8,7 @@ import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import CommentStamp from "./CommentStamp";
 import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
@@ -34,11 +35,19 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
 	hasActiveUpload: boolean | undefined;
+	comments?: Array<{
+		id: string;
+		timestamp: number | null;
+		type: "text" | "emoji";
+		content: string;
+		authorName?: string | null;
+	}>;
+	onSeek?: (time: number) => void;
 }
 
 export function CapVideoPlayer({
@@ -51,9 +60,12 @@ export function CapVideoPlayer({
 	autoplay = false,
 	enableCrossOrigin = false,
 	hasActiveUpload,
+	comments = [],
+	onSeek,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
+	const [mainControlsVisible, setMainControlsVisible] = useState(false);
 	const [toggleCaptions, setToggleCaptions] = useState(true);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
@@ -69,6 +81,7 @@ export function CapVideoPlayer({
 	const [isRetrying, setIsRetrying] = useState(false);
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
+	const [duration, setDuration] = useState(0);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -218,6 +231,42 @@ export function CapVideoPlayer({
 		fetchNewUrl();
 	}, [fetchNewUrl]);
 
+	// Track video duration for comment markers
+	useEffect(() => {
+		const video = videoRef.current;
+		if (!video) return;
+
+		const handleLoadedMetadata = () => {
+			setDuration(video.duration);
+		};
+
+		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+		return () => {
+			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+		};
+	}, [urlResolved]);
+
+	// Track when all data is ready for comment markers
+	const [markersReady, setMarkersReady] = useState(false);
+	const [hoveredComment, setHoveredComment] = useState<string | null>(null);
+
+	// Memoize hover handlers to prevent render loops
+	const handleMouseEnter = useCallback((commentId: string) => {
+		setHoveredComment(commentId);
+	}, []);
+
+	const handleMouseLeave = useCallback(() => {
+		setHoveredComment(null);
+	}, []);
+
+	useEffect(() => {
+		// Only show markers when we have duration, comments, and video element
+		if (duration > 0 && comments.length > 0 && videoRef.current) {
+			setMarkersReady(true);
+		}
+	}, [duration, comments.length]);
+
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || !urlResolved) return;
@@ -297,12 +346,29 @@ export function CapVideoPlayer({
 			}
 		};
 
+		// Ensure all caption tracks remain hidden
+		const ensureTracksHidden = (): void => {
+			const tracks = Array.from(video.textTracks);
+			for (const track of tracks) {
+				if (track.kind === "captions" || track.kind === "subtitles") {
+					if (track.mode !== "hidden") {
+						track.mode = "hidden";
+					}
+				}
+			}
+		};
+
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 			setupTracks();
+		};
+
+		// Monitor for track changes and ensure they stay hidden
+		const handleTrackChange = () => {
+			ensureTracksHidden();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -312,6 +378,11 @@ export function CapVideoPlayer({
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
+
+		// Add event listeners to monitor track changes
+		video.textTracks.addEventListener("change", handleTrackChange);
+		video.textTracks.addEventListener("addtrack", handleTrackChange);
+		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -341,6 +412,9 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
+				video.textTracks.removeEventListener("change", handleTrackChange);
+				video.textTracks.removeEventListener("addtrack", handleTrackChange);
+				video.textTracks.removeEventListener("removetrack", handleTrackChange);
 				if (retryTimeout.current) clearTimeout(retryTimeout.current);
 			};
 		}
@@ -355,6 +429,9 @@ export function CapVideoPlayer({
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
+			video.textTracks.removeEventListener("change", handleTrackChange);
+			video.textTracks.removeEventListener("addtrack", handleTrackChange);
+			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (retryTimeout.current) {
 				clearTimeout(retryTimeout.current);
 			}
@@ -456,14 +533,15 @@ export function CapVideoPlayer({
 					playsInline
 					autoPlay={autoplay}
 				>
-					<track default kind="chapters" src={chaptersSrc} />
-					<track
-						label="English"
-						kind="captions"
-						srcLang="en"
-						src={captionsSrc}
-						default
-					/>
+					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
+					{captionsSrc && (
+						<track
+							label="English"
+							kind="captions"
+							srcLang="en"
+							src={captionsSrc}
+						/>
+					)}
 				</MediaPlayerVideo>
 			)}
 			<AnimatePresence>
@@ -512,7 +590,7 @@ export function CapVideoPlayer({
 						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
 						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
 						controlsVisible || videoRef.current?.paused
-							? "bottom-16 sm:bottom-20"
+							? "bottom-16 sm:bottom-24"
 							: "bottom-3 sm:bottom-12",
 					)}
 				>
@@ -524,8 +602,35 @@ export function CapVideoPlayer({
 				<MediaPlayerError />
 			)}
 			<MediaPlayerVolumeIndicator />
+
+			{mainControlsVisible &&
+				markersReady &&
+				comments
+					.filter(
+						(comment) => comment && comment.timestamp !== null && comment.id,
+					)
+					.map((comment) => {
+						const position = (Number(comment.timestamp) / duration) * 100;
+						const containerPadding = 20;
+						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
+						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
+
+						return (
+							<CommentStamp
+								key={comment.id}
+								comment={comment}
+								adjustedPosition={adjustedPosition}
+								handleMouseEnter={handleMouseEnter}
+								handleMouseLeave={handleMouseLeave}
+								onSeek={onSeek}
+								hoveredComment={hoveredComment}
+							/>
+						);
+					})}
+
 			<MediaPlayerControls
 				className="flex-col items-start gap-2.5"
+				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
 				isUploadingOrFailed={isUploading || isUploadFailed}
 			>
 				<MediaPlayerControlsOverlay />

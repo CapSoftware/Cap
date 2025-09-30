@@ -14,15 +14,15 @@ type Doc = {
 };
 
 interface DocProps {
-	params: {
+	params: Promise<{
 		slug: string[];
-	};
+	}>;
 }
 
 export async function generateMetadata(
 	props: DocProps,
 ): Promise<Metadata | undefined> {
-	const { params } = props;
+	const params = await props.params;
 	if (!params?.slug) return;
 
 	const fullSlug = params.slug.join("/");
@@ -74,7 +74,7 @@ export async function generateMetadata(
 }
 
 export default async function DocPage(props: DocProps) {
-	const { params } = props;
+	const params = await props.params;
 	if (!params?.slug) notFound();
 
 	const fullSlug = params.slug.join("/");

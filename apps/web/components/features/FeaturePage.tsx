@@ -1,7 +1,7 @@
 "use client";
 
 import Script from "next/script";
-import { useId } from "react";
+import { type JSX, useId } from "react";
 import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
 import {
 	createFeaturePageStructuredData,
