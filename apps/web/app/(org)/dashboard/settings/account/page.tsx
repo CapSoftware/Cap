@@ -1,7 +1,7 @@
 import { getCurrentUser } from "@cap/database/auth/session";
+import { organizations } from "@cap/database/schema";
 import type { Metadata } from "next";
 import { Settings } from "./Settings";
-import { organizations } from "@cap/database/schema";
 
 export const metadata: Metadata = {
 	title: "Settings — Cap",

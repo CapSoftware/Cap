@@ -164,7 +164,7 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot = false,
 	isUpload = false,
 	folderId,
-	orgId: orgId,
+	orgId,
 }: {
 	videoId?: Video.VideoId;
 	duration?: number;
