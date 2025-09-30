@@ -60,7 +60,7 @@ pub struct Actor {
 }
 
 impl Actor {
-    async fn stop(&mut self) {
+    async fn stop(&mut self) -> anyhow::Result<()> {
         let pipeline = replace_with::replace_with_or_abort_and_return(&mut self.state, |state| {
             (
                 match state {
@@ -72,9 +72,11 @@ impl Actor {
             )
         });
 
-        if let Some(mut pipeline) = pipeline {
-            pipeline.output.stop().await;
+        if let Some(pipeline) = pipeline {
+            pipeline.output.stop().await?;
         }
+
+        Ok(())
     }
 }
 
@@ -82,7 +84,7 @@ impl Message<Stop> for Actor {
     type Reply = anyhow::Result<CompletedRecording>;
 
     async fn handle(&mut self, _: Stop, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.stop().await;
+        self.stop().await?;
 
         Ok(CompletedRecording {
             project_path: self.recording_dir.clone(),
@@ -149,7 +151,7 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.stop().await;
+        let _ = self.stop().await;
 
         Ok(())
     }

@@ -2,18 +2,15 @@ use crate::{
     ActorError, MediaError, RecordingBaseInputs, RecordingError,
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
-    feeds::{
-        camera::CameraFeedLock,
-        microphone::MicrophoneFeedLock,
-    },
+    feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
-    output_pipeline::{AudioFrame, OutputPipeline},
+    output_pipeline::{AudioFrame, FinishedOutputPipeline, OutputPipeline},
     sources::{self, ScreenCaptureFormat, ScreenCaptureTarget},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
-use cap_timestamp::Timestamps;
+use cap_timestamp::{Timestamp, Timestamps};
 use futures::{FutureExt, StreamExt, channel::mpsc, future::OptionFuture};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
@@ -61,18 +58,18 @@ pub struct Actor {
 impl Actor {
     async fn stop_pipeline(
         &mut self,
-        mut pipeline: Pipeline,
+        pipeline: Pipeline,
         segment_start_time: f64,
     ) -> anyhow::Result<(Cursors, u32)> {
         tracing::info!("pipeline shuting down");
 
-        pipeline.stop().await;
+        let mut pipeline = pipeline.stop().await?;
 
         tracing::info!("pipeline shutdown");
 
         let segment_stop_time = current_time_f64();
 
-        let cursors = if let Some(cursor) = &mut pipeline.cursor
+        let cursors = if let Some(cursor) = pipeline.cursor.as_mut()
             && let Ok(res) = cursor.actor.rx.clone().await
         {
             std::fs::write(
@@ -199,7 +196,7 @@ impl Message<Cancel> for Actor {
     type Reply = anyhow::Result<()>;
 
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        if let Some(ActorState::Recording { mut pipeline, .. }) = self.state.take() {
+        if let Some(ActorState::Recording { pipeline, .. }) = self.state.take() {
             let _ = pipeline.stop().await;
         }
 
@@ -210,7 +207,7 @@ impl Message<Cancel> for Actor {
 pub struct RecordingSegment {
     pub start: f64,
     pub end: f64,
-    pipeline: Pipeline,
+    pipeline: FinishedPipeline,
 }
 
 pub struct ScreenPipelineOutput {
@@ -221,32 +218,44 @@ pub struct ScreenPipelineOutput {
 struct Pipeline {
     pub start_time: Timestamps,
     // sources
-    pub screen: ScreenPipelineOutput,
+    pub screen: OutputPipeline,
     pub microphone: Option<OutputPipeline>,
-    pub camera: Option<CameraPipelineInfo>,
+    pub camera: Option<OutputPipeline>,
     pub system_audio: Option<OutputPipeline>,
     pub cursor: Option<CursorPipeline>,
 }
 
+struct FinishedPipeline {
+    pub start_time: Timestamps,
+    // sources
+    pub screen: FinishedOutputPipeline,
+    pub microphone: Option<FinishedOutputPipeline>,
+    pub camera: Option<FinishedOutputPipeline>,
+    pub system_audio: Option<FinishedOutputPipeline>,
+    pub cursor: Option<CursorPipeline>,
+}
+
 impl Pipeline {
-    pub async fn stop(&mut self) {
-        self.screen.inner.stop().await;
-
-        if let Some(mic) = self.microphone.as_mut() {
-            mic.stop().await;
-        }
-
-        if let Some(camera) = self.camera.as_mut() {
-            camera.inner.stop().await;
-        }
-
-        if let Some(system_audio) = self.system_audio.as_mut() {
-            system_audio.stop().await;
-        }
+    pub async fn stop(mut self) -> anyhow::Result<FinishedPipeline> {
+        let (screen, microphone, camera, system_audio) = futures::join!(
+            self.screen.stop(),
+            OptionFuture::from(self.microphone.map(|s| s.stop())),
+            OptionFuture::from(self.camera.map(|s| s.stop())),
+            OptionFuture::from(self.system_audio.map(|s| s.stop()))
+        );
 
         if let Some(cursor) = self.cursor.as_mut() {
             cursor.actor.stop();
         }
+
+        Ok(FinishedPipeline {
+            start_time: self.start_time,
+            screen: screen?,
+            microphone: microphone.transpose()?,
+            camera: camera.transpose()?,
+            system_audio: system_audio.transpose()?,
+            cursor: self.cursor,
+        })
     }
 }
 
@@ -378,13 +387,13 @@ async fn spawn_studio_recording_actor(
     trace!("spawning recording actor");
 
     let base_inputs = base_inputs.clone();
-    let fps = pipeline.screen.video_info.fps();
+    let fps = pipeline.screen.video_info().unwrap().fps();
 
     let actor_ref = Actor::spawn(Actor {
         recording_dir,
         fps,
         capture_target: base_inputs.capture_target.clone(),
-        video_info: pipeline.screen.video_info,
+        video_info: pipeline.screen.video_info().unwrap(),
         state: Some(ActorState::Recording {
             pipeline,
             /*pipeline_done_rx,*/
@@ -423,44 +432,31 @@ async fn stop_recording(
         inner: MultipleSegments {
             segments: futures::stream::iter(segments)
                 .then(async |s| {
-                    macro_rules! recv_timestamp {
-                        ($pipeline:expr) => {
-                            $pipeline
-                                .first_timestamp_rx
-                                .map(|v| {
-                                    v.map(|v| v.duration_since(s.pipeline.start_time).as_secs_f64())
-                                        .ok()
-                                })
-                                .await
-                        };
-                    }
+                    let to_start_time = |timestamp: Timestamp| {
+                        timestamp
+                            .duration_since(s.pipeline.start_time)
+                            .as_secs_f64()
+                    };
 
                     MultipleSegment {
                         display: VideoMeta {
-                            path: make_relative(s.pipeline.screen.inner.path()),
-                            fps: s.pipeline.screen.video_info.fps(),
-                            start_time: recv_timestamp!(s.pipeline.screen.inner),
+                            path: make_relative(&s.pipeline.screen.path),
+                            fps: s.pipeline.screen.video_info.unwrap().fps(),
+                            start_time: Some(to_start_time(s.pipeline.screen.first_timestamp)),
                         },
-                        camera: OptionFuture::from(s.pipeline.camera.map(async |camera| {
-                            VideoMeta {
-                                path: make_relative(camera.inner.path()),
-                                fps: camera.fps,
-                                start_time: recv_timestamp!(camera.inner),
-                            }
-                        }))
-                        .await,
-                        mic: OptionFuture::from(s.pipeline.microphone.map(async |mic| AudioMeta {
-                            path: make_relative(mic.path()),
-                            start_time: recv_timestamp!(mic),
-                        }))
-                        .await,
-                        system_audio: OptionFuture::from(s.pipeline.system_audio.map(
-                            async |audio| AudioMeta {
-                                path: make_relative(audio.path()),
-                                start_time: recv_timestamp!(audio),
-                            },
-                        ))
-                        .await,
+                        camera: s.pipeline.camera.map(|camera| VideoMeta {
+                            path: make_relative(&camera.path),
+                            fps: camera.video_info.unwrap().fps(),
+                            start_time: Some(to_start_time(camera.first_timestamp)),
+                        }),
+                        mic: s.pipeline.microphone.map(|mic| AudioMeta {
+                            path: make_relative(&mic.path),
+                            start_time: Some(to_start_time(mic.first_timestamp)),
+                        }),
+                        system_audio: s.pipeline.system_audio.map(|audio| AudioMeta {
+                            path: make_relative(&audio.path),
+                            start_time: Some(to_start_time(audio.first_timestamp)),
+                        }),
                         cursor: s
                             .pipeline
                             .cursor
@@ -627,20 +623,13 @@ async fn create_segment_pipeline(
 
     trace!("preparing segment pipeline {index}");
 
-    let screen = {
-        let output = ScreenCaptureMethod::make_studio_mode_pipeline(
-            capture_source,
-            screen_output_path.clone(),
-            start_time,
-        )
-        .await
-        .unwrap();
-
-        ScreenPipelineOutput {
-            inner: output,
-            video_info: screen_config.info(),
-        }
-    };
+    let screen = ScreenCaptureMethod::make_studio_mode_pipeline(
+        capture_source,
+        screen_output_path.clone(),
+        start_time,
+    )
+    .await
+    .context("screen pipeline setup")?;
 
     let camera = if let Some(camera_feed) = camera_feed {
         let output_path = dir.join("camera.mp4");
@@ -649,21 +638,15 @@ async fn create_segment_pipeline(
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
             .build::<Mp4Muxer>(())
-            .await?;
-
-        let video_info = output
-            .video_info()
-            .expect("Camera output has no video info!");
+            .await
+            .context("camera pipeline setup")?;
 
         info!(
             "camera pipeline prepared, will output to {}",
             output_path.strip_prefix(segments_dir).unwrap().display()
         );
 
-        Some(CameraPipelineInfo {
-            inner: output,
-            fps: (video_info.frame_rate.0 / video_info.frame_rate.1) as u32,
-        })
+        Some(output)
     } else {
         None
     };
@@ -675,7 +658,7 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .build::<OggMuxer>(())
                 .await
-                .context("microphone")?,
+                .context("microphone pipeline setup")?,
         )
     } else {
         None
@@ -688,7 +671,7 @@ async fn create_segment_pipeline(
                 .with_timestamps(start_time)
                 .build::<OggMuxer>(())
                 .await
-                .context("microphone")?,
+                .context("microphone pipeline setup")?,
         )
     } else {
         None

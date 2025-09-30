@@ -7,9 +7,11 @@ use super::*;
 use crate::output_pipeline::{
     self, AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig, SetupCtx,
 };
+use anyhow::anyhow;
 use cidre::*;
 use futures::{FutureExt, SinkExt, channel::mpsc, future::BoxFuture};
 use kameo::prelude::*;
+use tokio::sync::broadcast;
 use tracing::debug;
 
 #[derive(Debug)]
@@ -144,6 +146,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
     pub async fn to_capturer_sources(
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSource>)> {
+        let (error_tx, error_rx) = broadcast::channel(1);
         let (mut video_tx, video_rx) = mpsc::channel(4);
         let (mut audio_tx, audio_rx) = if self.system_audio {
             let (tx, rx) = mpsc::channel(32);
@@ -206,19 +209,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let builder = scap_screencapturekit::Capturer::builder(content_filter, settings)
             .with_output_sample_buf_cb({
-                // let mut error_tx = error_tx.clone();
                 move |frame| {
-                    let check_err = || {
-                        cap_fail::fail_err!(
-                            "macos::ScreenCaptureActor output_sample_buf",
-                            ns::Error::with_domain(ns::ErrorDomain::os_status(), 69420, None)
-                        );
-                        Result::<_, arc::R<ns::Error>>::Ok(())
-                    };
-                    if let Err(e) = check_err() {
-                        // let _ = error_tx.try_send(e.into());
-                    }
-
                     let sample_buffer = frame.sample_buf();
 
                     let mach_timestamp =
@@ -242,16 +233,10 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                                 Ok::<(), ()>(())
                             };
 
-                            if check_skip_send().is_ok()
-                                && video_tx
-                                    .try_send(VideoFrame {
-                                        sample_buf: sample_buffer.retained(),
-                                        timestamp,
-                                    })
-                                    .is_err()
-                            {
-                                warn!("Pipeline is unreachable");
-                            }
+                            let _ = video_tx.try_send(VideoFrame {
+                                sample_buf: sample_buffer.retained(),
+                                timestamp,
+                            });
                         }
                         scap_screencapturekit::Frame::Audio(_) => {
                             use ffmpeg::ChannelLayout;
@@ -292,7 +277,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 }
             })
             .with_stop_with_err_cb(move |_, err| {
-                // error_tx.try_send(anyhow::format_err!("{err}"));
+                let _ = error_tx.send(err.retained());
             });
 
         let capturer = Capturer::new(Arc::new(builder.build()?));
@@ -300,11 +285,13 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
             VideoSourceConfig(
                 ChannelVideoSourceConfig::new(self.video_info, video_rx),
                 capturer.clone(),
+                error_rx.resubscribe(),
             ),
             audio_rx.map(|rx| {
                 SystemAudioSource(
                     ChannelAudioSource::new(self.audio_info(), rx),
-                    capturer.clone(),
+                    capturer,
+                    error_rx,
                 )
             }),
         ))
@@ -323,22 +310,56 @@ pub struct NewFrame(pub scap_screencapturekit::Frame);
 
 pub struct CaptureError(pub arc::R<ns::Error>);
 
-#[derive(Clone)]
 struct Capturer {
     started: Arc<AtomicBool>,
     capturer: Arc<scap_screencapturekit::Capturer>,
+    // error_rx: broadcast::Receiver<arc::R<ns::Error>>,
 }
 
-impl Capturer {
-    fn new(capturer: Arc<scap_screencapturekit::Capturer>) -> Self {
+impl Clone for Capturer {
+    fn clone(&self) -> Self {
         Self {
-            started: Arc::new(AtomicBool::new(false)),
-            capturer,
+            started: self.started.clone(),
+            capturer: self.capturer.clone(),
+            // error_rx: self.error_rx.resubscribe(),
         }
     }
 }
 
-pub struct VideoSourceConfig(ChannelVideoSourceConfig<VideoFrame>, Capturer);
+impl Capturer {
+    fn new(
+        capturer: Arc<scap_screencapturekit::Capturer>,
+        // error_rx: broadcast::Receiver<arc::R<ns::Error>>,
+    ) -> Self {
+        Self {
+            started: Arc::new(AtomicBool::new(false)),
+            capturer,
+            // error_rx,
+        }
+    }
+
+    async fn start(&mut self) -> anyhow::Result<()> {
+        if !self.started.fetch_xor(true, atomic::Ordering::Relaxed) {
+            self.capturer.start().await?;
+        }
+
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        if self.started.fetch_xor(true, atomic::Ordering::Relaxed) {
+            self.capturer.stop().await?;
+        }
+
+        Ok(())
+    }
+}
+
+pub struct VideoSourceConfig(
+    ChannelVideoSourceConfig<VideoFrame>,
+    Capturer,
+    broadcast::Receiver<arc::R<ns::Error>>,
+);
 pub struct VideoSource(ChannelVideoSource<VideoFrame>, Capturer);
 
 impl output_pipeline::VideoSource for VideoSource {
@@ -346,13 +367,21 @@ impl output_pipeline::VideoSource for VideoSource {
     type Frame = VideoFrame;
 
     async fn setup(
-        config: Self::Config,
+        mut config: Self::Config,
         video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
+        ctx.tasks().spawn("screen-capture", async move {
+            if let Ok(err) = config.2.recv().await {
+                return Err(anyhow!("{err}"));
+            }
+
+            Ok(())
+        });
+
         ChannelVideoSource::setup(config.0, video_tx, ctx)
             .await
             .map(|source| Self(source, config.1))
@@ -360,9 +389,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn start(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            if !self.1.started.fetch_xor(true, atomic::Ordering::Relaxed) {
-                self.1.capturer.start().await?;
-            }
+            self.1.start().await?;
 
             Ok(())
         }
@@ -371,9 +398,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn stop(&mut self) -> BoxFuture<'_, anyhow::Result<()>> {
         async move {
-            if self.1.started.fetch_xor(true, atomic::Ordering::Relaxed) {
-                self.1.capturer.stop().await?;
-            }
+            self.1.stop().await?;
 
             Ok(())
         }
@@ -385,10 +410,26 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 }
 
-pub struct SystemAudioSource(ChannelAudioSource, Capturer);
+pub struct SystemAudioSource(
+    ChannelAudioSource,
+    Capturer,
+    broadcast::Receiver<arc::R<ns::Error>>,
+);
 
 impl output_pipeline::AudioSource for SystemAudioSource {
     async fn setup(self, tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> {
         self.0.setup(tx).await
+    }
+
+    async fn start(&mut self) -> anyhow::Result<()> {
+        self.1.start().await?;
+
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        self.1.stop().await?;
+
+        Ok(())
     }
 }

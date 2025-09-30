@@ -31,7 +31,7 @@ impl VideoSource for Camera {
 
         tokio::spawn(async move {
             while let Ok(frame) = rx.recv_async().await {
-                video_tx.send(frame).await;
+                let _ = video_tx.send(frame).await;
             }
         });
 

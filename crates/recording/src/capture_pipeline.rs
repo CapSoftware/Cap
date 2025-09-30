@@ -56,29 +56,22 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         output_path: PathBuf,
         pause_flag: Arc<AtomicBool>,
     ) -> anyhow::Result<OutputPipeline> {
-        let output_builder = OutputPipeline::builder(output_path.clone())
+        let mut output = OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture);
 
-        let muxer_config = AVFoundationMp4MuxerConfig {
-            output_height: Some(1080),
-        };
+        if let Some(system_audio) = system_audio {
+            output = output.with_audio_source(system_audio);
+        }
 
-        let builder = match (system_audio, mic_feed) {
-            (None, None) => {
-                return output_builder
-                    .build::<AVFoundationMp4Muxer>(muxer_config)
-                    .await;
-            }
-            (Some(system_audio), Some(mic_feed)) => output_builder
-                .with_audio_source(sources::Microphone(mic_feed))
-                .with_audio_source(system_audio),
-            (Some(system_audio), None) => output_builder.with_audio_source(system_audio),
-            (None, Some(mic_feed)) => {
-                output_builder.with_audio_source(sources::Microphone(mic_feed))
-            }
-        };
+        if let Some(mic_feed) = mic_feed {
+            output = output.with_audio_source(sources::Microphone(mic_feed));
+        }
 
-        builder.build::<AVFoundationMp4Muxer>(muxer_config).await
+        output
+            .build::<AVFoundationMp4Muxer>(AVFoundationMp4MuxerConfig {
+                output_height: Some(1080),
+            })
+            .await
     }
 }
 
