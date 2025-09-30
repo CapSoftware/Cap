@@ -230,7 +230,7 @@ export async function createVideoAndGetUploadUrl({
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
-			orgId: orgId,
+			orgId,
 			source: { type: "desktopMP4" as const },
 			isScreenshot,
 			bucket: customBucket?.id,

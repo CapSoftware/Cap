@@ -53,7 +53,10 @@ export const UploadCapButton = ({
 		if (!file || !user) return;
 
 		// This should be unreachable.
-		if (activeOrganization === null) alert("No organization active!");
+		if (activeOrganization === null) {
+			alert("No organization active!");
+			return;
+		}
 
 		const ok = await legacyUploadCap(
 			file,

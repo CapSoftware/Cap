@@ -1,12 +1,20 @@
 "use client";
 
 import type { users } from "@cap/database/schema";
-import { Button, Card, CardDescription, CardTitle, Input } from "@cap/ui";
+import {
+	Button,
+	Card,
+	CardDescription,
+	CardTitle,
+	Input,
+	Select,
+} from "@cap/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../Contexts";
+import { patchAccountSettings } from "./server";
 
 export const Settings = ({
 	user,
@@ -17,18 +25,17 @@ export const Settings = ({
 	const { organizationData } = useDashboardContext();
 	const [firstName, setFirstName] = useState(user?.name || "");
 	const [lastName, setLastName] = useState(user?.lastName || "");
+	const [defaultOrgId, setDefaultOrgId] = useState<string | undefined>(
+		user?.defaultOrgId,
+	);
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
-			const res = await fetch("/api/settings/user/name", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					firstName: firstName.trim(),
-					lastName: lastName.trim() ? lastName.trim() : null,
-				}),
-			});
-			if (!res.ok) throw new Error("Failed to update name");
+			await patchAccountSettings(
+				firstName.trim(),
+				lastName.trim() ? lastName.trim() : undefined,
+				defaultOrgId,
+			);
 		},
 		onSuccess: () => {
 			toast.success("Name updated successfully");
@@ -96,13 +103,20 @@ export const Settings = ({
 						<CardTitle>Default organization</CardTitle>
 						<CardDescription>This is the default organization</CardDescription>
 					</div>
-					{/*<Input
-						type="email"
-						value={user?.email as string}
-						id="contactEmail"
-						name="contactEmail"
-						disabled
-					/>*/}
+
+					<Select
+						value={
+							defaultOrgId ??
+							user?.defaultOrgId ??
+							organizationData?.[0]?.organization.id ??
+							""
+						}
+						onChange={(value) => setDefaultOrgId(value)}
+						options={(organizationData || []).map((org) => ({
+							value: org.organization.id,
+							label: org.organization.name,
+						}))}
+					/>
 				</Card>
 			</div>
 			<Button
