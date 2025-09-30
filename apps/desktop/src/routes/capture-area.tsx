@@ -21,7 +21,7 @@ import Cropper, {
 import { createOptionsQuery } from "~/utils/queries";
 import type { DisplayId } from "~/utils/tauri";
 
-const MIN_SIZE = { width: 50, height: 50 };
+const MIN_SIZE = { width: 150, height: 150 };
 
 export default function CaptureArea() {
 	const webview = getCurrentWebviewWindow();

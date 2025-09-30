@@ -285,11 +285,12 @@ function Inner() {
 					// Prefer below the crop (smaller margin)
 					// If no space below, place above the crop (larger top margin)
 					// Otherwise, place inside at the top of the crop (small inner margin)
+					const macos = ostype() === "macos";
 					const SIDE_MARGIN = 16;
 					const MARGIN_BELOW = 16;
 					const MARGIN_TOP_OUTSIDE = 16;
-					const MARGIN_TOP_INSIDE = 28;
-					const TOP_SAFE_MARGIN = ostype() === "macos" ? 40 : 10; // keep clear of notch on MacBooks
+					const MARGIN_TOP_INSIDE = macos ? 40 : 28;
+					const TOP_SAFE_MARGIN = macos ? 40 : 10; // keep clear of notch on MacBooks
 
 					const controlsStyle = createMemo(() => {
 						const bounds = crop();
