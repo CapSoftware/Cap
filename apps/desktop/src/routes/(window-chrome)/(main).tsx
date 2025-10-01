@@ -345,7 +345,7 @@ function Page() {
 									}
 								}}
 								class={cx(
-									"text-[0.6rem] rounded-lg px-1 py-0.5",
+									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 										: "bg-gray-3 cursor-pointer hover:bg-gray-5",

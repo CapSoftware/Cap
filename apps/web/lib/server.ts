@@ -5,7 +5,9 @@ import {
 	Database,
 	Folders,
 	HttpAuthMiddlewareLive,
+	OrganisationsPolicy,
 	S3Buckets,
+	SpacesPolicy,
 	Videos,
 	VideosPolicy,
 } from "@cap/web-backend";
@@ -43,6 +45,8 @@ export const Dependencies = Layer.mergeAll(
 	Videos.Default,
 	VideosPolicy.Default,
 	Folders.Default,
+	SpacesPolicy.Default,
+	OrganisationsPolicy.Default,
 ).pipe(
 	Layer.provideMerge(
 		Layer.mergeAll(Database.Default, TracingLayer, FetchHttpClient.layer),
