@@ -110,11 +110,7 @@ impl CursorEvents {
             return;
         }
 
-        let last_move_time = self
-            .moves
-            .last()
-            .map(|event| event.time_ms)
-            .unwrap_or(0.0);
+        let last_move_time = self.moves.last().map(|event| event.time_ms).unwrap_or(0.0);
 
         for i in 0..segments.len() {
             let end_time = if i + 1 < segments.len() {
@@ -318,16 +314,23 @@ mod tests {
             clicks: vec![click_event(250.0, "ibeam")],
         };
 
-        events.stabilize_short_lived_cursor_shapes(Some(&pointer_ids), SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        events.stabilize_short_lived_cursor_shapes(
+            Some(&pointer_ids),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
 
-        assert!(events
-            .moves
-            .iter()
-            .all(|event| event.cursor_id == "pointer"));
-        assert!(events
-            .clicks
-            .iter()
-            .all(|event| event.cursor_id == "pointer"));
+        assert!(
+            events
+                .moves
+                .iter()
+                .all(|event| event.cursor_id == "pointer")
+        );
+        assert!(
+            events
+                .clicks
+                .iter()
+                .all(|event| event.cursor_id == "pointer")
+        );
     }
 
     #[test]
@@ -344,7 +347,10 @@ mod tests {
             clicks: vec![click_event(400.0, "ibeam")],
         };
 
-        events.stabilize_short_lived_cursor_shapes(Some(&pointer_ids), SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+        events.stabilize_short_lived_cursor_shapes(
+            Some(&pointer_ids),
+            SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+        );
 
         assert_eq!(events.moves[1].cursor_id, "ibeam");
         assert_eq!(events.clicks[0].cursor_id, "ibeam");
@@ -364,13 +370,17 @@ mod tests {
 
         events.stabilize_short_lived_cursor_shapes(None, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
 
-        assert!(events
-            .moves
-            .iter()
-            .all(|event| event.cursor_id == "pointer"));
-        assert!(events
-            .clicks
-            .iter()
-            .all(|event| event.cursor_id == "pointer"));
+        assert!(
+            events
+                .moves
+                .iter()
+                .all(|event| event.cursor_id == "pointer")
+        );
+        assert!(
+            events
+                .clicks
+                .iter()
+                .all(|event| event.cursor_id == "pointer")
+        );
     }
 }

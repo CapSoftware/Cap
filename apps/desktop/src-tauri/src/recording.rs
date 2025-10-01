@@ -1,10 +1,10 @@
 use cap_fail::fail;
+use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_project::{
     CursorClickEvent, CursorMoveEvent, Platform, ProjectConfiguration, RecordingMeta,
-    RecordingMetaInner, SharingMeta, StudioRecordingMeta, TimelineConfiguration,
-    TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
+    RecordingMetaInner, SharingMeta, StudioRecordingMeta, TimelineConfiguration, TimelineSegment,
+    ZoomMode, ZoomSegment, cursor::CursorEvents,
 };
-use cap_project::cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS;
 use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
@@ -1013,9 +1013,8 @@ fn generate_zoom_segments_from_clicks_impl(
             window_distance = 0.0;
         }
 
-        let significant_movement =
-            distance >= MOVEMENT_EVENT_DISTANCE_THRESHOLD
-                || window_distance >= MOVEMENT_WINDOW_DISTANCE_THRESHOLD;
+        let significant_movement = distance >= MOVEMENT_EVENT_DISTANCE_THRESHOLD
+            || window_distance >= MOVEMENT_WINDOW_DISTANCE_THRESHOLD;
 
         if !significant_movement {
             continue;
@@ -1191,13 +1190,13 @@ mod tests {
 
     #[test]
     fn skips_trailing_stop_click() {
-        let segments = generate_zoom_segments_from_clicks_impl(
-            vec![click_event(11_900.0)],
-            vec![],
-            12.0,
-        );
+        let segments =
+            generate_zoom_segments_from_clicks_impl(vec![click_event(11_900.0)], vec![], 12.0);
 
-        assert!(segments.is_empty(), "expected trailing stop click to be ignored");
+        assert!(
+            segments.is_empty(),
+            "expected trailing stop click to be ignored"
+        );
     }
 
     #[test]
@@ -1211,7 +1210,10 @@ mod tests {
 
         let segments = generate_zoom_segments_from_clicks_impl(clicks, moves, 20.0);
 
-        assert!(!segments.is_empty(), "expected activity to produce zoom segments");
+        assert!(
+            !segments.is_empty(),
+            "expected activity to produce zoom segments"
+        );
         let first = &segments[0];
         assert!(first.start < first.end);
         assert!(first.end - first.start >= 1.3);
@@ -1230,6 +1232,9 @@ mod tests {
 
         let segments = generate_zoom_segments_from_clicks_impl(Vec::new(), jitter_moves, 15.0);
 
-        assert!(segments.is_empty(), "small jitter should not generate segments");
+        assert!(
+            segments.is_empty(),
+            "small jitter should not generate segments"
+        );
     }
 }

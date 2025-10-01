@@ -11,8 +11,8 @@ use tracing::{debug, info, warn};
 // use tracing::{debug, warn};
 
 use crate::{
-    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS, CaptionsData, CursorEvents, CursorImage,
-    ProjectConfiguration, XY,
+    CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
+    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
