@@ -28,7 +28,7 @@ const encryptedTextNullable = (name: string) => text(name);
 export const users = mysqlTable(
 	"users",
 	{
-		id: nanoId("id").notNull().primaryKey().unique(),
+		id: nanoId("id").primaryKey().unique(),
 		name: varchar("name", { length: 255 }),
 		lastName: varchar("lastName", { length: 255 }),
 		email: varchar("email", { length: 255 }).unique().notNull(),
@@ -63,7 +63,7 @@ export const users = mysqlTable(
 				};
 			} | null>()
 			.default(null),
-		activeOrganizationId: nanoId("activeOrganizationId"),
+		activeOrganizationId: nanoIdNullable("activeOrganizationId"),
 		created_at: timestamp("created_at").notNull().defaultNow(),
 		updated_at: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
@@ -300,7 +300,7 @@ export const comments = mysqlTable(
 		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
-		parentCommentId: nanoId("parentCommentId"),
+		parentCommentId: nanoIdNullable("parentCommentId"),
 	},
 	(table) => ({
 		videoIdIndex: index("video_id_idx").on(table.videoId),

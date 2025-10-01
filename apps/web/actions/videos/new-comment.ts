@@ -3,12 +3,19 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
-import { comments } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
+import { comments, videos } from "@cap/database/schema";
+import { Video } from "@cap/web-domain";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
+import { eq } from "drizzle-orm";
 
-export async function newComment(data: {
+export async function newComment({
+	content,
+	videoId,
+	type,
+	parentCommentId,
+	timestamp,
+}: {
 	content: string;
 	videoId: Video.VideoId;
 	type: "text" | "emoji";
@@ -16,29 +23,23 @@ export async function newComment(data: {
 	timestamp: number;
 }) {
 	const user = await getCurrentUser();
+	if (!user) throw new Error("User not authenticated");
 
-	if (!user) {
-		throw new Error("User not authenticated");
-	}
-
-	const content = data.content;
-	const videoId = data.videoId;
-	const type = data.type;
-	const parentCommentId = data.parentCommentId;
-	const timestamp = data.timestamp;
 	const conditionalType = parentCommentId
 		? "reply"
 		: type === "emoji"
 			? "reaction"
 			: "comment";
 
-	if (!content || !videoId) {
-		throw new Error("Content and videoId are required");
-	}
-	const id = nanoId();
+	const [video] = await db()
+		.select({ orgId: videos.orgId })
+		.from(videos)
+		.where(eq(videos.id, videoId));
+	if (!content || !videoId) throw new Error("Content and videoId are required");
+	if (!video) throw new Error("Video not found");
 
 	const newComment = {
-		id: id,
+		id: nanoId(),
 		authorId: user.id,
 		type: type,
 		content: content,
@@ -56,7 +57,7 @@ export async function newComment(data: {
 			type: conditionalType,
 			videoId,
 			authorId: user.id,
-			comment: { id, content },
+			comment: { id: newComment.id, content },
 			parentCommentId,
 		});
 	} catch (error) {
