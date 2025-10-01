@@ -29,10 +29,6 @@ export const Settings = ({
 		user?.defaultOrgId || undefined,
 	);
 
-	if (!defaultOrgId && user?.defaultOrgId) setDefaultOrgId(user.defaultOrgId);
-	if (!defaultOrgId && organizationData?.[0])
-		setDefaultOrgId(organizationData[0].organization.id);
-
 	// Track if form has unsaved changes
 	const hasChanges =
 		firstName !== (user?.name || "") ||
