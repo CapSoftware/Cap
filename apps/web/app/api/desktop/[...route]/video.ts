@@ -148,6 +148,7 @@ app.get(
 						.where(eq(users.id, user.id));
 				} else videoOrgId = user.defaultOrgId;
 			}
+			if (!videoOrgId) throw new Error("Unreachable");
 
 			const idToUse = Video.VideoId.make(nanoId());
 
