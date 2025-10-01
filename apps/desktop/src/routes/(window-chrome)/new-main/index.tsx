@@ -373,13 +373,11 @@ function Page() {
 			"captureTarget",
 			reconcile({ variant: "window", id: target.id }),
 		);
+		setOptions("targetMode", "window");
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
 		await commands.focusWindow(target.id);
-
-		await new Promise((resolve) => setTimeout(resolve, 100));
-		setOptions("targetMode", "window");
 	};
 
 	createEffect(() => {

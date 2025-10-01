@@ -154,20 +154,20 @@ pub async fn focus_window(window_id: WindowId) -> Result<(), String> {
             .owner_pid()
             .ok_or("Could not get window owner PID")?;
 
-        if let Some(app) = unsafe {
-            NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
-        } {
+        if let Some(app) =
+            unsafe { NSRunningApplication::runningApplicationWithProcessIdentifier(pid) }
+        {
             unsafe {
-                app.activateWithOptions(
-                    NSApplicationActivationOptions::ActivateIgnoringOtherApps,
-                );
+                app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
             }
         }
     }
 
     #[cfg(target_os = "windows")]
     {
-        use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SW_RESTORE, SetForegroundWindow, ShowWindow,
+        };
 
         let hwnd = window.raw_handle().inner();
 

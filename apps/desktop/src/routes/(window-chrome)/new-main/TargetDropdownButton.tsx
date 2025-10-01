@@ -7,6 +7,8 @@ import IconCapChevronDown from "~icons/cap/chevron-down";
 type TargetDropdownButtonProps<T extends ValidComponent> = PolymorphicProps<
 	T,
 	{
+		class?: string;
+		disabled?: boolean;
 		expanded?: boolean;
 	}
 >;
