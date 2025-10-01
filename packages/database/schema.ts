@@ -1,7 +1,6 @@
 import type { Folder, S3Bucket, Video } from "@cap/web-domain";
 import {
 	boolean,
-	customType,
 	datetime,
 	float,
 	index,
@@ -11,7 +10,6 @@ import {
 	primaryKey,
 	text,
 	timestamp,
-	tinyint,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
@@ -20,30 +18,12 @@ import { relations } from "drizzle-orm/relations";
 import { nanoIdLength } from "./helpers.ts";
 import type { VideoMetadata } from "./types/index.ts";
 
-const nanoId = customType<{ data: string; notNull: true }>({
-	dataType() {
-		return `varchar(${nanoIdLength})`;
-	},
-});
-
-const nanoIdNullable = customType<{ data: string; notNull: false }>({
-	dataType() {
-		return `varchar(${nanoIdLength})`;
-	},
-});
-
-// Add a custom type for encrypted strings
-const encryptedText = customType<{ data: string; notNull: true }>({
-	dataType() {
-		return "text";
-	},
-});
-
-const encryptedTextNullable = customType<{ data: string; notNull: false }>({
-	dataType() {
-		return "text";
-	},
-});
+const nanoId = (name: string) =>
+	varchar(name, { length: nanoIdLength }).notNull();
+const nanoIdNullable = (name: string) =>
+	varchar(name, { length: nanoIdLength });
+const encryptedText = (name: string) => text(name).notNull();
+const encryptedTextNullable = (name: string) => text(name);
 
 export const users = mysqlTable(
 	"users",
