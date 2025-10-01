@@ -1,6 +1,6 @@
 import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
-import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 const CHUNK_SIZE = 500;
 
