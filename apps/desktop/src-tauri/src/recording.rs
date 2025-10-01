@@ -635,7 +635,7 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
     use scap_direct3d::{Capturer, Settings};
     use std::io::Cursor;
 
-    let item = display.raw_handle().get_capture_item().ok()?;
+    let item = display.raw_handle().try_as_capture_item().ok()?;
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -645,7 +645,7 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
         ..Default::default()
     };
 
-    let capturer = Capturer::new(
+    let mut capturer = Capturer::new(
         item,
         settings.clone(),
         move |frame| {
@@ -696,7 +696,7 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
             thumbnail.as_raw(),
             thumbnail.width(),
             thumbnail.height(),
-            ColorType::Rgba8,
+            ColorType::Rgba8.into(),
         )
         .ok()?;
 
@@ -719,7 +719,7 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
     use scap_direct3d::{Capturer, Settings};
     use std::io::Cursor;
 
-    let item = window.raw_handle().get_capture_item().ok()?;
+    let item = window.raw_handle().try_as_capture_item().ok()?;
 
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -729,7 +729,7 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
         ..Default::default()
     };
 
-    let capturer = Capturer::new(
+    let mut capturer = Capturer::new(
         item,
         settings.clone(),
         move |frame| {
@@ -780,7 +780,7 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
             thumbnail.as_raw(),
             thumbnail.width(),
             thumbnail.height(),
-            ColorType::Rgba8,
+            ColorType::Rgba8.into(),
         )
         .ok()?;
 
