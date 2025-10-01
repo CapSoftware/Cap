@@ -74,20 +74,18 @@ async function backfillUserDefaultOrgIds(): Promise<{
 
 	let updated = 0;
 
-	while (true) {
-		const updateResult = await db()
-			.update(users)
-			.set({
-				defaultOrgId: users.activeOrganizationId,
-			})
-			.where(
-				and(isNull(users.defaultOrgId), isNotNull(users.activeOrganizationId)),
-			);
-		const rowsUpdated = updateResult.rowsAffected || 0;
-		updated += rowsUpdated;
+	const updateResult = await db()
+		.update(users)
+		.set({
+			defaultOrgId: users.activeOrganizationId,
+		})
+		.where(
+			and(isNull(users.defaultOrgId), isNotNull(users.activeOrganizationId)),
+		);
+	const rowsUpdated = updateResult.rowsAffected || 0;
+	updated += rowsUpdated;
 
-		console.log(`👥 Assigned defaultOrgId to ${updated} users`);
-	}
+	console.log(`👥 Assigned defaultOrgId to ${updated} users`);
 }
 
 async function validateBackfill(): Promise<void> {
