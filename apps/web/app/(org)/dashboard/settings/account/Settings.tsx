@@ -11,7 +11,7 @@ import {
 } from "@cap/ui";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useDashboardContext } from "../../Contexts";
 import { patchAccountSettings } from "./server";
@@ -29,6 +29,12 @@ export const Settings = ({
 		user?.defaultOrgId || undefined,
 	);
 
+	// Track if form has unsaved changes
+	const hasChanges =
+		firstName !== (user?.name || "") ||
+		lastName !== (user?.lastName || "") ||
+		defaultOrgId !== user?.defaultOrgId;
+
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
 			await patchAccountSettings(
@@ -45,6 +51,19 @@ export const Settings = ({
 			toast.error("Failed to update name");
 		},
 	});
+
+	// Prevent navigation when there are unsaved changes
+	useEffect(() => {
+		const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+			if (hasChanges) {
+				e.preventDefault();
+				e.returnValue = "";
+			}
+		};
+
+		window.addEventListener("beforeunload", handleBeforeUnload);
+		return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+	}, [hasChanges]);
 
 	return (
 		<form
