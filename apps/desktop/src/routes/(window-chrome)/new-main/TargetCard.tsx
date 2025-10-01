@@ -154,7 +154,7 @@ export default function TargetCard(props: TargetCardProps) {
 						alt={`${
 							local.variant === "display" ? "Display" : "Window"
 						} preview for ${label()}`}
-						class="object-contain w-full h-full"
+						class="object-cover w-full h-full"
 						loading="lazy"
 						draggable={false}
 					/>
