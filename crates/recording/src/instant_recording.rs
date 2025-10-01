@@ -3,12 +3,11 @@ use crate::{
     capture_pipeline::{MakeCapturePipeline, ScreenCaptureMethod, Stop, create_screen_capture},
     feeds::microphone::MicrophoneFeedLock,
     output_pipeline::{self, OutputPipeline},
-    sources::{ScreenCaptureConfig, ScreenCaptureTarget},
+    sources::screen_capture::{ScreenCaptureConfig, ScreenCaptureTarget},
 };
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_project::InstantRecordingMeta;
 use cap_utils::ensure_dir;
-use futures::FutureExt;
 use kameo::{Actor as _, prelude::*};
 use std::{
     path::PathBuf,
@@ -22,7 +21,6 @@ use tracing::*;
 
 struct Pipeline {
     output: OutputPipeline,
-    pub pause_flag: Arc<AtomicBool>,
 }
 
 enum ActorState {
@@ -122,7 +120,7 @@ impl Message<Pause> for Actor {
                 segment_start_time,
             } = state
             {
-                pipeline.pause_flag.store(true, Ordering::Relaxed);
+                pipeline.output.pause();
                 return ActorState::Paused {
                     pipeline,
                     segment_start_time,
@@ -146,7 +144,7 @@ impl Message<Resume> for Actor {
                 segment_start_time,
             } = state
             {
-                pipeline.pause_flag.store(true, Ordering::Relaxed);
+                pipeline.output.resume();
                 return ActorState::Recording {
                     pipeline,
                     segment_start_time,
@@ -192,17 +190,15 @@ async fn create_pipeline(
 
     let (screen_capture, system_audio) = screen_source.to_capturer_sources().await?;
 
-    let pause_flag = Arc::new(AtomicBool::new(false));
     let output = ScreenCaptureMethod::make_instant_mode_pipeline(
         screen_capture,
         system_audio,
         mic_feed,
         output_path.clone(),
-        pause_flag.clone(),
     )
     .await?;
 
-    Ok(Pipeline { output, pause_flag })
+    Ok(Pipeline { output })
 }
 
 impl Actor {

@@ -7,29 +7,46 @@ use cap_media_info::AudioInfo;
 use futures::{SinkExt, channel::mpsc};
 use std::sync::Arc;
 
-pub struct Microphone(pub Arc<MicrophoneFeedLock>);
+pub struct MicrophoneConfig(pub Arc<MicrophoneFeedLock>);
+pub struct Microphone(AudioInfo);
 
 impl AudioSource for Microphone {
-    async fn setup(self, mut audio_tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> {
-        let audio_info = self.0.audio_info();
-        let (tx, rx) = flume::bounded(8);
+    type Config = MicrophoneConfig;
 
+    fn setup(
+        config: Self::Config,
+        mut audio_tx: mpsc::Sender<AudioFrame>,
+        _: &mut crate::SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static
+    where
+        Self: Sized,
+    {
+        async move {
+            let audio_info = config.0.audio_info();
+            let (tx, rx) = flume::bounded(8);
+
+            config
+                .0
+                .ask(microphone::AddSender(tx))
+                .await
+                .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
+
+            tokio::spawn(async move {
+                while let Ok(frame) = rx.recv_async().await {
+                    let _ = audio_tx
+                        .send(AudioFrame::new(
+                            audio_info.wrap_frame(&frame.data),
+                            frame.timestamp,
+                        ))
+                        .await;
+                }
+            });
+
+            Ok(Self(audio_info))
+        }
+    }
+
+    fn audio_info(&self) -> AudioInfo {
         self.0
-            .ask(microphone::AddSender(tx))
-            .await
-            .map_err(|e| anyhow!("Failed to add camera sender: {e}"))?;
-
-        tokio::spawn(async move {
-            while let Ok(frame) = rx.recv_async().await {
-                let _ = audio_tx
-                    .send(AudioFrame::new(
-                        audio_info.wrap_frame(&frame.data),
-                        frame.timestamp,
-                    ))
-                    .await;
-            }
-        });
-
-        Ok(audio_info)
     }
 }

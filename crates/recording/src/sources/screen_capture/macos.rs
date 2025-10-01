@@ -1,16 +1,18 @@
+use super::*;
+use crate::{
+    ChannelAudioSourceConfig,
+    output_pipeline::{
+        self, AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig,
+        SetupCtx,
+    },
+};
+use anyhow::anyhow;
+use cidre::*;
+use futures::{FutureExt, channel::mpsc, future::BoxFuture};
 use std::sync::{
     Arc,
     atomic::{self, AtomicBool},
 };
-
-use super::*;
-use crate::output_pipeline::{
-    self, AudioFrame, ChannelAudioSource, ChannelVideoSource, ChannelVideoSourceConfig, SetupCtx,
-};
-use anyhow::anyhow;
-use cidre::*;
-use futures::{FutureExt, SinkExt, channel::mpsc, future::BoxFuture};
-use kameo::prelude::*;
 use tokio::sync::broadcast;
 use tracing::debug;
 
@@ -31,86 +33,6 @@ impl ScreenCaptureFormat for CMSampleBufferCapture {
             2,
         )
         .unwrap()
-    }
-}
-
-#[derive(Actor)]
-struct FrameHandler {
-    video_tx: Sender<(arc::R<cm::SampleBuf>, Timestamp)>,
-    audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
-}
-
-impl Message<NewFrame> for FrameHandler {
-    type Reply = ();
-
-    async fn handle(
-        &mut self,
-        msg: NewFrame,
-        _: &mut kameo::prelude::Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let frame = msg.0;
-        let sample_buffer = frame.sample_buf();
-
-        let mach_timestamp = cm::Clock::convert_host_time_to_sys_units(sample_buffer.pts());
-        let timestamp =
-            Timestamp::MachAbsoluteTime(cap_timestamp::MachAbsoluteTimestamp::new(mach_timestamp));
-
-        match &frame {
-            scap_screencapturekit::Frame::Screen(frame) => {
-                if frame.image_buf().height() == 0 || frame.image_buf().width() == 0 {
-                    return;
-                }
-
-                let check_skip_send = || {
-                    cap_fail::fail_err!("media::sources::screen_capture::skip_send", ());
-
-                    Ok::<(), ()>(())
-                };
-
-                if check_skip_send().is_ok()
-                    && self
-                        .video_tx
-                        .send((sample_buffer.retained(), timestamp))
-                        .is_err()
-                {
-                    warn!("Pipeline is unreachable");
-                }
-            }
-            scap_screencapturekit::Frame::Audio(_) => {
-                use ffmpeg::ChannelLayout;
-
-                let res = || {
-                    cap_fail::fail_err!("screen_capture audio skip", ());
-                    Ok::<(), ()>(())
-                };
-                if res().is_err() {
-                    return;
-                }
-
-                let Some(audio_tx) = &self.audio_tx else {
-                    return;
-                };
-
-                let buf_list = sample_buffer.audio_buf_list::<2>().unwrap();
-                let slice = buf_list.block().as_slice().unwrap();
-
-                let mut frame = ffmpeg::frame::Audio::new(
-                    ffmpeg::format::Sample::F32(ffmpeg::format::sample::Type::Planar),
-                    sample_buffer.num_samples() as usize,
-                    ChannelLayout::STEREO,
-                );
-                frame.set_rate(48_000);
-                let data_bytes_size = buf_list.list().buffers[0].data_bytes_size;
-                for i in 0..frame.planes() {
-                    frame.data_mut(i).copy_from_slice(
-                        &slice[i * data_bytes_size as usize..(i + 1) * data_bytes_size as usize],
-                    );
-                }
-
-                let _ = audio_tx.send((frame, timestamp));
-            }
-            _ => {}
-        }
     }
 }
 
@@ -145,7 +67,7 @@ impl output_pipeline::VideoFrame for VideoFrame {
 impl ScreenCaptureConfig<CMSampleBufferCapture> {
     pub async fn to_capturer_sources(
         &self,
-    ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSource>)> {
+    ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = broadcast::channel(1);
         let (mut video_tx, video_rx) = mpsc::channel(4);
         let (mut audio_tx, audio_rx) = if self.system_audio {
@@ -288,8 +210,8 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
                 error_rx.resubscribe(),
             ),
             audio_rx.map(|rx| {
-                SystemAudioSource(
-                    ChannelAudioSource::new(self.audio_info(), rx),
+                SystemAudioSourceConfig(
+                    ChannelAudioSourceConfig::new(self.audio_info(), rx),
                     capturer,
                     error_rx,
                 )
@@ -410,15 +332,34 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 }
 
-pub struct SystemAudioSource(
-    ChannelAudioSource,
+pub struct SystemAudioSourceConfig(
+    ChannelAudioSourceConfig,
     Capturer,
     broadcast::Receiver<arc::R<ns::Error>>,
 );
 
+pub struct SystemAudioSource(ChannelAudioSource, Capturer);
+
 impl output_pipeline::AudioSource for SystemAudioSource {
-    async fn setup(self, tx: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioInfo> {
-        self.0.setup(tx).await
+    type Config = SystemAudioSourceConfig;
+
+    fn setup(
+        mut config: Self::Config,
+        tx: mpsc::Sender<AudioFrame>,
+        ctx: &mut SetupCtx,
+    ) -> impl Future<Output = anyhow::Result<Self>> + 'static
+    where
+        Self: Sized,
+    {
+        ctx.tasks().spawn("system-audio", async move {
+            if let Ok(err) = config.2.recv().await {
+                return Err(anyhow!("{err}"));
+            }
+
+            Ok(())
+        });
+
+        ChannelAudioSource::setup(config.0, tx, ctx).map(|v| v.map(|source| Self(source, config.1)))
     }
 
     async fn start(&mut self) -> anyhow::Result<()> {
@@ -431,5 +372,9 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         self.1.stop().await?;
 
         Ok(())
+    }
+
+    fn audio_info(&self) -> AudioInfo {
+        self.0.audio_info()
     }
 }

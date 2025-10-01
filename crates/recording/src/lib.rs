@@ -2,14 +2,12 @@ mod audio_buffer;
 mod capture_pipeline;
 pub mod cursor;
 pub mod feeds;
-mod ffmpeg;
 pub mod instant_recording;
 mod output_pipeline;
 pub mod sources;
 pub mod studio_recording;
 
 pub use feeds::{camera::CameraFeed, microphone::MicrophoneFeed};
-pub use ffmpeg::*;
 pub use output_pipeline::*;
 pub use sources::screen_capture;
 
@@ -17,11 +15,10 @@ use cap_media::MediaError;
 use feeds::microphone::MicrophoneFeedLock;
 use scap_targets::bounds::LogicalBounds;
 use serde::{Deserialize, Serialize};
-use sources::*;
 use std::sync::Arc;
 use thiserror::Error;
 
-use crate::feeds::camera::CameraFeedLock;
+use crate::{feeds::camera::CameraFeedLock, sources::screen_capture::ScreenCaptureTarget};
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug, Copy, Default)]
 #[serde(rename_all = "camelCase")]

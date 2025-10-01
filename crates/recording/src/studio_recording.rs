@@ -5,13 +5,13 @@ use crate::{
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
     output_pipeline::{AudioFrame, FinishedOutputPipeline, OutputPipeline},
-    sources::{self, ScreenCaptureFormat, ScreenCaptureTarget},
+    sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{FutureExt, StreamExt, channel::mpsc, future::OptionFuture};
+use futures::{StreamExt, channel::mpsc, future::OptionFuture};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
 use std::{
@@ -19,7 +19,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tracing::{debug, info, trace};
+use tracing::{Instrument, debug, error_span, info, trace};
 
 #[allow(clippy::large_enum_variant)]
 enum ActorState {
@@ -40,14 +40,14 @@ enum ActorState {
 #[derive(Clone)]
 pub struct ActorHandle {
     actor_ref: kameo::actor::ActorRef<Actor>,
-    pub capture_target: ScreenCaptureTarget,
+    pub capture_target: screen_capture::ScreenCaptureTarget,
     // pub bounds: Bounds,
 }
 
 #[derive(kameo::Actor)]
 pub struct Actor {
     recording_dir: PathBuf,
-    capture_target: ScreenCaptureTarget,
+    capture_target: screen_capture::ScreenCaptureTarget,
     video_info: VideoInfo,
     state: Option<ActorState>,
     fps: u32,
@@ -283,14 +283,17 @@ impl ActorHandle {
 }
 
 impl Actor {
-    pub fn builder(output: PathBuf, capture_target: ScreenCaptureTarget) -> ActorBuilder {
+    pub fn builder(
+        output: PathBuf,
+        capture_target: screen_capture::ScreenCaptureTarget,
+    ) -> ActorBuilder {
         ActorBuilder::new(output, capture_target)
     }
 }
 
 pub struct ActorBuilder {
     output_path: PathBuf,
-    capture_target: ScreenCaptureTarget,
+    capture_target: screen_capture::ScreenCaptureTarget,
     system_audio: bool,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     camera_feed: Option<Arc<CameraFeedLock>>,
@@ -298,7 +301,7 @@ pub struct ActorBuilder {
 }
 
 impl ActorBuilder {
-    pub fn new(output: PathBuf, capture_target: ScreenCaptureTarget) -> Self {
+    pub fn new(output: PathBuf, capture_target: screen_capture::ScreenCaptureTarget) -> Self {
         Self {
             output_path: output,
             capture_target,
@@ -577,7 +580,7 @@ async fn create_segment_pipeline(
     segments_dir: &PathBuf,
     cursors_dir: &Path,
     index: u32,
-    capture_target: ScreenCaptureTarget,
+    capture_target: screen_capture::ScreenCaptureTarget,
     mic_feed: Option<Arc<MicrophoneFeedLock>>,
     capture_system_audio: bool,
     camera_feed: Option<Arc<CameraFeedLock>>,
@@ -631,51 +634,38 @@ async fn create_segment_pipeline(
     .await
     .context("screen pipeline setup")?;
 
-    let camera = if let Some(camera_feed) = camera_feed {
-        let output_path = dir.join("camera.mp4");
-
-        let output = OutputPipeline::builder(output_path.clone())
+    let camera = OptionFuture::from(camera_feed.map(|camera_feed| {
+        OutputPipeline::builder(dir.join("camera.mp4"))
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
             .build::<Mp4Muxer>(())
-            .await
-            .context("camera pipeline setup")?;
+    }))
+    .instrument(error_span!("camera-output"))
+    .await
+    .transpose()
+    .context("camera pipeline setup")?;
 
-        info!(
-            "camera pipeline prepared, will output to {}",
-            output_path.strip_prefix(segments_dir).unwrap().display()
-        );
+    let microphone = OptionFuture::from(mic_feed.map(|mic_feed| {
+        OutputPipeline::builder(dir.join("audio-input.ogg"))
+            .with_audio_source::<sources::Microphone>(sources::MicrophoneConfig(mic_feed))
+            .with_timestamps(start_time)
+            .build::<OggMuxer>(())
+    }))
+    .instrument(error_span!("mic-output"))
+    .await
+    .transpose()
+    .context("microphone pipeline setup")?;
 
-        Some(output)
-    } else {
-        None
-    };
-
-    let microphone = if let Some(mic_feed) = mic_feed {
-        Some(
-            OutputPipeline::builder(dir.join("audio-input.ogg"))
-                .with_audio_source(sources::Microphone(mic_feed))
-                .with_timestamps(start_time)
-                .build::<OggMuxer>(())
-                .await
-                .context("microphone pipeline setup")?,
-        )
-    } else {
-        None
-    };
-
-    let system_audio = if let Some(system_audio) = system_audio {
-        Some(
-            OutputPipeline::builder(dir.join("system_audio.ogg"))
-                .with_audio_source(system_audio)
-                .with_timestamps(start_time)
-                .build::<OggMuxer>(())
-                .await
-                .context("microphone pipeline setup")?,
-        )
-    } else {
-        None
-    };
+    let system_audio = OptionFuture::from(system_audio.map(|system_audio| {
+        OutputPipeline::builder(dir.join("system_audio.ogg"))
+            .with_audio_source::<screen_capture::SystemAudioSource>(system_audio)
+            .with_timestamps(start_time)
+            .build::<OggMuxer>(())
+    }))
+    .instrument(error_span!("system-audio-output"))
+    .await
+    .transpose()
+    .context("microphone pipeline setup")?;
 
     let cursor = custom_cursor_capture.then(move || {
         let cursor = spawn_cursor_recorder(

@@ -8,7 +8,10 @@ use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
-    sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+    sources::{
+        screen_capture,
+        screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
+    },
     studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;

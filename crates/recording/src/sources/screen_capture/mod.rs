@@ -1,12 +1,11 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::Timestamp;
-use flume::Sender;
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
-use tracing::{error, warn};
+use tracing::*;
 
 #[cfg(windows)]
 mod windows;
