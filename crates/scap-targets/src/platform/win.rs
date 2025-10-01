@@ -1145,6 +1145,11 @@ impl WindowImpl {
 
         true
     }
+
+    pub fn try_as_capture_item(&self) -> windows::core::Result<GraphicsCaptureItem> {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        unsafe { interop.CreateForWindow(self.0) }
+    }
 }
 
 fn is_window_valid_for_enumeration(hwnd: HWND, current_process_id: u32) -> bool {
