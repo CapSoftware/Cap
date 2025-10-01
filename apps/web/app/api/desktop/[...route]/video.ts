@@ -125,7 +125,7 @@ app.get(
 				.orderBy(organizations.createdAt);
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
-			let videoOrgId: string | undefined;
+			let videoOrgId: string;
 			if (orgId) {
 				// Hard error if the user requested org is non-existent or they don't have access.
 				if (!userOrgIds.includes(orgId))

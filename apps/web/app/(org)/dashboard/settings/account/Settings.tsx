@@ -33,7 +33,7 @@ export const Settings = ({
 	const hasChanges =
 		firstName !== (user?.name || "") ||
 		lastName !== (user?.lastName || "") ||
-		(defaultOrgId ?? null) !== (user?.defaultOrgId ?? null);
+		defaultOrgId !== user?.defaultOrgId;
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
@@ -139,7 +139,7 @@ export const Settings = ({
 				</Card>
 			</div>
 			<Button
-				disabled={!firstName || updateNamePending}
+				disabled={!firstName || updateNamePending || !hasChanges}
 				className="mt-6"
 				type="submit"
 				size="sm"
