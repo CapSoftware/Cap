@@ -144,7 +144,7 @@ export default function TargetCard(props: TargetCardProps) {
 				<Show
 					when={thumbnailSrc()}
 					fallback={
-						<div class="flex h-full w-full items-center justify-center bg-gray-4">
+						<div class="flex justify-center items-center w-full h-full bg-gray-4">
 							{renderIcon("size-6 text-gray-9 opacity-70")}
 						</div>
 					}
@@ -154,13 +154,13 @@ export default function TargetCard(props: TargetCardProps) {
 						alt={`${
 							local.variant === "display" ? "Display" : "Window"
 						} preview for ${label()}`}
-						class="h-full w-full object-contain"
+						class="object-cover w-full h-full"
 						loading="lazy"
 						draggable={false}
 					/>
 				</Show>
 				<Show when={appIconSrc()}>
-					<div class="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/45">
+					<div class="flex absolute inset-0 justify-center items-center pointer-events-none bg-black/45">
 						<img
 							src={appIconSrc()!}
 							alt={`${label()} icon`}
@@ -169,11 +169,11 @@ export default function TargetCard(props: TargetCardProps) {
 						/>
 					</div>
 				</Show>
-				<div class="pointer-events-none absolute inset-0 border border-black/5 opacity-60" />
-				<div class="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/40 to-transparent" />
+				<div class="absolute inset-0 border opacity-60 pointer-events-none border-black/5" />
+				<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t to-transparent pointer-events-none from-black/40" />
 			</div>
 			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
-				<div class="min-w-0 flex-1">
+				<div class="flex-1 min-w-0">
 					<p class="truncate text-[11px] font-medium text-gray-12">
 						{highlight(label())}
 					</p>
@@ -207,7 +207,7 @@ export function TargetCardSkeleton(props: { class?: string }) {
 			<div class="h-[4.75rem] w-full animate-pulse bg-gray-4" />
 			<div class="flex flex-row items-start gap-2 px-2 py-1.5">
 				<div class="flex-1 space-y-1">
-					<div class="h-3 w-3/4 rounded bg-gray-4" />
+					<div class="w-3/4 h-3 rounded bg-gray-4" />
 					<div class="h-2.5 w-1/2 rounded bg-gray-4" />
 					<div class="h-2.5 w-2/5 rounded bg-gray-4" />
 				</div>

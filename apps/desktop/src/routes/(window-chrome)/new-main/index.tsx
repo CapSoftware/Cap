@@ -27,8 +27,10 @@ import {
 	Suspense,
 } from "solid-js";
 import { reconcile } from "solid-js/store";
+import { Motion, Presence } from "solid-motionone";
 import { Transition } from "solid-transition-group";
 import Tooltip from "~/components/Tooltip";
+import { Input } from "~/routes/editor/ui";
 import { generalSettingsStore } from "~/store";
 import { createSignInMutation } from "~/utils/auth";
 import {
@@ -189,65 +191,68 @@ function TargetMenuPanel(props: TargetMenuPanelProps & SharedTargetMenuProps) {
 	});
 
 	return (
-		<div class="w-full flex flex-col pt-2">
-			<div class="flex items-center justify-between gap-2">
-				<button
-					type="button"
+		<div class="flex flex-col w-full">
+			<div class="flex gap-3 justify-between items-center mt-3">
+				<div
 					onClick={() => props.onBack()}
-					class="flex items-center gap-2 rounded-md px-1.5 py-1 text-xs text-gray-11 transition-colors hover:bg-gray-2 hover:text-gray-12 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
+					class="flex gap-1 items-center rounded-md px-1.5 text-xs 
+					text-gray-11 transition-opacity hover:opacity-70 hover:text-gray-12 
+					focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
 				>
-					<IconLucideArrowLeft class="size-4 text-gray-11" />
+					<IconLucideArrowLeft class="size-3 text-gray-11" />
 					<span class="font-medium text-gray-12">Back</span>
-				</button>
-				<div class="relative flex-1 min-w-0">
-					<IconLucideSearch class="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-gray-10" />
-					<input
+				</div>
+				<div class="relative flex-1 min-w-0 h-[36px] flex items-center">
+					<IconLucideSearch class="absolute left-2 top-[48%] -translate-y-1/2 pointer-events-none size-3 text-gray-10" />
+					<Input
 						type="search"
+						class="py-2 pl-6 h-full"
 						value={search()}
 						onInput={(event) => setSearch(event.currentTarget.value)}
-						placeholder={placeholder}
-						autoCapitalize="off"
-						autocorrect="off"
-						autocomplete="off"
-						spellcheck={false}
-						aria-label={placeholder}
 						onKeyDown={(event) => {
 							if (event.key === "Escape" && search()) {
 								event.preventDefault();
 								setSearch("");
 							}
 						}}
-						class="h-7 w-full rounded-md border border-transparent bg-gray-3 pl-7 pr-2 text-[11px] text-gray-12 placeholder:text-gray-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-9 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-1"
+						placeholder={placeholder}
+						autoCapitalize="off"
+						autocorrect="off"
+						autocomplete="off"
+						spellcheck={false}
+						aria-label={placeholder}
 					/>
 				</div>
 			</div>
-			<div
-				class="mt-2 overflow-y-auto scrollbar-none"
-				style="max-height: calc(256px - 100px)"
-			>
-				{props.variant === "display" ? (
-					<TargetMenuGrid
-						variant="display"
-						targets={filteredDisplayTargets()}
-						isLoading={props.isLoading}
-						errorMessage={props.errorMessage}
-						onSelect={props.onSelect}
-						disabled={props.disabled}
-						highlightQuery={trimmedSearch()}
-						emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
-					/>
-				) : (
-					<TargetMenuGrid
-						variant="window"
-						targets={filteredWindowTargets()}
-						isLoading={props.isLoading}
-						errorMessage={props.errorMessage}
-						onSelect={props.onSelect}
-						disabled={props.disabled}
-						highlightQuery={trimmedSearch()}
-						emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
-					/>
-				)}
+			<div class="pt-4">
+				<div
+					class="px-2 custom-scroll"
+					style="max-height: calc(256px - 100px - 1rem)"
+				>
+					{props.variant === "display" ? (
+						<TargetMenuGrid
+							variant="display"
+							targets={filteredDisplayTargets()}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							highlightQuery={trimmedSearch()}
+							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+						/>
+					) : (
+						<TargetMenuGrid
+							variant="window"
+							targets={filteredWindowTargets()}
+							isLoading={props.isLoading}
+							errorMessage={props.errorMessage}
+							onSelect={props.onSelect}
+							disabled={props.disabled}
+							highlightQuery={trimmedSearch()}
+							emptyMessage={trimmedSearch() ? noResultsMessage : undefined}
+						/>
+					)}
+				</div>
 			</div>
 		</div>
 	);
@@ -596,8 +601,14 @@ function Page() {
 	);
 
 	const TargetSelectionHome = () => (
-		<div class="flex w-full flex-col gap-2">
-			<div class="flex w-full flex-row gap-2 items-stretch text-xs text-gray-11">
+		<Motion.div
+			initial={{ scale: 0.95 }}
+			animate={{ scale: 1 }}
+			exit={{ scale: 0.95 }}
+			transition={{ duration: 0.2 }}
+			class="flex flex-col gap-2 w-full"
+		>
+			<div class="flex flex-row gap-2 items-stretch w-full text-xs text-gray-11">
 				<div
 					class={cx(
 						"flex flex-1 overflow-hidden rounded-lg bg-gray-3 ring-1 ring-transparent ring-offset-2 ring-offset-gray-1 transition focus-within:ring-blue-9 focus-within:ring-offset-2 focus-within:ring-offset-gray-1",
@@ -694,7 +705,7 @@ function Page() {
 				/>
 			</div>
 			<BaseControls />
-		</div>
+		</Motion.div>
 	);
 
 	const startSignInCleanup = listen("start-sign-in", async () => {
@@ -781,7 +792,7 @@ function Page() {
 									}
 								}}
 								class={cx(
-									"text-[0.6rem] rounded-full px-1.5 py-0.5",
+									"text-[0.6rem] ml-2 rounded-full px-1.5 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-300] text-gray-1 dark:text-gray-12"
 										: "bg-gray-4 cursor-pointer hover:bg-gray-5",
@@ -817,43 +828,37 @@ function Page() {
 				</div>
 			</Show>
 			<Show when={!signIn.isPending}>
-				<Transition
-					appear
-					enterActiveClass="animate-in fade-in slide-in-from-top-1 duration-200"
-					exitActiveClass="animate-out fade-out slide-out-to-top-1 duration-150"
-				>
-					<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
-						{(variant) =>
-							variant === "display" ? (
-								<TargetMenuPanel
-									variant="display"
-									targets={displayTargetsData()}
-									isLoading={displayMenuLoading()}
-									errorMessage={displayErrorMessage()}
-									onSelect={selectDisplayTarget}
-									disabled={isRecording()}
-									onBack={() => {
-										setDisplayMenuOpen(false);
-										displayTriggerRef?.focus();
-									}}
-								/>
-							) : (
-								<TargetMenuPanel
-									variant="window"
-									targets={windowTargetsData()}
-									isLoading={windowMenuLoading()}
-									errorMessage={windowErrorMessage()}
-									onSelect={selectWindowTarget}
-									disabled={isRecording()}
-									onBack={() => {
-										setWindowMenuOpen(false);
-										windowTriggerRef?.focus();
-									}}
-								/>
-							)
-						}
-					</Show>
-				</Transition>
+				<Show when={activeMenu()} keyed fallback={<TargetSelectionHome />}>
+					{(variant) =>
+						variant === "display" ? (
+							<TargetMenuPanel
+								variant="display"
+								targets={displayTargetsData()}
+								isLoading={displayMenuLoading()}
+								errorMessage={displayErrorMessage()}
+								onSelect={selectDisplayTarget}
+								disabled={isRecording()}
+								onBack={() => {
+									setDisplayMenuOpen(false);
+									displayTriggerRef?.focus();
+								}}
+							/>
+						) : (
+							<TargetMenuPanel
+								variant="window"
+								targets={windowTargetsData()}
+								isLoading={windowMenuLoading()}
+								errorMessage={windowErrorMessage()}
+								onSelect={selectWindowTarget}
+								disabled={isRecording()}
+								onBack={() => {
+									setWindowMenuOpen(false);
+									windowTriggerRef?.focus();
+								}}
+							/>
+						)
+					}
+				</Show>
 			</Show>
 		</div>
 	);
