@@ -121,7 +121,7 @@ app.get(
 					),
 				)
 				// Remove duplicates if user is both owner and member
-				.groupBy(organizations.id)
+				.groupBy(organizations.id, organizations.name)
 				.orderBy(organizations.createdAt);
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
