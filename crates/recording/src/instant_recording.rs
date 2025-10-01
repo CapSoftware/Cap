@@ -188,7 +188,7 @@ async fn create_pipeline(
         );
     };
 
-    let (screen_capture, system_audio) = screen_source.to_capturer_sources().await?;
+    let (screen_capture, system_audio) = screen_source.to_sources().await?;
 
     let output = ScreenCaptureMethod::make_instant_mode_pipeline(
         screen_capture,

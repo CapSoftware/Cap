@@ -618,7 +618,7 @@ async fn create_segment_pipeline(
     .await
     .unwrap();
 
-    let (capture_source, system_audio) = screen_config.to_capturer_sources().await?;
+    let (capture_source, system_audio) = screen_config.to_sources().await?;
 
     let dir = ensure_dir(&segments_dir.join(format!("segment-{index}")))?;
 
@@ -647,7 +647,7 @@ async fn create_segment_pipeline(
 
     let microphone = OptionFuture::from(mic_feed.map(|mic_feed| {
         OutputPipeline::builder(dir.join("audio-input.ogg"))
-            .with_audio_source::<sources::Microphone>(sources::MicrophoneConfig(mic_feed))
+            .with_audio_source::<sources::Microphone>(mic_feed)
             .with_timestamps(start_time)
             .build::<OggMuxer>(())
     }))

@@ -92,6 +92,8 @@ impl H264StreamMuxer {
 
         let mut packet = self.mf_sample_to_avpacket(sample)?;
 
+        dbg!(packet.pts());
+
         packet.rescale_ts(
             self.time_base,
             output.stream(self.stream_index).unwrap().time_base(),

@@ -77,12 +77,14 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
     ) -> anyhow::Result<OutputPipeline> {
+    let d3d_device = screen_capture.1.d3d_device().clone();
+
         OutputPipeline::builder(output_path.clone())
-            .with_video::<screen_capture::VideoSource>(source.clone())
+            .with_video::<screen_capture::VideoSource>(screen_capture)
             .with_timestamps(start_time)
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                d3d_device: source.d3d_device().clone(),
+                d3d_device,
                 bitrate_multiplier: 0.1f32,
                 frame_rate: 30u32,
             })
@@ -91,27 +93,28 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
     async fn make_instant_mode_pipeline(
         screen_capture: screen_capture::VideoSourceConfig,
-        system_audio: Option<screen_capture::SystemAudioSource>,
+        system_audio: Option<screen_capture::SystemAudioSourceConfig>,
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
     ) -> anyhow::Result<OutputPipeline> {
+    let d3d_device = screen_capture.1.d3d_device().clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
-            .with_video::<screen_capture::VideoSource>(source);
+            .with_video::<screen_capture::VideoSource>(screen_capture);
 
         if let Some(mic_feed) = mic_feed {
-            output_builder = output_builder.with_audio_source(sources::Microphone(mic_feed));
+            output_builder = output_builder.with_audio_source::<sources::Microphone>(mic_feed);
         }
 
         if let Some(system_audio) = system_audio {
-            output_builder = output_builder.with_audio_source(system_audio);
+            output_builder = output_builder.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
         }
 
         output_builder
             .build::<WindowsMuxer>(WindowsMuxerConfig {
                 pixel_format: screen_capture::Direct3DCapture::PIXEL_FORMAT.as_dxgi(),
-                d3d_device: source.d3d_device().clone(),
                 bitrate_multiplier: 0.15f32,
                 frame_rate: 30u32,
+                d3d_device,
             })
             .await
     }

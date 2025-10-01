@@ -9,7 +9,6 @@ use futures::{
     lock::Mutex,
     stream::FuturesUnordered,
 };
-use objc2_app_kit::NSCollectionLayoutSpacing;
 use std::{
     any::Any,
     future,
@@ -335,7 +334,7 @@ async fn setup_video_source<TVideo: VideoSource>(
     video_config: TVideo::Config,
     setup_ctx: &mut SetupCtx,
 ) -> anyhow::Result<(TVideo, mpsc::Receiver<TVideo::Frame>)> {
-    let (video_tx, video_rx) = mpsc::channel(4);
+    let (video_tx, video_rx) = mpsc::channel(8);
     let video_source = TVideo::setup(video_config, video_tx, setup_ctx).await?;
 
     Ok((video_source, video_rx))

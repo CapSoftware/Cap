@@ -2,10 +2,9 @@ use crate::{AudioFrame, AudioMuxer, Muxer, VideoMuxer, screen_capture};
 use anyhow::anyhow;
 use cap_enc_ffmpeg::AACEncoder;
 use cap_media_info::{AudioInfo, VideoInfo};
-use std::sync::mpsc::{SyncSender, sync_channel};
 use std::{
     path::PathBuf,
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool, mpsc::{SyncSender, sync_channel}},
     time::Duration,
 };
 use tracing::*;
@@ -14,6 +13,7 @@ use windows::{
     Graphics::SizeInt32,
     Win32::Graphics::{Direct3D11::ID3D11Device, Dxgi::Common::DXGI_FORMAT},
 };
+use futures::channel::oneshot;
 
 /// Muxes to MP4 using a combination of FFmpeg and Media Foundation
 pub struct WindowsMuxer {
@@ -54,53 +54,56 @@ impl Muxer for WindowsMuxer {
 
         let (first_frame_tx, first_frame_rx) = sync_channel::<Duration>(1);
 
+        // let video_encoder = {
+        //     cap_mediafoundation_utils::thread_init();
+
+        //     let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+        //         &config.d3d_device,
+        //         config.pixel_format,
+        //         SizeInt32 {
+        //             Width: video_config.width as i32,
+        //             Height: video_config.height as i32,
+        //         },
+        //         SizeInt32 {
+        //             Width: video_config.width as i32,
+        //             Height: video_config.height as i32,
+        //         },
+        //         config.frame_rate,
+        //         config.bitrate_multiplier,
+        //     );
+
+        //     match native_encoder {
+        //         Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+        //             &mut output,
+        //             cap_mediafoundation_ffmpeg::MuxerConfig {
+        //                 width: video_config.width,
+        //                 height: video_config.height,
+        //                 fps: config.frame_rate,
+        //                 bitrate: encoder.bitrate(),
+        //             },
+        //         )
+        //         .map(|muxer| either::Left((encoder, muxer)))
+        //         .map_err(|e| anyhow!("{e}")),
+        //         Err(e) => {
+        //             use tracing::{error, info};
+
+        //             error!("Failed to create native encoder: {e}");
+        //             info!("Falling back to software H264 encoder");
+
+        //             cap_enc_ffmpeg::H264Encoder::builder(video_config)
+        //                 .build(&mut output)
+        //                 .map(either::Right)
+        //                 .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
+        //         }
+        //     }?
+        // };
+
         let video_encoder = {
             cap_mediafoundation_utils::thread_init();
-
-            let native_encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
-                &config.d3d_device,
-                config.pixel_format,
-                SizeInt32 {
-                    Width: video_config.width as i32,
-                    Height: video_config.height as i32,
-                },
-                SizeInt32 {
-                    Width: video_config.width as i32,
-                    Height: video_config.height as i32,
-                },
-                config.frame_rate,
-                config.bitrate_multiplier,
-            );
-
-            match native_encoder {
-                Ok(encoder) => cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
-                    &mut output,
-                    cap_mediafoundation_ffmpeg::MuxerConfig {
-                        width: video_config.width,
-                        height: video_config.height,
-                        fps: config.frame_rate,
-                        bitrate: encoder.bitrate(),
-                    },
-                )
-                .map(|muxer| either::Left((encoder, muxer)))
-                .map_err(|e| anyhow!("{e}")),
-                Err(e) => {
-                    use tracing::{error, info};
-
-                    error!("Failed to create native encoder: {e}");
-                    info!("Falling back to software H264 encoder");
-
-                    cap_enc_ffmpeg::H264Encoder::builder(video_config)
-                        .build(&mut output)
-                        .map(either::Right)
-                        .map_err(|e| anyhow!("ScreenSoftwareEncoder/{e}"))
-                }
-            }?
         };
 
-        output.write_header()?;
-
         let output = Arc::new(Mutex::new(output));
+        let (ready_tx, ready_rx) = oneshot::channel();
 
         {
             let output = output.clone();
@@ -108,15 +111,46 @@ impl Muxer for WindowsMuxer {
             std::thread::spawn(move || {
                 cap_mediafoundation_utils::thread_init();
 
-                match video_encoder {
-                    either::Left((mut encoder, mut muxer)) => {
-                        trace!("Running native encoder");
+	            let mut encoder = cap_enc_mediafoundation::H264Encoder::new_with_scaled_output(
+	                &config.d3d_device,
+	                config.pixel_format,
+	                SizeInt32 {
+	                    Width: video_config.width as i32,
+	                    Height: video_config.height as i32,
+	                },
+	                SizeInt32 {
+	                    Width: video_config.width as i32,
+	                    Height: video_config.height as i32,
+	                },
+	                config.frame_rate,
+	                config.bitrate_multiplier,
+	            ).unwrap();
+
+	            let mut muxer = {
+					let mut output = output.lock().unwrap();
+					cap_mediafoundation_ffmpeg::H264StreamMuxer::new(
+			            &mut output,
+			            cap_mediafoundation_ffmpeg::MuxerConfig {
+			                width: video_config.width,
+			                height: video_config.height,
+			                fps: config.frame_rate,
+			                bitrate: encoder.bitrate(),
+			            },
+	                ).unwrap()
+				};
+
+				ready_tx.send(());
+
+                // match video_encoder {
+                //     either::Left((mut encoder, mut muxer)) => {
+                //         trace!("Running native encoder");
                         let mut first_timestamp = None;
                         encoder
                             .run(
                                 Arc::new(AtomicBool::default()),
                                 || {
                                     let Ok((frame, _)) = video_rx.recv() else {
+                                    println!("NO MORE FRAMES?!");
                                         return Ok(None);
                                     };
 
@@ -126,9 +160,13 @@ impl Muxer for WindowsMuxer {
                                         Duration: frame_time.Duration - first_timestamp.Duration,
                                     };
 
+                                    dbg!(frame_time);
+
                                     Ok(Some((frame.texture().clone(), frame_time)))
                                 },
                                 |output_sample| {
+                                	dbg!(&output_sample);
+
                                     let mut output = output.lock().unwrap();
 
                                     let _ = muxer
@@ -139,34 +177,38 @@ impl Muxer for WindowsMuxer {
                                 },
                             )
                             .unwrap();
-                    }
-                    either::Right(mut encoder) => {
-                        while let Ok((frame, time)) = video_rx.recv() {
-                            let Ok(mut output) = output.lock() else {
-                                continue;
-                            };
+                //     }
+                //     either::Right(mut encoder) => {
+                //         while let Ok((frame, time)) = video_rx.recv() {
+                //             let Ok(mut output) = output.lock() else {
+                //                 continue;
+                //             };
 
-                            // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                            //     mp4.pause();
-                            // } else {
-                            //     mp4.resume();
-                            // }
+                //             // if pause_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                //             //     mp4.pause();
+                //             // } else {
+                //             //     mp4.resume();
+                //             // }
 
-                            use scap_ffmpeg::AsFFmpeg;
+                //             use scap_ffmpeg::AsFFmpeg;
 
-                            encoder.queue_frame(
-                                frame
-                                    .as_ffmpeg()
-                                    .map_err(|e| format!("FrameAsFFmpeg: {e}"))
-                                    .unwrap(),
-                                time,
-                                &mut output,
-                            );
-                        }
-                    }
-                }
+                //             encoder.queue_frame(
+                //                 frame
+                //                     .as_ffmpeg()
+                //                     .map_err(|e| format!("FrameAsFFmpeg: {e}"))
+                //                     .unwrap(),
+                //                 time,
+                //                 &mut output,
+                //             );
+                //         }
+                //     }
+                // }
             });
         }
+
+        let _ = ready_rx.await;
+
+        output.lock().unwrap().write_header()?;
 
         Ok(Self {
             video_tx,
@@ -197,7 +239,7 @@ impl VideoMuxer for WindowsMuxer {
             let _ = first_frame_tx.send(timestamp);
         }
 
-        Ok(self.video_tx.send((frame, timestamp))?)
+        Ok(self.video_tx.send((frame.frame, timestamp))?)
     }
 }
 

@@ -86,9 +86,9 @@ impl output_pipeline::VideoFrame for VideoFrame {
 }
 
 impl ScreenCaptureConfig<Direct3DCapture> {
-    pub fn to_source(&self) -> anyhow::Result<VideoSourceConfig> {
+	pub async fn to_sources(&self) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = oneshot::channel();
-        let (video_tx, video_rx) = mpsc::channel(4);
+        let (mut video_tx, video_rx) = mpsc::channel(4);
 
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,
@@ -122,7 +122,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         }
 
         let display = Display::from_id(&self.config.display)
-            .ok_or_else(|| SourceError::NoDisplay(self.config.display))?;
+            .ok_or_else(|| SourceError::NoDisplay(self.config.display.clone()))?;
 
         let capture_item = display
             .raw_handle()
@@ -153,11 +153,14 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         )
         .map_err(StartCapturingError::CreateCapturer)?;
 
-        Ok(VideoSourceConfig(
-            ChannelVideoSourceConfig::new(self.video_info, video_rx),
-            capturer,
-            error_rx,
-        ))
+        Ok((
+	        VideoSourceConfig(
+	            ChannelVideoSourceConfig::new(self.video_info, video_rx),
+	            capturer,
+	            error_rx,
+	        ),
+			self.system_audio.then(|| SystemAudioSourceConfig)
+		))
     }
 }
 
@@ -169,7 +172,7 @@ pub enum VideoSourceError {
 
 pub struct VideoSourceConfig(
     ChannelVideoSourceConfig<VideoFrame>,
-    scap_direct3d::Capturer,
+    pub scap_direct3d::Capturer,
     oneshot::Receiver<VideoSourceError>,
 );
 pub struct VideoSource(ChannelVideoSource<VideoFrame>, scap_direct3d::Capturer);
@@ -200,7 +203,7 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 
     fn video_info(&self) -> VideoInfo {
-        self.1
+    	self.0.video_info()
     }
 
     fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
@@ -236,12 +239,14 @@ pub enum StartCapturingError {
     StartCapturer(::windows::core::Error),
 }
 
+pub struct SystemAudioSourceConfig;
+
 pub struct SystemAudioSource {
     capturer: scap_cpal::Capturer,
 }
 
 impl output_pipeline::AudioSource for SystemAudioSource {
-    type Config = ();
+    type Config = SystemAudioSourceConfig;
 
     fn setup(
         _: Self::Config,

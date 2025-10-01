@@ -3,7 +3,6 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc::SyncSender,
 };
-
 use windows::{
     Foundation::TimeSpan,
     Graphics::SizeInt32,
@@ -31,7 +30,6 @@ use windows::{
     },
     core::{Error, Interface},
 };
-
 use crate::{
     media::{MFSetAttributeRatio, MFSetAttributeSize},
     mft::EncoderDevice,
@@ -401,11 +399,14 @@ impl H264Encoder {
 
             let mut should_exit = false;
             while !should_exit {
+            	println!("getting event");
+
                 let event = self
                     .event_generator
                     .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
+                dbg!(&event_type);
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
                         should_exit = true;
@@ -457,6 +458,8 @@ impl H264Encoder {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
         }
+
+        println!("BRUHHH");
 
         Ok(())
     }
