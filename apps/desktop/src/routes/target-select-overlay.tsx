@@ -91,10 +91,7 @@ function Inner() {
 		const hoveredWindow = targetUnderCursor.window;
 		if (hoveredWindow) return hoveredWindow;
 		if (rawOptions.captureTarget.variant === "window") {
-			const selected =
-				typeof selectedWindow.data === "function"
-					? selectedWindow.data()
-					: selectedWindow.data;
+			const selected = selectedWindow.data;
 			if (selected) return selected;
 		}
 		return hoveredWindow;
