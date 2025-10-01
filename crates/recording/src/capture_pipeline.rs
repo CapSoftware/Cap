@@ -784,23 +784,9 @@ pub async fn create_screen_capture(
     audio_tx: Option<Sender<(ffmpeg::frame::Audio, Timestamp)>>,
     start_time: SystemTime,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
 ) -> Result<ScreenCaptureReturn<ScreenCaptureMethod>, RecordingError> {
     let (video_tx, video_rx) = flume::bounded(16);
-
-    #[cfg(target_os = "macos")]
-    {
-        let warm_start = std::time::Instant::now();
-        match scap_targets::prewarm_shareable_content().await {
-            Ok(()) => tracing::trace!(
-                elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0,
-                "ScreenCaptureKit cache ensured before capture"
-            ),
-            Err(error) => tracing::warn!(
-                error = %error,
-                "ScreenCaptureKit prewarm failed before capture"
-            ),
-        }
-    }
 
     ScreenCaptureSource::<ScreenCaptureMethod>::init(
         capture_target,
@@ -812,6 +798,8 @@ pub async fn create_screen_capture(
         tokio::runtime::Handle::current(),
         #[cfg(windows)]
         d3d_device,
+        #[cfg(target_os = "macos")]
+        shareable_content,
     )
     .await
     .map(|v| (v, video_rx))

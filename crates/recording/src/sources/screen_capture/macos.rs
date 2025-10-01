@@ -137,9 +137,12 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 let display = Display::from_id(&config.display)
                     .ok_or_else(|| SourceError::NoDisplay(config.display))?;
 
+                let content = sc::ShareableContent::current().await
+                    .map_err(|e| SourceError::CreateActor(e))?;
+
                 let content_filter = display
                     .raw_handle()
-                    .as_content_filter()
+                    .as_content_filter(&content)
                     .await
                     .ok_or_else(|| SourceError::AsContentFilter)?;
 

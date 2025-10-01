@@ -379,6 +379,12 @@ pub async fn start_recording(
                     Err(e) => return Err(e.to_string()),
                 };
 
+                #[cfg(target_os = "macos")]
+                let shareable_content = crate::platform::get_shareable_content()
+                    .await
+                    .map_err(|e| format!("GetShareableContent: {e}"))?
+                    .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
+
                 let (actor, actor_done_rx) = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
@@ -400,10 +406,16 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
-                            error!("Failed to spawn studio recording actor: {e}");
-                            e.to_string()
-                        })?;
+                        let (handle, actor_done_rx) = builder
+                            .build(
+                                #[cfg(target_os = "macos")]
+                                shareable_content,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to spawn studio recording actor: {e}");
+                                e.to_string()
+                            })?;
 
                         (
                             InProgressRecording::Studio {
@@ -430,10 +442,16 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder.build().await.map_err(|e| {
-                            error!("Failed to spawn studio recording actor: {e}");
-                            e.to_string()
-                        })?;
+                        let (handle, actor_done_rx) = builder
+                            .build(
+                                #[cfg(target_os = "macos")]
+                                shareable_content,
+                            )
+                            .await
+                            .map_err(|e| {
+                                error!("Failed to spawn studio recording actor: {e}");
+                                e.to_string()
+                            })?;
 
                         (
                             InProgressRecording::Instant {

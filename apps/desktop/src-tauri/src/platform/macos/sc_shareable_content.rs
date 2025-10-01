@@ -1,12 +1,11 @@
+use cidre::{arc, ns, sc};
+use core_graphics::{display::CGDirectDisplayID, window::CGWindowID};
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     sync::{OnceLock, RwLock},
     time::Instant,
 };
-
-use cidre::{arc, ns, sc};
-use core_graphics::{display::CGDirectDisplayID, window::CGWindowID};
-use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 use tracing::{debug, info, trace};
 
@@ -30,7 +29,7 @@ fn state() -> &'static CacheState {
     STATE.get_or_init(CacheState::default)
 }
 
-pub(super) async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
+pub async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>> {
     if state().cache.read().unwrap().is_some() {
         trace!("ScreenCaptureKit shareable content already warmed");
         return Ok(());
@@ -59,6 +58,35 @@ pub(super) async fn prewarm_shareable_content() -> Result<(), arc::R<ns::Error>>
         .await
         .clone()
         .expect("ScreenCaptureKit warmup task missing result")
+}
+
+pub async fn get_shareable_content()
+-> Result<Option<arc::R<sc::ShareableContent>>, arc::R<ns::Error>> {
+    let lookup_start = Instant::now();
+
+    if let Some(content) = state()
+        .cache
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|v| v.content.retained())
+    {
+        trace!(
+            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
+            "Resolved ScreenCaptureKit from warmed cache"
+        );
+        return Ok(Some(content));
+    }
+
+    prewarm_shareable_content().await?;
+
+    let content = state().cache.read().unwrap();
+    trace!(
+        elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
+        cache_hit = content.is_some(),
+        "Resolved ScreenCaptureKit after cache populate"
+    );
+    Ok(content.as_ref().map(|v| v.content.retained()))
 }
 
 async fn run_warmup(task: WarmupTask) {
@@ -95,80 +123,6 @@ async fn run_warmup(task: WarmupTask) {
     {
         *guard = None;
     }
-}
-
-pub(super) async fn get_display(
-    id: CGDirectDisplayID,
-) -> Result<Option<arc::R<sc::Display>>, arc::R<ns::Error>> {
-    let lookup_start = Instant::now();
-
-    if let Some(display) = state()
-        .cache
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|cache| cache.display(id))
-    {
-        trace!(
-            display_id = id,
-            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-            "Resolved ScreenCaptureKit display from warmed cache"
-        );
-        return Ok(Some(display));
-    }
-
-    prewarm_shareable_content().await?;
-
-    let result = state()
-        .cache
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|cache| cache.display(id));
-    trace!(
-        display_id = id,
-        elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-        cache_hit = result.is_some(),
-        "Resolved ScreenCaptureKit display after cache populate"
-    );
-    Ok(result)
-}
-
-pub(super) async fn get_window(
-    id: CGWindowID,
-) -> Result<Option<arc::R<sc::Window>>, arc::R<ns::Error>> {
-    let lookup_start = Instant::now();
-
-    if let Some(window) = state()
-        .cache
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|cache| cache.window(id))
-    {
-        trace!(
-            window_id = id,
-            elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-            "Resolved ScreenCaptureKit window from warmed cache"
-        );
-        return Ok(Some(window));
-    }
-
-    prewarm_shareable_content().await?;
-
-    let result = state()
-        .cache
-        .read()
-        .unwrap()
-        .as_ref()
-        .and_then(|cache| cache.window(id));
-    trace!(
-        window_id = id,
-        elapsed_ms = lookup_start.elapsed().as_micros() as f64 / 1000.0,
-        cache_hit = result.is_some(),
-        "Resolved ScreenCaptureKit window after cache populate"
-    );
-    Ok(result)
 }
 
 #[derive(Debug)]

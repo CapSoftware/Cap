@@ -393,7 +393,7 @@ impl ScreenCapturePrewarmer {
         }
 
         let warm_start = std::time::Instant::now();
-        let result = scap_targets::prewarm_shareable_content().await;
+        let result = crate::platform::prewarm_shareable_content().await;
 
         let mut state = self.state.lock().await;
         match result {

@@ -2,8 +2,6 @@ pub mod bounds;
 pub mod platform;
 
 use bounds::*;
-#[cfg(target_os = "macos")]
-pub use platform::macos::prewarm_shareable_content;
 pub use platform::{DisplayIdImpl, DisplayImpl, WindowIdImpl, WindowImpl};
 use serde::{Deserialize, Serialize};
 use specta::Type;
