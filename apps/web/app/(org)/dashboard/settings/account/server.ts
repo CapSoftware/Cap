@@ -3,9 +3,9 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import {
-	users,
-	organizations,
 	organizationMembers,
+	organizations,
+	users,
 } from "@cap/database/schema";
 import { eq, or } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
