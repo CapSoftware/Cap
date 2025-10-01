@@ -125,7 +125,7 @@ app.get(
 				.orderBy(organizations.createdAt);
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
-			let videoOrgId: string;
+			let videoOrgId!: string;
 			if (orgId) {
 				// Hard error if the user requested org is non-existent or they don't have access.
 				if (!userOrgIds.includes(orgId))
@@ -148,7 +148,6 @@ app.get(
 						.where(eq(users.id, user.id));
 				} else videoOrgId = user.defaultOrgId;
 			}
-			if (!videoOrgId) throw new Error("Unreachable");
 
 			const idToUse = Video.VideoId.make(nanoId());
 
