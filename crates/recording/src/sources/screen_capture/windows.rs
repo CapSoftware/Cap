@@ -6,6 +6,7 @@ use ::windows::{
 use cap_fail::fail_err;
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamps};
 use cpal::traits::{DeviceTrait, HostTrait};
+use futures::channel::oneshot;
 use kameo::prelude::*;
 use scap_ffmpeg::*;
 use std::{
@@ -368,7 +369,7 @@ impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
 
 #[derive(Actor)]
 struct ScreenCaptureActor {
-    capture_handle: Option<scap_direct3d::Capturer>,
+    stop_tx: Option<std::sync::mpsc::SyncSender<oneshot::Sender<()>>>,
     error_tx: Sender<()>,
     d3d_device: ID3D11Device,
 }
@@ -424,30 +425,59 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 
         let error_tx = self.error_tx.clone();
 
-        let mut capture_handle = scap_direct3d::Capturer::new(
-            msg.target,
-            msg.settings,
-            move |frame| {
-                let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
+        let (ready_tx, ready_rx) = oneshot::channel();
 
-                Ok(())
-            },
-            move || {
-                let _ = error_tx.send(());
+        let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
 
-                Ok(())
-            },
-            Some(self.d3d_device.clone()),
-        )
-        .map_err(StartCapturingError::CreateCapturer)?;
+        std::thread::spawn(|| {
+            cap_mediafoundation_utils::thread_init();
 
-        capture_handle
-            .start()
-            .map_err(StartCapturingError::StartCapturer)?;
+            let res = (|| {
+                let mut res = scap_direct3d::Capturer::new(
+                    msg.target,
+                    msg.settings,
+                    move |frame| {
+                        let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
+
+                        Ok(())
+                    },
+                    move || {
+                        let _ = error_tx.send(());
+
+                        Ok(())
+                    },
+                    Some(self.d3d_device.clone()),
+                )
+                .map_err(StartCapturingError::CreateCapturer)?;
+
+                capture_handle
+                    .start()
+                    .map_err(StartCapturingError::StartCapturer);
+            })();
+
+            let capturer = match res {
+                Ok(capturer) => {
+                    ready_tx.send(Ok(()));
+                    capturer
+                }
+                Err(e) => {
+                    ready_tx.send(Err(e));
+                    return;
+                }
+            };
+
+            let stop_channel = stop_rx.recv();
+
+            let res = capturer.stop();
+
+            if let Ok(stop_channel) = stop_channel {
+                stop_channel.send(res);
+            }
+        });
 
         info!("Capturer started");
 
-        self.capture_handle = Some(capture_handle);
+        self.stop_tx = Some(stop_tx);
 
         Ok(())
     }
@@ -461,12 +491,17 @@ impl Message<StopCapturing> for ScreenCaptureActor {
         _: StopCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Some(mut capturer) = self.capture_handle.take() else {
+        let Some(stop_tx) = self.stop_tx.take() else {
             return Err(StopCapturingError::NotCapturing);
         };
 
-        if let Err(e) = capturer.stop() {
+        let (done_tx, done_rx) = oneshot::channel();
+        if let Err(e) = stop_tx.send(done_tx) {
             error!("Silently failed to stop Windows capturer: {}", e);
+        }
+
+        if let Ok(res) = done_rx.await {
+            res?;
         }
 
         info!("stopped windows capturer");
