@@ -78,7 +78,6 @@ export function VerifyOTPForm({
 			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
 				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
-				{ redirect: "manual" },
 			);
 
 			if (!res.url.includes("/login-success")) {
@@ -157,19 +156,19 @@ export function VerifyOTPForm({
 			</Link>
 
 			<Link className="flex mx-auto size-fit" href="/">
-				<LogoBadge className="w-[72px] h-[72px]" />
+				<LogoBadge className="size-12" />
 			</Link>
 
 			<div className="flex flex-col justify-center items-center my-7 text-center">
-				<h1 className="text-2xl font-semibold text-gray-12">
+				<h1 className="text-xl font-semibold text-gray-12">
 					Enter verification code
 				</h1>
-				<p className="text-[16px] text-gray-10 mt-2">
+				<p className="text-sm text-gray-10">
 					We sent a 6-digit code to {email}
 				</p>
 			</div>
 
-			<div className="flex gap-2 justify-center mb-6">
+			<div className="flex flex-1 gap-2 justify-between mb-5">
 				{code.map((digit, index) => (
 					<input
 						key={index.toString()}
@@ -192,7 +191,7 @@ export function VerifyOTPForm({
 								.replace(/\D/g, "");
 							handleChange(0, pastedData);
 						}}
-						className="w-12 h-14 text-xl font-semibold text-center rounded-lg border transition-all bg-gray-1 border-gray-5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+						className="flex-1 h-[52px] text-xl font-semibold text-center rounded-lg border transition-all bg-gray-1 border-gray-5 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
 						disabled={handleVerify.isPending || handleVerify.isSuccess}
 					/>
 				))}
@@ -222,7 +221,7 @@ export function VerifyOTPForm({
 			</div>
 
 			<p className="mt-6 text-xs text-center text-gray-9">
-				By verifying your email, you acknowledge that you have both read and
+				By entering your email, you acknowledge that you have both read and
 				agree to Cap's{" "}
 				<Link
 					href="/terms"

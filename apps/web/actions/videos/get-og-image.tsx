@@ -1,9 +1,11 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { ImageResponse } from "next/og";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "@/lib/server";
 
 export async function generateVideoOgImage(videoId: Video.VideoId) {
 	const videoData = await getData(videoId);
@@ -58,13 +60,17 @@ export async function generateVideoOgImage(videoId: Video.VideoId) {
 		);
 	}
 
-	const bucket = await createBucketProvider(videoData.bucket);
-
 	const screenshotKey = `${video.ownerId}/${video.id}/screenshot/screen-capture.jpg`;
 	let screenshotUrl = null;
 
 	try {
-		screenshotUrl = await bucket.getSignedObjectUrl(screenshotKey);
+		await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(
+				Option.fromNullable(videoData.bucket?.id),
+			);
+
+			screenshotUrl = yield* bucket.getSignedObjectUrl(screenshotKey);
+		}).pipe(runPromise);
 	} catch (error) {
 		console.error("Error generating URL for screenshot:", error);
 	}

@@ -27,12 +27,10 @@ export const dynamic = "auto";
 export const dynamicParams = true;
 export const revalidate = 30;
 
-type Props = {
-	params: { [key: string]: string | string[] | undefined };
-	searchParams: { [key: string]: string | string[] | undefined };
-};
-
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(
+	props: PageProps<"/embed/[videoId]">,
+): Promise<Metadata> {
+	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
 	return Effect.flatMap(Videos, (v) => v.getById(videoId)).pipe(
@@ -111,9 +109,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 	);
 }
 
-export default async function EmbedVideoPage(props: Props) {
-	const params = props.params;
-	const searchParams = props.searchParams;
+export default async function EmbedVideoPage(
+	props: PageProps<"/embed/[videoId]">,
+) {
+	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 	const autoplay = searchParams.autoplay === "true";
 
@@ -129,13 +129,13 @@ export default async function EmbedVideoPage(props: Props) {
 					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
-					awsRegion: videos.awsRegion,
-					awsBucket: videos.awsBucket,
 					bucket: videos.bucket,
 					metadata: videos.metadata,
 					public: videos.public,
 					videoStartTime: videos.videoStartTime,
 					audioStartTime: videos.audioStartTime,
+					awsRegion: videos.awsRegion,
+					awsBucket: videos.awsBucket,
 					xStreamInfo: videos.xStreamInfo,
 					jobId: videos.jobId,
 					jobStatus: videos.jobStatus,
@@ -165,7 +165,13 @@ export default async function EmbedVideoPage(props: Props) {
 		return Option.fromNullable(video);
 	}).pipe(
 		Effect.flatten,
-		Effect.map((video) => ({ needsPassword: false, video }) as const),
+		Effect.map(
+			(video) =>
+				({
+					needsPassword: false,
+					video,
+				}) as const,
+		),
 		Effect.catchTag("VerifyVideoPasswordError", () =>
 			Effect.succeed({ needsPassword: true } as const),
 		),

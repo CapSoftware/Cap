@@ -13,27 +13,33 @@ import {
 	videos,
 	videoUploads,
 } from "@cap/database/schema";
+import { Database } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
-import { Folder } from "@cap/web-domain";
+import { CurrentUser, Folder } from "@cap/web-domain";
 import { and, desc, eq } from "drizzle-orm";
 import { sql } from "drizzle-orm/sql";
+import { Effect } from "effect";
 import { revalidatePath } from "next/cache";
 
-export async function getFolderById(folderId: string | undefined) {
+export const getFolderById = Effect.fn(function* (folderId: string) {
 	if (!folderId) throw new Error("Folder ID is required");
+	const db = yield* Database;
 
-	const [folder] = await db()
-		.select()
-		.from(folders)
-		.where(eq(folders.id, Folder.FolderId.make(folderId)));
+	const [folder] = yield* db.execute((db) =>
+		db
+			.select()
+			.from(folders)
+			.where(eq(folders.id, Folder.FolderId.make(folderId))),
+	);
 
 	if (!folder) throw new Error("Folder not found");
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
 	return folder;
-}
+});
 
-export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
+export const getFolderBreadcrumb = Effect.fn(function* (
+	folderId: Folder.FolderId,
+) {
 	const breadcrumb: Array<{
 		id: Folder.FolderId;
 		name: string;
@@ -42,7 +48,7 @@ export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
 	let currentFolderId = folderId;
 
 	while (currentFolderId) {
-		const folder = await getFolderById(currentFolderId);
+		const folder = yield* getFolderById(currentFolderId);
 		if (!folder) break;
 
 		breadcrumb.unshift({
@@ -55,50 +61,59 @@ export async function getFolderBreadcrumb(folderId: Folder.FolderId) {
 		currentFolderId = folder.parentId;
 	}
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
 	return breadcrumb;
-}
+});
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+const getSharedSpacesForVideos = Effect.fn(function* (
+	videoIds: Video.VideoId[],
+) {
 	if (videoIds.length === 0) return {};
+	const db = yield* Database;
 
 	// Fetch space-level sharing
-	const spaceSharing = await db()
-		.select({
-			videoId: spaceVideos.videoId,
-			id: spaces.id,
-			name: spaces.name,
-			organizationId: spaces.organizationId,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(spaceVideos)
-		.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
-		.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
-		.where(
-			sql`${spaceVideos.videoId} IN (${sql.join(
-				videoIds.map((id) => sql`${id}`),
-				sql`, `,
-			)})`,
-		);
+	const spaceSharing = yield* db.execute((db) =>
+		db
+			.select({
+				videoId: spaceVideos.videoId,
+				id: spaces.id,
+				name: spaces.name,
+				organizationId: spaces.organizationId,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(spaceVideos)
+			.innerJoin(spaces, eq(spaceVideos.spaceId, spaces.id))
+			.innerJoin(organizations, eq(spaces.organizationId, organizations.id))
+			.where(
+				sql`${spaceVideos.videoId} IN (${sql.join(
+					videoIds.map((id) => sql`${id}`),
+					sql`, `,
+				)})`,
+			),
+	);
 
 	// Fetch organization-level sharing
-	const orgSharing = await db()
-		.select({
-			videoId: sharedVideos.videoId,
-			id: organizations.id,
-			name: organizations.name,
-			organizationId: organizations.id,
-			iconUrl: organizations.iconUrl,
-		})
-		.from(sharedVideos)
-		.innerJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.where(
-			sql`${sharedVideos.videoId} IN (${sql.join(
-				videoIds.map((id) => sql`${id}`),
-				sql`, `,
-			)})`,
-		);
+	const orgSharing = yield* db.execute((db) =>
+		db
+			.select({
+				videoId: sharedVideos.videoId,
+				id: organizations.id,
+				name: organizations.name,
+				organizationId: organizations.id,
+				iconUrl: organizations.iconUrl,
+			})
+			.from(sharedVideos)
+			.innerJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.where(
+				sql`${sharedVideos.videoId} IN (${sql.join(
+					videoIds.map((id) => sql`${id}`),
+					sql`, `,
+				)})`,
+			),
+	);
 
 	// Combine and group by videoId
 	const sharedSpacesMap: Record<
@@ -140,23 +155,29 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	});
 
 	return sharedSpacesMap;
-}
+});
 
-export async function getVideosByFolderId(folderId: Folder.FolderId) {
+export const getVideosByFolderId = Effect.fn(function* (
+	folderId: Folder.FolderId,
+) {
 	if (!folderId) throw new Error("Folder ID is required");
+	const db = yield* Database;
 
-	const videoData = await db()
-		.select({
-			id: videos.id,
-			ownerId: videos.ownerId,
-			name: videos.name,
-			createdAt: videos.createdAt,
-			public: videos.public,
-			metadata: videos.metadata,
-			duration: videos.duration,
-			totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
-			totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
-			sharedOrganizations: sql<{ id: string; name: string; iconUrl: string }[]>`
+	const videoData = yield* db.execute((db) =>
+		db
+			.select({
+				id: videos.id,
+				ownerId: videos.ownerId,
+				name: videos.name,
+				createdAt: videos.createdAt,
+				public: videos.public,
+				metadata: videos.metadata,
+				duration: videos.duration,
+				totalComments: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'text' THEN ${comments.id} END)`,
+				totalReactions: sql<number>`COUNT(DISTINCT CASE WHEN ${comments.type} = 'emoji' THEN ${comments.id} END)`,
+				sharedOrganizations: sql<
+					{ id: string; name: string; iconUrl: string }[]
+				>`
         COALESCE(
           JSON_ARRAYAGG(
             JSON_OBJECT(
@@ -169,44 +190,48 @@ export async function getVideosByFolderId(folderId: Folder.FolderId) {
         )
       `,
 
-			ownerName: users.name,
-			effectiveDate: sql<string>`
+				ownerName: users.name,
+				effectiveDate: sql<string>`
         COALESCE(
           JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-				Boolean,
-			),
-		})
-		.from(videos)
-		.leftJoin(comments, eq(videos.id, comments.videoId))
-		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
-		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
-		.leftJoin(users, eq(videos.ownerId, users.id))
-		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
-		.where(eq(videos.folderId, folderId))
-		.groupBy(
-			videos.id,
-			videos.ownerId,
-			videos.name,
-			videos.createdAt,
-			videos.public,
-			videos.metadata,
-			users.name,
-		)
-		.orderBy(
-			desc(sql`COALESCE(
+				hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
+				hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+					Boolean,
+				),
+			})
+			.from(videos)
+			.leftJoin(comments, eq(videos.id, comments.videoId))
+			.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
+			.leftJoin(
+				organizations,
+				eq(sharedVideos.organizationId, organizations.id),
+			)
+			.leftJoin(users, eq(videos.ownerId, users.id))
+			.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
+			.where(eq(videos.folderId, folderId))
+			.groupBy(
+				videos.id,
+				videos.ownerId,
+				videos.name,
+				videos.createdAt,
+				videos.public,
+				videos.metadata,
+				users.name,
+			)
+			.orderBy(
+				desc(sql`COALESCE(
       JSON_UNQUOTE(JSON_EXTRACT(${videos.metadata}, '$.customCreatedAt')),
       ${videos.createdAt}
     )`),
-		);
+			),
+	);
 
 	// Fetch shared spaces data for all videos
 	const videoIds = videoData.map((video) => video.id);
-	const sharedSpacesMap = await getSharedSpacesForVideos(videoIds);
+	const sharedSpacesMap = yield* getSharedSpacesForVideos(videoIds);
 
 	// Process the video data to match the expected format
 	const processedVideoData = videoData.map((video) => {
@@ -239,36 +264,43 @@ export async function getVideosByFolderId(folderId: Folder.FolderId) {
 		};
 	});
 
-	revalidatePath(`/dashboard/folder/${folderId}`);
-
 	return processedVideoData;
-}
+});
 
-export async function getChildFolders(folderId: Folder.FolderId) {
-	const user = await getCurrentUser();
-	if (!user || !user.activeOrganizationId)
-		throw new Error("Unauthorized or no active organization");
+export const getChildFolders = Effect.fn(function* (
+	folderId: Folder.FolderId,
+	root:
+		| { variant: "user" }
+		| { variant: "space"; spaceId: string }
+		| { variant: "org"; organizationId: string },
+) {
+	const db = yield* Database;
 
-	const childFolders = await db()
-		.select({
-			id: folders.id,
-			name: folders.name,
-			color: folders.color,
-			parentId: folders.parentId,
-			organizationId: folders.organizationId,
-			videoCount: sql<number>`(
-        SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
-      )`,
-		})
-		.from(folders)
-		.where(
-			and(
-				eq(folders.parentId, folderId),
-				eq(folders.organizationId, user.activeOrganizationId),
+	const user = yield* CurrentUser;
+	if (!user.activeOrganizationId) throw new Error("No active organization");
+
+	const childFolders = yield* db.execute((db) =>
+		db
+			.select({
+				id: folders.id,
+				name: folders.name,
+				color: folders.color,
+				parentId: folders.parentId,
+				organizationId: folders.organizationId,
+				videoCount: sql<number>`(
+        	SELECT COUNT(*) FROM videos WHERE videos.folderId = folders.id
+	      )`,
+			})
+			.from(folders)
+			.where(
+				and(
+					eq(folders.parentId, folderId),
+					root.variant === "space"
+						? eq(folders.spaceId, root.spaceId)
+						: undefined,
+				),
 			),
-		);
-
-	revalidatePath(`/dashboard/folder/${folderId}`);
+	);
 
 	return childFolders;
-}
+});

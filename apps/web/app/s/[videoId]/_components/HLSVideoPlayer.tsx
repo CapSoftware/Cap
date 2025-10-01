@@ -35,7 +35,7 @@ interface Props {
 	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement>;
+	videoRef: React.RefObject<HTMLVideoElement | null>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	hasActiveUpload?: boolean;
@@ -233,11 +233,37 @@ export function HLSVideoPlayer({
 			}
 		};
 
+		// Ensure all caption tracks remain hidden
+		const ensureTracksHidden = (): void => {
+			const tracks = video.textTracks;
+			for (let i = 0; i < tracks.length; i++) {
+				const track = tracks[i];
+				if (
+					track &&
+					(track.kind === "captions" || track.kind === "subtitles")
+				) {
+					if (track.mode !== "hidden") {
+						track.mode = "hidden";
+					}
+				}
+			}
+		};
+
 		const handleLoadedMetadata = (): void => {
 			setupTracks();
 		};
 
+		// Monitor for track changes and ensure they stay hidden
+		const handleTrackChange = () => {
+			ensureTracksHidden();
+		};
+
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+		// Add event listeners to monitor track changes
+		video.textTracks.addEventListener("change", handleTrackChange);
+		video.textTracks.addEventListener("addtrack", handleTrackChange);
+		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState >= 1) {
 			setupTracks();
@@ -245,6 +271,9 @@ export function HLSVideoPlayer({
 
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+			video.textTracks.removeEventListener("change", handleTrackChange);
+			video.textTracks.removeEventListener("addtrack", handleTrackChange);
+			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (captionTrack) {
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
@@ -335,13 +364,7 @@ export function HLSVideoPlayer({
 				autoPlay={autoplay}
 			>
 				<track default kind="chapters" src={chaptersSrc} />
-				<track
-					label="English"
-					kind="captions"
-					srcLang="en"
-					src={captionsSrc}
-					default
-				/>
+				<track label="English" kind="captions" srcLang="en" src={captionsSrc} />
 			</MediaPlayerVideo>
 			{currentCue && toggleCaptions && (
 				<div

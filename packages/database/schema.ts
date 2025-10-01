@@ -1,4 +1,4 @@
-import type { Folder, Video } from "@cap/web-domain";
+import type { Folder, S3Bucket, Video } from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -168,13 +168,16 @@ export const organizations = mysqlTable(
 	}),
 );
 
+export type OrganisationMemberRole = "owner" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		userId: nanoId("userId").notNull(),
 		organizationId: nanoId("organizationId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -195,7 +198,9 @@ export const organizationInvites = mysqlTable(
 		organizationId: nanoId("organizationId").notNull(),
 		invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
 		invitedByUserId: nanoId("invitedByUserId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		status: varchar("status", { length: 255 }).notNull().default("pending"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -245,7 +250,7 @@ export const videos = mysqlTable(
 		// TODO: make this non-null
 		orgId: nanoIdNullable("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
-		bucket: nanoIdNullable("bucket"),
+		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
 		duration: float("duration"),
 		width: int("width"),
@@ -371,7 +376,7 @@ export const notifications = mysqlTable(
 );
 
 export const s3Buckets = mysqlTable("s3_buckets", {
-	id: nanoId("id").notNull().primaryKey().unique(),
+	id: nanoId("id").notNull().primaryKey().unique().$type<S3Bucket.S3BucketId>(),
 	ownerId: nanoId("ownerId").notNull(),
 	// Use encryptedText for sensitive fields
 	region: encryptedText("region").notNull(),
@@ -552,7 +557,10 @@ export const spaceMembers = mysqlTable(
 		id: nanoId("id").notNull().primaryKey().unique(),
 		spaceId: nanoId("spaceId").notNull(),
 		userId: nanoId("userId").notNull(),
-		role: varchar("role", { length: 255 }).notNull().default("member"),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.default("member")
+			.$type<"member" | "Admin">(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},

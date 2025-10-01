@@ -18,7 +18,7 @@ import { createOrganization } from "./server";
 
 export interface NewOrganizationProps {
 	onOrganizationCreated: () => void;
-	formRef?: React.RefObject<HTMLFormElement>;
+	formRef?: React.RefObject<HTMLFormElement | null>;
 	setCreateLoading?: React.Dispatch<React.SetStateAction<boolean>>;
 	onNameChange?: (name: string) => void;
 }

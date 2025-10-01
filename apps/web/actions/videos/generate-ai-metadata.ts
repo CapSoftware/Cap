@@ -4,10 +4,13 @@ import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { serverEnv } from "@cap/env";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { GROQ_MODEL, getGroqClient } from "@/lib/groq-client";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "@/lib/server";
+
 export async function generateAiMetadata(
 	videoId: Video.VideoId,
 	userId: string,
@@ -118,27 +121,25 @@ export async function generateAiMetadata(
 
 		const { video } = row;
 
-		const awsBucket = video.awsBucket;
-		if (!awsBucket) {
-			console.error(
-				`[generateAiMetadata] AWS bucket not found for video ${videoId}`,
+		const vtt = await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(
+				Option.fromNullable(row.bucket?.id),
 			);
-			throw new Error(`AWS bucket not found for video ${videoId}`);
+
+			return yield* bucket.getObject(`${userId}/${videoId}/transcription.vtt`);
+		}).pipe(runPromise);
+
+		if (Option.isNone(vtt)) {
+			console.error(`[generateAiMetadata] Transcript is empty`);
+			throw new Error("Transcript is empty");
+		} else if (vtt.value.length < 10) {
+			console.error(
+				`[generateAiMetadata] Transcript is too short (${vtt.value.length} chars)`,
+			);
+			throw new Error("Transcript is too short");
 		}
 
-		const bucket = await createBucketProvider(row.bucket);
-
-		const transcriptKey = `${userId}/${videoId}/transcription.vtt`;
-		const vtt = await bucket.getObject(transcriptKey);
-
-		if (!vtt || vtt.length < 10) {
-			console.error(
-				`[generateAiMetadata] Transcript is empty or too short (${vtt?.length} chars)`,
-			);
-			throw new Error("Transcript is empty or too short");
-		}
-
-		const transcriptText = vtt
+		const transcriptText = vtt.value
 			.split("\n")
 			.filter(
 				(l) =>

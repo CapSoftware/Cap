@@ -1,10 +1,12 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
+import { runPromise } from "@/lib/server";
 import { getHeaders } from "@/utils/helpers";
-import { createBucketProvider } from "@/utils/s3";
 
 export const revalidate = 0;
 
@@ -44,12 +46,15 @@ export async function GET(request: NextRequest) {
 		);
 
 	const prefix = `${query.video.ownerId}/${query.video.id}/`;
-	const bucketProvider = await createBucketProvider(query.bucket);
 
 	try {
-		const listResponse = await bucketProvider.listObjects({
-			prefix: prefix,
-		});
+		const [bucket] = await S3Buckets.getBucketAccess(
+			Option.fromNullable(query.bucket?.id),
+		).pipe(runPromise);
+
+		const listResponse = await bucket
+			.listObjects({ prefix: prefix })
+			.pipe(runPromise);
 		const contents = listResponse.Contents || [];
 
 		const thumbnailKey = contents.find((item) =>
@@ -68,7 +73,9 @@ export async function GET(request: NextRequest) {
 				},
 			);
 
-		const thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
+		const thumbnailUrl = await bucket
+			.getSignedObjectUrl(thumbnailKey)
+			.pipe(runPromise);
 
 		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
 			status: 200,

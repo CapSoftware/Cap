@@ -3,9 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
+import { S3Buckets } from "@cap/web-backend";
 import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { createBucketProvider } from "@/utils/s3";
+import { Effect, Option } from "effect";
+import { runPromise } from "@/lib/server";
 
 export async function getTranscript(
 	videoId: Video.VideoId,
@@ -46,20 +48,24 @@ export async function getTranscript(
 		};
 	}
 
-	const bucket = await createBucketProvider(result.bucket);
-
 	try {
-		const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
+		const vttContent = await Effect.gen(function* () {
+			const [bucket] = yield* S3Buckets.getBucketAccess(
+				Option.fromNullable(result.bucket?.id),
+			);
 
-		const vttContent = await bucket.getObject(transcriptKey);
+			return yield* bucket.getObject(
+				`${video.ownerId}/${videoId}/transcription.vtt`,
+			);
+		}).pipe(runPromise);
 
-		if (!vttContent) {
+		if (Option.isNone(vttContent)) {
 			return { success: false, message: "Transcript file not found" };
 		}
 
 		return {
 			success: true,
-			content: vttContent,
+			content: vttContent.value,
 			message: "Transcript retrieved successfully",
 		};
 	} catch (error) {

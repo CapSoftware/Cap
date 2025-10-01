@@ -24,7 +24,7 @@ export const getBootstrapData = cache(async (): Promise<BootstrapData> => {
 	let distinct_id = "";
 	const phProjectAPIKey = buildEnv.NEXT_PUBLIC_POSTHOG_KEY;
 	const phCookieName = `ph_${phProjectAPIKey}_posthog`;
-	const cookieStore = cookies();
+	const cookieStore = await cookies();
 	const phCookie = cookieStore.get(phCookieName);
 
 	if (phCookie) {

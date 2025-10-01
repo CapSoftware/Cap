@@ -24,7 +24,7 @@ async function getAuth(c: Context) {
 		user = res[0]?.users;
 	} else {
 		if (authHeader)
-			cookies().set({
+			(await cookies()).set({
 				name: "next-auth.session-token",
 				value: authHeader,
 				path: "/",

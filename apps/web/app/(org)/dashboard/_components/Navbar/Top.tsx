@@ -25,6 +25,7 @@ import {
 	cloneElement,
 	type MutableRefObject,
 	memo,
+	type RefObject,
 	useMemo,
 	useRef,
 	useState,
@@ -318,7 +319,11 @@ const User = () => {
 };
 
 interface Props {
-	icon: React.ReactElement;
+	icon: React.ReactElement<{
+		ref: RefObject<DownloadIconHandle | null>;
+		className: string;
+		size: number;
+	}>;
 	name: string;
 	href?: string;
 	onClick: () => void;

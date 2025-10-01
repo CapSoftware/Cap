@@ -115,8 +115,6 @@ export default async function RootLayout({ children }: PropsWithChildren) {
 								<PublicEnvContext
 									value={{
 										webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
-										awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
-										s3BucketUrl: S3_BUCKET_URL,
 									}}
 								>
 									<ReactQueryProvider>

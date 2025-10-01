@@ -47,6 +47,6 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
-const { handler } = apiToHandler(ApiLive);
+const handler = apiToHandler(ApiLive);
 
 export const DELETE = handler;

@@ -8,6 +8,8 @@ use crate::CapturedFrameExt;
 pub enum AsFFmpegError {
     #[error("FailedToGetBytes: {0}")]
     FailedToGetBytes(windows_core::Error),
+    #[error("Empty")]
+    Empty,
 }
 
 impl CapturedFrameExt for CapturedFrame {
@@ -16,7 +18,15 @@ impl CapturedFrameExt for CapturedFrame {
         let width = native.width;
         let height = native.height;
 
+        if width == 0 || height == 0 {
+            return Err(AsFFmpegError::Empty);
+        }
+
         let bytes = native.bytes().map_err(AsFFmpegError::FailedToGetBytes)?;
+
+        if bytes.len() == 0 {
+            return Err(AsFFmpegError::Empty);
+        }
 
         Ok(match native.pixel_format {
             PixelFormat::YUV420P => {
