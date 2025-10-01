@@ -18,8 +18,15 @@ export async function patchAccountSettings(
 	const currentUser = await getCurrentUser();
 	if (!currentUser) throw new Error("Unauthorized");
 
-	// If defaultOrgId is being updated, verify user has access to that organization
-	if (defaultOrgId) {
+	const updatePayload: Partial<{
+		name: string;
+		lastName: string;
+		defaultOrgId: string;
+	}> = {};
+
+	if (firstName !== undefined) updatePayload.name = firstName;
+	if (lastName !== undefined) updatePayload.lastName = lastName;
+	if (defaultOrgId !== undefined) {
 		const userOrganizations = await db()
 			.select({
 				id: organizations.id,
@@ -46,15 +53,13 @@ export async function patchAccountSettings(
 			throw new Error(
 				"Forbidden: User does not have access to the specified organization",
 			);
+
+		updatePayload.defaultOrgId = defaultOrgId;
 	}
 
 	await db()
 		.update(users)
-		.set({
-			name: firstName,
-			lastName,
-			defaultOrgId,
-		})
+		.set(updatePayload)
 		.where(eq(users.id, currentUser.id));
 
 	revalidatePath("/dashboard/settings/account");
