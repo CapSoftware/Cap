@@ -377,7 +377,11 @@ function Page() {
 		setWindowMenuOpen(false);
 		windowTriggerRef?.focus();
 
-		await commands.focusWindow(target.id);
+		try {
+			await commands.focusWindow(target.id);
+		} catch (error) {
+			console.error("Failed to focus window:", error);
+		}
 	};
 
 	createEffect(() => {
