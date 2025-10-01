@@ -673,20 +673,83 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
     let data = frame_buffer.data();
     let stride = frame_buffer.stride() as usize;
 
-    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let offset = y * stride + x * 4;
-            if offset + 3 < data.len() {
-                rgba_data.push(data[offset]);
-                rgba_data.push(data[offset + 1]);
-                rgba_data.push(data[offset + 2]);
-                rgba_data.push(data[offset + 3]);
-            }
-        }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+
+    let Some(row_bytes) = width_usize.checked_mul(4) else {
+        warn!(
+            frame_width = width,
+            "Windows display thumbnail row size overflowed"
+        );
+        return None;
+    };
+
+    if stride < row_bytes {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            expected_row_bytes = row_bytes,
+            "Windows display thumbnail stride smaller than row size"
+        );
+        return None;
     }
 
-    let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
+    let rows_before_last = height_usize.saturating_sub(1);
+    let Some(last_row_start) = rows_before_last.checked_mul(stride) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            "Windows display thumbnail row offset overflowed"
+        );
+        return None;
+    };
+
+    let Some(required_len) = last_row_start.checked_add(row_bytes) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            required_row_bytes = row_bytes,
+            "Windows display thumbnail required length overflowed"
+        );
+        return None;
+    };
+
+    if data.len() < required_len {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            frame_data_len = data.len(),
+            expected_len = required_len,
+            "Windows display thumbnail frame buffer missing pixel data"
+        );
+        return None;
+    }
+
+    let Some(rgba_capacity) = height_usize.checked_mul(row_bytes) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            total_row_bytes = row_bytes,
+            "Windows display thumbnail RGBA capacity overflowed"
+        );
+        return None;
+    };
+
+    let mut rgba_data = Vec::with_capacity(rgba_capacity);
+    for y in 0..height_usize {
+        let row_start = y * stride;
+        let row_end = row_start + row_bytes;
+        rgba_data.extend_from_slice(&data[row_start..row_end]);
+    }
+
+    let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data) else {
+        warn!("Windows display thumbnail failed to construct RGBA image");
+        return None;
+    };
     let thumbnail = normalize_thumbnail_dimensions(&img);
 
     let mut png_data = Cursor::new(Vec::new());
@@ -757,20 +820,83 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
     let data = frame_buffer.data();
     let stride = frame_buffer.stride() as usize;
 
-    let mut rgba_data = Vec::with_capacity((width * height * 4) as usize);
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let offset = y * stride + x * 4;
-            if offset + 3 < data.len() {
-                rgba_data.push(data[offset]);
-                rgba_data.push(data[offset + 1]);
-                rgba_data.push(data[offset + 2]);
-                rgba_data.push(data[offset + 3]);
-            }
-        }
+    let width_usize = width as usize;
+    let height_usize = height as usize;
+
+    let Some(row_bytes) = width_usize.checked_mul(4) else {
+        warn!(
+            frame_width = width,
+            "Windows window thumbnail row size overflowed"
+        );
+        return None;
+    };
+
+    if stride < row_bytes {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            expected_row_bytes = row_bytes,
+            "Windows window thumbnail stride smaller than row size"
+        );
+        return None;
     }
 
-    let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
+    let rows_before_last = height_usize.saturating_sub(1);
+    let Some(last_row_start) = rows_before_last.checked_mul(stride) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            "Windows window thumbnail row offset overflowed"
+        );
+        return None;
+    };
+
+    let Some(required_len) = last_row_start.checked_add(row_bytes) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            required_row_bytes = row_bytes,
+            "Windows window thumbnail required length overflowed"
+        );
+        return None;
+    };
+
+    if data.len() < required_len {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            stride,
+            frame_data_len = data.len(),
+            expected_len = required_len,
+            "Windows window thumbnail frame buffer missing pixel data"
+        );
+        return None;
+    }
+
+    let Some(rgba_capacity) = height_usize.checked_mul(row_bytes) else {
+        warn!(
+            frame_width = width,
+            frame_height = height,
+            total_row_bytes = row_bytes,
+            "Windows window thumbnail RGBA capacity overflowed"
+        );
+        return None;
+    };
+
+    let mut rgba_data = Vec::with_capacity(rgba_capacity);
+    for y in 0..height_usize {
+        let row_start = y * stride;
+        let row_end = row_start + row_bytes;
+        rgba_data.extend_from_slice(&data[row_start..row_end]);
+    }
+
+    let Some(img) = image::RgbaImage::from_raw(width, height, rgba_data) else {
+        warn!("Windows window thumbnail failed to construct RGBA image");
+        return None;
+    };
     let thumbnail = normalize_thumbnail_dimensions(&img);
 
     let mut png_data = Cursor::new(Vec::new());

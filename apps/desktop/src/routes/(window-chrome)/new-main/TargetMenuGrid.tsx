@@ -47,16 +47,19 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		() => !props.isLoading && items().length === 0 && !props.errorMessage,
 	);
 
-	let cardRefs: HTMLButtonElement[] = [];
+	let cardRefs: (HTMLButtonElement | undefined)[] = [];
 
 	createEffect(() => {
-		items();
-		cardRefs = [];
+		const currentItems = items();
+		if (cardRefs.length > currentItems.length) {
+			cardRefs.length = currentItems.length;
+		}
 	});
 
-	const registerRef = (index: number) => (el: HTMLButtonElement) => {
-		cardRefs[index] = el;
-	};
+	const registerRef =
+		(index: number) => (el: HTMLButtonElement | null) => {
+			cardRefs[index] = el || undefined;
+		};
 
 	const focusAt = (index: number) => {
 		const target = cardRefs[index];
@@ -64,21 +67,22 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 	};
 
 	const handleKeyDown = (event: KeyboardEvent, index: number) => {
-		if (!cardRefs.length) return;
+		const totalItems = items().length;
+		if (!totalItems) return;
 		const columns = 2;
 		let nextIndex = index;
 
 		switch (event.key) {
 			case "ArrowRight":
-				nextIndex = (index + 1) % cardRefs.length;
+				nextIndex = (index + 1) % totalItems;
 				event.preventDefault();
 				break;
 			case "ArrowLeft":
-				nextIndex = (index - 1 + cardRefs.length) % cardRefs.length;
+				nextIndex = (index - 1 + totalItems) % totalItems;
 				event.preventDefault();
 				break;
 			case "ArrowDown":
-				nextIndex = Math.min(index + columns, cardRefs.length - 1);
+				nextIndex = Math.min(index + columns, totalItems - 1);
 				event.preventDefault();
 				break;
 			case "ArrowUp":
@@ -90,7 +94,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 				event.preventDefault();
 				break;
 			case "End":
-				nextIndex = cardRefs.length - 1;
+				nextIndex = totalItems - 1;
 				event.preventDefault();
 				break;
 			default:
