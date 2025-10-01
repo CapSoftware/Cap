@@ -88,11 +88,16 @@ function Inner() {
 	}));
 
 	const windowToShow = () => {
-		if (rawOptions.captureTarget.variant === "window" && selectedWindow.data) {
-			return selectedWindow.data;
+		const hoveredWindow = targetUnderCursor.window;
+		if (hoveredWindow) return hoveredWindow;
+		if (rawOptions.captureTarget.variant === "window") {
+			const selected =
+				typeof selectedWindow.data === "function"
+					? selectedWindow.data()
+					: selectedWindow.data;
+			if (selected) return selected;
 		}
-		// Otherwise use what's under the cursor
-		return targetUnderCursor.window;
+		return hoveredWindow;
 	};
 
 	const windowIcon = createQuery(() => ({

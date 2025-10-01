@@ -1,5 +1,5 @@
 import { cx } from "cva";
-import { createEffect, createMemo, For, Match, Switch } from "solid-js";
+import { createMemo, For, Match, Switch } from "solid-js";
 import { Motion } from "solid-motionone";
 import type {
 	CaptureDisplayWithThumbnail,
@@ -40,46 +40,44 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		() => !props.isLoading && items().length === 0 && !props.errorMessage,
 	);
 
-	let cardRefs: (HTMLButtonElement | undefined)[] = [];
+	let containerRef: HTMLDivElement | undefined;
 
-	createEffect(() => {
-		const currentItems = items();
-		if (cardRefs.length > currentItems.length) {
-			cardRefs.length = currentItems.length;
-		}
-	});
+	const handleKeyDown = (event: KeyboardEvent) => {
+		const container = containerRef;
+		if (!container) return;
 
-	const registerRef =
-		(index: number) => (el: HTMLButtonElement | null) => {
-			cardRefs[index] = el || undefined;
-		};
+		const buttons = Array.from(
+			container.querySelectorAll<HTMLButtonElement>(
+				"button[data-target-menu-card]:not(:disabled)",
+			),
+		);
+		if (!buttons.length) return;
 
-	const focusAt = (index: number) => {
-		const target = cardRefs[index];
-		if (target) target.focus();
-	};
+		const currentTarget = event.currentTarget as HTMLButtonElement | null;
+		if (!currentTarget) return;
 
-	const handleKeyDown = (event: KeyboardEvent, index: number) => {
-		const totalItems = items().length;
-		if (!totalItems) return;
+		const currentIndex = buttons.indexOf(currentTarget);
+		if (currentIndex === -1) return;
+
+		const totalItems = buttons.length;
 		const columns = 2;
-		let nextIndex = index;
+		let nextIndex = currentIndex;
 
 		switch (event.key) {
 			case "ArrowRight":
-				nextIndex = (index + 1) % totalItems;
+				nextIndex = (currentIndex + 1) % totalItems;
 				event.preventDefault();
 				break;
 			case "ArrowLeft":
-				nextIndex = (index - 1 + totalItems) % totalItems;
+				nextIndex = (currentIndex - 1 + totalItems) % totalItems;
 				event.preventDefault();
 				break;
 			case "ArrowDown":
-				nextIndex = Math.min(index + columns, totalItems - 1);
+				nextIndex = Math.min(currentIndex + columns, totalItems - 1);
 				event.preventDefault();
 				break;
 			case "ArrowUp":
-				nextIndex = Math.max(index - columns, 0);
+				nextIndex = Math.max(currentIndex - columns, 0);
 				event.preventDefault();
 				break;
 			case "Home":
@@ -94,7 +92,8 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 				return;
 		}
 
-		focusAt(nextIndex);
+		const target = buttons[nextIndex];
+		target?.focus();
 	};
 
 	const defaultEmptyMessage = () =>
@@ -107,7 +106,9 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 				"grid w-full grid-cols-2 content-start items-start justify-items-stretch gap-2",
 				props.class,
 			)}
-			role="listbox"
+			ref={(node) => {
+				containerRef = node ?? undefined;
+			}}
 		>
 			<Switch>
 				<Match when={props.errorMessage}>
@@ -141,10 +142,9 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											target={item}
 											onClick={() => props.onSelect?.(item)}
 											disabled={props.disabled}
-											ref={registerRef(index())}
-											onKeyDown={(event) => handleKeyDown(event, index())}
-											role="option"
+											onKeyDown={handleKeyDown}
 											class="w-full"
+											data-target-menu-card="true"
 											highlightQuery={props.highlightQuery}
 										/>
 									</Motion.div>
@@ -165,10 +165,9 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 											target={item}
 											onClick={() => props.onSelect?.(item)}
 											disabled={props.disabled}
-											ref={registerRef(index())}
-											onKeyDown={(event) => handleKeyDown(event, index())}
-											role="option"
+											onKeyDown={handleKeyDown}
 											class="w-full"
+											data-target-menu-card="true"
 											highlightQuery={props.highlightQuery}
 										/>
 									</Motion.div>
