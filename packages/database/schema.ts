@@ -168,13 +168,16 @@ export const organizations = mysqlTable(
 	}),
 );
 
+export type OrganisationMemberRole = "owner" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		userId: nanoId("userId").notNull(),
 		organizationId: nanoId("organizationId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -195,7 +198,9 @@ export const organizationInvites = mysqlTable(
 		organizationId: nanoId("organizationId").notNull(),
 		invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
 		invitedByUserId: nanoId("invitedByUserId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		status: varchar("status", { length: 255 }).notNull().default("pending"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -552,7 +557,10 @@ export const spaceMembers = mysqlTable(
 		id: nanoId("id").notNull().primaryKey().unique(),
 		spaceId: nanoId("spaceId").notNull(),
 		userId: nanoId("userId").notNull(),
-		role: varchar("role", { length: 255 }).notNull().default("member"),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.default("member")
+			.$type<"member" | "Admin">(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
