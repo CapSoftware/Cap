@@ -1,5 +1,6 @@
 import { cx } from "cva";
 import { createEffect, createMemo, For, Match, Switch } from "solid-js";
+import { Motion } from "solid-motionone";
 import type {
 	CaptureDisplayWithThumbnail,
 	CaptureWindowWithThumbnail,
@@ -99,14 +100,14 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 		<div
 			data-variant={props.variant}
 			class={cx(
-				"grid w-full grid-cols-2 content-start items-start justify-items-stretch gap-4",
+				"grid w-full grid-cols-2 content-start items-start justify-items-stretch gap-2",
 				props.class,
 			)}
 			role="listbox"
 		>
 			<Switch>
 				<Match when={props.errorMessage}>
-					<div class="col-span-2 flex flex-col items-center justify-center gap-2 py-6 text-center text-sm text-gray-11">
+					<div class="flex flex-col col-span-2 gap-2 justify-center items-center py-6 text-sm text-center text-gray-11">
 						<p>{props.errorMessage}</p>
 					</div>
 				</Match>
@@ -116,7 +117,7 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 					</For>
 				</Match>
 				<Match when={isEmpty()}>
-					<div class="col-span-2 py-6 text-center text-sm text-gray-11">
+					<div class="col-span-2 py-6 text-sm text-center text-gray-11">
 						{props.emptyMessage ?? defaultEmptyMessage()}
 					</div>
 				</Match>
@@ -125,34 +126,48 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 						<Match when={props.variant === "display"}>
 							<For each={items() as CaptureDisplayWithThumbnail[]}>
 								{(item, index) => (
-									<TargetCard
-										variant="display"
-										target={item}
-										onClick={() => props.onSelect?.(item)}
-										disabled={props.disabled}
-										ref={registerRef(index())}
-										onKeyDown={(event) => handleKeyDown(event, index())}
-										role="option"
-										class="w-full"
-										highlightQuery={props.highlightQuery}
-									/>
+									<Motion.div
+										initial={{ scale: 0.95, opacity: 0 }}
+										animate={{ scale: 1, opacity: 1 }}
+										exit={{ scale: 0.95 }}
+										transition={{ duration: 0.2, delay: index() * 0.1 }}
+									>
+										<TargetCard
+											variant="display"
+											target={item}
+											onClick={() => props.onSelect?.(item)}
+											disabled={props.disabled}
+											ref={registerRef(index())}
+											onKeyDown={(event) => handleKeyDown(event, index())}
+											role="option"
+											class="w-full"
+											highlightQuery={props.highlightQuery}
+										/>
+									</Motion.div>
 								)}
 							</For>
 						</Match>
 						<Match when={props.variant === "window"}>
 							<For each={items() as CaptureWindowWithThumbnail[]}>
 								{(item, index) => (
-									<TargetCard
-										variant="window"
-										target={item}
-										onClick={() => props.onSelect?.(item)}
-										disabled={props.disabled}
-										ref={registerRef(index())}
-										onKeyDown={(event) => handleKeyDown(event, index())}
-										role="option"
-										class="w-full"
-										highlightQuery={props.highlightQuery}
-									/>
+									<Motion.div
+										initial={{ scale: 0.95, opacity: 0 }}
+										animate={{ scale: 1, opacity: 1 }}
+										exit={{ scale: 0.95 }}
+										transition={{ duration: 0.2, delay: index() * 0.1 }}
+									>
+										<TargetCard
+											variant="window"
+											target={item}
+											onClick={() => props.onSelect?.(item)}
+											disabled={props.disabled}
+											ref={registerRef(index())}
+											onKeyDown={(event) => handleKeyDown(event, index())}
+											role="option"
+											class="w-full"
+											highlightQuery={props.highlightQuery}
+										/>
+									</Motion.div>
 								)}
 							</For>
 						</Match>
