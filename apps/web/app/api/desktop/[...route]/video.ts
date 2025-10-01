@@ -125,7 +125,7 @@ app.get(
 				.orderBy(organizations.createdAt);
 			const userOrgIds = userOrganizations.map((org) => org.id);
 
-			let videoOrgId!: string;
+			let videoOrgId: string;
 			if (orgId) {
 				// Hard error if the user requested org is non-existent or they don't have access.
 				if (!userOrgIds.includes(orgId))
@@ -147,6 +147,11 @@ app.get(
 						})
 						.where(eq(users.id, user.id));
 				} else videoOrgId = user.defaultOrgId;
+			} else {
+				// No orgId provided and no defaultOrgId, use first available org
+				if (!userOrganizations[0])
+					return c.json({ error: "no_valid_org" }, { status: 403 });
+				videoOrgId = userOrganizations[0].id;
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
