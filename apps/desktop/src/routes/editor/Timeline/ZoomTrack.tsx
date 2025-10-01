@@ -58,7 +58,10 @@ export function ZoomTrack(props: {
 			const zoomSegments = await commands.generateZoomSegmentsFromClicks();
 			setProject("timeline", "zoomSegments", zoomSegments);
 			if (zoomSegments.length > 0) {
-				setProject("cursor", "size", 200);
+				const currentSize = project.cursor?.size ?? 0;
+				if (currentSize < 200) {
+					setProject("cursor", "size", 200);
+				}
 			}
 		} catch (error) {
 			console.error("Failed to generate zoom segments:", error);
