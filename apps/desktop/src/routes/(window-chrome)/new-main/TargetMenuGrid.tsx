@@ -129,50 +129,60 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 				<Match when={items().length > 0}>
 					<Switch>
 						<Match when={props.variant === "display"}>
-							<For each={items() as CaptureDisplayWithThumbnail[]}>
-								{(item, index) => (
-									<Motion.div
-										initial={{ scale: 0.95, opacity: 0 }}
-										animate={{ scale: 1, opacity: 1 }}
-										exit={{ scale: 0.95 }}
-										transition={{ duration: 0.2, delay: index() * 0.1 }}
-									>
-										<TargetCard
-											variant="display"
-											target={item}
-											onClick={() => props.onSelect?.(item)}
-											disabled={props.disabled}
-											onKeyDown={handleKeyDown}
-											class="w-full"
-											data-target-menu-card="true"
-											highlightQuery={props.highlightQuery}
-										/>
-									</Motion.div>
-								)}
-							</For>
+							{(() => {
+								const displayProps = props as DisplayGridProps;
+								return (
+									<For each={items() as CaptureDisplayWithThumbnail[]}>
+										{(item, index) => (
+											<Motion.div
+												initial={{ scale: 0.95, opacity: 0 }}
+												animate={{ scale: 1, opacity: 1 }}
+												exit={{ scale: 0.95 }}
+												transition={{ duration: 0.2, delay: index() * 0.1 }}
+											>
+												<TargetCard
+													variant="display"
+													target={item}
+													onClick={() => displayProps.onSelect?.(item)}
+													disabled={displayProps.disabled}
+													onKeyDown={handleKeyDown}
+													class="w-full"
+													data-target-menu-card="true"
+													highlightQuery={displayProps.highlightQuery}
+												/>
+											</Motion.div>
+										)}
+									</For>
+								);
+							})()}
 						</Match>
 						<Match when={props.variant === "window"}>
-							<For each={items() as CaptureWindowWithThumbnail[]}>
-								{(item, index) => (
-									<Motion.div
-										initial={{ scale: 0.95, opacity: 0 }}
-										animate={{ scale: 1, opacity: 1 }}
-										exit={{ scale: 0.95 }}
-										transition={{ duration: 0.2, delay: index() * 0.1 }}
-									>
-										<TargetCard
-											variant="window"
-											target={item}
-											onClick={() => props.onSelect?.(item)}
-											disabled={props.disabled}
-											onKeyDown={handleKeyDown}
-											class="w-full"
-											data-target-menu-card="true"
-											highlightQuery={props.highlightQuery}
-										/>
-									</Motion.div>
-								)}
-							</For>
+							{(() => {
+								const windowProps = props as WindowGridProps;
+								return (
+									<For each={items() as CaptureWindowWithThumbnail[]}>
+										{(item, index) => (
+											<Motion.div
+												initial={{ scale: 0.95, opacity: 0 }}
+												animate={{ scale: 1, opacity: 1 }}
+												exit={{ scale: 0.95 }}
+												transition={{ duration: 0.2, delay: index() * 0.1 }}
+											>
+												<TargetCard
+													variant="window"
+													target={item}
+													onClick={() => windowProps.onSelect?.(item)}
+													disabled={windowProps.disabled}
+													onKeyDown={handleKeyDown}
+													class="w-full"
+													data-target-menu-card="true"
+													highlightQuery={windowProps.highlightQuery}
+												/>
+											</Motion.div>
+										)}
+									</For>
+								);
+							})()}
 						</Match>
 					</Switch>
 				</Match>
