@@ -33,7 +33,7 @@ export const Settings = ({
 	const hasChanges =
 		firstName !== (user?.name || "") ||
 		lastName !== (user?.lastName || "") ||
-		defaultOrgId !== user?.defaultOrgId;
+		(defaultOrgId ?? null) !== (user?.defaultOrgId ?? null);
 
 	const { mutate: updateName, isPending: updateNamePending } = useMutation({
 		mutationFn: async () => {
