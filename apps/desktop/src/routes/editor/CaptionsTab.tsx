@@ -1,6 +1,5 @@
 import { Button } from "@cap/ui-solid";
 import { Select as KSelect } from "@kobalte/core/select";
-import { createWritableMemo } from "@solid-primitives/memo";
 import { createElementSize } from "@solid-primitives/resize-observer";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { exists } from "@tauri-apps/plugin-fs";
@@ -8,10 +7,11 @@ import { batch, createEffect, createSignal, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import toast from "solid-toast";
 import { Toggle } from "~/components/Toggle";
+import { captionsStore } from "~/store/captions";
+import { applySegmentUpdates } from "~/utils/captionWords";
 import type { CaptionSegment, CaptionSettings } from "~/utils/tauri";
 import { commands, events } from "~/utils/tauri";
 import { FPS, OUTPUT_SIZE, useEditorContext } from "./context";
-import { TextInput } from "./TextInput";
 import {
   Field,
   Input,
@@ -87,72 +87,16 @@ const fontOptions = [
   { value: "System Serif", label: "System Serif" },
   { value: "System Monospace", label: "System Monospace" },
 ];
+const CAPTION_STYLE_KEYS: ReadonlyArray<keyof CaptionSettings> = [
+  "enabled",
+  "font",
+  "size",
+  "backgroundOpacity",
+  "position",
+];
 
 interface CaptionsResponse {
   segments: CaptionSegment[];
-}
-
-type RGB = [number, number, number];
-
-function hexToRgb(hex: string): RGB {
-  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return result
-    ? [
-        parseInt(result[1], 16),
-        parseInt(result[2], 16),
-        parseInt(result[3], 16),
-      ]
-    : [0, 0, 0];
-}
-
-function rgbToHex(rgb: RGB): string {
-  return `#${rgb.map((x) => x.toString(16).padStart(2, "0")).join("")}`;
-}
-
-function RgbInput(props: { value: string; onChange: (value: string) => void }) {
-  const [text, setText] = createWritableMemo(() => props.value);
-  let prevColor = props.value;
-  let colorInput!: HTMLInputElement;
-
-  return (
-    <div class="flex flex-row items-center gap-[0.75rem] relative">
-      <button
-        type="button"
-        class="size-[3rem] rounded-[0.5rem]"
-        style={{
-          "background-color": text(),
-        }}
-        onClick={() => colorInput.click()}
-      />
-      <input
-        ref={colorInput}
-        type="color"
-        class="absolute left-0 bottom-0 w-[3rem] opacity-0"
-        value={text()}
-        onChange={(e) => {
-          setText(e.target.value);
-          props.onChange(e.target.value);
-        }}
-      />
-      <TextInput
-        class="w-[5rem] p-[0.375rem] border text-gray-400 rounded-[0.5rem] bg-gray-50"
-        value={text()}
-        onFocus={() => {
-          prevColor = props.value;
-        }}
-        onInput={(e) => {
-          setText(e.currentTarget.value);
-          props.onChange(e.currentTarget.value);
-        }}
-        onBlur={(e) => {
-          if (!/^#[0-9A-F]{6}$/i.test(e.target.value)) {
-            setText(prevColor);
-            props.onChange(prevColor);
-          }
-        }}
-      />
-    </div>
-  );
 }
 
 export function CaptionsTab() {
@@ -178,51 +122,38 @@ export function CaptionsTab() {
       position: "bottom",
       bold: true,
       italic: false,
-      outline: true,
+      outline: false,
       outlineColor: "#000000",
       exportWithSubtitles: false,
     }
   );
-
-  createEffect(() => {
-    if (!project?.captions) return;
-
-    const settings = captionSettings;
-
-    if (
-      JSON.stringify(settings) !== JSON.stringify(project.captions.settings)
-    ) {
-      batch(() => {
-        setProject("captions", "settings", settings);
-
-        events.renderFrameEvent.emit({
-          frame_number: Math.floor(editorState.playbackTime * FPS),
-          fps: FPS,
-          resolution_base: OUTPUT_SIZE,
-        });
-      });
-    }
-  });
-
   createEffect(() => {
     if (project?.captions?.settings) {
       setCaptionSettings(project.captions.settings);
+      captionsStore.updateSettings(project.captions.settings);
     }
   });
 
-  const updateCaptionSetting = (key: keyof CaptionSettings, value: any) => {
+  const updateCaptionSetting = <K extends keyof CaptionSettings>(
+    key: K,
+    value: CaptionSettings[K],
+  ) => {
     if (!project?.captions) return;
 
     if (scrollContainerRef) {
       setScrollState("lastScrollTop", scrollContainerRef.scrollTop);
     }
 
-    setCaptionSettings({
-      ...captionSettings,
-      [key]: value,
-    });
+    setCaptionSettings(key, () => value);
 
-    if (key === "font") {
+    captionsStore.updateSettings({ [key]: value } as Pick<CaptionSettings, K>);
+
+    setProject("captions", "settings", (prev) => ({
+      ...(prev ?? {}),
+      [key]: value,
+    }));
+
+    if (CAPTION_STYLE_KEYS.includes(key)) {
       events.renderFrameEvent.emit({
         frame_number: Math.floor(editorState.playbackTime * FPS),
         fps: FPS,
@@ -276,7 +207,7 @@ export function CaptionsTab() {
           position: "bottom",
           bold: true,
           italic: false,
-          outline: true,
+          outline: false,
           outlineColor: "#000000",
           exportWithSubtitles: false,
         },
@@ -464,7 +395,13 @@ export function CaptionsTab() {
       );
 
       if (result && result.segments.length > 0) {
-        setProject("captions", "segments", result.segments);
+        setProject(
+          "captions",
+          "segments",
+          result.segments.map((segment) =>
+            applySegmentUpdates(segment, {}),
+          ),
+        );
         updateCaptionSetting("enabled", true);
         toast.success("Captions generated successfully!");
       } else {
@@ -517,25 +454,11 @@ export function CaptionsTab() {
       "captions",
       "segments",
       project.captions.segments.map((segment) =>
-        segment.id === id ? { ...segment, ...updates } : segment
+        segment.id === id ? applySegmentUpdates(segment, updates) : segment
       )
     );
   };
 
-  const addSegment = (time: number) => {
-    if (!project?.captions) return;
-
-    const id = `segment-${Date.now()}`;
-    setProject("captions", "segments", [
-      ...project.captions.segments,
-      {
-        id,
-        start: time,
-        end: time + 2,
-        text: "New caption",
-      },
-    ]);
-  };
 
   return (
     <div class="flex flex-col h-full">
@@ -862,16 +785,6 @@ export function CaptionsTab() {
                         step={1}
                       />
                     </div>
-
-                    <div class="flex flex-col gap-2">
-                      <span class="text-gray-500 text-sm">Font Color</span>
-                      <RgbInput
-                        value={captionSettings.color || "#FFFFFF"}
-                        onChange={(value) =>
-                          updateCaptionSetting("color", value)
-                        }
-                      />
-                    </div>
                   </div>
                 </Field>
 
@@ -880,18 +793,6 @@ export function CaptionsTab() {
                   icon={<IconCapMessageBubble />}
                 >
                   <div class="space-y-3">
-                    <div class="flex flex-col gap-2">
-                      <span class="text-gray-500 text-sm">
-                        Background Color
-                      </span>
-                      <RgbInput
-                        value={captionSettings.backgroundColor || "#000000"}
-                        onChange={(value) =>
-                          updateCaptionSetting("backgroundColor", value)
-                        }
-                      />
-                    </div>
-
                     <div class="flex flex-col gap-2">
                       <span class="text-gray-500 text-sm">
                         Background Opacity
@@ -953,49 +854,6 @@ export function CaptionsTab() {
                   </KSelect>
                 </Field>
 
-                <Field name="Style Options" icon={<IconCapMessageBubble />}>
-                  <div class="space-y-3">
-                    <div class="flex flex-col gap-4">
-                      <Subfield name="Bold">
-                        <Toggle
-                          checked={captionSettings.bold}
-                          onChange={(checked) =>
-                            updateCaptionSetting("bold", checked)
-                          }
-                        />
-                      </Subfield>
-                      <Subfield name="Italic">
-                        <Toggle
-                          checked={captionSettings.italic}
-                          onChange={(checked) =>
-                            updateCaptionSetting("italic", checked)
-                          }
-                        />
-                      </Subfield>
-                      <Subfield name="Outline">
-                        <Toggle
-                          checked={captionSettings.outline}
-                          onChange={(checked) =>
-                            updateCaptionSetting("outline", checked)
-                          }
-                        />
-                      </Subfield>
-                    </div>
-
-                    <Show when={captionSettings.outline}>
-                      <div class="flex flex-col gap-2">
-                        <span class="text-gray-500 text-sm">Outline Color</span>
-                        <RgbInput
-                          value={captionSettings.outlineColor || "#000000"}
-                          onChange={(value) =>
-                            updateCaptionSetting("outlineColor", value)
-                          }
-                        />
-                      </div>
-                    </Show>
-                  </div>
-                </Field>
-
                 <Field name="Export Options" icon={<IconCapMessageBubble />}>
                   <Subfield name="Export with Subtitles">
                     <Toggle
@@ -1013,15 +871,6 @@ export function CaptionsTab() {
                     icon={<IconCapMessageBubble />}
                   >
                     <div class="space-y-4">
-                      <div class="flex items-center justify-between">
-                        <Button
-                          onClick={() => addSegment(editorState.playbackTime)}
-                          class="w-full"
-                        >
-                          Add at Current Time
-                        </Button>
-                      </div>
-
                       <div class="max-h-[300px] overflow-y-auto space-y-3 pr-2">
                         {project.captions?.segments.length === 0 ? (
                           <p class="text-sm text-gray-500">
@@ -1131,3 +980,4 @@ function IconDelete() {
     </svg>
   );
 }
+

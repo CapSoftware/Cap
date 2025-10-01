@@ -1062,7 +1062,7 @@ pub fn parse_captions_json(json: &str) -> Result<cap_project::CaptionsData, Stri
                     let outline = settings_obj
                         .get("outline")
                         .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
+                        .unwrap_or(false);
 
                     let outline_color = settings_obj
                         .get("outlineColor")

@@ -583,7 +583,7 @@ impl Default for CaptionSettings {
             position: "bottom".to_string(),
             bold: true,
             italic: false,
-            outline: true,
+            outline: false,
             outline_color: "#000000".to_string(),
             export_with_subtitles: false,
         }

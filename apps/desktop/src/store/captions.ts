@@ -1,5 +1,6 @@
 import { createEffect, createRoot } from "solid-js";
 import { createStore } from "solid-js/store";
+import { applySegmentUpdates, buildWordsFromText } from "~/utils/captionWords";
 import { type CaptionSegment, commands } from "~/utils/tauri";
 
 // export type CaptionSegment = {
@@ -43,7 +44,7 @@ function createCaptionsStore() {
 			position: "bottom",
 			bold: true,
 			italic: false,
-			outline: true,
+			outline: false,
 			outlineColor: "#000000",
 			exportWithSubtitles: false,
 		},
@@ -60,7 +61,7 @@ function createCaptionsStore() {
 		},
 
 		updateSegments(segments: CaptionSegment[]) {
-			setState("segments", segments);
+			setState("segments", segments.map((segment) => applySegmentUpdates(segment, {})));
 		},
 
 		setCurrentCaption(caption: string | null) {
@@ -80,7 +81,7 @@ function createCaptionsStore() {
 		) {
 			setState("segments", (prev) =>
 				prev.map((segment) =>
-					segment.id === id ? { ...segment, ...updates } : segment,
+					segment.id === id ? applySegmentUpdates(segment, updates) : segment,
 				),
 			);
 		},
@@ -94,6 +95,7 @@ function createCaptionsStore() {
 					start: time,
 					end: time + 2,
 					text: "New caption",
+					words: buildWordsFromText("New caption", time, time + 2),
 				},
 			]);
 		},
@@ -105,7 +107,9 @@ function createCaptionsStore() {
 				if (captionsData) {
 					setState((prev) => ({
 						...prev,
-						segments: captionsData.segments,
+						segments: (captionsData.segments || []).map((segment) =>
+						applySegmentUpdates(segment, {}),
+					),
 						settings: captionsData.settings || {
 							enabled: true,
 							font: "Arial",
@@ -116,7 +120,7 @@ function createCaptionsStore() {
 							position: "bottom",
 							bold: true,
 							italic: false,
-							outline: true,
+							outline: false,
 							outlineColor: "#000000",
 							exportWithSubtitles: false,
 						},
@@ -129,7 +133,11 @@ function createCaptionsStore() {
 						localStorage.getItem(`captions-${videoPath}`) || "{}",
 					);
 					if (localCaptionsData.segments) {
-						setState("segments", localCaptionsData.segments);
+						setState("segments",
+							(localCaptionsData.segments || []).map((segment: CaptionSegment) =>
+								applySegmentUpdates(segment, {}),
+							),
+						);
 					}
 					if (localCaptionsData.settings) {
 						setState("settings", localCaptionsData.settings);
