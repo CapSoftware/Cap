@@ -4,17 +4,7 @@ import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 const CHUNK_SIZE = 500;
 
-interface BackfillStats {
-	videosProcessed: number;
-	videosUpdated: number;
-	usersProcessed: number;
-	usersUpdated: number;
-}
-
-async function backfillVideoOrgIds(): Promise<{
-	processed: number;
-	updated: number;
-}> {
+async function backfillVideoOrgIds() {
 	console.log("🎬 Starting video orgId backfill...");
 
 	let updated = 0;
@@ -62,14 +52,9 @@ async function backfillVideoOrgIds(): Promise<{
 
 		console.log(`📹 Assigned orgId to ${updated} videos`);
 	}
-
-	return { updated };
 }
 
-async function backfillUserDefaultOrgIds(): Promise<{
-	processed: number;
-	updated: number;
-}> {
+async function backfillUserDefaultOrgIds() {
 	console.log("👤 Starting user defaultOrgId backfill...");
 
 	let updated = 0;
