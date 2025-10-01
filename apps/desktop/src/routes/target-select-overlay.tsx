@@ -71,7 +71,7 @@ function Inner() {
 			const windowId = rawOptions.captureTarget.id;
 
 			const windows = await commands.listCaptureWindows();
-			const window = windows.find(w => w.id === windowId);
+			const window = windows.find((w) => w.id === windowId);
 
 			if (!window) return null;
 
@@ -81,7 +81,9 @@ function Inner() {
 				bounds: window.bounds,
 			};
 		},
-		enabled: rawOptions.captureTarget.variant === "window" && rawOptions.targetMode === "window",
+		enabled:
+			rawOptions.captureTarget.variant === "window" &&
+			rawOptions.targetMode === "window",
 		staleTime: 5 * 1000,
 	}));
 
@@ -98,12 +100,10 @@ function Inner() {
 		queryFn: async () => {
 			const window = windowToShow();
 			if (!window?.id) return null;
-			return await commands.getWindowIcon(
-				window.id.toString(),
-			);
+			return await commands.getWindowIcon(window.id.toString());
 		},
 		enabled: !!windowToShow()?.id,
-		staleTime: 5 * 60 * 1000, 
+		staleTime: 5 * 60 * 1000,
 	}));
 
 	const displayInformation = createQuery(() => ({
@@ -215,7 +215,8 @@ function Inner() {
 				when={
 					rawOptions.targetMode === "window" &&
 					(targetUnderCursor.display_id === params.displayId ||
-						(rawOptions.captureTarget.variant === "window" && selectedWindow.data))
+						(rawOptions.captureTarget.variant === "window" &&
+							selectedWindow.data))
 				}
 			>
 				<Show when={windowToShow()} keyed>
