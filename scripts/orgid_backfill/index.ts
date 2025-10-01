@@ -2,7 +2,7 @@ import { db } from "@cap/database";
 import { users, videos } from "@cap/database/schema";
 import { eq, and, isNull, isNotNull, sql } from "drizzle-orm";
 
-const CHUNK_SIZE = 100;
+const CHUNK_SIZE = 500;
 
 interface BackfillStats {
 	videosProcessed: number;
@@ -17,7 +17,6 @@ async function backfillVideoOrgIds(): Promise<{
 }> {
 	console.log("🎬 Starting video orgId backfill...");
 
-	let processed = 0;
 	let updated = 0;
 
 	while (true) {
@@ -45,6 +44,7 @@ async function backfillVideoOrgIds(): Promise<{
           SELECT u.activeOrganizationId
           FROM users u
           WHERE u.id = videos.ownerId
+          AND u.activeOrganizationId IS NOT NULL
         )`,
 			})
 			.where(
@@ -58,18 +58,12 @@ async function backfillVideoOrgIds(): Promise<{
 			);
 
 		const rowsUpdated = updateResult.rowsAffected || 0;
-		processed += videosToUpdate.length;
 		updated += rowsUpdated;
 
-		console.log(
-			`📹 Processed ${processed} videos, updated ${updated} (chunk: ${videosToUpdate.length}/${rowsUpdated})`,
-		);
-
-		// If we got less than CHUNK_SIZE, we're done
-		if (videosToUpdate.length < CHUNK_SIZE) break;
+		console.log(`📹 Assigned orgId to ${updated} videos`);
 	}
 
-	return { processed, updated };
+	return { updated };
 }
 
 async function backfillUserDefaultOrgIds(): Promise<{
@@ -78,44 +72,22 @@ async function backfillUserDefaultOrgIds(): Promise<{
 }> {
 	console.log("👤 Starting user defaultOrgId backfill...");
 
-	let processed = 0;
 	let updated = 0;
 
 	while (true) {
-		// Find users that need defaultOrgId backfilled
-		const usersToUpdate = await db()
-			.select({
-				id: users.id,
-				activeOrganizationId: users.activeOrganizationId,
-				defaultOrgId: users.defaultOrgId,
+		const updateResult = await db()
+			.update(users)
+			.set({
+				defaultOrgId: users.activeOrganizationId,
 			})
-			.from(users)
 			.where(
 				and(isNull(users.defaultOrgId), isNotNull(users.activeOrganizationId)),
-			)
-			.limit(CHUNK_SIZE);
+			);
+		const rowsUpdated = updateResult.rowsAffected || 0;
+		updated += rowsUpdated;
 
-		if (usersToUpdate.length === 0) break;
-
-		// Update users individually to ensure idempotency
-		for (const user of usersToUpdate)
-			await db()
-				.update(users)
-				.set({ defaultOrgId: user.activeOrganizationId })
-				.where(and(eq(users.id, user.id), isNull(users.defaultOrgId)));
-
-		processed += usersToUpdate.length;
-		updated += usersToUpdate.length;
-
-		console.log(
-			`👥 Processed ${processed} users, updated ${updated} (chunk: ${usersToUpdate.length})`,
-		);
-
-		// If we got less than CHUNK_SIZE, we're done
-		if (usersToUpdate.length < CHUNK_SIZE) break;
+		console.log(`👥 Assigned defaultOrgId to ${updated} users`);
 	}
-
-	return { processed, updated };
 }
 
 async function validateBackfill(): Promise<void> {
@@ -231,31 +203,13 @@ async function main(): Promise<void> {
 	try {
 		await getInitialStats();
 
-		const videoResults = await backfillVideoOrgIds();
-		console.log(
-			`✅ Video backfill complete: ${videoResults.updated}/${videoResults.processed} videos updated\n`,
-		);
+		await backfillVideoOrgIds();
+		console.log(`✅ Video backfill complete\n`);
 
-		const userResults = await backfillUserDefaultOrgIds();
-		console.log(
-			`✅ User backfill complete: ${userResults.updated}/${userResults.processed} users updated\n`,
-		);
+		await backfillUserDefaultOrgIds();
+		console.log(`✅ User backfill complete\n`);
 
 		await validateBackfill();
-
-		const totalStats: BackfillStats = {
-			videosProcessed: videoResults.processed,
-			videosUpdated: videoResults.updated,
-			usersProcessed: userResults.processed,
-			usersUpdated: userResults.updated,
-		};
-
-		console.log("\n🎉 Backfill completed successfully!");
-		console.log("📋 Final summary:");
-		console.log(`  Videos processed: ${totalStats.videosProcessed}`);
-		console.log(`  Videos updated: ${totalStats.videosUpdated}`);
-		console.log(`  Users processed: ${totalStats.usersProcessed}`);
-		console.log(`  Users updated: ${totalStats.usersUpdated}`);
 		process.exit(0);
 	} catch (error) {
 		console.error("❌ Error during backfill:", error);
