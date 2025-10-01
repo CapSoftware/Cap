@@ -30,6 +30,14 @@ type WindowGridProps = BaseProps<CaptureWindowWithThumbnail> & {
 
 type TargetMenuGridProps = DisplayGridProps | WindowGridProps;
 
+function isDisplayProps(props: TargetMenuGridProps): props is DisplayGridProps {
+	return props.variant === "display";
+}
+
+function isWindowProps(props: TargetMenuGridProps): props is WindowGridProps {
+	return props.variant === "window";
+}
+
 export default function TargetMenuGrid(props: TargetMenuGridProps) {
 	const items = createMemo(() => props.targets ?? []);
 	const skeletonItems = createMemo(() =>
@@ -123,38 +131,56 @@ export default function TargetMenuGrid(props: TargetMenuGridProps) {
 				<Match when={items().length > 0}>
 					<Switch>
 						<Match when={props.variant === "display"}>
-							<For each={items() as CaptureDisplayWithThumbnail[]}>
-								{(item, index) => (
-									<TargetCard
-										variant="display"
-										target={item}
-										onClick={() => props.onSelect?.(item)}
-										disabled={props.disabled}
-										ref={registerRef(index())}
-										onKeyDown={(event) => handleKeyDown(event, index())}
-										role="option"
-										class="w-full"
-										highlightQuery={props.highlightQuery}
-									/>
-								)}
-							</For>
+							{(() => {
+								if (!isDisplayProps(props)) return null;
+								const displayProps = props;
+								const targets = displayProps.targets ?? [];
+								const onSelect = displayProps.onSelect;
+
+								return (
+									<For each={targets}>
+										{(item, index) => (
+											<TargetCard
+												variant="display"
+												target={item}
+												onClick={() => onSelect?.(item)}
+												disabled={displayProps.disabled}
+												ref={registerRef(index())}
+												onKeyDown={(event) => handleKeyDown(event, index())}
+												role="option"
+												class="w-full"
+												highlightQuery={displayProps.highlightQuery}
+											/>
+										)}
+									</For>
+								);
+							})()}
 						</Match>
 						<Match when={props.variant === "window"}>
-							<For each={items() as CaptureWindowWithThumbnail[]}>
-								{(item, index) => (
-									<TargetCard
-										variant="window"
-										target={item}
-										onClick={() => props.onSelect?.(item)}
-										disabled={props.disabled}
-										ref={registerRef(index())}
-										onKeyDown={(event) => handleKeyDown(event, index())}
-										role="option"
-										class="w-full"
-										highlightQuery={props.highlightQuery}
-									/>
-								)}
-							</For>
+							{(() => {
+								if (!isWindowProps(props)) return null;
+								const windowProps = props;
+								const targets = windowProps.targets ?? [];
+								const onSelect = windowProps.onSelect;
+
+								return (
+									<For each={targets}>
+										{(item, index) => (
+											<TargetCard
+												variant="window"
+												target={item}
+												onClick={() => onSelect?.(item)}
+												disabled={windowProps.disabled}
+												ref={registerRef(index())}
+												onKeyDown={(event) => handleKeyDown(event, index())}
+												role="option"
+												class="w-full"
+												highlightQuery={windowProps.highlightQuery}
+											/>
+										)}
+									</For>
+								);
+							})()}
 						</Match>
 					</Switch>
 				</Match>

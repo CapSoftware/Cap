@@ -203,6 +203,57 @@ pub struct CaptureWindowWithThumbnail {
     pub app_icon: Option<String>,
 }
 
+#[cfg(any(target_os = "macos", windows))]
+const THUMBNAIL_WIDTH: u32 = 320;
+#[cfg(any(target_os = "macos", windows))]
+const THUMBNAIL_HEIGHT: u32 = 180;
+
+#[cfg(any(target_os = "macos", windows))]
+fn normalize_thumbnail_dimensions(image: &image::RgbaImage) -> image::RgbaImage {
+    let width = image.width();
+    let height = image.height();
+
+    if width == THUMBNAIL_WIDTH && height == THUMBNAIL_HEIGHT {
+        return image.clone();
+    }
+
+    if width == 0 || height == 0 {
+        return image::RgbaImage::from_pixel(
+            THUMBNAIL_WIDTH,
+            THUMBNAIL_HEIGHT,
+            image::Rgba([0, 0, 0, 0]),
+        );
+    }
+
+    let scale = (THUMBNAIL_WIDTH as f32 / width as f32)
+        .min(THUMBNAIL_HEIGHT as f32 / height as f32)
+        .max(f32::MIN_POSITIVE);
+
+    let scaled_width = (width as f32 * scale)
+        .round()
+        .clamp(1.0, THUMBNAIL_WIDTH as f32) as u32;
+    let scaled_height = (height as f32 * scale)
+        .round()
+        .clamp(1.0, THUMBNAIL_HEIGHT as f32) as u32;
+
+    let resized = image::imageops::resize(
+        image,
+        scaled_width.max(1),
+        scaled_height.max(1),
+        image::imageops::FilterType::Lanczos3,
+    );
+
+    let mut canvas =
+        image::RgbaImage::from_pixel(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, image::Rgba([0, 0, 0, 0]));
+
+    let offset_x = (THUMBNAIL_WIDTH - scaled_width) / 2;
+    let offset_y = (THUMBNAIL_HEIGHT - scaled_height) / 2;
+
+    image::imageops::overlay(&mut canvas, &resized, offset_x as i64, offset_y as i64);
+
+    canvas
+}
+
 #[cfg(target_os = "macos")]
 async fn capture_thumbnail_from_filter(filter: &cidre::sc::ContentFilter) -> Option<String> {
     use cidre::{cv, sc};
@@ -210,8 +261,8 @@ async fn capture_thumbnail_from_filter(filter: &cidre::sc::ContentFilter) -> Opt
     use std::{io::Cursor, slice};
 
     let mut config = sc::StreamCfg::new();
-    config.set_width(200);
-    config.set_height(112);
+    config.set_width(THUMBNAIL_WIDTH as usize);
+    config.set_height(THUMBNAIL_HEIGHT as usize);
     config.set_shows_cursor(false);
 
     let sample_buf =
@@ -271,12 +322,13 @@ async fn capture_thumbnail_from_filter(filter: &cidre::sc::ContentFilter) -> Opt
         warn!("Failed to construct RGBA image for thumbnail");
         return None;
     };
+    let thumbnail = normalize_thumbnail_dimensions(&img);
     let mut png_data = Cursor::new(Vec::new());
     let encoder = PngEncoder::new(&mut png_data);
     if let Err(err) = encoder.write_image(
-        img.as_raw(),
-        img.width(),
-        img.height(),
+        thumbnail.as_raw(),
+        thumbnail.width(),
+        thumbnail.height(),
         image::ColorType::Rgba8.into(),
     ) {
         warn!(error = ?err, "Failed to encode thumbnail as PNG");
@@ -617,9 +669,6 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
         return None;
     }
 
-    let target_width = 320u32;
-    let target_height = (height as f32 * (target_width as f32 / width as f32)) as u32;
-
     let frame_buffer = frame.as_buffer().ok()?;
     let data = frame_buffer.data();
     let stride = frame_buffer.stride() as usize;
@@ -638,20 +687,15 @@ async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<St
     }
 
     let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
-    let resized = image::imageops::resize(
-        &img,
-        target_width,
-        target_height,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let thumbnail = normalize_thumbnail_dimensions(&img);
 
     let mut png_data = Cursor::new(Vec::new());
     let encoder = PngEncoder::new(&mut png_data);
     encoder
         .write_image(
-            resized.as_raw(),
-            target_width,
-            target_height,
+            thumbnail.as_raw(),
+            thumbnail.width(),
+            thumbnail.height(),
             ColorType::Rgba8,
         )
         .ok()?;
@@ -709,9 +753,6 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
         return None;
     }
 
-    let target_width = 200u32;
-    let target_height = (height as f32 * (target_width as f32 / width as f32)) as u32;
-
     let frame_buffer = frame.as_buffer().ok()?;
     let data = frame_buffer.data();
     let stride = frame_buffer.stride() as usize;
@@ -730,20 +771,15 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
     }
 
     let img = image::RgbaImage::from_raw(width, height, rgba_data)?;
-    let resized = image::imageops::resize(
-        &img,
-        target_width,
-        target_height,
-        image::imageops::FilterType::Lanczos3,
-    );
+    let thumbnail = normalize_thumbnail_dimensions(&img);
 
     let mut png_data = Cursor::new(Vec::new());
     let encoder = PngEncoder::new(&mut png_data);
     encoder
         .write_image(
-            resized.as_raw(),
-            target_width,
-            target_height,
+            thumbnail.as_raw(),
+            thumbnail.width(),
+            thumbnail.height(),
             ColorType::Rgba8,
         )
         .ok()?;
@@ -797,20 +833,16 @@ fn collect_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, 
         let mut results = Vec::new();
         for (capture_window, window) in windows {
             let thumbnail = capture_window_thumbnail(&window).await;
-            let app_icon = window
-                .app_icon()
-                .and_then(|bytes| {
-                    if bytes.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            base64::Engine::encode(
-                                &base64::engine::general_purpose::STANDARD,
-                                bytes,
-                            ),
-                        )
-                    }
-                });
+            let app_icon = window.app_icon().and_then(|bytes| {
+                if bytes.is_empty() {
+                    None
+                } else {
+                    Some(base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        bytes,
+                    ))
+                }
+            });
 
             if thumbnail.is_none() {
                 warn!(
