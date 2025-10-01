@@ -40,6 +40,7 @@ import {
 	type CaptureWindow,
 	commands,
 	events,
+	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 
@@ -196,7 +197,7 @@ function Page() {
 	});
 
 	const toggleRecording = createMutation(() => ({
-		mutationFn: async () => {
+		mutationFn: async (payload: { mode: RecordingMode }) => {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
@@ -239,7 +240,7 @@ function Page() {
 
 				await commands.startRecording({
 					capture_target,
-					mode: rawOptions.mode,
+					mode: payload.mode,
 					capture_system_audio: rawOptions.captureSystemAudio,
 				});
 			} else await commands.stopRecording();
@@ -344,7 +345,7 @@ function Page() {
 									}
 								}}
 								class={cx(
-									"text-[0.6rem] rounded-lg px-1 py-0.5",
+									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 										: "bg-gray-3 cursor-pointer hover:bg-gray-5",
@@ -514,7 +515,7 @@ function Page() {
 							disabled={toggleRecording.isPending}
 							variant="blue"
 							size="md"
-							onClick={() => toggleRecording.mutate()}
+							onClick={() => toggleRecording.mutate({ mode: rawOptions.mode })}
 							class="flex flex-grow justify-center items-center"
 						>
 							{isRecording() ? (

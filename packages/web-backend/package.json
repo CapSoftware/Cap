@@ -12,12 +12,15 @@
 		"@cap/database": "workspace:*",
 		"@cap/utils": "workspace:*",
 		"@cap/web-domain": "workspace:*",
-		"@effect/platform": "^0.90.1",
-		"@effect/rpc": "^0.68.3",
+		"@effect/cluster": "^0.49.1",
+		"@effect/platform": "^0.91.1",
+		"@effect/rpc": "^0.70.0",
+		"@effect/workflow": "^0.10.0",
 		"@smithy/types": "^4.3.1",
-		"drizzle-orm": "0.43.1",
-		"effect": "^3.17.7",
-		"server-only": "^0.0.1",
-		"next": "14.2.3"
+		"@vercel/functions": "^3.1.0",
+		"drizzle-orm": "0.44.5",
+		"effect": "^3.17.14",
+		"next": "15.5.4",
+		"server-only": "^0.0.1"
 	}
 }

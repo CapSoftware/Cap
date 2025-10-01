@@ -4,7 +4,7 @@ import { Button } from "@cap/ui";
 import clsx from "clsx";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
-import { useState } from "react";
+import { type JSX, useState } from "react";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,

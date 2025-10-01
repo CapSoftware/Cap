@@ -4,7 +4,7 @@ use ::windows::{
     Win32::Graphics::Direct3D11::{D3D11_BOX, ID3D11Device},
 };
 use cap_fail::fail_err;
-use cap_timestamp::PerformanceCounterTimestamp;
+use cap_timestamp::{PerformanceCounterTimestamp, Timestamps};
 use cpal::traits::{DeviceTrait, HostTrait};
 use kameo::prelude::*;
 use scap_ffmpeg::*;
@@ -52,6 +52,9 @@ struct FrameHandler {
     last_log: Instant,
     frame_events: VecDeque<(Instant, bool)>,
     video_tx: Sender<(scap_direct3d::Frame, Timestamp)>,
+    target_fps: u32,
+    last_timestamp: Option<Timestamp>,
+    timestamps: Timestamps,
 }
 
 impl Actor for FrameHandler {
@@ -126,14 +129,30 @@ impl Message<NewFrame> for FrameHandler {
         msg: NewFrame,
         ctx: &mut kameo::prelude::Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Ok(timestamp) = msg.frame.inner().SystemRelativeTime() else {
+        let Ok(timestamp) = msg.0.inner().SystemRelativeTime() else {
             return;
         };
 
-        let frame_dropped = match self.video_tx.try_send((
-            msg.frame,
-            Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(timestamp.Duration)),
-        )) {
+        let timestamp =
+            Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(timestamp.Duration));
+
+        // manual FPS limiter
+        if let Some(last_timestamp) = self.last_timestamp
+            && let Some(time_since_last) = timestamp
+                .duration_since(self.timestamps)
+                .checked_sub(last_timestamp.duration_since(self.timestamps))
+        {
+            let target_interval = 1.0 / self.target_fps as f32;
+            let tolerance = target_interval * 0.8; // Allow 20% early arrival
+
+            if time_since_last.as_secs_f32() < tolerance {
+                return;
+            }
+        }
+
+        self.last_timestamp = Some(timestamp);
+
+        let frame_dropped = match self.video_tx.try_send((msg.0, timestamp)) {
             Err(flume::TrySendError::Disconnected(_)) => {
                 warn!("Pipeline disconnected");
                 let _ = ctx.actor_ref().stop_gracefully().await;
@@ -232,6 +251,9 @@ impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
                     frames_dropped: Default::default(),
                     last_cleanup: Instant::now(),
                     last_log: Instant::now(),
+                    target_fps: config.fps,
+                    last_timestamp: None,
+                    timestamps: Timestamps::now(),
                 });
 
                 let mut settings = scap_direct3d::Settings {
@@ -249,7 +271,6 @@ impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
                             back: 1,
                         }
                     }),
-                    min_update_interval: Some(Duration::from_millis(16)),
                     ..Default::default()
                 };
 
@@ -380,10 +401,7 @@ pub enum StartCapturingError {
     StartCapturer(::windows::core::Error),
 }
 
-pub struct NewFrame {
-    pub frame: scap_direct3d::Frame,
-    pub display_time: SystemTime,
-}
+pub struct NewFrame(pub scap_direct3d::Frame);
 
 impl Message<StartCapturing> for ScreenCaptureActor {
     type Reply = Result<(), StartCapturingError>;
@@ -410,15 +428,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
             msg.target,
             msg.settings,
             move |frame| {
-                let display_time = SystemTime::now();
-
-                let _ = msg
-                    .frame_handler
-                    .tell(NewFrame {
-                        frame,
-                        display_time,
-                    })
-                    .try_send();
+                let _ = msg.frame_handler.tell(NewFrame(frame)).try_send();
 
                 Ok(())
             },

@@ -9,6 +9,7 @@ import {
 	spaceVideos,
 	users,
 	videos,
+	videoUploads,
 } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
 import { buildEnv } from "@cap/env";
@@ -38,7 +39,7 @@ export const dynamicParams = true;
 export const revalidate = 30;
 
 // Helper function to fetch shared spaces data for a video
-async function getSharedSpacesForVideo(videoId: string) {
+async function getSharedSpacesForVideo(videoId: Video.VideoId) {
 	// Fetch space-level sharing
 	const spaceSharing = await db()
 		.select({
@@ -95,8 +96,8 @@ async function getSharedSpacesForVideo(videoId: string) {
 }
 
 type Props = {
-	params: { [key: string]: string | string[] | undefined };
-	searchParams: { [key: string]: string | string[] | undefined };
+	params: Promise<{ [key: string]: string | string[] | undefined }>;
+	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
 
 type VideoWithOrganization = typeof videos.$inferSelect & {
@@ -121,10 +122,13 @@ const ALLOWED_REFERRERS = [
 	"linkedin.com",
 ];
 
-export function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(
+	props: PageProps<"/s/[videoId]">,
+): Promise<Metadata> {
+	const params = await props.params;
 	const videoId = params.videoId as Video.VideoId;
 
-	const referrer = headers().get("x-referrer") || "";
+	const referrer = (await headers()).get("x-referrer") || "";
 	const isAllowedReferrer = ALLOWED_REFERRERS.some((domain) =>
 		referrer.includes(domain),
 	);
@@ -251,9 +255,9 @@ export function generateMetadata({ params }: Props): Promise<Metadata> {
 	);
 }
 
-export default async function ShareVideoPage(props: Props) {
-	const params = props.params;
-	const searchParams = props.searchParams;
+export default async function ShareVideoPage(props: PageProps<"/s/[videoId]">) {
+	const params = await props.params;
+	const searchParams = await props.searchParams;
 	const videoId = params.videoId as Video.VideoId;
 
 	return Effect.gen(function* () {
@@ -265,15 +269,16 @@ export default async function ShareVideoPage(props: Props) {
 					id: videos.id,
 					name: videos.name,
 					ownerId: videos.ownerId,
+					orgId: videos.orgId,
 					createdAt: videos.createdAt,
 					updatedAt: videos.updatedAt,
-					awsRegion: videos.awsRegion,
-					awsBucket: videos.awsBucket,
 					bucket: videos.bucket,
 					metadata: videos.metadata,
 					public: videos.public,
 					videoStartTime: videos.videoStartTime,
 					audioStartTime: videos.audioStartTime,
+					awsRegion: videos.awsRegion,
+					awsBucket: videos.awsBucket,
 					xStreamInfo: videos.xStreamInfo,
 					jobId: videos.jobId,
 					jobStatus: videos.jobStatus,
@@ -285,15 +290,22 @@ export default async function ShareVideoPage(props: Props) {
 					height: videos.height,
 					duration: videos.duration,
 					fps: videos.fps,
-					hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
+					hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
 					sharedOrganization: {
 						organizationId: sharedVideos.organizationId,
 					},
-					ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+					ownerIsPro:
+						sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
+							Boolean,
+						),
+					hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
+						Boolean,
+					),
 				})
 				.from(videos)
 				.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 				.leftJoin(users, eq(videos.ownerId, users.id))
+				.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 				.where(eq(videos.id, videoId)),
 		).pipe(Policy.withPublicPolicy(videosPolicy.canView(videoId)));
 
@@ -305,7 +317,7 @@ export default async function ShareVideoPage(props: Props) {
 			Effect.succeed({ needsPassword: true } as const),
 		),
 		Effect.map((data) => (
-			<div className="flex flex-col min-h-screen bg-gray-2">
+			<div key={videoId} className="flex flex-col min-h-screen bg-gray-2">
 				<PasswordOverlay isOpen={data.needsPassword} videoId={videoId} />
 				{!data.needsPassword && (
 					<AuthorizedContent video={data.video} searchParams={searchParams} />
@@ -315,7 +327,10 @@ export default async function ShareVideoPage(props: Props) {
 		Effect.catchTags({
 			PolicyDenied: () =>
 				Effect.succeed(
-					<div className="flex flex-col justify-center items-center p-4 min-h-screen text-center">
+					<div
+						key={videoId}
+						className="flex flex-col justify-center items-center p-4 min-h-screen text-center"
+					>
 						<Logo className="size-32" />
 						<h1 className="mb-2 text-2xl font-semibold">
 							This video is private
@@ -326,10 +341,7 @@ export default async function ShareVideoPage(props: Props) {
 						</p>
 					</div>,
 				),
-			NoSuchElementException: () => {
-				console.log("[ShareVideoPage] No video found for videoId:", videoId);
-				return Effect.succeed(<p>No video found</p>);
-			},
+			NoSuchElementException: () => Effect.sync(() => notFound()),
 		}),
 		provideOptionalAuth,
 		EffectRuntime.runPromise,
@@ -342,8 +354,8 @@ async function AuthorizedContent({
 }: {
 	video: Omit<InferSelectModel<typeof videos>, "folderId" | "password"> & {
 		sharedOrganization: { organizationId: string } | null;
-		hasPassword: number;
-		ownerIsPro?: number;
+		hasPassword: boolean;
+		ownerIsPro?: boolean;
 	};
 	searchParams: { [key: string]: string | string[] | undefined };
 }) {
@@ -359,7 +371,7 @@ async function AuthorizedContent({
 				authorId: user.id,
 			});
 		} catch (error) {
-			console.error("Failed to create view notification:", error);
+			console.warn("Failed to create view notification:", error);
 		}
 	}
 
@@ -441,11 +453,12 @@ async function AuthorizedContent({
 				id: videos.id,
 				name: videos.name,
 				ownerId: videos.ownerId,
-				ownerIsPro: sql<number>`IF(${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL, 1, 0)`,
+				ownerIsPro:
+					sql`${users.stripeSubscriptionStatus} IN ('active','trialing','complete','paid') OR ${users.thirdPartyStripeSubscriptionId} IS NOT NULL`.mapWith(
+						Boolean,
+					),
 				createdAt: videos.createdAt,
 				updatedAt: videos.updatedAt,
-				awsRegion: videos.awsRegion,
-				awsBucket: videos.awsBucket,
 				bucket: videos.bucket,
 				metadata: videos.metadata,
 				public: videos.public,
@@ -652,8 +665,6 @@ async function AuthorizedContent({
 
 	const videoWithOrganizationInfo: VideoWithOrganization = {
 		...video,
-		hasPassword: Number(video.hasPassword) === 1,
-		ownerIsPro: Number(video.ownerIsPro) === 1,
 		organizationMembers: membersList.map((member) => member.userId),
 		organizationId: video.sharedOrganization?.organizationId ?? undefined,
 		sharedOrganizations: sharedOrganizations,

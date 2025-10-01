@@ -36,10 +36,6 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
-        sentry::configure_scope(|scope| {
-            scope.set_tag("crate", "editor");
-        });
-
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
             panic!("Video path {} not found!", project_path.display());

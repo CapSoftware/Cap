@@ -1,9 +1,11 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(cargo check:*)"
-    ],
-    "deny": [],
-    "ask": []
-  }
+	"permissions": {
+		"allow": [
+			"Bash(pnpm typecheck:*)",
+			"Bash(pnpm lint:*)",
+			"Bash(pnpm build:*)"
+		],
+		"deny": [],
+		"ask": []
+	}
 }

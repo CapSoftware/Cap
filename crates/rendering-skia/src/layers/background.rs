@@ -247,10 +247,10 @@ impl RecordableLayer for BackgroundLayer {
         self.render_background(canvas, bounds);
 
         // Render border if enabled
-        if let Some(border) = &uniforms.border {
-            if border.enabled {
-                self.render_border(canvas, bounds, border);
-            }
+        if let Some(border) = &uniforms.border
+            && border.enabled
+        {
+            self.render_border(canvas, bounds, border);
         }
 
         // Update what was last rendered

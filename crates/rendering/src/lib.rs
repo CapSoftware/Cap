@@ -522,6 +522,104 @@ impl ProjectUniforms {
         end - display_offset
     }
 
+    fn auto_zoom_focus(
+        cursor_events: &CursorEvents,
+        time_secs: f32,
+        smoothing: Option<SpringMassDamperSimulationConfig>,
+        current_cursor: Option<InterpolatedCursorPosition>,
+    ) -> Coord<RawDisplayUVSpace> {
+        const PREVIOUS_SAMPLE_DELTA: f32 = 0.1;
+        const MIN_LOOKAHEAD: f64 = 0.05;
+        const MAX_LOOKAHEAD: f64 = 0.18;
+        const MIN_FOLLOW_FACTOR: f64 = 0.2;
+        const MAX_FOLLOW_FACTOR: f64 = 0.65;
+        const SPEED_RESPONSE: f64 = 12.0;
+        const VELOCITY_BLEND: f64 = 0.25;
+        const MAX_SHIFT: f64 = 0.25;
+        const MIN_SPEED: f64 = 0.002;
+
+        let fallback = Coord::<RawDisplayUVSpace>::new(XY::new(0.5, 0.5));
+
+        let current_cursor = match current_cursor
+            .or_else(|| interpolate_cursor(cursor_events, time_secs, smoothing))
+        {
+            Some(cursor) => cursor,
+            None => return fallback,
+        };
+
+        let previous_time = (time_secs - PREVIOUS_SAMPLE_DELTA).max(0.0);
+        let previous_cursor = if previous_time < time_secs {
+            interpolate_cursor(cursor_events, previous_time, smoothing)
+        } else {
+            None
+        };
+
+        let current_position = current_cursor.position.coord;
+        let previous_position = previous_cursor
+            .as_ref()
+            .map(|c| c.position.coord)
+            .unwrap_or(current_position);
+
+        let delta_time = (time_secs - previous_time).max(f32::EPSILON) as f64;
+
+        let simulation_velocity = XY::new(
+            current_cursor.velocity.x as f64,
+            current_cursor.velocity.y as f64,
+        );
+
+        let finite_velocity = if previous_cursor.is_some() {
+            (current_position - previous_position) / delta_time
+        } else {
+            XY::new(0.0, 0.0)
+        };
+
+        let mut velocity = if smoothing.is_some() {
+            simulation_velocity * (1.0 - VELOCITY_BLEND) + finite_velocity * VELOCITY_BLEND
+        } else {
+            finite_velocity
+        };
+
+        if velocity.x.is_nan() || velocity.y.is_nan() {
+            velocity = XY::new(0.0, 0.0);
+        }
+
+        let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+
+        if speed < MIN_SPEED {
+            return Coord::new(XY::new(
+                current_position.x.clamp(0.0, 1.0),
+                current_position.y.clamp(0.0, 1.0),
+            ));
+        }
+
+        let speed_factor = (1.0 - (-speed / SPEED_RESPONSE).exp()).clamp(0.0, 1.0);
+
+        let lookahead = MIN_LOOKAHEAD + (MAX_LOOKAHEAD - MIN_LOOKAHEAD) * speed_factor;
+        let follow_strength =
+            MIN_FOLLOW_FACTOR + (MAX_FOLLOW_FACTOR - MIN_FOLLOW_FACTOR) * speed_factor;
+
+        let predicted_shift = XY::new(
+            (velocity.x * lookahead).clamp(-MAX_SHIFT, MAX_SHIFT),
+            (velocity.y * lookahead).clamp(-MAX_SHIFT, MAX_SHIFT),
+        );
+
+        let predicted_center = current_position + predicted_shift;
+        let base_center = previous_cursor
+            .map(|prev| {
+                let retention = 0.45 + 0.25 * speed_factor;
+                prev.position.coord * retention + current_position * (1.0 - retention)
+            })
+            .unwrap_or(current_position);
+
+        let final_center =
+            base_center * (1.0 - follow_strength) + predicted_center * follow_strength;
+
+        Coord::new(XY::new(
+            final_center.x.clamp(0.0, 1.0),
+            final_center.y.clamp(0.0, 1.0),
+        ))
+    }
+
     pub fn new(
         constants: &RenderVideoConstants,
         project: &ProjectConfiguration,
@@ -541,14 +639,23 @@ impl ProjectUniforms {
 
         let crop = Self::get_crop(options, project);
 
+        let cursor_smoothing = (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
+            tension: project.cursor.tension,
+            mass: project.cursor.mass,
+            friction: project.cursor.friction,
+        });
+
         let interpolated_cursor = interpolate_cursor(
             cursor_events,
             segment_frames.recording_time,
-            (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                tension: project.cursor.tension,
-                mass: project.cursor.mass,
-                friction: project.cursor.friction,
-            }),
+            cursor_smoothing,
+        );
+
+        let zoom_focus = Self::auto_zoom_focus(
+            cursor_events,
+            segment_frames.recording_time,
+            cursor_smoothing,
+            interpolated_cursor.clone(),
         );
 
         let zoom = InterpolatedZoom::new(
@@ -560,18 +667,7 @@ impl ProjectUniforms {
                     .map(|t| t.zoom_segments.as_slice())
                     .unwrap_or(&[]),
             ),
-            interpolate_cursor(
-                cursor_events,
-                (segment_frames.recording_time - 0.2).max(0.0),
-                (!project.cursor.raw).then_some(SpringMassDamperSimulationConfig {
-                    tension: project.cursor.tension,
-                    mass: project.cursor.mass,
-                    friction: project.cursor.friction,
-                }),
-            )
-            .as_ref()
-            .map(|i| i.position)
-            .unwrap_or_else(|| Coord::new(XY::new(0.5, 0.5))),
+            zoom_focus,
         );
 
         let scene = InterpolatedScene::new(SceneSegmentsCursor::new(
@@ -649,7 +745,7 @@ impl ProjectUniforms {
                     .background
                     .border
                     .as_ref()
-                    .map_or(false, |b| b.enabled)
+                    .is_some_and(|b| b.enabled)
                 {
                     1.0
                 } else {
@@ -1101,6 +1197,85 @@ impl RendererLayers {
             let mut pass = render_pass!(session.current_texture_view(), wgpu::LoadOp::Load);
             self.captions.render_text(&mut pass);
         }
+    }
+}
+
+#[cfg(test)]
+mod project_uniforms_tests {
+    use super::*;
+    use cap_project::CursorMoveEvent;
+
+    fn cursor_move(time_ms: f64, x: f64, y: f64) -> CursorMoveEvent {
+        CursorMoveEvent {
+            active_modifiers: vec![],
+            cursor_id: "primary".to_string(),
+            time_ms,
+            x,
+            y,
+        }
+    }
+
+    fn default_smoothing() -> SpringMassDamperSimulationConfig {
+        SpringMassDamperSimulationConfig {
+            tension: 100.0,
+            mass: 1.0,
+            friction: 20.0,
+        }
+    }
+
+    #[test]
+    fn auto_zoom_focus_defaults_without_cursor_data() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![],
+        };
+
+        let focus = ProjectUniforms::auto_zoom_focus(&events, 0.3, None, None);
+
+        assert_eq!(focus.coord.x, 0.5);
+        assert_eq!(focus.coord.y, 0.5);
+    }
+
+    #[test]
+    fn auto_zoom_focus_is_stable_for_slow_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![
+                cursor_move(0.0, 0.5, 0.5),
+                cursor_move(200.0, 0.55, 0.5),
+                cursor_move(400.0, 0.6, 0.5),
+            ],
+        };
+
+        let smoothing = Some(default_smoothing());
+
+        let current = interpolate_cursor(&events, 0.4, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, 0.4, smoothing, Some(current.clone()));
+
+        let dx = (focus.coord.x - current.position.coord.x).abs();
+        let dy = (focus.coord.y - current.position.coord.y).abs();
+
+        assert!(dx < 0.05, "expected minimal horizontal drift, got {dx}");
+        assert!(dy < 0.05, "expected minimal vertical drift, got {dy}");
+    }
+
+    #[test]
+    fn auto_zoom_focus_leans_into_velocity_for_fast_motion() {
+        let events = CursorEvents {
+            clicks: vec![],
+            moves: vec![cursor_move(0.0, 0.1, 0.5), cursor_move(40.0, 0.9, 0.5)],
+        };
+
+        let smoothing = Some(default_smoothing());
+        let query_time = 0.045; // slightly after the fast movement
+
+        let current = interpolate_cursor(&events, query_time, smoothing).expect("cursor position");
+        let focus =
+            ProjectUniforms::auto_zoom_focus(&events, query_time, smoothing, Some(current.clone()));
+        let delta = focus.coord.x - current.position.coord.x;
+        assert!(delta < 0.2, "focus moved too far ahead: {delta}");
+        assert!(delta > -0.25, "focus lagged too far behind: {delta}");
     }
 }
 

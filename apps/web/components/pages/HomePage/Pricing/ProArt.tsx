@@ -40,10 +40,7 @@ export const ProArt = memo(
 
 		return (
 			<ProRive
-				className={clsx(
-					className,
-					"relative bottom-5 mx-auto w-full max-w-[210px] h-[195px]",
-				)}
+				className={clsx(className, "mx-auto w-full max-w-[100px] h-[80px]")}
 			/>
 		);
 	}),

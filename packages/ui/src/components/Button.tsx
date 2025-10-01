@@ -15,11 +15,11 @@ const buttonVariants = cva(
 			variant: {
 				primary:
 					"bg-gray-12 dark-button-shadow text-gray-1 disabled:bg-gray-6 disabled:text-gray-9",
-				blue: "bg-blue-600 text-white border border-blue-800 shadow-[0_1.50px_0_0_rgba(255,255,255,0.20)_inset] hover:bg-blue-700  disabled:bg-gray-6 disabled:text-gray-9",
+				blue: "bg-blue-600 text-white disabled:border-gray-8 border border-blue-800 shadow-[0_1.50px_0_0_rgba(255,255,255,0.20)_inset] hover:bg-blue-700  disabled:bg-gray-7 disabled:text-gray-10",
 				destructive:
 					"bg-red-500 text-white hover:bg-red-600 disabled:bg-red-200",
 				outline:
-					"border border-gray-4 hover:border-gray-12 hover:bg-gray-12 hover:text-gray-1 text-gray-12 disabled:bg-gray-8",
+					"border border-gray-4 hover:border-gray-5 hover:bg-gray-3 text-gray-12 disabled:bg-gray-8",
 				white:
 					"bg-gray-1 border border-gray-5 text-gray-12 hover:bg-gray-3 disabled:bg-gray-8",
 				ghost: "hover:bg-white/20 hover:text-white",
@@ -49,6 +49,7 @@ export interface ButtonProps
 	href?: string;
 	kbd?: string;
 	icon?: React.ReactNode;
+	target?: string;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -62,6 +63,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			href,
 			kbd,
 			icon,
+			target,
 			...props
 		},
 		ref,
@@ -71,6 +73,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 			<Comp
 				className={classNames(buttonVariants({ variant, size, className }))}
 				ref={ref as any}
+				target={target || undefined}
 				href={href || undefined}
 				{...props}
 			>

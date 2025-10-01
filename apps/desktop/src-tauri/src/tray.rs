@@ -102,7 +102,11 @@ pub fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 Ok(TrayItem::OpenCap) => {
                     let app = app.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Main.show(&app).await;
+                        let _ = ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&app)
+                        .await;
                     });
                 }
                 Ok(TrayItem::TakeScreenshot) => {

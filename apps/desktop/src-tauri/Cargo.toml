@@ -1,6 +1,6 @@
 [package]
 name = "cap-desktop"
-version = "0.3.68"
+version = "0.3.72"
 description = "Beautiful screen recordings, owned by you."
 authors = ["you"]
 edition = "2024"
@@ -89,6 +89,8 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 scap-targets = { path = "../../../crates/scap-targets" }
+scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
+scap-direct3d = { path = "../../../crates/scap-direct3d" }
 
 flume.workspace = true
 tracing-subscriber = "0.3.19"
@@ -102,6 +104,7 @@ tokio-util = "0.7.15"
 wgpu.workspace = true
 bytemuck = "1.23.1"
 kameo = "0.17.2"
+tauri-plugin-sentry = "0.5.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24.0"

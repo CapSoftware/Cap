@@ -121,7 +121,7 @@ impl Renderer {
 
 impl RendererHandle {
     async fn send(&self, msg: RendererMessage) {
-        self.tx.send(msg).await.unwrap();
+        let _ = self.tx.send(msg).await;
     }
 
     pub async fn render_frame(

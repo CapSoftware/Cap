@@ -5,7 +5,7 @@
 	"mainBinaryName": "Cap - Development",
 	"build": {
 		"beforeDevCommand": "pnpm localdev",
-		"devUrl": "http://localhost:3001",
+		"devUrl": "http://localhost:3002",
 		"beforeBuildCommand": "pnpm turbo build --filter @cap/desktop",
 		"frontendDist": "../.output/public"
 	},

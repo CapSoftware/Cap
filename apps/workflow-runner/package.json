@@ -1,0 +1,23 @@
+{
+	"name": "@cap/workflow-runner",
+	"type": "module",
+	"scripts": {
+		"dev": "pnpm dotenv -e ../../.env -- deno run --allow-all --watch ./src/index.ts"
+	},
+	"dependencies": {
+		"@cap/web-backend": "workspace:*",
+		"@cap/web-domain": "workspace:*",
+		"@effect/cluster": "^0.49.1",
+		"@effect/opentelemetry": "^0.56.1",
+		"@effect/platform": "^0.91.1",
+		"@effect/platform-node": "^0.96.1",
+		"@effect/sql-mysql2": "^0.45.1",
+		"@effect/workflow": "^0.10.0",
+		"@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
+		"@opentelemetry/sdk-trace-base": "^2.0.1",
+		"effect": "^3.17.14"
+	},
+	"devDependencies": {
+		"dotenv-cli": "^10.0.0"
+	}
+}

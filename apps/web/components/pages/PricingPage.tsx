@@ -4,8 +4,10 @@ import { faHeart } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { motion } from "framer-motion";
 import { Testimonials } from "../ui/Testimonials";
+import ComparePlans from "./_components/ComparePlans";
 import Faq from "./HomePage/Faq";
 import { CommercialCard, ProCard } from "./HomePage/Pricing";
+import { EnterpriseCard } from "./HomePage/Pricing/EnterpriseCard";
 
 // Animation variants
 const fadeIn = {
@@ -62,9 +64,13 @@ export const PricingPage = () => {
 
 	return (
 		<motion.div initial="hidden" animate="visible" variants={staggerContainer}>
-			<div className="py-32 space-y-24 md:py-40 wrapper">
+			<div className="py-32 space-y-[100px] md:py-40 wrapper">
 				<div>
-					<motion.div className="mb-8 text-center" variants={fadeIn} custom={0}>
+					<motion.div
+						className="mb-16 text-center"
+						variants={fadeIn}
+						custom={0}
+					>
 						<motion.h1
 							className="text-4xl md:text-5xl"
 							variants={fadeIn}
@@ -98,53 +104,34 @@ export const PricingPage = () => {
 					</motion.div>
 
 					<motion.div
-						className="w-full max-w-[1100px] mx-auto"
+						className="w-full max-w-[1400px] mx-auto"
 						variants={fadeInFromBottom}
 						custom={0}
 					>
 						<div className="flex flex-col gap-8 justify-center items-stretch lg:flex-row">
 							<CommercialCard />
 							<ProCard />
+							<EnterpriseCard />
 						</div>
 					</motion.div>
 				</div>
 
-				<motion.div
-					variants={fadeIn}
-					custom={4}
-					initial="hidden"
-					whileInView="visible"
-					viewport={{ once: true, margin: "-100px" }}
-				>
-					<Faq />
-				</motion.div>
+				{/* Comparison Table (Cap Pro vs Desktop License) */}
+				<div>
+					<ComparePlans />
+				</div>
 
-				<motion.div
-					className="mb-32 wrapper"
-					id="testimonials"
-					variants={fadeIn}
-					custom={5}
-				>
+				<div>
+					<Faq />
+				</div>
+
+				<div className="mb-32 wrapper" id="testimonials">
 					<Testimonials
 						amount={24}
 						title="What our users say about Cap after hitting record"
 						subtitle="Don't just take our word for it. Here's what our users are saying about their experience with Cap."
 					/>
-				</motion.div>
-
-				<motion.div
-					variants={fadeIn}
-					custom={6}
-					initial="hidden"
-					whileInView="visible"
-					viewport={{ once: true, margin: "-100px" }}
-				>
-					<img
-						className="mx-auto w-full h-auto rounded-xl shadow-lg"
-						src="/illustrations/comparison.png"
-						alt="Cap vs Competitors Table"
-					/>
-				</motion.div>
+				</div>
 			</div>
 		</motion.div>
 	);

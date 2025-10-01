@@ -17,6 +17,7 @@ mod permissions;
 mod platform;
 mod presets;
 mod recording;
+mod recording_settings;
 mod target_select_overlay;
 mod tray;
 mod upload;
@@ -55,7 +56,7 @@ use scap::{
     capturer::Capturer,
     frame::{Frame, VideoFrame},
 };
-use scap_targets::{DisplayId, WindowId, bounds::LogicalBounds};
+use scap_targets::{Display, DisplayId, WindowId, bounds::LogicalBounds};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use specta::Type;
@@ -70,7 +71,7 @@ use std::{
     str::FromStr,
     sync::Arc,
 };
-use tauri::{AppHandle, Manager, State, Window, WindowEvent};
+use tauri::{AppHandle, Manager, State, Window, WindowEvent, ipc::Channel};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
@@ -84,8 +85,11 @@ use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
-use crate::camera::CameraPreviewManager;
-use crate::upload::build_video_meta;
+use crate::{
+    camera::CameraPreviewManager,
+    recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+};
+use crate::{recording::start_recording, upload::build_video_meta};
 
 #[allow(clippy::large_enum_variant)]
 pub enum RecordingState {
@@ -245,8 +249,7 @@ async fn set_camera_input(
     state: MutableState<'_, App>,
     id: Option<DeviceOrModelID>,
 ) -> Result<(), String> {
-    let app = state.read().await;
-    let camera_feed = app.camera_feed.clone();
+    let camera_feed = state.read().await.camera_feed.clone();
 
     match id {
         None => {
@@ -282,7 +285,7 @@ pub struct NewStudioRecordingAdded {
     path: PathBuf,
 }
 
-#[derive(specta::Type, tauri_specta::Event, Debug, Clone)]
+#[derive(specta::Type, tauri_specta::Event, Debug, Clone, Serialize)]
 pub struct RecordingDeleted {
     #[allow(unused)]
     path: PathBuf,
@@ -300,10 +303,17 @@ pub struct RecordingStarted;
 pub struct RecordingStopped;
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
-pub struct RequestStartRecording;
+pub struct RequestStartRecording {
+    pub mode: RecordingMode,
+}
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestNewScreenshot;
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestOpenRecordingPicker {
+    pub target_mode: Option<RecordingTargetMode>,
+}
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
@@ -1024,7 +1034,7 @@ async fn list_audio_devices() -> Result<Vec<String>, ()> {
     Ok(MicrophoneFeed::list().keys().cloned().collect())
 }
 
-#[derive(Serialize, Type, tauri_specta::Event, Debug, Clone)]
+#[derive(Serialize, Type, Debug, Clone)]
 pub struct UploadProgress {
     progress: f64,
 }
@@ -1043,6 +1053,7 @@ async fn upload_exported_video(
     app: AppHandle,
     path: PathBuf,
     mode: UploadMode,
+    channel: Channel<UploadProgress>,
 ) -> Result<UploadResult, String> {
     let Ok(Some(auth)) = AuthStore::get(&app) else {
         AuthStore::set(&app, None).map_err(|e| e.to_string())?;
@@ -1064,7 +1075,7 @@ async fn upload_exported_video(
         return Ok(UploadResult::UpgradeRequired);
     }
 
-    UploadProgress { progress: 0.0 }.emit(&app).ok();
+    channel.send(UploadProgress { progress: 0.0 }).ok();
 
     let s3_config = async {
         let video_id = match mode {
@@ -1103,11 +1114,12 @@ async fn upload_exported_video(
         Some(s3_config),
         Some(meta.project_path.join("screenshots/display.jpg")),
         Some(metadata),
+        Some(channel.clone()),
     )
     .await
     {
         Ok(uploaded_video) => {
-            UploadProgress { progress: 1.0 }.emit(&app).ok();
+            channel.send(UploadProgress { progress: 1.0 }).ok();
 
             meta.sharing = Some(SharingMeta {
                 link: uploaded_video.link.clone(),
@@ -1678,6 +1690,27 @@ async fn get_system_audio_waveforms(
     Ok(out)
 }
 
+#[tauri::command]
+#[specta::specta]
+async fn editor_delete_project(
+    app: tauri::AppHandle,
+    editor_instance: WindowEditorInstance,
+    window: tauri::Window,
+) -> Result<(), String> {
+    let _ = window.close();
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+    let path = editor_instance.0.project_path.clone();
+    drop(editor_instance);
+
+    let _ = tokio::fs::remove_dir_all(&path).await;
+
+    RecordingDeleted { path }.emit(&app);
+
+    Ok(())
+}
+
 // keep this async otherwise opening windows may hang on windows
 #[tauri::command]
 #[specta::specta]
@@ -1823,6 +1856,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_displays,
+            recording::list_displays_with_thumbnails,
+            recording::list_windows_with_thumbnails,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -1889,6 +1924,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::close_target_select_overlays,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
+            target_select_overlay::focus_window,
+            editor_delete_project
         ])
         .events(tauri_specta::collect_events![
             RecordingOptionsChanged,
@@ -1900,17 +1937,17 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RecordingStarted,
             RecordingStopped,
             RequestStartRecording,
+            RequestOpenRecordingPicker,
             RequestNewScreenshot,
             RequestOpenSettings,
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
-            UploadProgress,
             captions::DownloadProgress,
             recording::RecordingEvent,
             RecordingDeleted,
             target_select_overlay::TargetUnderCursor,
-            hotkeys::OnEscapePress
+            hotkeys::OnEscapePress,
         ])
         .error_handling(tauri_specta::ErrorHandlingMode::Throw)
         .typ::<ProjectConfiguration>()
@@ -1918,6 +1955,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
         .typ::<presets::PresetsStore>()
         .typ::<hotkeys::HotkeysStore>()
         .typ::<general_settings::GeneralSettingsStore>()
+        .typ::<recording_settings::RecordingSettingsStore>()
         .typ::<cap_flags::Flags>();
 
     #[cfg(debug_assertions)]
@@ -1970,7 +2008,13 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 .map(PathBuf::from)
             else {
                 let app = app.clone();
-                tokio::spawn(async move { ShowCapWindow::Main.show(&app).await });
+                tokio::spawn(async move {
+                    ShowCapWindow::Main {
+                        init_target_mode: None,
+                    }
+                    .show(&app)
+                    .await
+                });
                 return;
             };
 
@@ -2109,7 +2153,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                     } else {
                         println!("Permissions granted, showing main window");
 
-                        let _ = ShowCapWindow::Main.show(&app).await;
+                        let _ = ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&app)
+                        .await;
                     }
                 }
             });
@@ -2118,13 +2166,40 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             tray::create_tray(&app).unwrap();
 
-            RequestNewScreenshot::listen_any_spawn(&app, |_, app| async move {
-                if let Err(e) = take_screenshot(app.clone(), app.state()).await {
-                    eprintln!("Failed to take screenshot: {e}");
-                }
+            RequestStartRecording::listen_any_spawn(&app, async |event, app| {
+                let settings = RecordingSettingsStore::get(&app)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
+
+                let _ = set_mic_input(app.state(), settings.mic_name).await;
+                let _ = set_camera_input(app.clone(), app.state(), settings.camera_id).await;
+
+                let _ = start_recording(
+                    app.clone(),
+                    app.state(),
+                    recording::StartRecordingInputs {
+                        capture_target: settings.target.unwrap_or_else(|| {
+                            ScreenCaptureTarget::Display {
+                                id: Display::primary().id(),
+                            }
+                        }),
+                        capture_system_audio: settings.system_audio,
+                        mode: event.mode,
+                    },
+                )
+                .await;
             });
 
-            RequestOpenSettings::listen_any_spawn(&app, |payload, app| async move {
+            RequestOpenRecordingPicker::listen_any_spawn(&app, async |event, app| {
+                let _ = ShowCapWindow::Main {
+                    init_target_mode: event.target_mode,
+                }
+                .show(&app)
+                .await;
+            });
+
+            RequestOpenSettings::listen_any_spawn(&app, async |payload, app| {
                 let _ = ShowCapWindow::Settings {
                     page: Some(payload.page),
                 }
@@ -2149,6 +2224,15 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         match window_id {
                             CapWindowId::Main => {
                                 let app = app.clone();
+
+                                for (id, window) in app.webview_windows() {
+                                    if let Ok(CapWindowId::TargetSelectOverlay { .. }) =
+                                        CapWindowId::from_str(&id)
+                                    {
+                                        let _ = window.close();
+                                    }
+                                }
+
                                 tokio::spawn(async move {
                                     let state = app.state::<ArcLock<App>>();
                                     let app_state = &mut *state.write().await;
@@ -2230,13 +2314,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                         }
                     }
 
-                    if *focused {
-                        if let Ok(window_id) = window_id
-                            && window_id.activates_dock()
-                        {
-                            app.set_activation_policy(tauri::ActivationPolicy::Regular)
-                                .ok();
-                        }
+                    if *focused
+                        && let Ok(window_id) = window_id
+                        && window_id.activates_dock()
+                    {
+                        app.set_activation_policy(tauri::ActivationPolicy::Regular)
+                            .ok();
                     }
                 }
                 WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -2274,7 +2357,11 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 } else {
                     let handle = _handle.clone();
                     tokio::spawn(async move {
-                        let _ = ShowCapWindow::Main.show(&handle).await;
+                        let _ = ShowCapWindow::Main {
+                            init_target_mode: None,
+                        }
+                        .show(&handle)
+                        .await;
                     });
                 }
             }

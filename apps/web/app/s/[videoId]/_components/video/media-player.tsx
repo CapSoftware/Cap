@@ -46,7 +46,7 @@ import {
 	useMediaSelector,
 } from "media-chrome/react/media-store";
 import * as React from "react";
-import { forwardRef } from "react";
+import { forwardRef, useCallback, useEffect } from "react";
 import * as ReactDOM from "react-dom";
 import { useComposedRefs } from "@/app/lib/compose-refs";
 import { cn } from "@/app/lib/utils";
@@ -876,18 +876,34 @@ function MediaPlayerAudio(props: MediaPlayerAudioProps) {
 
 interface MediaPlayerControlsProps extends React.ComponentProps<"div"> {
 	asChild?: boolean;
+	isUploadingOrFailed?: boolean;
+	mainControlsVisible?: (arg: boolean) => void;
 }
 
 function MediaPlayerControls(props: MediaPlayerControlsProps) {
-	const { asChild, className, ...controlsProps } = props;
+	const {
+		asChild,
+		className,
+		isUploadingOrFailed,
+		mainControlsVisible,
+		...controlsProps
+	} = props;
 
 	const context = useMediaPlayerContext("MediaPlayerControls");
 	const isFullscreen = useMediaSelector(
 		(state) => state.mediaIsFullscreen ?? false,
 	);
 	const controlsVisible = useStoreSelector((state) => state.controlsVisible);
+	// Call the callback whenever controlsVisible changes
+	useEffect(() => {
+		if (typeof mainControlsVisible === "function") {
+			mainControlsVisible(controlsVisible);
+		}
+	}, [mainControlsVisible, controlsVisible]);
 
 	const ControlsPrimitive = asChild ? Slot : "div";
+
+	if (isUploadingOrFailed) return null;
 
 	return (
 		<ControlsPrimitive

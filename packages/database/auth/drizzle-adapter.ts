@@ -3,8 +3,9 @@ import { and, eq } from "drizzle-orm";
 import type { PlanetScaleDatabase } from "drizzle-orm/planetscale-serverless";
 import type { Adapter } from "next-auth/adapters";
 import type Stripe from "stripe";
-import { nanoId } from "../helpers";
-import { accounts, sessions, users, verificationTokens } from "../schema";
+
+import { nanoId } from "../helpers.ts";
+import { accounts, sessions, users, verificationTokens } from "../schema.ts";
 
 export function DrizzleAdapter(db: PlanetScaleDatabase): Adapter {
 	return {

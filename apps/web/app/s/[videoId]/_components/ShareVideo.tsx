@@ -35,25 +35,45 @@ export const ShareVideo = forwardRef<
 	{
 		data: typeof videos.$inferSelect & {
 			ownerIsPro?: boolean;
+			hasActiveUpload?: boolean;
 		};
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		aiProcessing?: boolean;
 	}
->(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
+>(({ data, comments, chapters = [] }, ref) => {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
-	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
+	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
 
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 	const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 	const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
+	const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
 
 	const { data: transcriptContent, error: transcriptError } = useTranscript(
 		data.id,
 		data.transcriptionStatus,
 	);
+
+	// Handle comments data
+	useEffect(() => {
+		if (comments) {
+			if (Array.isArray(comments)) {
+				setCommentsData(comments);
+			} else {
+				comments.then(setCommentsData);
+			}
+		}
+	}, [comments]);
+
+	// Handle seek functionality
+	const handleSeek = (time: number) => {
+		if (videoRef.current) {
+			videoRef.current.currentTime = time;
+		}
+	};
 
 	useEffect(() => {
 		if (transcriptContent) {
@@ -147,20 +167,32 @@ export const ShareVideo = forwardRef<
 			<div className="relative h-full">
 				{data.source.type === "desktopMP4" ? (
 					<CapVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
 						enableCrossOrigin={enableCrossOrigin}
+						hasActiveUpload={data.hasActiveUpload}
+						comments={commentsData.map((comment) => ({
+							id: comment.id,
+							type: comment.type,
+							timestamp: comment.timestamp,
+							content: comment.content,
+							authorName: comment.authorName,
+						}))}
+						onSeek={handleSeek}
 					/>
 				) : (
 					<HLSVideoPlayer
+						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
+						hasActiveUpload={data.hasActiveUpload}
 					/>
 				)}
 			</div>

@@ -1,6 +1,7 @@
 use super::*;
 use cidre::*;
 use kameo::prelude::*;
+use tracing::{debug, info, trace};
 
 #[derive(Debug)]
 pub struct CMSampleBufferCapture;
@@ -122,6 +123,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         ready_signal: crate::pipeline::task::PipelineReadySignal,
         control_signal: crate::pipeline::control::PipelineControlSignal,
     ) -> Result<(), String> {
+        trace!("PipelineSourceTask::run");
+
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
         let config = self.config.clone();
@@ -140,6 +143,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .await
                     .ok_or_else(|| SourceError::AsContentFilter)?;
 
+                debug!("SCK content filter: {:?}", content_filter);
+
                 let size = {
                     let logical_size = config
                         .crop_bounds
@@ -153,7 +158,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     PhysicalSize::new(logical_size.width() * scale, logical_size.height() * scale)
                 };
 
-                tracing::info!("size: {:?}", size);
+                debug!("size: {:?}", size);
 
                 let mut settings = scap_screencapturekit::StreamCfgBuilder::default()
                     .with_width(size.width() as usize)
@@ -167,7 +172,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 settings.set_color_space_name(cg::color_space::names::srgb());
 
                 if let Some(crop_bounds) = config.crop_bounds {
-                    tracing::info!("crop bounds: {:?}", crop_bounds);
+                    debug!("crop bounds: {:?}", crop_bounds);
                     settings.set_src_rect(cg::Rect::new(
                         crop_bounds.position().x(),
                         crop_bounds.position().y(),
@@ -177,6 +182,8 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 }
 
                 let (error_tx, error_rx) = flume::bounded(1);
+
+                trace!("Spawning ScreenCaptureActor");
 
                 let capturer = ScreenCaptureActor::spawn(
                     ScreenCaptureActor::new(
@@ -188,10 +195,14 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                     .map_err(SourceError::CreateActor)?,
                 );
 
+                info!("Spawned ScreenCaptureActor");
+
                 capturer
                     .ask(StartCapturing)
                     .await
                     .map_err(SourceError::StartCapturing)?;
+
+                info!("Started capturing");
 
                 let _ = ready_signal.send(Ok(()));
 
@@ -307,14 +318,20 @@ impl Message<StartCapturing> for ScreenCaptureActor {
         _: StartCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        trace!("ScreenCaptureActor.StartCapturing");
+
         if self.capturing {
             return Err(StartCapturingError::AlreadyCapturing);
         }
+
+        trace!("Starting SCK capturer");
 
         self.capturer
             .start()
             .await
             .map_err(StartCapturingError::Start)?;
+
+        info!("Started SCK capturer");
 
         self.capturing = true;
 
@@ -330,6 +347,8 @@ impl Message<StopCapturing> for ScreenCaptureActor {
         _: StopCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        trace!("ScreenCaptureActor.StopCapturing");
+
         if !self.capturing {
             return Err(StopCapturingError::NotCapturing);
         };
