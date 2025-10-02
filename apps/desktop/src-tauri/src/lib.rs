@@ -2436,7 +2436,9 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
 async fn resume_uploads(app: AppHandle) -> Result<(), String> {
     let recordings_dir = recordings_path(&app);
-    (!recordings_dir.exists()).then(|| format!("Recording directory missing"))?;
+    if !recordings_dir.exists() {
+        return Err("Recording directory missing".to_string());
+    }
 
     let entries = std::fs::read_dir(&recordings_dir)
         .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
