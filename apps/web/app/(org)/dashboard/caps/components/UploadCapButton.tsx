@@ -27,7 +27,7 @@ export const UploadCapButton = ({
 	grey?: boolean;
 	folderId?: Folder.FolderId;
 }) => {
-	const { user } = useDashboardContext();
+	const { user, activeOrganization } = useDashboardContext();
 	const inputRef = useRef<HTMLInputElement>(null);
 	const { uploadingStore, setUploadStatus } = useUploadingContext();
 	const isUploading = useStore(uploadingStore, (s) => !!s.uploadStatus);
@@ -52,9 +52,16 @@ export const UploadCapButton = ({
 		const file = e.target.files?.[0];
 		if (!file || !user) return;
 
+		// This should be unreachable.
+		if (activeOrganization === null) {
+			alert("No organization active!");
+			return;
+		}
+
 		const ok = await legacyUploadCap(
 			file,
 			folderId,
+			activeOrganization.organization.id,
 			setUploadStatus,
 			queryClient,
 		);
@@ -93,6 +100,7 @@ export const UploadCapButton = ({
 async function legacyUploadCap(
 	file: File,
 	folderId: Folder.FolderId | undefined,
+	orgId: string,
 	setUploadStatus: (state: UploadStatus | undefined) => void,
 	queryClient: QueryClient,
 ) {
@@ -127,6 +135,7 @@ async function legacyUploadCap(
 			isScreenshot: false,
 			isUpload: true,
 			folderId,
+			orgId,
 		});
 
 		const uploadId = videoData.id;
@@ -451,6 +460,7 @@ async function legacyUploadCap(
 				videoId: uploadId,
 				isScreenshot: true,
 				isUpload: true,
+				orgId,
 			});
 
 			const screenshotFormData = new FormData();

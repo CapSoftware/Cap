@@ -164,6 +164,7 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot = false,
 	isUpload = false,
 	folderId,
+	orgId,
 	supportsUploadProgress = false,
 }: {
 	videoId?: Video.VideoId;
@@ -174,6 +175,7 @@ export async function createVideoAndGetUploadUrl({
 	isScreenshot?: boolean;
 	isUpload?: boolean;
 	folderId?: Folder.FolderId;
+	orgId: string;
 	// TODO: Remove this once we are happy with it's stability
 	supportsUploadProgress?: boolean;
 }) {
@@ -228,6 +230,7 @@ export async function createVideoAndGetUploadUrl({
 				isScreenshot ? "Screenshot" : isUpload ? "Upload" : "Recording"
 			} - ${formattedDate}`,
 			ownerId: user.id,
+			orgId,
 			source: { type: "desktopMP4" as const },
 			isScreenshot,
 			bucket: customBucket?.id,
