@@ -520,7 +520,7 @@ fn ycbcr_to_rgb(y: u8, cb: u8, cr: u8, range: Nv12Range) -> (u8, u8, u8) {
 
 #[cfg(target_os = "macos")]
 fn clamp_channel(value: f32) -> u8 {
-    value.max(0.0).min(255.0) as u8
+    value.clamp(0.0, 255.0) as u8
 }
 
 #[cfg(target_os = "macos")]
@@ -929,7 +929,7 @@ async fn capture_window_thumbnail(window: &scap_targets::Window) -> Option<Strin
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| collect_displays_with_thumbnails())
+    tokio::task::spawn_blocking(collect_displays_with_thumbnails)
         .await
         .map_err(|err| err.to_string())?
 }
@@ -937,7 +937,7 @@ pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThu
 #[tauri::command(async)]
 #[specta::specta]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tokio::task::spawn_blocking(|| collect_windows_with_thumbnails())
+    tokio::task::spawn_blocking(collect_windows_with_thumbnails)
         .await
         .map_err(|err| err.to_string())?
 }
@@ -1681,35 +1681,30 @@ async fn handle_recording_finish(
                                 })
                                 .ok();
                             }
-                    } else {
-                        if let Ok(meta) = build_video_meta(&output_path)
-                            .map_err(|err| error!("Error getting video metadata: {}", err))
-                        {
-                            // The upload_video function handles screenshot upload, so we can pass it along
-                            upload_video(
-                                &app,
-                                video_upload_info.id.clone(),
-                                output_path,
-                                display_screenshot.clone(),
-                                meta,
-                                None,
-                            )
-                            .await
-                            .map(|_| {
-                                info!("Final video upload with screenshot completed successfully")
-                            })
-                            .map_err(|error| {
-                                error!("Error in upload_video: {error}");
+                    } else if let Ok(meta) = build_video_meta(&output_path)
+                        .map_err(|err| error!("Error getting video metadata: {}", err))
+                    {
+                        // The upload_video function handles screenshot upload, so we can pass it along
+                        upload_video(
+                            &app,
+                            video_upload_info.id.clone(),
+                            output_path,
+                            display_screenshot.clone(),
+                            meta,
+                            None,
+                        )
+                        .await
+                        .map(|_| info!("Final video upload with screenshot completed successfully"))
+                        .map_err(|error| {
+                            error!("Error in upload_video: {error}");
 
-                                let mut meta =
-                                    RecordingMeta::load_for_project(&recording_dir).unwrap();
-                                meta.upload = Some(UploadMeta::Failed { error });
-                                meta.save_for_project()
-                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
-                                    .ok();
-                            })
-                            .ok();
-                        }
+                            let mut meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+                            meta.upload = Some(UploadMeta::Failed { error });
+                            meta.save_for_project()
+                                .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                .ok();
+                        })
+                        .ok();
                     }
                 }
             });
@@ -1902,11 +1897,11 @@ fn generate_zoom_segments_from_clicks_impl(
 
     let mut merged: Vec<(f64, f64)> = Vec::new();
     for interval in intervals {
-        if let Some(last) = merged.last_mut() {
-            if interval.0 <= last.1 + MERGE_GAP_THRESHOLD {
-                last.1 = last.1.max(interval.1);
-                continue;
-            }
+        if let Some(last) = merged.last_mut()
+            && interval.0 <= last.1 + MERGE_GAP_THRESHOLD
+        {
+            last.1 = last.1.max(interval.1);
+            continue;
         }
         merged.push(interval);
     }

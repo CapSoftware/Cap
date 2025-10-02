@@ -899,9 +899,9 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         RecordingMetaInner::Studio(meta) => {
             let status = meta.status();
             if let StudioRecordingStatus::Failed { .. } = status {
-                return Err(format!("Unable to get metadata on failed recording"));
+                return Err("Unable to get metadata on failed recording".to_string());
             } else if let StudioRecordingStatus::InProgress = status {
-                return Err(format!("Unable to get metadata on in-progress recording"));
+                return Err("Unable to get metadata on in-progress recording".to_string());
             }
 
             match meta {
@@ -1754,7 +1754,7 @@ async fn editor_delete_project(
 
     let _ = tokio::fs::remove_dir_all(&path).await;
 
-    RecordingDeleted { path }.emit(&app);
+    RecordingDeleted { path }.emit(&app).ok();
 
     Ok(())
 }
@@ -2480,17 +2480,15 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                 }
 
                 // Save the updated meta if we made changes
-                if needs_save {
-                    if let Err(err) = meta.save_for_project() {
-                        error!("Failed to save recording meta for {path:?}: {err}");
-                    }
+                if needs_save && let Err(err) = meta.save_for_project() {
+                    error!("Failed to save recording meta for {path:?}: {err}");
                 }
 
                 // Handle upload resumption
                 if let Some(upload_meta) = meta.upload {
                     match upload_meta {
                         UploadMeta::MultipartUpload {
-                            video_id,
+                            video_id: _,
                             file_path,
                             pre_created_video,
                             recording_dir,
@@ -2513,8 +2511,7 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                             tokio::spawn(async move {
                                 if let Ok(meta) = build_video_meta(&file_path)
                                     .map_err(|err| error!("Failed to resume video upload. error getting video metadata: {}", err))
-                                {
-                                    if let Ok(uploaded_video) = upload_video(
+                                    && let Ok(uploaded_video) = upload_video(
                                         &app,
                                         video_id,
                                         file_path,
@@ -2550,8 +2547,6 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                                             .set_text(uploaded_video.link.clone());
                                         NotificationType::ShareableLinkCopied.send(&app);
                                     }
-
-                                }
                             });
                         }
                         UploadMeta::Failed { .. } | UploadMeta::Complete => {}
@@ -2668,9 +2663,9 @@ fn open_project_from_path(path: &Path, app: AppHandle) -> Result<(), String> {
         RecordingMetaInner::Studio(meta) => {
             let status = meta.status();
             if let StudioRecordingStatus::Failed { .. } = status {
-                return Err(format!("Unable to open failed recording"));
+                return Err("Unable to open failed recording".to_string());
             } else if let StudioRecordingStatus::InProgress = status {
-                return Err(format!("Recording in progress"));
+                return Err("Recording in progress".to_string());
             }
 
             let project_path = path.to_path_buf();

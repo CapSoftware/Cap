@@ -153,7 +153,7 @@ async fn file_reader_stream(path: impl AsRef<Path>) -> Result<(ReaderStream<File
 }
 
 pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedItem, String> {
-    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
+    let is_new_uploader_enabled = GeneralSettingsStore::get(app)
         .map_err(|err| error!("Error checking status of new uploader flow from settings: {err}"))
         .ok()
         .and_then(|v| v.map(|v| v.enable_new_uploader))
@@ -470,17 +470,15 @@ pub fn from_pending_file_to_chunks(
 
         loop {
             // Check if realtime recording is done
-            if !realtime_is_done.unwrap_or(true) {
-                if let Some(ref realtime_receiver) = realtime_upload_done {
-                    match realtime_receiver.try_recv() {
-                        Ok(_) => realtime_is_done = Some(true),
-                        Err(flume::TryRecvError::Empty) => {},
-                        Err(_) => yield Err(std::io::Error::new(
-                            std::io::ErrorKind::Interrupted,
-                            "Realtime generation failed"
-                        ))?,
-                    };
-                }
+            if !realtime_is_done.unwrap_or(true) && let Some(ref realtime_receiver) = realtime_upload_done {
+                match realtime_receiver.try_recv() {
+                    Ok(_) => realtime_is_done = Some(true),
+                    Err(flume::TryRecvError::Empty) => {},
+                    Err(_) => yield Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "Realtime generation failed"
+                    ))?,
+                };
             }
 
             // Check file existence and size
@@ -608,7 +606,7 @@ fn multipart_uploader(
             let url = Uri::from_str(&presigned_url).map_err(|err| format!("uploader/part/{part_number}/invalid_url: {err:?}"))?;
             let resp = reqwest::Client::builder()
                 .retry(reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(|req_rep| {
-                    if req_rep.status().map_or(false, |s| s.is_server_error()) {
+                    if req_rep.status().is_some_and(|s| s.is_server_error()) {
                         req_rep.retryable()
                     } else {
                         req_rep.success()
@@ -657,7 +655,7 @@ pub async fn singlepart_uploader(
         .retry(
             reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(
                 |req_rep| {
-                    if req_rep.status().map_or(false, |s| s.is_server_error()) {
+                    if req_rep.status().is_some_and(|s| s.is_server_error()) {
                         req_rep.retryable()
                     } else {
                         req_rep.success()

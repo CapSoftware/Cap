@@ -8,7 +8,6 @@
 use crate::api::S3VideoMeta;
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
-use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
 use futures::StreamExt;
@@ -79,15 +78,15 @@ pub struct CreateErrorResponse {
 //     deserializer.deserialize_any(StringOrObject)
 // }
 
-impl S3UploadMeta {
-    pub fn id(&self) -> &str {
-        &self.id
-    }
+// impl S3UploadMeta {
+//     pub fn id(&self) -> &str {
+//         &self.id
+//     }
 
-    // pub fn new(id: String) -> Self {
-    //     Self { id }
-    // }
-}
+//     // pub fn new(id: String) -> Self {
+//     //     Self { id }
+//     // }
+// }
 
 pub struct UploadedVideo {
     pub link: String,
@@ -617,31 +616,9 @@ pub struct MultipartCompleteResponse<'a> {
     meta: Option<S3VideoMeta>,
 }
 
-pub struct InstantMultipartUpload {
-    pub handle: tokio::task::JoinHandle<Result<(), String>>,
-}
+pub struct InstantMultipartUpload {}
 
 impl InstantMultipartUpload {
-    // /// starts a progressive (multipart) upload that runs until recording stops
-    // /// and the file has stabilized (no additional data is being written).
-    // pub fn spawn(
-    //     app: AppHandle,
-    //     video_id: String,
-    //     file_path: PathBuf,
-    //     pre_created_video: VideoUploadInfo,
-    //     realtime_upload_done: Option<Receiver<()>>,
-    // ) -> Self {
-    //     Self {
-    //         handle: spawn_actor(Self::run(
-    //             app,
-    //             video_id,
-    //             file_path,
-    //             pre_created_video,
-    //             realtime_upload_done,
-    //         )),
-    //     }
-    // }
-
     pub async fn run(
         app: AppHandle,
         video_id: String,
