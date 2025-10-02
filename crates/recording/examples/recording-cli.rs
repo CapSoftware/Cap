@@ -66,7 +66,7 @@ pub async fn main() {
             id: Display::primary().id(),
         },
     )
-    // .with_system_audio(true)
+    .with_system_audio(true)
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
