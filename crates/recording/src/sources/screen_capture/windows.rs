@@ -480,6 +480,10 @@ impl Message<StartCapturing> for ScreenCaptureActor {
             }
         });
 
+        if let Ok(res) = ready_rx.await {
+            res?;
+        }
+
         info!("Capturer started");
 
         self.stop_tx = Some(stop_tx);
