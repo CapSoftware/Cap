@@ -314,7 +314,7 @@ export const CapCard = ({
 							: isDropdownOpen
 								? "opacity-100"
 								: "opacity-0 group-hover:opacity-100",
-						"top-2 right-2 flex-col gap-2 z-20",
+						"top-2 right-2 flex-col gap-2 z-[51]",
 					)}
 				>
 					<CapCardButton
@@ -508,8 +508,8 @@ export const CapCard = ({
 						href={`/s/${cap.id}`}
 					>
 						{uploadProgress ? (
-							<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-0">
-								<div className="flex absolute inset-0 z-50 justify-center items-center rounded-t-xl">
+							<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-5">
+								<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
 									{uploadProgress.status === "failed" ? (
 										<div className="flex flex-col items-center">
 											<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
