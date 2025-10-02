@@ -45,9 +45,9 @@ use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{Clipboard, ClipboardContext};
 use editor_window::{EditorInstances, WindowEditorInstance};
+use ffmpeg::ffi::AV_TIME_BASE;
 use general_settings::GeneralSettingsStore;
 use kameo::{Actor, actor::ActorRef};
-use mp4::Mp4Reader;
 use notifications::NotificationType;
 use png::{ColorType, Encoder};
 use recording::InProgressRecording;
@@ -64,7 +64,7 @@ use std::{
     collections::BTreeMap,
     fs::File,
     future::Future,
-    io::{BufReader, BufWriter},
+    io::BufWriter,
     marker::PhantomData,
     path::{Path, PathBuf},
     process::Command,
@@ -683,16 +683,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 }
 
 pub fn is_valid_mp4(path: &std::path::Path) -> bool {
-    if let Ok(file) = std::fs::File::open(path) {
-        let file_size = match file.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(_) => return false,
-        };
-        let reader = std::io::BufReader::new(file);
-        Mp4Reader::read_header(reader, file_size).is_ok()
-    } else {
-        false
+    if let Err(_) = ffmpeg::init() {
+        return false;
     }
+
+    ffmpeg::format::input(path).is_ok()
 }
 
 #[tauri::command]
@@ -877,23 +872,13 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
     let recording_meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
-        let reader = BufReader::new(
-            File::open(&path).map_err(|e| format!("Failed to open video file: {e}"))?,
-        );
-        let file_size = path
-            .metadata()
-            .map_err(|e| format!("Failed to get file metadata: {e}"))?
-            .len();
+        ffmpeg::init().map_err(|e| format!("Failed to initialize ffmpeg: {e}"))?;
 
-        let current_duration = match Mp4Reader::read_header(reader, file_size) {
-            Ok(mp4) => mp4.duration().as_secs_f64(),
-            Err(e) => {
-                println!("Failed to read MP4 header: {e}. Falling back to default duration.");
-                0.0_f64
-            }
-        };
+        let input =
+            ffmpeg::format::input(&path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
-        Ok(current_duration)
+        let duration = input.duration() as f64 / AV_TIME_BASE as f64;
+        Ok(duration)
     }
 
     let display_paths = match &recording_meta.inner {
