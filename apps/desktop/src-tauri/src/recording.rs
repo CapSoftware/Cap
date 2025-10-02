@@ -1527,19 +1527,23 @@ async fn handle_recording_end(
         // we delay reporting errors here so that everything else happens first
         Ok(recording) => Some(handle_recording_finish(&handle, recording).await),
         Err(error) => {
-            // TODO: Error handling -> Can we reuse `RecordingMeta` too?
-            let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-            match &mut project_meta.inner {
-                RecordingMetaInner::Studio(meta) => {
-                    if let StudioRecordingMeta::MultipleSegments { inner } = meta {
-                        inner.status = Some(StudioRecordingStatus::Failed { error });
+            if let Ok(mut project_meta) =
+                RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+                    error!("Error loading recording meta while finishing recording: {err}")
+                })
+            {
+                match &mut project_meta.inner {
+                    RecordingMetaInner::Studio(meta) => {
+                        if let StudioRecordingMeta::MultipleSegments { inner } = meta {
+                            inner.status = Some(StudioRecordingStatus::Failed { error });
+                        }
+                    }
+                    RecordingMetaInner::Instant(meta) => {
+                        *meta = InstantRecordingMeta::Failed { error };
                     }
                 }
-                RecordingMetaInner::Instant(meta) => {
-                    *meta = InstantRecordingMeta::Failed { error };
-                }
+                project_meta.save_for_project().unwrap();
             }
-            project_meta.save_for_project().unwrap();
 
             None
         }
@@ -1719,14 +1723,16 @@ async fn handle_recording_finish(
         }
     };
 
-    // TODO: Can we avoid reloading it from disk by parsing as arg?
-    let mut meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-    meta.inner = meta_inner;
-    meta.sharing = sharing;
-    meta.save_for_project()
-        .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+    if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+        error!("Failed to load recording meta while saving finished recording: {err}")
+    }) {
+        meta.inner = meta_inner.clone();
+        meta.sharing = sharing;
+        meta.save_for_project()
+            .map_err(|e| format!("Failed to save recording meta: {e}"))?;
+    }
 
-    if let RecordingMetaInner::Studio(_) = meta.inner {
+    if let RecordingMetaInner::Studio(_) = meta_inner {
         match GeneralSettingsStore::get(app)
             .ok()
             .flatten()

@@ -209,12 +209,6 @@ pub async fn spawn_instant_recording_actor(
     ),
     RecordingError,
 > {
-    // TODO: Remove
-    // return Err(RecordingError::Io(std::io::Error::new(
-    //     std::io::ErrorKind::Other,
-    //     format!("Bruh"),
-    // )));
-
     ensure_dir(&recording_dir)?;
 
     let start_time = SystemTime::now();

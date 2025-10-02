@@ -68,6 +68,7 @@ pub async fn upload_video(
         .ok()
         .and_then(|v| v.map(|v| v.enable_new_uploader))
         .unwrap_or(false);
+    info!("uploader_video: is new uploader enabled? {is_new_uploader_enabled}");
     if !is_new_uploader_enabled {
         return upload_legacy::upload_video(
             app,
@@ -129,7 +130,6 @@ pub async fn upload_video(
     let (video_result, thumbnail_result): (Result<_, String>, Result<_, String>) =
         tokio::join!(video_fut, thumbnail_fut);
 
-    // TODO: Reporting errors to the frontend???
     let _ = (video_result?, thumbnail_result?);
 
     Ok(UploadedItem {
@@ -158,6 +158,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         .ok()
         .and_then(|v| v.map(|v| v.enable_new_uploader))
         .unwrap_or(false);
+    info!("upload_image: is new uploader enabled? {is_new_uploader_enabled}");
     if !is_new_uploader_enabled {
         return upload_legacy::upload_image(app, file_path)
             .await
@@ -358,6 +359,7 @@ impl InstantMultipartUpload {
             .ok()
             .and_then(|v| v.map(|v| v.enable_new_uploader))
             .unwrap_or(false);
+        info!("InstantMultipartUpload::run: is new uploader enabled? {is_new_uploader_enabled}");
         if !is_new_uploader_enabled {
             return upload_legacy::InstantMultipartUpload::run(
                 app,

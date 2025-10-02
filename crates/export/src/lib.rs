@@ -39,8 +39,6 @@ pub enum ExporterBuildError {
     MetaLoad(#[source] Box<dyn std::error::Error>),
     #[error("Recording is not a studio recording")]
     NotStudioRecording,
-    #[error("Unable to export a failed recording")]
-    RecordingFailed,
     #[error("Failed to load recordings meta: {0}")]
     RecordingsMeta(String),
     #[error("Failed to setup renderer: {0}")]
