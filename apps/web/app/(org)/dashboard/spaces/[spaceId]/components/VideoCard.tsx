@@ -6,7 +6,7 @@ import type React from "react";
 import { memo, useState } from "react";
 import { Tooltip } from "@/components/Tooltip";
 import {
-	ImageLoadingStatus,
+	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import type { VideoData } from "./AddVideosDialogBase";

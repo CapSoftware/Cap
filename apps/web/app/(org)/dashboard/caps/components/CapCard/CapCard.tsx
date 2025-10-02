@@ -29,11 +29,12 @@ import { type PropsWithChildren, useState } from "react";
 import { toast } from "sonner";
 import { ConfirmationDialog } from "@/app/(org)/dashboard/_components/ConfirmationDialog";
 import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
+import { useFeatureFlag } from "@/app/Layout/features";
 import ProgressCircle, {
 	useUploadProgress,
 } from "@/app/s/[videoId]/_components/ProgressCircle";
 import {
-	ImageLoadingStatus,
+	type ImageLoadingStatus,
 	VideoThumbnail,
 } from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
@@ -43,7 +44,6 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
-import { useFeatureFlag } from "@/app/Layout/features";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
