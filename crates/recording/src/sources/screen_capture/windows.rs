@@ -90,7 +90,7 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = oneshot::channel();
-        let (mut video_tx, video_rx) = flume::bounded(4);
+        let (video_tx, video_rx) = flume::bounded(4);
 
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,

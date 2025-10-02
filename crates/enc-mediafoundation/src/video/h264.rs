@@ -1,7 +1,11 @@
+use crate::{
+    media::{MFSetAttributeRatio, MFSetAttributeSize},
+    mft::EncoderDevice,
+    video::{NewVideoProcessorError, VideoProcessor},
+};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc::SyncSender,
 };
 use windows::{
     Foundation::TimeSpan,
@@ -14,8 +18,8 @@ use windows::{
         },
         Media::MediaFoundation::{
             self, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEventGenerator, IMFMediaType,
-            IMFSample, IMFTransform, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MF_E_INVALIDMEDIATYPE,
-            MF_E_NO_MORE_TYPES, MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_TYPE,
+            IMFSample, IMFTransform, MF_E_INVALIDMEDIATYPE, MF_E_NO_MORE_TYPES,
+            MF_E_TRANSFORM_TYPE_NOT_SET, MF_EVENT_FLAG_NONE, MF_EVENT_TYPE,
             MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
             MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
             MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, MF_TRANSFORM_ASYNC_UNLOCK,
@@ -29,11 +33,6 @@ use windows::{
         },
     },
     core::{Error, Interface},
-};
-use crate::{
-    media::{MFSetAttributeRatio, MFSetAttributeSize},
-    mft::EncoderDevice,
-    video::{NewVideoProcessorError, VideoProcessor},
 };
 
 pub struct VideoEncoderOutputSample {
@@ -399,23 +398,19 @@ impl H264Encoder {
 
             let mut should_exit = false;
             while !should_exit {
-            	println!("getting event");
-
-                let event = self
-                    .event_generator
-                    .GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
+                let event = self.event_generator.GetEvent(MF_EVENT_FLAG_NONE)?;
 
                 let event_type = MF_EVENT_TYPE(event.GetType()? as i32);
-                dbg!(&event_type);
                 match event_type {
                     MediaFoundation::METransformNeedInput => {
                         should_exit = true;
                         if !should_stop.load(Ordering::SeqCst) {
                             if let Some((texture, timestamp)) = get_frame()? {
+                                self.video_processor.process_texture(&texture)?;
                                 let input_buffer = {
                                     MFCreateDXGISurfaceBuffer(
                                         &ID3D11Texture2D::IID,
-                                        &texture,
+                                        self.video_processor.output_texture(),
                                         0,
                                         false,
                                     )?
@@ -458,8 +453,6 @@ impl H264Encoder {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
         }
-
-        println!("BRUHHH");
 
         Ok(())
     }

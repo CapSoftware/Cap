@@ -29,7 +29,6 @@ impl H264StreamMuxer {
         output: &mut ffmpeg::format::context::Output,
         config: MuxerConfig,
     ) -> Result<Self, ffmpeg::Error> {
-        dbg!(&config);
         info!("Adding H264 stream to output context");
 
         // Find H264 codec
@@ -91,8 +90,6 @@ impl H264StreamMuxer {
         }
 
         let mut packet = self.mf_sample_to_avpacket(sample)?;
-
-        dbg!(packet.pts());
 
         packet.rescale_ts(
             self.time_base,
