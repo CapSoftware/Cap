@@ -2510,7 +2510,14 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
                             let app = app.clone();
                             tokio::spawn(async move {
                                 if let Ok(meta) = build_video_meta(&file_path)
-                                    .map_err(|err| error!("Failed to resume video upload. error getting video metadata: {}", err))
+                                    .map_err(|error| {
+                                        error!("Failed to resume video upload. error getting video metadata: {error}");
+
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
+                                        }
+                                    })
                                     && let Ok(uploaded_video) = upload_video(
                                         &app,
                                         video_id,

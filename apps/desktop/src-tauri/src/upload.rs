@@ -390,7 +390,7 @@ impl InstantMultipartUpload {
 
         let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
-        let parts = progress(
+        let mut parts = progress(
             app.clone(),
             video_id.clone(),
             multipart_uploader(
@@ -402,6 +402,7 @@ impl InstantMultipartUpload {
         )
         .try_collect::<Vec<_>>()
         .await?;
+        parts.sort_by_key(|part| part.part_number);
 
         let metadata = build_video_meta(&file_path)
             .map_err(|e| error!("Failed to get video metadata: {e}"))

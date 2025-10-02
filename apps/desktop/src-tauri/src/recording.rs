@@ -1542,7 +1542,12 @@ async fn handle_recording_end(
                         *meta = InstantRecordingMeta::Failed { error };
                     }
                 }
-                project_meta.save_for_project().unwrap();
+                project_meta
+                    .save_for_project()
+                    .map_err(|err| {
+                        error!("Error saving recording meta while finishing recording: {err}")
+                    })
+                    .ok();
             }
 
             None
