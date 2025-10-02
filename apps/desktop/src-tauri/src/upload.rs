@@ -1,6 +1,6 @@
 // credit @filleduchaos
 
-use crate::web_api::ManagerExt;
+use crate::web_api::{AuthedApiError, ManagerExt};
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
@@ -216,7 +216,7 @@ pub async fn upload_video(
     screenshot_path: Option<PathBuf>,
     meta: Option<S3VideoMeta>,
     channel: Option<Channel<UploadProgress>>,
-) -> Result<UploadedVideo, String> {
+) -> Result<UploadedVideo, AuthedApiError> {
     println!("Uploading video {video_id}...");
 
     let client = reqwest::Client::new();
@@ -284,7 +284,7 @@ pub async fn upload_video(
 
     let (video_upload, screenshot_result): (
         Result<reqwest::Response, reqwest::Error>,
-        Option<Result<reqwest::Response, String>>,
+        Option<Result<reqwest::Response, AuthedApiError>>,
     ) = tokio::join!(video_upload.send(), async {
         if let Some(screenshot_req) = screenshot_upload {
             Some(screenshot_req.await)
@@ -326,12 +326,13 @@ pub async fn upload_video(
         status,
         error_body
     );
-    Err(format!(
-        "Failed to upload file. Status: {status}. Body: {error_body}"
-    ))
+    Err(format!("Failed to upload file. Status: {status}. Body: {error_body}").into())
 }
 
-pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<UploadedImage, String> {
+pub async fn upload_image(
+    app: &AppHandle,
+    file_path: PathBuf,
+) -> Result<UploadedImage, AuthedApiError> {
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -382,9 +383,7 @@ pub async fn upload_image(app: &AppHandle, file_path: PathBuf) -> Result<Uploade
         status,
         error_body
     );
-    Err(format!(
-        "Failed to upload file. Status: {status}. Body: {error_body}"
-    ))
+    Err(format!("Failed to upload file. Status: {status}. Body: {error_body}").into())
 }
 
 pub async fn create_or_get_video(
@@ -393,7 +392,9 @@ pub async fn create_or_get_video(
     video_id: Option<String>,
     name: Option<String>,
     meta: Option<S3VideoMeta>,
-) -> Result<S3UploadMeta, String> {
+) -> Result<S3UploadMeta, AuthedApiError> {
+    return Err(AuthedApiError::InvalidAuthentication); // TODO
+
     let mut s3_config_url = if let Some(id) = video_id {
         format!("/api/desktop/video/create?recordingMode=desktopMP4&videoId={id}")
     } else if is_screenshot {
@@ -417,23 +418,13 @@ pub async fn create_or_get_video(
 
     let response = app
         .authed_api_request(s3_config_url, |client, url| client.get(url))
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
-
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
+        .await?;
 
     if response.status() != StatusCode::OK {
         if let Ok(error) = response.json::<CreateErrorResponse>().await {
             if error.error == "upgrade_required" {
-                return Err(
-                    "You must upgrade to Cap Pro to upload recordings over 5 minutes in length"
-                        .into(),
-                );
+                return Err(AuthedApiError::UpgradeRequired);
             }
-
-            return Err(format!("server error: {}", error.error));
         }
 
         return Err("Unknown error uploading video".into());
@@ -469,7 +460,10 @@ pub enum PresignedS3PutRequestMethod {
     Put,
 }
 
-async fn presigned_s3_put(app: &AppHandle, body: PresignedS3PutRequest) -> Result<String, String> {
+async fn presigned_s3_put(
+    app: &AppHandle,
+    body: PresignedS3PutRequest,
+) -> Result<String, AuthedApiError> {
     #[derive(Deserialize, Debug)]
     struct Data {
         url: String,
@@ -485,17 +479,9 @@ async fn presigned_s3_put(app: &AppHandle, body: PresignedS3PutRequest) -> Resul
         .authed_api_request("/api/upload/signed", |client, url| {
             client.post(url).json(&body)
         })
-        .await
-        .map_err(|e| format!("Failed to send request to Next.js handler: {e}"))?;
+        .await?;
 
-    if response.status() == StatusCode::UNAUTHORIZED {
-        return Err("Failed to authenticate request; please log in again".into());
-    }
-
-    let Wrapper { presigned_put_data } = response
-        .json::<Wrapper>()
-        .await
-        .map_err(|e| format!("Failed to deserialize server response: {e}"))?;
+    let Wrapper { presigned_put_data } = response.json::<Wrapper>().await?;
 
     Ok(presigned_put_data.url)
 }
@@ -556,7 +542,7 @@ pub async fn prepare_screenshot_upload(
     app: &AppHandle,
     s3_config: &S3UploadMeta,
     screenshot_path: PathBuf,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, AuthedApiError> {
     let presigned_put = presigned_s3_put(
         app,
         PresignedS3PutRequest {
@@ -576,7 +562,7 @@ pub async fn prepare_screenshot_upload(
         .body(compressed_image)
         .send()
         .await
-        .map_err(|e| format!("Error uploading screenshot: {e}"))
+        .map_err(Into::into)
 }
 
 async fn compress_image(path: PathBuf) -> Result<Vec<u8>, String> {
