@@ -89,6 +89,8 @@ cap-flags = { path = "../../../crates/flags" }
 cap-recording = { path = "../../../crates/recording" }
 cap-export = { path = "../../../crates/export" }
 scap-targets = { path = "../../../crates/scap-targets" }
+scap-screencapturekit = { path = "../../../crates/scap-screencapturekit" }
+scap-direct3d = { path = "../../../crates/scap-direct3d" }
 
 flume.workspace = true
 tracing-subscriber = "0.3.19"

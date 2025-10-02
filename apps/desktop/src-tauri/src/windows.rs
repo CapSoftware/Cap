@@ -261,7 +261,7 @@ impl ShowCapWindow {
                     .minimizable(false)
                     .always_on_top(true)
                     .visible_on_all_workspaces(true)
-                    .content_protected(true)
+                    .content_protected(false)
                     .center()
                     .initialization_script(format!(
                         "
