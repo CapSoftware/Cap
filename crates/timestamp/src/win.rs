@@ -28,8 +28,22 @@ impl PerformanceCounterTimestamp {
     }
 
     pub fn duration_since(&self, other: Self) -> Duration {
-        let freq = perf_freq();
-        Duration::from_secs_f64((self.0 - other.0) as f64 / freq as f64)
+        let freq = perf_freq() as i128;
+        debug_assert!(freq > 0);
+
+        let diff = self.0 as i128 - other.0 as i128;
+
+        if diff <= 0 {
+            Duration::ZERO
+        } else {
+            let diff = diff as u128;
+            let freq = freq as u128;
+
+            let secs = diff / freq;
+            let nanos = ((diff % freq) * 1_000_000_000u128) / freq;
+
+            Duration::new(secs as u64, nanos as u32)
+        }
     }
 
     pub fn now() -> Self {
@@ -60,5 +74,28 @@ impl Sub<Duration> for PerformanceCounterTimestamp {
     fn sub(self, rhs: Duration) -> Self::Output {
         let freq = perf_freq();
         Self(self.0 - (rhs.as_secs_f64() * freq as f64) as i64)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duration_since_returns_zero_when_earlier() {
+        let freq = perf_freq();
+        let base = PerformanceCounterTimestamp::new(10 * freq);
+        let earlier = PerformanceCounterTimestamp::new(9 * freq);
+
+        assert_eq!(earlier.duration_since(base), Duration::ZERO);
+    }
+
+    #[test]
+    fn duration_since_handles_positive_diff() {
+        let freq = perf_freq();
+        let base = PerformanceCounterTimestamp::new(10 * freq);
+        let later = PerformanceCounterTimestamp::new(11 * freq);
+
+        assert_eq!(later.duration_since(base), Duration::from_secs(1));
     }
 }
