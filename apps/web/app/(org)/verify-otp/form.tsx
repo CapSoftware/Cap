@@ -27,6 +27,17 @@ export function VerifyOTPForm({
 	const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 	const router = useRouter();
 
+	let verifyEmail = email;
+	if (!email && typeof window !== 'undefined') {
+		const urlParams = new URLSearchParams(window.location.search);
+		const urlEmail = urlParams.get('email');
+		if (urlEmail) {
+			verifyEmail = urlEmail;
+		} else {
+			router.push('/login');
+		}
+	}
+
 	useEffect(() => {
 		inputRefs.current[0]?.focus();
 	}, []);
@@ -75,9 +86,8 @@ export function VerifyOTPForm({
 			const otpCode = code.join("");
 			if (otpCode.length !== 6) throw "Please enter a complete 6-digit code";
 
-			// shoutout https://github.com/buoyad/Tally/pull/14
 			const res = await fetch(
-				`/api/auth/callback/email?email=${encodeURIComponent(email)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
+				`/api/auth/callback/email?email=${encodeURIComponent(verifyEmail)}&token=${encodeURIComponent(otpCode)}&callbackUrl=${encodeURIComponent("/login-success")}`,
 			);
 
 			if (!res.url.includes("/login-success")) {
@@ -101,10 +111,9 @@ export function VerifyOTPForm({
 
 	const handleResend = useMutation({
 		mutationFn: async () => {
-			// Check client-side rate limiting
 			if (lastResendTime) {
 				const timeSinceLastRequest = Date.now() - lastResendTime;
-				const waitTime = 30000; // 30 seconds
+				const waitTime = 30000;
 				if (timeSinceLastRequest < waitTime) {
 					const remainingSeconds = Math.ceil(
 						(waitTime - timeSinceLastRequest) / 1000,
@@ -115,12 +124,11 @@ export function VerifyOTPForm({
 			}
 
 			const result = await signIn("email", {
-				email,
+				email: verifyEmail,
 				redirect: false,
 			});
 
 			if (result?.error) {
-				// NextAuth returns generic "EmailSignin" error for all email errors
 				throw "Please wait 30 seconds before requesting a new code";
 			}
 		},
@@ -164,7 +172,7 @@ export function VerifyOTPForm({
 					Enter verification code
 				</h1>
 				<p className="text-sm text-gray-10">
-					We sent a 6-digit code to {email}
+					We sent a 6-digit code to {verifyEmail}
 				</p>
 			</div>
 
