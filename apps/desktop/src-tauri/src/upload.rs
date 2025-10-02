@@ -8,7 +8,7 @@ use crate::{
 use async_stream::{stream, try_stream};
 use axum::http::Uri;
 use bytes::Bytes;
-use cap_project::{RecordingMeta, UploadMeta};
+use cap_project::{RecordingMeta, S3UploadMeta, UploadMeta};
 use cap_utils::spawn_actor;
 use ffmpeg::ffi::AV_TIME_BASE;
 use flume::Receiver;
@@ -34,11 +34,6 @@ use tokio::{
 };
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
-
-#[derive(Deserialize, Serialize, Clone, Type, Debug)]
-pub struct S3UploadMeta {
-    pub id: String,
-}
 
 pub struct UploadedItem {
     pub link: String,
@@ -320,23 +315,22 @@ impl InstantMultipartUpload {
         let video_id = pre_created_video.id.clone();
         debug!("Initiating multipart upload for {video_id}...");
 
-        // TODO: Reuse this + error handling
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            format!("Error reading project meta from {recording_dir:?} for upload init: {err}")
+        })?;
         project_meta.upload = Some(UploadMeta::MultipartUpload {
             video_id: video_id.clone(),
+            file_path: file_path.clone(),
+            pre_created_video: pre_created_video.clone(),
+            recording_dir: recording_dir.clone(),
         });
         project_meta
             .save_for_project()
             .map_err(|e| error!("Failed to save recording meta: {e}"))
             .ok();
 
-        // TODO: Allow injecting this for Studio mode upload
-        // let file = File::open(path).await.unwrap(); // TODO: Error handling
-        // ReaderStream::new(file) // TODO: Map into part numbers
-
         let upload_id = api::upload_multipart_initiate(&app, &video_id).await?;
 
-        // TODO: Will it be a problem that `ReaderStream` doesn't have a fixed chunk size??? We should fix that!!!!
         let parts = progress(
             app.clone(),
             video_id.clone(),
@@ -357,10 +351,13 @@ impl InstantMultipartUpload {
         api::upload_multipart_complete(&app, &video_id, &upload_id, &parts, metadata).await?;
         info!("Multipart upload complete for {video_id}.");
 
-        // TODO: Reuse this + error handling
-        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
+        let mut project_meta = RecordingMeta::load_for_project(&recording_dir).map_err(|err| {
+            format!("Error reading project meta from {recording_dir:?} for upload complete: {err}")
+        })?;
         project_meta.upload = Some(UploadMeta::Complete);
-        project_meta.save_for_project().unwrap();
+        project_meta
+            .save_for_project()
+            .map_err(|err| format!("Error reading project meta from {recording_dir:?}: {err}"))?;
 
         let _ = app.clipboard().write_text(pre_created_video.link.clone());
 

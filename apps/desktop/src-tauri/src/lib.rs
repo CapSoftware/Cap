@@ -22,6 +22,7 @@ mod recording_settings;
 mod target_select_overlay;
 mod tray;
 mod upload;
+mod upload_legacy;
 mod web_api;
 mod windows;
 
@@ -31,7 +32,7 @@ use camera::CameraPreviewState;
 use cap_editor::{EditorInstance, EditorState};
 use cap_project::{
     InstantRecordingMeta, ProjectConfiguration, RecordingMeta, RecordingMetaInner, SharingMeta,
-    StudioRecordingMeta, StudioRecordingStatus, UploadMeta, XY, ZoomSegment,
+    StudioRecordingMeta, StudioRecordingStatus, UploadMeta, VideoUploadInfo, XY, ZoomSegment,
 };
 use cap_recording::{
     RecordingMode,
@@ -82,13 +83,14 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace, warn};
-use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
+use upload::{create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
 use crate::{
     camera::CameraPreviewManager,
     recording_settings::{RecordingSettingsStore, RecordingTargetMode},
+    upload::InstantMultipartUpload,
 };
 use crate::{recording::start_recording, upload::build_video_meta};
 
@@ -142,13 +144,6 @@ pub enum UploadResult {
 pub struct VideoRecordingMetadata {
     pub duration: f64,
     pub size: f64,
-}
-
-#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
-pub struct VideoUploadInfo {
-    id: String,
-    link: String,
-    config: S3UploadMeta,
 }
 
 impl App {
@@ -1120,6 +1115,7 @@ async fn upload_exported_video(
         video_id: s3_config.id.clone(),
         file_path: file_path.clone(),
         screenshot_path: screenshot_path.clone(),
+        recording_dir: path.clone(),
     });
     meta.save_for_project()
         .map_err(|e| error!("Failed to save recording meta: {e}"))
@@ -2448,22 +2444,107 @@ async fn resume_uploads(app: AppHandle) -> Result<(), String> {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
-            if let Some(upload_meta) = RecordingMeta::load_for_project(&path)
-                .ok()
-                .and_then(|v| v.upload)
-            {
-                match upload_meta {
-                    UploadMeta::MultipartUpload { video_id } => {
-                        // TODO: Resume `MultipartUpload`
+            // Load recording meta to check for in-progress recordings
+            if let Ok(mut meta) = RecordingMeta::load_for_project(&path) {
+                let mut needs_save = false;
+
+                // Check if recording is still marked as in-progress and if so mark as failed
+                // This should only happen if the application crashes while recording
+                match &mut meta.inner {
+                    RecordingMetaInner::Studio(StudioRecordingMeta::MultipleSegments { inner }) => {
+                        if let Some(StudioRecordingStatus::InProgress) = &inner.status {
+                            inner.status = Some(StudioRecordingStatus::Failed {
+                                error: "Recording crashed".to_string(),
+                            });
+                            needs_save = true;
+                        }
                     }
-                    UploadMeta::SinglePartUpload {
-                        video_id,
-                        file_path,
-                        screenshot_path,
-                    } => {
-                        // TODO: Resume `SinglePartUpload`
+                    RecordingMetaInner::Instant(InstantRecordingMeta::InProgress { .. }) => {
+                        meta.inner = RecordingMetaInner::Instant(InstantRecordingMeta::Failed {
+                            error: "Recording crashed".to_string(),
+                        });
+                        needs_save = true;
                     }
-                    UploadMeta::Failed { .. } | UploadMeta::Complete => {}
+                    _ => {}
+                }
+
+                // Save the updated meta if we made changes
+                if needs_save {
+                    if let Err(err) = meta.save_for_project() {
+                        error!("Failed to save recording meta for {path:?}: {err}");
+                    }
+                }
+
+                // Handle upload resumption
+                if let Some(upload_meta) = meta.upload {
+                    match upload_meta {
+                        UploadMeta::MultipartUpload {
+                            video_id,
+                            file_path,
+                            pre_created_video,
+                            recording_dir,
+                        } => {
+                            InstantMultipartUpload::spawn(
+                                app.clone(),
+                                file_path,
+                                pre_created_video,
+                                None,
+                                recording_dir,
+                            );
+                        }
+                        UploadMeta::SinglePartUpload {
+                            video_id,
+                            file_path,
+                            screenshot_path,
+                            recording_dir,
+                        } => {
+                            let app = app.clone();
+                            tokio::spawn(async move {
+                                if let Ok(meta) = build_video_meta(&file_path)
+                                    .map_err(|err| error!("Failed to resume video upload. error getting video metadata: {}", err))
+                                {
+                                    if let Ok(uploaded_video) = upload_video(
+                                        &app,
+                                        video_id,
+                                        file_path,
+                                        screenshot_path,
+                                        meta,
+                                        None,
+                                    )
+                                    .await
+                                    .map_err(|error| {
+                                        error!("Error completing resumed upload for video: {error}");
+
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Failed { error });
+                                            meta.save_for_project().map_err(|err| error!("Error saving project metadata: {err}")).ok();
+                                        }
+                                    })
+                                    {
+                                        if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir).map_err(|err| error!("Error loading project metadata: {err}")) {
+                                            meta.upload = Some(UploadMeta::Complete);
+                                            meta.sharing = Some(SharingMeta {
+                                                link: uploaded_video.link.clone(),
+                                                id: uploaded_video.id.clone(),
+                                            });
+                                            meta.save_for_project()
+                                                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                                                .ok();
+                                        }
+
+                                        let _ = app
+                                            .state::<ArcLock<ClipboardContext>>()
+                                            .write()
+                                            .await
+                                            .set_text(uploaded_video.link.clone());
+                                        NotificationType::ShareableLinkCopied.send(&app);
+                                    }
+
+                                }
+                            });
+                        }
+                        UploadMeta::Failed { .. } | UploadMeta::Complete => {}
+                    }
                 }
             }
         }

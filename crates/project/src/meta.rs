@@ -76,17 +76,34 @@ pub struct RecordingMeta {
     pub upload: Option<UploadMeta>,
 }
 
+#[derive(Deserialize, Serialize, Clone, Type, Debug)]
+pub struct S3UploadMeta {
+    pub id: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, specta::Type, Debug)]
+pub struct VideoUploadInfo {
+    pub id: String,
+    pub link: String,
+    pub config: S3UploadMeta,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(tag = "state")]
 pub enum UploadMeta {
     MultipartUpload {
         // Cap web identifier
         video_id: String,
-        // TODO
+        // Data for resuming
+        file_path: PathBuf,
+        pre_created_video: VideoUploadInfo,
+        recording_dir: PathBuf,
     },
     SinglePartUpload {
         // Cap web identifier
         video_id: String,
+        // Path of the Cap file
+        recording_dir: PathBuf,
         // Path to video and screenshot files for resuming
         file_path: PathBuf,
         screenshot_path: PathBuf,
