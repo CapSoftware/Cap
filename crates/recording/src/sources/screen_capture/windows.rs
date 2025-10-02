@@ -8,6 +8,7 @@ use cap_timestamp::{PerformanceCounterTimestamp, Timestamps};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::channel::oneshot;
 use kameo::prelude::*;
+use scap_direct3d::StopCapturerError;
 use scap_ffmpeg::*;
 use std::{
     collections::VecDeque,
@@ -369,7 +370,7 @@ impl PipelineSourceTask for ScreenCaptureSource<Direct3DCapture> {
 
 #[derive(Actor)]
 struct ScreenCaptureActor {
-    stop_tx: Option<std::sync::mpsc::SyncSender<oneshot::Sender<()>>>,
+    stop_tx: Option<std::sync::mpsc::SyncSender<oneshot::Sender<Result<(), StopCapturerError>>>>,
     error_tx: Sender<()>,
     d3d_device: ID3D11Device,
 }
@@ -377,7 +378,7 @@ struct ScreenCaptureActor {
 impl ScreenCaptureActor {
     pub fn new(error_tx: Sender<()>, d3d_device: ID3D11Device) -> Self {
         Self {
-            capture_handle: None,
+            stop_tx: None,
             error_tx,
             d3d_device,
         }
@@ -412,7 +413,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
         msg: StartCapturing,
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if self.capture_handle.is_some() {
+        if self.stop_tx.is_some() {
             return Err(StartCapturingError::AlreadyCapturing);
         }
 
@@ -427,13 +428,15 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 
         let (ready_tx, ready_rx) = oneshot::channel();
 
-        let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
+        let (stop_tx, stop_rx) =
+            std::sync::mpsc::sync_channel::<oneshot::Sender<Result<(), StopCapturerError>>>(1);
 
-        std::thread::spawn(|| {
+        let d3d_device = self.d3d_device.clone();
+        std::thread::spawn(move || {
             cap_mediafoundation_utils::thread_init();
 
             let res = (|| {
-                let mut res = scap_direct3d::Capturer::new(
+                let mut capture_handle = scap_direct3d::Capturer::new(
                     msg.target,
                     msg.settings,
                     move |frame| {
@@ -446,22 +449,24 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 
                         Ok(())
                     },
-                    Some(self.d3d_device.clone()),
+                    Some(d3d_device),
                 )
                 .map_err(StartCapturingError::CreateCapturer)?;
 
                 capture_handle
                     .start()
-                    .map_err(StartCapturingError::StartCapturer);
+                    .map_err(StartCapturingError::StartCapturer)?;
+
+                Ok::<_, StartCapturingError>(capture_handle)
             })();
 
-            let capturer = match res {
+            let mut capturer = match res {
                 Ok(capturer) => {
-                    ready_tx.send(Ok(()));
+                    let _ = ready_tx.send(Ok(()));
                     capturer
                 }
                 Err(e) => {
-                    ready_tx.send(Err(e));
+                    let _ = ready_tx.send(Err(e));
                     return;
                 }
             };
@@ -471,7 +476,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
             let res = capturer.stop();
 
             if let Ok(stop_channel) = stop_channel {
-                stop_channel.send(res);
+                let _ = stop_channel.send(res);
             }
         });
 
@@ -484,7 +489,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
 }
 
 impl Message<StopCapturing> for ScreenCaptureActor {
-    type Reply = Result<(), StopCapturingError>;
+    type Reply = Result<(), String>;
 
     async fn handle(
         &mut self,
@@ -492,7 +497,7 @@ impl Message<StopCapturing> for ScreenCaptureActor {
         _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let Some(stop_tx) = self.stop_tx.take() else {
-            return Err(StopCapturingError::NotCapturing);
+            return Err("Not Capturing".to_string());
         };
 
         let (done_tx, done_rx) = oneshot::channel();
@@ -501,7 +506,7 @@ impl Message<StopCapturing> for ScreenCaptureActor {
         }
 
         if let Ok(res) = done_rx.await {
-            res?;
+            res.map_err(|e| e.to_string())?;
         }
 
         info!("stopped windows capturer");
