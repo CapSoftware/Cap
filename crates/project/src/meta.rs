@@ -3,13 +3,16 @@ use relative_path::RelativePathBuf;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     error::Error,
     path::{Path, PathBuf},
 };
 use tracing::{debug, info, warn};
 
-use crate::{CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY};
+use crate::{
+    CaptionsData, CursorEvents, CursorImage, ProjectConfiguration, XY,
+    cursor::SHORT_CURSOR_SHAPE_DEBOUNCE_MS,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct VideoMeta {
@@ -215,6 +218,13 @@ impl StudioRecordingMeta {
         }
     }
 
+    pub fn pointer_cursor_ids(&self) -> HashSet<String> {
+        match self {
+            StudioRecordingMeta::MultipleSegments { inner, .. } => inner.pointer_cursor_ids(),
+            _ => HashSet::new(),
+        }
+    }
+
     pub fn min_fps(&self) -> u32 {
         match self {
             Self::SingleSegment { segment } => segment.display.fps,
@@ -303,6 +313,24 @@ impl MultipleSegments {
         meta.project_path.join(path)
     }
 
+    pub fn pointer_cursor_ids(&self) -> HashSet<String> {
+        match &self.cursors {
+            Cursors::Correct(map) => map
+                .iter()
+                .filter_map(|(id, cursor)| match cursor.shape.as_ref() {
+                    Some(cap_cursor_info::CursorShape::MacOS(
+                        cap_cursor_info::CursorShapeMacOS::Arrow,
+                    ))
+                    | Some(cap_cursor_info::CursorShape::Windows(
+                        cap_cursor_info::CursorShapeWindows::Arrow,
+                    )) => Some(id.clone()),
+                    _ => None,
+                })
+                .collect(),
+            Cursors::Old(_) => HashSet::new(),
+        }
+    }
+
     pub fn get_cursor_image(&self, meta: &RecordingMeta, id: &str) -> Option<CursorImage> {
         match &self.cursors {
             Cursors::Old(_) => None,
@@ -344,13 +372,24 @@ impl MultipleSegment {
         let full_path = meta.path(cursor_path);
 
         // Try to load the cursor data
-        match CursorEvents::load_from_file(&full_path) {
+        let mut data = match CursorEvents::load_from_file(&full_path) {
             Ok(data) => data,
             Err(e) => {
                 eprintln!("Failed to load cursor data: {e}");
-                CursorEvents::default()
+                return CursorEvents::default();
             }
-        }
+        };
+
+        let pointer_ids = if let RecordingMetaInner::Studio(studio_meta) = &meta.inner {
+            studio_meta.pointer_cursor_ids()
+        } else {
+            HashSet::new()
+        };
+
+        let pointer_ids_ref = (!pointer_ids.is_empty()).then_some(&pointer_ids);
+        data.stabilize_short_lived_cursor_shapes(pointer_ids_ref, SHORT_CURSOR_SHAPE_DEBOUNCE_MS);
+
+        data
     }
 
     pub fn latest_start_time(&self) -> Option<f64> {

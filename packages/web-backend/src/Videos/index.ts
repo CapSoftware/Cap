@@ -10,6 +10,7 @@ import { VideosRepo } from "./VideosRepo.ts";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
+		const db = yield* Database;
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
@@ -106,8 +107,6 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getUploadProgress: Effect.fn("Videos.getUploadProgress")(function* (
 				videoId: Video.VideoId,
 			) {
-				const db = yield* Database;
-
 				const [result] = yield* db
 					.execute((db) =>
 						db
@@ -134,14 +133,17 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
 				videoId: Video.VideoId,
 			) {
-				const [video] = yield* getById(videoId).pipe(
-					Effect.flatMap(
-						Effect.catchTag(
-							"NoSuchElementException",
-							() => new Video.NotFoundError(),
+				const [video] = yield* repo
+					.getById(videoId)
+					.pipe(
+						Effect.flatMap(
+							Effect.catchTag(
+								"NoSuchElementException",
+								() => new Video.NotFoundError(),
+							),
 						),
-					),
-				);
+						Policy.withPublicPolicy(policy.canView(videoId)),
+					);
 
 				const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
 

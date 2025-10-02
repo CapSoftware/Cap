@@ -1908,6 +1908,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             recording::list_cameras,
             recording::list_capture_windows,
             recording::list_capture_displays,
+            recording::list_displays_with_thumbnails,
+            recording::list_windows_with_thumbnails,
             take_screenshot,
             list_audio_devices,
             close_recordings_overlay_window,
@@ -1974,6 +1976,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             target_select_overlay::close_target_select_overlays,
             target_select_overlay::display_information,
             target_select_overlay::get_window_icon,
+            target_select_overlay::focus_window,
             editor_delete_project
         ])
         .events(tauri_specta::collect_events![

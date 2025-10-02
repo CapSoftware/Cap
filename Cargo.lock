@@ -1219,6 +1219,8 @@ dependencies = [
  "reqwest",
  "rodio",
  "scap",
+ "scap-direct3d",
+ "scap-screencapturekit",
  "scap-targets",
  "sentry",
  "serde",
