@@ -726,6 +726,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
                         .map_err(|e| format!("EncoderFinish: {e}"))?;
                 }
                 either::Right(mut encoder) => {
+                    let mut first_timestamp = None;
                     let output = output.clone();
 
                     let _ = ready.send(Ok(()));
@@ -743,12 +744,17 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
 
                         use scap_ffmpeg::AsFFmpeg;
 
-                        encoder.queue_frame(
-                            frame
-                                .as_ffmpeg()
-                                .map_err(|e| format!("FrameAsFFmpeg: {e}"))?,
-                            &mut output,
-                        );
+                        let first_timestamp = first_timestamp.get_or_insert(timestamp);
+
+                        let mut ff_frame = frame
+                            .as_ffmpeg()
+                            .map_err(|e| format!("FrameAsFfmpeg: {e}"))?;
+
+                        let elapsed = timestamp.duration_since(start_time)
+                            - first_timestamp.duration_since(start_time);
+                        ff_frame.set_pts(Some(encoder.get_pts(elapsed)));
+
+                        encoder.queue_frame(ff_frame, &mut output);
                     }
                 }
             }
