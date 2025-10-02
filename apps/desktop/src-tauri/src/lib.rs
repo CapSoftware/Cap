@@ -874,7 +874,15 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
         let input =
             ffmpeg::format::input(&path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
-        let duration = input.duration() as f64 / AV_TIME_BASE as f64;
+        let raw_duration = input.duration();
+        if raw_duration <= 0 {
+            return Err(format!(
+                "Unknown or invalid duration for video file: {:?}",
+                path
+            ));
+        }
+
+        let duration = raw_duration as f64 / AV_TIME_BASE as f64;
         Ok(duration)
     }
 
@@ -897,7 +905,10 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
     let duration = display_paths
         .into_iter()
         .map(get_duration_for_path)
-        .sum::<Result<_, _>>()?;
+        .try_fold(0f64, |acc, item| -> Result<f64, String> {
+            let d = item?;
+            Ok(acc + d)
+        })?;
 
     let (width, height) = (1920, 1080);
     let fps = 30;
