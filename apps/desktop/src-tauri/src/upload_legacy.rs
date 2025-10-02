@@ -622,25 +622,25 @@ pub struct InstantMultipartUpload {
 }
 
 impl InstantMultipartUpload {
-    /// starts a progressive (multipart) upload that runs until recording stops
-    /// and the file has stabilized (no additional data is being written).
-    pub fn spawn(
-        app: AppHandle,
-        video_id: String,
-        file_path: PathBuf,
-        pre_created_video: VideoUploadInfo,
-        realtime_upload_done: Option<Receiver<()>>,
-    ) -> Self {
-        Self {
-            handle: spawn_actor(Self::run(
-                app,
-                video_id,
-                file_path,
-                pre_created_video,
-                realtime_upload_done,
-            )),
-        }
-    }
+    // /// starts a progressive (multipart) upload that runs until recording stops
+    // /// and the file has stabilized (no additional data is being written).
+    // pub fn spawn(
+    //     app: AppHandle,
+    //     video_id: String,
+    //     file_path: PathBuf,
+    //     pre_created_video: VideoUploadInfo,
+    //     realtime_upload_done: Option<Receiver<()>>,
+    // ) -> Self {
+    //     Self {
+    //         handle: spawn_actor(Self::run(
+    //             app,
+    //             video_id,
+    //             file_path,
+    //             pre_created_video,
+    //             realtime_upload_done,
+    //         )),
+    //     }
+    // }
 
     pub async fn run(
         app: AppHandle,

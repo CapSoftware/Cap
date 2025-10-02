@@ -33,6 +33,7 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
     task::{self, JoinHandle},
+    time,
 };
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
@@ -501,10 +502,14 @@ pub fn from_pending_file_to_chunks(
 
             let new_data_size = file_size.saturating_sub(last_read_position);
 
-            // Determine if we should read a chunk
-            let should_read_chunk = (new_data_size >= CHUNK_SIZE)
-                || (new_data_size > 0 && realtime_is_done.unwrap_or(false))
-                || (realtime_is_done.is_none() && new_data_size > 0);
+            // Read chunk if we have enough data OR if recording is done with any data
+            let should_read_chunk = if let Some(is_done) = realtime_is_done {
+                // We have a realtime receiver - check if recording is done or we have enough data
+                (new_data_size >= CHUNK_SIZE) || (is_done && new_data_size > 0)
+            } else {
+                // No realtime receiver - read any available data
+                new_data_size > 0
+            };
 
             if should_read_chunk {
                 let chunk_size = std::cmp::min(new_data_size, CHUNK_SIZE);
@@ -569,8 +574,7 @@ pub fn from_pending_file_to_chunks(
                 }
                 break;
             } else {
-                // Wait for more data
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
     }
@@ -728,6 +732,7 @@ fn progress<T: UploadedChunk, E>(
 ) -> impl Stream<Item = Result<T, E>> {
     let mut uploaded = 0u64;
     let mut pending_task: Option<JoinHandle<()>> = None;
+    let mut reemit_task: Option<JoinHandle<()>> = None;
     let (video_id2, app_handle) = (video_id.clone(), app.clone());
 
     stream! {
@@ -740,6 +745,11 @@ fn progress<T: UploadedChunk, E>(
 
                 // Cancel any pending task
                 if let Some(handle) = pending_task.take() {
+                    handle.abort();
+                }
+
+                // Cancel any existing reemit task
+                if let Some(handle) = reemit_task.take() {
                     handle.abort();
                 }
 
@@ -760,6 +770,27 @@ fn progress<T: UploadedChunk, E>(
                         tokio::time::sleep(Duration::from_secs(2)).await;
                         api::desktop_video_progress(&app_clone, &video_id_clone, uploaded, total).await.ok();
                     }));
+
+                    // Start reemit task for continuous progress updates every 700ms
+                    let app_reemit = app.clone();
+                    let video_id_reemit = video_id.clone();
+                    let uploaded_reemit = uploaded;
+                    let total_reemit = total;
+                    reemit_task = Some(tokio::spawn(async move {
+                        let mut interval = time::interval(Duration::from_millis(700));
+                        interval.tick().await; // Skip first immediate tick
+
+                        loop {
+                            interval.tick().await;
+                            UploadProgressEvent {
+                                video_id: video_id_reemit.clone(),
+                                uploaded: uploaded_reemit.to_string(),
+                                total: total_reemit.to_string(),
+                            }
+                            .emit(&app_reemit)
+                            .ok();
+                        }
+                    }));
                 }
 
                 // Emit progress event for the app frontend
@@ -773,6 +804,11 @@ fn progress<T: UploadedChunk, E>(
             }
 
             yield chunk;
+        }
+
+        // Clean up reemit task when stream ends
+        if let Some(handle) = reemit_task.take() {
+            handle.abort();
         }
     }
     .map(Some)
