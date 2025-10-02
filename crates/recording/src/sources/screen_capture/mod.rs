@@ -7,9 +7,9 @@ use specta::Type;
 use std::time::SystemTime;
 use tracing::*;
 
-// #[cfg(windows)]
+#[cfg(target_os = "windows")]
 mod windows;
-// #[cfg(windows)]
+#[cfg(target_os = "windows")]
 pub use windows::*;
 
 #[cfg(target_os = "macos")]

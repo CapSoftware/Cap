@@ -51,6 +51,18 @@ impl ActorHandle {
     pub fn done_fut(&self) -> output_pipeline::DoneFut {
         self.done_fut.clone()
     }
+
+    pub async fn pause(&self) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(Pause).await?)
+    }
+
+    pub async fn resume(&self) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(Resume).await?)
+    }
+
+    pub async fn cancel(&self) -> anyhow::Result<()> {
+        Ok(self.actor_ref.ask(Cancel).await?)
+    }
 }
 
 impl Drop for ActorHandle {

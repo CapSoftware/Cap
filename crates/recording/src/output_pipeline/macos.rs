@@ -1,5 +1,5 @@
 use crate::{
-    output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoMuxer},
+    output_pipeline::{AudioFrame, AudioMuxer, Muxer, TaskPool, VideoMuxer},
     sources::screen_capture,
 };
 use anyhow::anyhow;
@@ -30,6 +30,7 @@ impl Muxer for AVFoundationMp4Muxer {
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
         pause_flag: Arc<AtomicBool>,
+        _tasks: &mut TaskPool,
     ) -> anyhow::Result<Self> {
         let video_config =
             video_config.ok_or_else(|| anyhow!("Invariant: No video source provided"))?;

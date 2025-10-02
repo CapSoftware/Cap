@@ -4,14 +4,16 @@ use crate::{
     cursor::{CursorActor, Cursors, spawn_cursor_recorder},
     feeds::{camera::CameraFeedLock, microphone::MicrophoneFeedLock},
     ffmpeg::{Mp4Muxer, OggMuxer},
-    output_pipeline::{AudioFrame, FinishedOutputPipeline, OutputPipeline},
+    output_pipeline::{
+        AudioFrame, DoneFut, FinishedOutputPipeline, OutputPipeline, PipelineDoneError,
+    },
     sources::{self, screen_capture},
 };
 use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{StreamExt, channel::mpsc, future::OptionFuture};
+use futures::{FutureExt, StreamExt, channel::mpsc, future::OptionFuture};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
 use std::{
@@ -19,6 +21,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::watch;
 use tracing::{Instrument, debug, error_span, info, trace};
 
 #[allow(clippy::large_enum_variant)]
@@ -41,6 +44,7 @@ enum ActorState {
 pub struct ActorHandle {
     actor_ref: kameo::actor::ActorRef<Actor>,
     pub capture_target: screen_capture::ScreenCaptureTarget,
+    done_fut: DoneFut,
     // pub bounds: Bounds,
 }
 
@@ -53,6 +57,7 @@ pub struct Actor {
     fps: u32,
     segment_factory: SegmentPipelineFactory,
     segments: Vec<RecordingSegment>,
+    completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
 }
 
 impl Actor {
@@ -93,6 +98,12 @@ impl Actor {
 
         Ok(cursors)
     }
+
+    fn notify_completion_ok(&self) {
+        if self.completion_tx.borrow().is_none() {
+            let _ = self.completion_tx.send(Some(Ok(())));
+        }
+    }
 }
 
 impl Message<Stop> for Actor {
@@ -120,12 +131,16 @@ impl Message<Stop> for Actor {
 
         ctx.actor_ref().stop_gracefully().await?;
 
-        Ok(stop_recording(
+        let recording = stop_recording(
             self.recording_dir.clone(),
             std::mem::take(&mut self.segments),
             cursors,
         )
-        .await?)
+        .await?;
+
+        self.notify_completion_ok();
+
+        Ok(recording)
     }
 }
 
@@ -198,6 +213,8 @@ impl Message<Cancel> for Actor {
     async fn handle(&mut self, _: Cancel, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
         if let Some(ActorState::Recording { pipeline, .. }) = self.state.take() {
             let _ = pipeline.stop().await;
+
+            self.notify_completion_ok();
         }
 
         Ok(())
@@ -267,6 +284,10 @@ struct CursorPipeline {
 impl ActorHandle {
     pub async fn stop(&self) -> anyhow::Result<CompletedRecording> {
         Ok(self.actor_ref.ask(Stop).await?)
+    }
+
+    pub fn done_fut(&self) -> DoneFut {
+        self.done_fut.clone()
     }
 
     pub async fn pause(&self) -> anyhow::Result<()> {
@@ -364,6 +385,9 @@ async fn spawn_studio_recording_actor(
 
     let start_time = Timestamps::now();
 
+    let (completion_tx, completion_rx) =
+        watch::channel::<Option<Result<(), PipelineDoneError>>>(None);
+
     if let Some(camera_feed) = &base_inputs.camera_feed {
         debug!("camera device info: {:#?}", camera_feed.camera_info());
         debug!("camera video info: {:#?}", camera_feed.video_info());
@@ -379,12 +403,15 @@ async fn spawn_studio_recording_actor(
         base_inputs.clone(),
         custom_cursor_capture,
         start_time,
+        completion_tx.clone(),
     );
 
     let index = 0;
     let pipeline = segment_pipeline_factory
         .create_next(Default::default(), 0)
         .await?;
+
+    let done_fut = completion_rx_to_done_fut(completion_rx);
 
     let segment_start_time = current_time_f64();
 
@@ -407,11 +434,13 @@ async fn spawn_studio_recording_actor(
         }),
         segment_factory: segment_pipeline_factory,
         segments: Vec::new(),
+        completion_tx: completion_tx.clone(),
     });
 
     Ok(ActorHandle {
         actor_ref,
         capture_target: base_inputs.capture_target,
+        done_fut,
     })
 }
 
@@ -510,6 +539,7 @@ struct SegmentPipelineFactory {
     custom_cursor_capture: bool,
     start_time: Timestamps,
     index: u32,
+    completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
 }
 
 impl SegmentPipelineFactory {
@@ -520,6 +550,7 @@ impl SegmentPipelineFactory {
         base_inputs: RecordingBaseInputs,
         custom_cursor_capture: bool,
         start_time: Timestamps,
+        completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>,
     ) -> Self {
         Self {
             segments_dir,
@@ -528,6 +559,7 @@ impl SegmentPipelineFactory {
             custom_cursor_capture,
             start_time,
             index: 0,
+            completion_tx,
         }
     }
 
@@ -553,8 +585,62 @@ impl SegmentPipelineFactory {
 
         self.index += 1;
 
+        spawn_pipeline_watchers(&result, &self.completion_tx);
+
         Ok(result)
     }
+}
+
+fn spawn_pipeline_watchers(
+    pipeline: &Pipeline,
+    completion_tx: &watch::Sender<Option<Result<(), PipelineDoneError>>>,
+) {
+    for fut in collect_pipeline_done_futs(pipeline) {
+        let tx = completion_tx.clone();
+        tokio::spawn(async move {
+            if let Err(err) = fut.await {
+                if tx.borrow().is_none() {
+                    let _ = tx.send(Some(Err(err)));
+                }
+            }
+        });
+    }
+}
+
+fn collect_pipeline_done_futs(pipeline: &Pipeline) -> Vec<DoneFut> {
+    let mut futures = vec![pipeline.screen.done_fut()];
+
+    if let Some(ref microphone) = pipeline.microphone {
+        futures.push(microphone.done_fut());
+    }
+
+    if let Some(ref camera) = pipeline.camera {
+        futures.push(camera.done_fut());
+    }
+
+    if let Some(ref system_audio) = pipeline.system_audio {
+        futures.push(system_audio.done_fut());
+    }
+
+    futures
+}
+
+fn completion_rx_to_done_fut(
+    mut rx: watch::Receiver<Option<Result<(), PipelineDoneError>>>,
+) -> DoneFut {
+    async move {
+        loop {
+            if let Some(result) = rx.borrow().clone() {
+                return result;
+            }
+
+            if rx.changed().await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+    .boxed()
+    .shared()
 }
 
 #[derive(Debug, thiserror::Error)]

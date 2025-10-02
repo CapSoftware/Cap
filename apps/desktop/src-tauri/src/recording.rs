@@ -131,7 +131,7 @@ impl InProgressRecording {
     pub fn done_fut(&self) -> cap_recording::DoneFut {
         match self {
             Self::Instant { handle, .. } => handle.done_fut(),
-            Self::Studio { handle, .. } => todo!(),
+            Self::Studio { handle, .. } => handle.done_fut(),
         }
     }
 
