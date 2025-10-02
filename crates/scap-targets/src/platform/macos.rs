@@ -2,7 +2,12 @@ use std::{ffi::c_void, str::FromStr};
 
 use cidre::{arc, ns, sc};
 use cocoa::appkit::NSScreen;
-use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::CFString};
+use core_foundation::{
+    array::CFArray,
+    base::{FromVoid, TCFType},
+    number::CFNumber,
+    string::CFString,
+};
 use core_graphics::{
     display::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
@@ -314,6 +319,22 @@ impl WindowImpl {
             window_dict
                 .find(kCGWindowOwnerName)
                 .map(|v| CFString::from_void(*v).to_string())
+        }
+    }
+
+    pub fn owner_pid(&self) -> Option<i32> {
+        let windows =
+            core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
+
+        let window_dict =
+            unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
+
+        let key = CFString::from_static_string("kCGWindowOwnerPID");
+
+        unsafe {
+            window_dict
+                .find(key.as_concrete_TypeRef())
+                .and_then(|v| CFNumber::from_void(*v).to_i32())
         }
     }
 
