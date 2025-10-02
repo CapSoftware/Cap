@@ -5,6 +5,8 @@ import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef, useState } from "react";
 
+export type ImageLoadingStatus = "loading" | "success" | "error";
+
 interface VideoThumbnailProps {
 	videoId: string;
 	alt: string;
@@ -12,6 +14,8 @@ interface VideoThumbnailProps {
 	objectFit?: string;
 	containerClass?: string;
 	videoDuration?: number;
+	imageStatus: ImageLoadingStatus;
+	setImageStatus: (status: ImageLoadingStatus) => void;
 }
 
 const formatDuration = (durationSecs: number) => {
@@ -61,15 +65,13 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		objectFit = "cover",
 		containerClass,
 		videoDuration,
+		imageStatus,
+		setImageStatus,
 	}) => {
 		const imageUrl = useQuery(imageUrlQuery(videoId));
 		const imageRef = useRef<HTMLImageElement>(null);
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
-
-		const [imageStatus, setImageStatus] = useState<
-			"loading" | "error" | "success"
-		>("loading");
 
 		useEffect(() => {
 			if (imageRef.current?.complete && imageRef.current.naturalWidth !== 0) {

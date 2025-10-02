@@ -32,7 +32,10 @@ import { useDashboardContext } from "@/app/(org)/dashboard/Contexts";
 import ProgressCircle, {
 	useUploadProgress,
 } from "@/app/s/[videoId]/_components/ProgressCircle";
-import { VideoThumbnail } from "@/components/VideoThumbnail";
+import {
+	ImageLoadingStatus,
+	VideoThumbnail,
+} from "@/components/VideoThumbnail";
 import { useEffectMutation } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 import { PasswordDialog } from "../PasswordDialog";
@@ -172,6 +175,7 @@ export const CapCard = ({
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
+	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 
 	// Helper function to create a drag preview element
 	const createDragPreview = (text: string): HTMLElement => {
@@ -496,10 +500,12 @@ export const CapCard = ({
 						</div>
 					</div>
 				)}
+
 				<div className="relative">
 					<Link
 						className={clsx(
-							"block group",
+							"relative",
+							// "block group",
 							anyCapSelected && "cursor-pointer pointer-events-none",
 						)}
 						onClick={(e) => {
@@ -507,76 +513,59 @@ export const CapCard = ({
 						}}
 						href={`/s/${cap.id}`}
 					>
-						{uploadProgress ? (
-							<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-5">
-								<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
-									{uploadProgress.status === "failed" ? (
-										<div className="flex flex-col items-center">
-											<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
-												<FontAwesomeIcon
-													icon={faVideo}
-													className="text-white size-3"
+						{imageStatus !== "success" && uploadProgress ? (
+							<div className="absolute inset-0 w-full h-full z-20">
+								<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-5">
+									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
+										{uploadProgress.status === "failed" ? (
+											<div className="flex flex-col items-center">
+												<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
+													<FontAwesomeIcon
+														icon={faVideo}
+														className="text-white size-3"
+													/>
+												</div>
+												<p className="text-[13px] text-center text-white">
+													Upload failed
+												</p>
+											</div>
+										) : (
+											<div className="relative size-20 md:size-16">
+												<ProgressCircle
+													progressTextClassName="md:!text-[11px]"
+													subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
+													className="md:scale-[1.5] scale-[1.2]"
+													progress={uploadProgress.progress}
 												/>
 											</div>
-											<p className="text-[13px] text-center text-white">
-												Upload failed
-											</p>
-										</div>
-									) : (
-										<div className="relative size-20 md:size-16">
-											<ProgressCircle
-												progressTextClassName="md:!text-[11px]"
-												subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
-												className="md:scale-[1.5] scale-[1.2]"
-												progress={uploadProgress.progress}
-											/>
-										</div>
-									)}
+										)}
+									</div>
 								</div>
 							</div>
-						) : (
-							<VideoThumbnail
-								videoDuration={cap.duration}
-								imageClass={clsx(
-									anyCapSelected
-										? "opacity-50"
-										: isDropdownOpen
-											? "opacity-30"
-											: "group-hover:opacity-30",
-									"transition-opacity duration-200",
-									// uploadProgress && "opacity-30",
-								)}
-								videoId={cap.id}
-								alt={`${cap.name} Thumbnail`}
-							/>
-						)}
-					</Link>
-					{uploadProgress && (
-						<div className="flex absolute inset-0 z-50 justify-center items-center bg-black rounded-t-xl">
-							{uploadProgress.status === "failed" ? (
-								<div className="flex flex-col items-center">
-									<div className="flex justify-center items-center mb-2 w-8 h-8 bg-red-500 rounded-full">
-										<FontAwesomeIcon
-											icon={faVideo}
-											className="text-white size-3"
-										/>
-									</div>
-									<p className="text-[13px] text-center text-white">
-										Upload failed
-									</p>
-								</div>
-							) : (
-								<div className="relative size-20 md:size-16">
-									<ProgressCircle
-										progressTextClassName="md:!text-[11px]"
-										subTextClassName="!mt-0 md:!text-[7px] !text-[10px] mb-1"
-										className="md:scale-[1.5] scale-[1.2]"
-										progress={uploadProgress.progress}
-									/>
-								</div>
+						) : null}
+
+						<VideoThumbnail
+							videoDuration={cap.duration}
+							imageClass={clsx(
+								anyCapSelected
+									? "opacity-50"
+									: isDropdownOpen
+										? "opacity-30"
+										: "group-hover:opacity-30",
+								"transition-opacity duration-200",
 							)}
-						</div>
-					)}
+							containerClass={clsx(
+								imageStatus !== "success" && uploadProgress
+									? "display-none"
+									: "",
+								"absolute inset-0",
+							)}
+							videoId={cap.id}
+							alt={`${cap.name} Thumbnail`}
+							imageStatus={imageStatus}
+							setImageStatus={setImageStatus}
+						/>
+					</Link>
 				</div>
 				<div
 					className={clsx(
