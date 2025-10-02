@@ -486,7 +486,7 @@ impl Message<StartCapturing> for ScreenCaptureActor {
                 return Err(StartCapturingError::StartCapturer(
                     ::windows::core::Error::new(
                         ::windows::core::HRESULT(0x80004005u32 as i32),
-                        "Capturer thread dropped ready channel".into(),
+                        "Capturer thread dropped ready channel",
                     ),
                 ));
             }
