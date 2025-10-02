@@ -3,7 +3,7 @@ use anyhow::{Context, anyhow};
 use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{Timestamp, Timestamps};
 use futures::{
-    FutureExt, SinkExt, StreamExt,
+    FutureExt, SinkExt, StreamExt, TryFutureExt,
     channel::{mpsc, oneshot},
     future::{BoxFuture, Shared},
     lock::Mutex,
@@ -122,7 +122,25 @@ impl TaskPool {
     {
         self.0.push((
             name,
-            tokio::spawn(future.instrument(error_span!("", name)).in_current_span()),
+            tokio::spawn(
+                future
+                    .instrument(error_span!("", task = name))
+                    .in_current_span(),
+            ),
+        ));
+    }
+
+    pub fn spawn_thread(&mut self, name: &'static str, cb: impl FnOnce() + Send + 'static) {
+        let span = error_span!("", task = name);
+        let (done_tx, done_rx) = oneshot::channel();
+        std::thread::spawn(move || {
+            let _guard = span.enter();
+            cb();
+            done_tx.send(());
+        });
+        self.0.push((
+            name,
+            tokio::spawn(done_rx.map_err(|_| anyhow!("Cancelled"))),
         ));
     }
 }
@@ -155,6 +173,7 @@ impl<TVideo: VideoSource> OutputPipelineBuilder<HasVideo<TVideo>> {
                 Some(video_source.video_info()),
                 Some(AudioMixer::INFO),
                 pause_flag.clone(),
+                &mut setup_ctx.tasks,
             )
             .await?,
         ));
@@ -208,7 +227,7 @@ impl OutputPipelineBuilder<NoVideo> {
             return Err(anyhow!("Invariant: No audio sources"));
         }
 
-        let (setup_ctx, stop_token, done_tx, done_rx, pause_flag) = setup_build();
+        let (mut setup_ctx, stop_token, done_tx, done_rx, pause_flag) = setup_build();
 
         let (first_tx, first_rx) = oneshot::channel();
 
@@ -219,6 +238,7 @@ impl OutputPipelineBuilder<NoVideo> {
                 None,
                 Some(AudioMixer::INFO),
                 pause_flag.clone(),
+                &mut setup_ctx.tasks,
             )
             .await?,
         ));
@@ -702,6 +722,7 @@ pub trait Muxer: Send + 'static {
         video_config: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
         pause_flag: Arc<AtomicBool>,
+        tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
         Self: Sized;

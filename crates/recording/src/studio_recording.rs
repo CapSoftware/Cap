@@ -347,6 +347,7 @@ impl ActorBuilder {
     }
 }
 
+#[tracing::instrument("studio_recording", skip_all)]
 async fn spawn_studio_recording_actor(
     recording_dir: PathBuf,
     base_inputs: RecordingBaseInputs,

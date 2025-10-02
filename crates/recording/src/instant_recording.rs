@@ -175,7 +175,6 @@ pub struct CompletedRecording {
     pub meta: InstantRecordingMeta,
 }
 
-#[tracing::instrument(skip_all, name = "instant")]
 async fn create_pipeline(
     output_path: PathBuf,
     screen_source: ScreenCaptureConfig<ScreenCaptureMethod>,
@@ -248,6 +247,7 @@ impl ActorBuilder {
     }
 }
 
+#[tracing::instrument("instant_recording", skip_all)]
 pub async fn spawn_instant_recording_actor(
     recording_dir: PathBuf,
     inputs: RecordingBaseInputs,

@@ -1,4 +1,7 @@
-use crate::output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer};
+use crate::{
+    TaskPool,
+    output_pipeline::{AudioFrame, AudioMuxer, Muxer, VideoFrame, VideoMuxer},
+};
 use anyhow::{Context, anyhow};
 use cap_enc_ffmpeg::*;
 use cap_media_info::{AudioInfo, VideoInfo};
@@ -36,6 +39,7 @@ impl Muxer for Mp4Muxer {
         video_config: Option<cap_media_info::VideoInfo>,
         audio_config: Option<cap_media_info::AudioInfo>,
         _: Arc<AtomicBool>,
+        tasks: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
@@ -113,6 +117,7 @@ impl Muxer for OggMuxer {
         _: Option<VideoInfo>,
         audio_config: Option<AudioInfo>,
         _: Arc<AtomicBool>,
+        _: &mut TaskPool,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
