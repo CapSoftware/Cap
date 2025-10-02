@@ -241,6 +241,7 @@ pub async fn spawn_instant_recording_actor(
         start_time,
         #[cfg(windows)]
         d3d_device,
+        #[cfg(target_os = "macos")]
         inputs.shareable_content.retained(),
     )
     .await?;

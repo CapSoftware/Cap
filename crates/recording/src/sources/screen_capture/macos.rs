@@ -128,6 +128,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
         let video_tx = self.video_tx.clone();
         let audio_tx = self.audio_tx.clone();
         let config = self.config.clone();
+        let shareable_content = self.shareable_content.clone();
 
         self.tokio_handle
             .block_on(async move {
@@ -137,13 +138,9 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
                 let display = Display::from_id(&config.display)
                     .ok_or_else(|| SourceError::NoDisplay(config.display))?;
 
-                let content = sc::ShareableContent::current()
-                    .await
-                    .map_err(|e| SourceError::CreateActor(e))?;
-
                 let content_filter = display
                     .raw_handle()
-                    .as_content_filter(&content)
+                    .as_content_filter(&shareable_content)
                     .await
                     .ok_or_else(|| SourceError::AsContentFilter)?;
 

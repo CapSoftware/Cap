@@ -449,7 +449,7 @@ pub async fn start_recording(
                             )
                             .await
                             .map_err(|e| {
-                                error!("Failed to spawn studio recording actor: {e}");
+                                error!("Failed to spawn instant recording actor: {e}");
                                 e.to_string()
                             })?;
 
