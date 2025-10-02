@@ -656,15 +656,16 @@ pub async fn singlepart_uploader(
         .map_err(|err| format!("singlepart_uploader/invalid_url: {err:?}"))?;
     let resp = reqwest::Client::builder()
         .retry(
-            reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string()).classify_fn(
-                |req_rep| {
+            reqwest::retry::for_host(url.host().unwrap_or("<unknown>").to_string())
+                .classify_fn(|req_rep| {
                     if req_rep.status().is_some_and(|s| s.is_server_error()) {
                         req_rep.retryable()
                     } else {
                         req_rep.success()
                     }
-                },
-            ),
+                })
+                .max_retries_per_request(5)
+                .max_extra_load(5.0),
         )
         .build()
         .map_err(|err| format!("singlepart_uploader/client: {err:?}"))?
