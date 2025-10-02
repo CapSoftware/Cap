@@ -579,11 +579,11 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
         return Err(format!("Source file {src} does not exist"));
     }
 
-    if !is_screenshot && !is_gif && !is_valid_mp4(src_path) {
+    if !is_screenshot && !is_gif && !is_valid_video(src_path) {
         let mut attempts = 0;
         while attempts < 10 {
             std::thread::sleep(std::time::Duration::from_secs(1));
-            if is_valid_mp4(src_path) {
+            if is_valid_video(src_path) {
                 break;
             }
             attempts += 1;
@@ -626,8 +626,8 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
                     continue;
                 }
 
-                if !is_screenshot && !is_gif && !is_valid_mp4(std::path::Path::new(&dst)) {
-                    last_error = Some("Destination file is not a valid MP4".to_string());
+                if !is_screenshot && !is_gif && !is_valid_video(std::path::Path::new(&dst)) {
+                    last_error = Some("Destination file is not a valid".to_string());
                     let _ = tokio::fs::remove_file(&dst).await;
                     attempts += 1;
                     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
@@ -677,8 +677,16 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
     Err(last_error.unwrap_or_else(|| "Maximum retry attempts exceeded".to_string()))
 }
 
-pub fn is_valid_mp4(path: &std::path::Path) -> bool {
-    ffmpeg::format::input(path).is_ok()
+pub fn is_valid_video(path: &std::path::Path) -> bool {
+    match ffmpeg::format::input(path) {
+        Ok(input_context) => {
+            // Check if we have at least one video stream
+            input_context
+                .streams()
+                .any(|stream| stream.parameters().medium() == ffmpeg::media::Type::Video)
+        }
+        Err(_) => false,
+    }
 }
 
 #[tauri::command]
