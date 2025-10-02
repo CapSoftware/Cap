@@ -39,12 +39,36 @@ export const listWindows = queryOptions({
 		return w;
 	},
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: false,
 });
 
 export const listScreens = queryOptions({
 	queryKey: ["capture", "displays"] as const,
 	queryFn: () => commands.listCaptureDisplays(),
+	reconcile: "id",
+	refetchInterval: 1000,
+});
+
+export const listWindowsWithThumbnails = queryOptions({
+	queryKey: ["capture", "windows-thumbnails"] as const,
+	queryFn: async () => {
+		const w = await commands.listWindowsWithThumbnails();
+
+		w.sort(
+			(a, b) =>
+				a.owner_name.localeCompare(b.owner_name) ||
+				a.name.localeCompare(b.name),
+		);
+
+		return w;
+	},
+	reconcile: "id",
+	refetchInterval: false,
+});
+
+export const listDisplaysWithThumbnails = queryOptions({
+	queryKey: ["capture", "displays-thumbnails"] as const,
+	queryFn: () => commands.listDisplaysWithThumbnails(),
 	reconcile: "id",
 	refetchInterval: 1000,
 });
