@@ -86,9 +86,11 @@ impl output_pipeline::VideoFrame for VideoFrame {
 }
 
 impl ScreenCaptureConfig<Direct3DCapture> {
-	pub async fn to_sources(&self) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
+    pub async fn to_sources(
+        &self,
+    ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
         let (error_tx, error_rx) = oneshot::channel();
-        let (mut video_tx, video_rx) = mpsc::channel(4);
+        let (mut video_tx, video_rx) = flume::bounded(4);
 
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,
@@ -154,13 +156,13 @@ impl ScreenCaptureConfig<Direct3DCapture> {
         .map_err(StartCapturingError::CreateCapturer)?;
 
         Ok((
-	        VideoSourceConfig(
-	            ChannelVideoSourceConfig::new(self.video_info, video_rx),
-	            capturer,
-	            error_rx,
-	        ),
-			self.system_audio.then(|| SystemAudioSourceConfig)
-		))
+            VideoSourceConfig(
+                ChannelVideoSourceConfig::new(self.video_info, video_rx),
+                capturer,
+                error_rx,
+            ),
+            self.system_audio.then(|| SystemAudioSourceConfig),
+        ))
     }
 }
 
@@ -203,7 +205,7 @@ impl output_pipeline::VideoSource for VideoSource {
     }
 
     fn video_info(&self) -> VideoInfo {
-    	self.0.video_info()
+        self.0.video_info()
     }
 
     fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {

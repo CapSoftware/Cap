@@ -531,11 +531,11 @@ impl OutputPipeline {
 
 pub struct ChannelVideoSourceConfig<TVideoFrame> {
     info: VideoInfo,
-    rx: mpsc::Receiver<TVideoFrame>,
+    rx: flume::Receiver<TVideoFrame>,
 }
 
 impl<TVideoFrame> ChannelVideoSourceConfig<TVideoFrame> {
-    pub fn new(info: VideoInfo, rx: mpsc::Receiver<TVideoFrame>) -> Self {
+    pub fn new(info: VideoInfo, rx: flume::Receiver<TVideoFrame>) -> Self {
         Self { info, rx }
     }
 }
@@ -547,7 +547,7 @@ impl<TVideoFrame: VideoFrame> VideoSource for ChannelVideoSource<TVideoFrame> {
     type Frame = TVideoFrame;
 
     async fn setup(
-        mut config: Self::Config,
+        config: Self::Config,
         mut video_tx: mpsc::Sender<Self::Frame>,
         _: &mut SetupCtx,
     ) -> anyhow::Result<Self>
@@ -555,7 +555,7 @@ impl<TVideoFrame: VideoFrame> VideoSource for ChannelVideoSource<TVideoFrame> {
         Self: Sized,
     {
         tokio::spawn(async move {
-            while let Some(frame) = config.rx.next().await {
+            while let Ok(frame) = config.rx.recv_async().await {
                 let _ = video_tx.send(frame).await;
             }
         });

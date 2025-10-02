@@ -58,8 +58,7 @@ impl MakeCapturePipeline for screen_capture::CMSampleBufferCapture {
         }
 
         if let Some(mic_feed) = mic_feed {
-            output = output
-                .with_audio_source::<sources::Microphone>(sources::MicrophoneConfig(mic_feed));
+            output = output.with_audio_source::<sources::Microphone>(mic_feed);
         }
 
         output
@@ -77,7 +76,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
     ) -> anyhow::Result<OutputPipeline> {
-    let d3d_device = screen_capture.1.d3d_device().clone();
+        let d3d_device = screen_capture.1.d3d_device().clone();
 
         OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture)
@@ -97,7 +96,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
     ) -> anyhow::Result<OutputPipeline> {
-    let d3d_device = screen_capture.1.d3d_device().clone();
+        let d3d_device = screen_capture.1.d3d_device().clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture);
 
@@ -106,7 +105,8 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         }
 
         if let Some(system_audio) = system_audio {
-            output_builder = output_builder.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
+            output_builder =
+                output_builder.with_audio_source::<screen_capture::SystemAudioSource>(system_audio);
         }
 
         output_builder
