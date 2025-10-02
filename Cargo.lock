@@ -1178,7 +1178,6 @@ dependencies = [
  "lazy_static",
  "log",
  "md5",
- "mp4",
  "nix 0.29.0",
  "objc",
  "objc2-app-kit",
