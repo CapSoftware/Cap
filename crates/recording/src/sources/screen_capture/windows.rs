@@ -516,8 +516,9 @@ impl Message<StopCapturing> for ScreenCaptureActor {
             error!("Silently failed to stop Windows capturer: {}", e);
         }
 
-        if let Ok(res) = done_rx.await {
-            res.map_err(|e| e.to_string())?;
+        match done_rx.await {
+            Ok(res) => res.map_err(|e| e.to_string())?,
+            Err(_) => return Err("Capturer thread dropped stop channel".to_string()),
         }
 
         info!("stopped windows capturer");
