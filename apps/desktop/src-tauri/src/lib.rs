@@ -2159,10 +2159,21 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             tokio::spawn({
                 let app = app.clone();
                 async move {
-                    resume_uploads(app)
-                        .await
-                        .map_err(|err| warn!("Error resuming uploads: {err}"))
-                        .ok();
+                    let is_new_uploader_enabled = GeneralSettingsStore::get(&app)
+                        .map_err(|err| {
+                            error!(
+                                "Error checking status of new uploader flow from settings: {err}"
+                            )
+                        })
+                        .ok()
+                        .and_then(|v| v.map(|v| v.enable_new_uploader))
+                        .unwrap_or(false);
+                    if is_new_uploader_enabled {
+                        resume_uploads(app)
+                            .await
+                            .map_err(|err| warn!("Error resuming uploads: {err}"))
+                            .ok();
+                    }
                 }
             });
 

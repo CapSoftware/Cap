@@ -5,6 +5,7 @@
 
 // credit @filleduchaos
 
+use crate::api::S3VideoMeta;
 use crate::web_api::ManagerExt;
 use crate::{UploadProgress, VideoUploadInfo};
 use cap_utils::spawn_actor;
@@ -86,17 +87,6 @@ impl S3UploadMeta {
     // pub fn new(id: String) -> Self {
     //     Self { id }
     // }
-}
-
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct S3VideoMeta {
-    #[serde(rename = "durationInSecs")]
-    pub duration_in_secs: f64,
-    pub width: u32,
-    pub height: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fps: Option<f32>,
 }
 
 pub struct UploadedVideo {
