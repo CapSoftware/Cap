@@ -296,8 +296,8 @@ impl Pipeline {
         tokio::spawn(async move {
             while let Some(res) = futures.next().await {
                 if let Err(err) = res {
-                    if tx.borrow().is_none() {
-                        let _ = tx.send(Some(Err(err)));
+                    if completion_tx.borrow().is_none() {
+                        let _ = completion_tx.send(Some(Err(err)));
                     }
                 }
             }
