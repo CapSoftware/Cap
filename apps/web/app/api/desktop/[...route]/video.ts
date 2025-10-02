@@ -2,13 +2,20 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	s3Buckets,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
 import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt, lte, or } from "drizzle-orm";
 import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -34,6 +41,7 @@ app.get(
 			width: stringOrNumberOptional,
 			height: stringOrNumberOptional,
 			fps: stringOrNumberOptional,
+			orgId: z.string().optional(),
 		}),
 	),
 	async (c) => {
@@ -47,6 +55,7 @@ app.get(
 				width,
 				height,
 				fps,
+				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
 
@@ -71,8 +80,6 @@ app.get(
 				.from(s3Buckets)
 				.where(eq(s3Buckets.ownerId, user.id));
 
-			console.log("User bucket:", customBucket ? "found" : "not found");
-
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
 				"default",
@@ -85,7 +92,7 @@ app.get(
 					.from(videos)
 					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,7 +100,58 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
+			}
+
+			const userOrganizations = await db()
+				.select({
+					id: organizations.id,
+					name: organizations.name,
+				})
+				.from(organizations)
+				.leftJoin(
+					organizationMembers,
+					eq(organizations.id, organizationMembers.organizationId),
+				)
+				.where(
+					or(
+						// User owns the organization
+						eq(organizations.ownerId, user.id),
+						// User is a member of the organization
+						eq(organizationMembers.userId, user.id),
+					),
+				)
+				// Remove duplicates if user is both owner and member
+				.groupBy(organizations.id, organizations.name)
+				.orderBy(organizations.createdAt);
+			const userOrgIds = userOrganizations.map((org) => org.id);
+
+			let videoOrgId: string;
+			if (orgId) {
+				// Hard error if the user requested org is non-existent or they don't have access.
+				if (!userOrgIds.includes(orgId))
+					return c.json({ error: "forbidden_org" }, { status: 403 });
+				videoOrgId = orgId;
+			} else if (user.defaultOrgId) {
+				// User's defaultOrgId is no longer valid, switch to first available org
+				if (!userOrgIds.includes(user.defaultOrgId)) {
+					if (!userOrganizations[0])
+						return c.json({ error: "no_valid_org" }, { status: 403 });
+
+					videoOrgId = userOrganizations[0].id;
+
+					// Update user's defaultOrgId to the new valid org
+					await db()
+						.update(users)
+						.set({
+							defaultOrgId: videoOrgId,
+						})
+						.where(eq(users.id, user.id));
+				} else videoOrgId = user.defaultOrgId;
+			} else {
+				// No orgId provided and no defaultOrgId, use first available org
+				if (!userOrganizations[0])
+					return c.json({ error: "no_valid_org" }, { status: 403 });
+				videoOrgId = userOrganizations[0].id;
 			}
 
 			const idToUse = Video.VideoId.make(nanoId());
@@ -108,6 +166,7 @@ app.get(
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
+					orgId: videoOrgId,
 					source:
 						recordingMode === "hls"
 							? { type: "local" as const }
