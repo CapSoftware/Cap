@@ -22,6 +22,7 @@ import {
 	Show,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import CapTooltip from "~/components/Tooltip";
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
 import {
@@ -30,7 +31,6 @@ import {
 	type RecordingMetaWithMetadata,
 	type UploadProgress,
 } from "~/utils/tauri";
-import CapTooltip from "~/components/Tooltip";
 
 type Recording = {
 	meta: RecordingMetaWithMetadata;
