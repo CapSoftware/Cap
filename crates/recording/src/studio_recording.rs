@@ -13,7 +13,9 @@ use anyhow::{Context as _, anyhow};
 use cap_media_info::VideoInfo;
 use cap_project::{CursorEvents, StudioRecordingMeta};
 use cap_timestamp::{Timestamp, Timestamps};
-use futures::{FutureExt, StreamExt, channel::mpsc, future::OptionFuture};
+use futures::{
+    FutureExt, StreamExt, channel::mpsc, future::OptionFuture, stream::FuturesUnordered,
+};
 use kameo::{Actor as _, prelude::*};
 use relative_path::RelativePathBuf;
 use std::{
@@ -273,6 +275,33 @@ impl Pipeline {
             system_audio: system_audio.transpose()?,
             cursor: self.cursor,
         })
+    }
+
+    fn spawn_watcher(&self, completion_tx: watch::Sender<Option<Result<(), PipelineDoneError>>>) {
+        let mut futures = FuturesUnordered::new();
+        futures.push(self.screen.done_fut());
+
+        if let Some(ref microphone) = self.microphone {
+            futures.push(microphone.done_fut());
+        }
+
+        if let Some(ref camera) = self.camera {
+            futures.push(camera.done_fut());
+        }
+
+        if let Some(ref system_audio) = self.system_audio {
+            futures.push(system_audio.done_fut());
+        }
+
+        tokio::spawn(async move {
+            while let Some(res) = futures.next().await {
+                if let Err(err) = res {
+                    if completion_tx.borrow().is_none() {
+                        let _ = completion_tx.send(Some(Err(err)));
+                    }
+                }
+            }
+        });
     }
 }
 
@@ -568,7 +597,7 @@ impl SegmentPipelineFactory {
         cursors: Cursors,
         next_cursors_id: u32,
     ) -> anyhow::Result<Pipeline> {
-        let result = create_segment_pipeline(
+        let pipeline = create_segment_pipeline(
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
@@ -585,44 +614,10 @@ impl SegmentPipelineFactory {
 
         self.index += 1;
 
-        spawn_pipeline_watchers(&result, &self.completion_tx);
+        pipeline.spawn_watcher(self.completion_tx.clone());
 
-        Ok(result)
+        Ok(pipeline)
     }
-}
-
-fn spawn_pipeline_watchers(
-    pipeline: &Pipeline,
-    completion_tx: &watch::Sender<Option<Result<(), PipelineDoneError>>>,
-) {
-    for fut in collect_pipeline_done_futs(pipeline) {
-        let tx = completion_tx.clone();
-        tokio::spawn(async move {
-            if let Err(err) = fut.await {
-                if tx.borrow().is_none() {
-                    let _ = tx.send(Some(Err(err)));
-                }
-            }
-        });
-    }
-}
-
-fn collect_pipeline_done_futs(pipeline: &Pipeline) -> Vec<DoneFut> {
-    let mut futures = vec![pipeline.screen.done_fut()];
-
-    if let Some(ref microphone) = pipeline.microphone {
-        futures.push(microphone.done_fut());
-    }
-
-    if let Some(ref camera) = pipeline.camera {
-        futures.push(camera.done_fut());
-    }
-
-    if let Some(ref system_audio) = pipeline.system_audio {
-        futures.push(system_audio.done_fut());
-    }
-
-    futures
 }
 
 fn completion_rx_to_done_fut(
