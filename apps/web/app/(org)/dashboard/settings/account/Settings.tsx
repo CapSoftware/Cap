@@ -124,13 +124,14 @@ export const Settings = ({
 					</div>
 
 					<Select
+						placeholder="Default organization"
 						value={
 							defaultOrgId ??
 							user?.defaultOrgId ??
 							organizationData?.[0]?.organization.id ??
 							""
 						}
-						onChange={(value) => setDefaultOrgId(value)}
+						onValueChange={(value) => setDefaultOrgId(value)}
 						options={(organizationData || []).map((org) => ({
 							value: org.organization.id,
 							label: org.organization.name,
