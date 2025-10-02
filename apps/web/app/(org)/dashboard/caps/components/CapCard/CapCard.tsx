@@ -555,9 +555,7 @@ export const CapCard = ({
 								"transition-opacity duration-200",
 							)}
 							containerClass={clsx(
-								imageStatus !== "success" && uploadProgress
-									? "display-none"
-									: "",
+								imageStatus !== "success" && uploadProgress ? "hidden" : "",
 								"absolute inset-0",
 							)}
 							videoId={cap.id}

@@ -1707,11 +1707,12 @@ async fn handle_recording_finish(
                         .map_err(|error| {
                             error!("Error in upload_video: {error}");
 
-                            let mut meta = RecordingMeta::load_for_project(&recording_dir).unwrap();
-                            meta.upload = Some(UploadMeta::Failed { error });
-                            meta.save_for_project()
-                                .map_err(|e| format!("Failed to save recording meta: {e}"))
-                                .ok();
+                            if let Ok(mut meta) = RecordingMeta::load_for_project(&recording_dir) {
+                                meta.upload = Some(UploadMeta::Failed { error });
+                                meta.save_for_project()
+                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                    .ok();
+                            }
                         })
                         .ok();
                     }

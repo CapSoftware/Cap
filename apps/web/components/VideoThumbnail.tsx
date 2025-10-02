@@ -3,7 +3,7 @@ import { queryOptions, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import moment from "moment";
 import Image from "next/image";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef } from "react";
 
 export type ImageLoadingStatus = "loading" | "success" | "error";
 
