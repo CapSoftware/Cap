@@ -82,6 +82,7 @@ use tauri_specta::Event;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
+use web_api::AuthedApiError;
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
 
@@ -1070,7 +1071,7 @@ async fn upload_exported_video(
 
     channel.send(UploadProgress { progress: 0.0 }).ok();
 
-    let s3_config = async {
+    let s3_config = match async {
         let video_id = match mode {
             UploadMode::Initial { pre_created_video } => {
                 if let Some(pre_created) = pre_created_video {
@@ -1080,7 +1081,7 @@ async fn upload_exported_video(
             }
             UploadMode::Reupload => {
                 let Some(sharing) = meta.sharing.clone() else {
-                    return Err("No sharing metadata found".to_string());
+                    return Err("No sharing metadata found".into());
                 };
 
                 Some(sharing.id)
@@ -1096,7 +1097,13 @@ async fn upload_exported_video(
         )
         .await
     }
-    .await?;
+    .await
+    {
+        Ok(data) => data,
+        Err(AuthedApiError::InvalidAuthentication) => return Ok(UploadResult::NotAuthenticated),
+        Err(AuthedApiError::UpgradeRequired) => return Ok(UploadResult::UpgradeRequired),
+        Err(err) => return Err(err.to_string()),
+    };
 
     let upload_id = s3_config.id().to_string();
 
@@ -1129,11 +1136,12 @@ async fn upload_exported_video(
             NotificationType::ShareableLinkCopied.send(&app);
             Ok(UploadResult::Success(uploaded_video.link))
         }
+        Err(AuthedApiError::UpgradeRequired) => Ok(UploadResult::UpgradeRequired),
         Err(e) => {
             error!("Failed to upload video: {e}");
 
             NotificationType::UploadFailed.send(&app);
-            Err(e)
+            Err(e.to_string().into())
         }
     }
 }
@@ -1540,16 +1548,10 @@ async fn check_upgraded_and_update(app: AppHandle) -> Result<bool, String> {
         .await
         .map_err(|e| {
             println!("Failed to fetch plan: {e}");
-            format!("Failed to fetch plan: {e}")
+            e.to_string()
         })?;
 
     println!("Plan fetch response status: {}", response.status());
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-        println!("Unauthorized response, clearing auth store");
-        AuthStore::set(&app, None).map_err(|e| e.to_string())?;
-        return Ok(false);
-    }
-
     let plan_data = response.json::<serde_json::Value>().await.map_err(|e| {
         println!("Failed to parse plan response: {e}");
         format!("Failed to parse plan response: {e}")

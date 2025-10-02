@@ -265,7 +265,7 @@ fn normalize_thumbnail_dimensions(image: &image::RgbaImage) -> image::RgbaImage 
 async fn capture_thumbnail_from_filter(filter: &cidre::sc::ContentFilter) -> Option<String> {
     use cidre::{cv, sc};
     use image::{ImageEncoder, RgbaImage, codecs::png::PngEncoder};
-    use std::{io::Cursor, slice};
+    use std::io::Cursor;
 
     let mut config = sc::StreamCfg::new();
     config.set_width(THUMBNAIL_WIDTH as usize);
