@@ -81,7 +81,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use tokio::sync::{RwLock, oneshot};
-use tracing::{error, trace};
+use tracing::{error, trace, warn};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
 use web_api::ManagerExt as WebManagerExt;
 use windows::{CapWindowId, EditorWindowIds, ShowCapWindow, set_window_transparent};
@@ -1121,7 +1121,9 @@ async fn upload_exported_video(
         file_path: file_path.clone(),
         screenshot_path: screenshot_path.clone(),
     });
-    meta.save_for_project().ok();
+    meta.save_for_project()
+        .map_err(|e| error!("Failed to save recording meta: {e}"))
+        .ok();
 
     match upload_video(
         &app,
@@ -1141,7 +1143,9 @@ async fn upload_exported_video(
                 link: uploaded_video.link.clone(),
                 id: uploaded_video.id.clone(),
             });
-            meta.save_for_project().ok();
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
 
             let _ = app
                 .state::<ArcLock<ClipboardContext>>()
@@ -1156,6 +1160,12 @@ async fn upload_exported_video(
             error!("Failed to upload video: {e}");
 
             NotificationType::UploadFailed.send(&app);
+
+            meta.upload = Some(UploadMeta::Failed { error: e.clone() });
+            meta.save_for_project()
+                .map_err(|e| error!("Failed to save recording meta: {e}"))
+                .ok();
+
             Err(e)
         }
     }
@@ -2147,6 +2157,16 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 });
             }
 
+            tokio::spawn({
+                let app = app.clone();
+                async move {
+                    resume_uploads(app)
+                        .await
+                        .map_err(|err| warn!("Error resuming uploads: {err}"))
+                        .ok();
+                }
+            });
+
             {
                 app.manage(Arc::new(RwLock::new(App {
                     camera_ws_port,
@@ -2412,6 +2432,39 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             }
             _ => {}
         });
+}
+
+async fn resume_uploads(app: AppHandle) -> Result<(), String> {
+    let recordings_dir = recordings_path(&app);
+    (!recordings_dir.exists()).then(|| format!("Recording directory missing"))?;
+
+    let entries = std::fs::read_dir(&recordings_dir)
+        .map_err(|e| format!("Failed to read recordings directory: {}", e))?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.extension().and_then(|s| s.to_str()) == Some("cap") {
+            if let Some(upload_meta) = RecordingMeta::load_for_project(&path)
+                .ok()
+                .and_then(|v| v.upload)
+            {
+                match upload_meta {
+                    UploadMeta::MultipartUpload { video_id } => {
+                        // TODO: Resume `MultipartUpload`
+                    }
+                    UploadMeta::SinglePartUpload {
+                        video_id,
+                        file_path,
+                        screenshot_path,
+                    } => {
+                        // TODO: Resume `SinglePartUpload`
+                    }
+                    UploadMeta::Failed { .. } | UploadMeta::Complete => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 async fn create_editor_instance_impl(

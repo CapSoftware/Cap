@@ -325,7 +325,10 @@ impl InstantMultipartUpload {
         project_meta.upload = Some(UploadMeta::MultipartUpload {
             video_id: video_id.clone(),
         });
-        project_meta.save_for_project().ok();
+        project_meta
+            .save_for_project()
+            .map_err(|e| error!("Failed to save recording meta: {e}"))
+            .ok();
 
         // TODO: Allow injecting this for Studio mode upload
         // let file = File::open(path).await.unwrap(); // TODO: Error handling

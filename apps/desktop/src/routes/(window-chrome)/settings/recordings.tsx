@@ -13,11 +13,11 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import * as shell from "@tauri-apps/plugin-shell";
 import { cx } from "cva";
 import {
+	createEffect,
 	createMemo,
 	createSignal,
 	For,
 	type JSX,
-	onCleanup,
 	type ParentProps,
 	Show,
 } from "solid-js";
@@ -76,6 +76,8 @@ const recordingsQuery = queryOptions({
 		);
 		return recordings;
 	},
+	// This will ensure any changes to the upload status in the project meta are reflected.
+	refetchInterval: 2000,
 });
 
 export default function Recordings() {
@@ -189,7 +191,7 @@ export default function Recordings() {
 										recording.meta.upload &&
 										(recording.meta.upload.state === "MultipartUpload" ||
 											recording.meta.upload.state === "SinglePartUpload")
-											? uploadProgress[recording.meta.upload.cap_id]
+											? uploadProgress[recording.meta.upload.video_id]
 											: undefined
 									}
 								/>
@@ -286,26 +288,23 @@ function RecordingItem(props: {
 			</div>
 			<div class="flex gap-2 items-center">
 				<Show when={mode() === "studio"}>
+					<Show when={props.uploadProgress}>
+						<CapTooltip content={`${(props.uploadProgress || 0).toFixed(2)}%`}>
+							<ProgressCircle
+								variant="primary"
+								progress={props.uploadProgress || 0}
+								size="sm"
+							/>
+						</CapTooltip>
+					</Show>
 					<Show when={props.recording.meta.sharing}>
 						{(sharing) => (
-							<>
-								<Show when={props.uploadProgress}>
-									<CapTooltip content={`${props.uploadProgress || 0}%`}>
-										<ProgressCircle
-											variant="primary"
-											progress={props.uploadProgress || 0}
-											size="sm"
-										/>
-									</CapTooltip>
-								</Show>
-
-								<TooltipIconButton
-									tooltipText="Open link"
-									onClick={() => shell.open(sharing().link)}
-								>
-									<IconCapLink class="size-4" />
-								</TooltipIconButton>
-							</>
+							<TooltipIconButton
+								tooltipText="Open link"
+								onClick={() => shell.open(sharing().link)}
+							>
+								<IconCapLink class="size-4" />
+							</TooltipIconButton>
 						)}
 					</Show>
 					<TooltipIconButton

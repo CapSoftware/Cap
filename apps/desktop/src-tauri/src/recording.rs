@@ -2,7 +2,8 @@ use cap_fail::fail;
 use cap_project::{
     CursorClickEvent, InstantRecordingMeta, MultipleSegments, Platform, ProjectConfiguration,
     RecordingMeta, RecordingMetaInner, SharingMeta, StudioRecordingMeta, StudioRecordingStatus,
-    TimelineConfiguration, TimelineSegment, ZoomMode, ZoomSegment, cursor::CursorEvents,
+    TimelineConfiguration, TimelineSegment, UploadMeta, ZoomMode, ZoomSegment,
+    cursor::CursorEvents,
 };
 use cap_recording::{
     RecordingError, RecordingMode,
@@ -806,6 +807,7 @@ async fn handle_recording_finish(
 
             spawn_actor({
                 let video_upload_info = video_upload_info.clone();
+                let recording_dir = recording_dir.clone();
 
                 async move {
                     let video_upload_succeeded = match progressive_upload
@@ -857,7 +859,7 @@ async fn handle_recording_finish(
                             .map_err(|err| error!("Error getting video metdata: {}", err))
                         {
                             // The upload_video function handles screenshot upload, so we can pass it along
-                            match upload_video(
+                            upload_video(
                                 &app,
                                 video_upload_info.id.clone(),
                                 output_path,
@@ -866,16 +868,20 @@ async fn handle_recording_finish(
                                 None,
                             )
                             .await
-                            {
-                                Ok(_) => {
-                                    info!(
-                                        "Final video upload with screenshot completed successfully"
-                                    )
-                                }
-                                Err(e) => {
-                                    error!("Error in final upload with screenshot: {}", e)
-                                }
-                            }
+                            .map(|_| {
+                                info!("Final video upload with screenshot completed successfully")
+                            })
+                            .map_err(|error| {
+                                error!("Error in upload_video: {error}");
+
+                                let mut meta =
+                                    RecordingMeta::load_for_project(&recording_dir).unwrap();
+                                meta.upload = Some(UploadMeta::Failed { error });
+                                meta.save_for_project()
+                                    .map_err(|e| format!("Failed to save recording meta: {e}"))
+                                    .ok();
+                            })
+                            .ok();
                         }
                     }
                 }
