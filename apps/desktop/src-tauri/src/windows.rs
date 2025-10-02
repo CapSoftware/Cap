@@ -29,9 +29,6 @@ use crate::{
 };
 
 #[cfg(target_os = "macos")]
-use crate::ScreenCapturePrewarmer;
-
-#[cfg(target_os = "macos")]
 const DEFAULT_TRAFFIC_LIGHTS_INSET: LogicalPosition<f64> = LogicalPosition::new(12.0, 12.0);
 
 #[derive(Clone, Deserialize, Type)]
@@ -282,7 +279,8 @@ impl ShowCapWindow {
                 {
                     let app_handle = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        let prewarmer = app_handle.state::<ScreenCapturePrewarmer>();
+                        let prewarmer =
+                            app_handle.state::<crate::platform::ScreenCapturePrewarmer>();
                         prewarmer.request(false).await;
                     });
 

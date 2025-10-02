@@ -19,6 +19,7 @@ mod presets;
 mod recording;
 mod recording_settings;
 mod target_select_overlay;
+mod thumbnails;
 mod tray;
 mod upload;
 mod web_api;
@@ -333,81 +334,6 @@ pub struct NewNotification {
     title: String,
     body: String,
     is_error: bool,
-}
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PrewarmState {
-    Idle,
-    Warming,
-    Warmed,
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) struct ScreenCapturePrewarmer {
-    state: Mutex<PrewarmState>,
-}
-
-#[cfg(target_os = "macos")]
-impl Default for ScreenCapturePrewarmer {
-    fn default() -> Self {
-        Self {
-            state: Mutex::new(PrewarmState::Idle),
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl ScreenCapturePrewarmer {
-    async fn request(&self, force: bool) {
-        let should_start = {
-            let mut state = self.state.lock().await;
-
-            if force {
-                *state = PrewarmState::Idle;
-            }
-
-            match *state {
-                PrewarmState::Idle => {
-                    *state = PrewarmState::Warming;
-                    true
-                }
-                PrewarmState::Warming => {
-                    trace!("ScreenCaptureKit prewarm already in progress");
-                    false
-                }
-                PrewarmState::Warmed => {
-                    if force {
-                        *state = PrewarmState::Warming;
-                        true
-                    } else {
-                        trace!("ScreenCaptureKit cache already warmed");
-                        false
-                    }
-                }
-            }
-        };
-
-        if !should_start {
-            return;
-        }
-
-        let warm_start = std::time::Instant::now();
-        let result = crate::platform::prewarm_shareable_content().await;
-
-        let mut state = self.state.lock().await;
-        match result {
-            Ok(()) => {
-                let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
-                *state = PrewarmState::Warmed;
-                trace!(elapsed_ms, "ScreenCaptureKit cache warmed");
-            }
-            Err(error) => {
-                *state = PrewarmState::Idle;
-                tracing::warn!(error = %error, "ScreenCaptureKit prewarm failed");
-            }
-        }
-    }
 }
 
 type ArcLock<T> = Arc<RwLock<T>>;
@@ -2163,7 +2089,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
             #[cfg(target_os = "macos")]
-            app.manage(ScreenCapturePrewarmer::default());
+            app.manage(crate::platform::ScreenCapturePrewarmer::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2295,7 +2221,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
 
             #[cfg(target_os = "macos")]
             RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
-                let prewarmer = app.state::<ScreenCapturePrewarmer>();
+                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
                 prewarmer.request(event.force).await;
             });
 

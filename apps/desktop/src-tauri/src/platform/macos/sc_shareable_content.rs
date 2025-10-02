@@ -165,3 +165,74 @@ impl ShareableContentCache {
         self.windows.get(&id).cloned()
     }
 }
+
+pub(crate) struct ScreenCapturePrewarmer {
+    state: Mutex<PrewarmState>,
+}
+
+impl Default for ScreenCapturePrewarmer {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(PrewarmState::Idle),
+        }
+    }
+}
+
+impl ScreenCapturePrewarmer {
+    pub async fn request(&self, force: bool) {
+        let should_start = {
+            let mut state = self.state.lock().await;
+
+            if force {
+                *state = PrewarmState::Idle;
+            }
+
+            match *state {
+                PrewarmState::Idle => {
+                    *state = PrewarmState::Warming;
+                    true
+                }
+                PrewarmState::Warming => {
+                    trace!("ScreenCaptureKit prewarm already in progress");
+                    false
+                }
+                PrewarmState::Warmed => {
+                    if force {
+                        *state = PrewarmState::Warming;
+                        true
+                    } else {
+                        trace!("ScreenCaptureKit cache already warmed");
+                        false
+                    }
+                }
+            }
+        };
+
+        if !should_start {
+            return;
+        }
+
+        let warm_start = std::time::Instant::now();
+        let result = crate::platform::prewarm_shareable_content().await;
+
+        let mut state = self.state.lock().await;
+        match result {
+            Ok(()) => {
+                let elapsed_ms = warm_start.elapsed().as_micros() as f64 / 1000.0;
+                *state = PrewarmState::Warmed;
+                trace!(elapsed_ms, "ScreenCaptureKit cache warmed");
+            }
+            Err(error) => {
+                *state = PrewarmState::Idle;
+                tracing::warn!(error = %error, "ScreenCaptureKit prewarm failed");
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PrewarmState {
+    Idle,
+    Warming,
+    Warmed,
+}

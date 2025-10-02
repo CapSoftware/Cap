@@ -140,7 +140,7 @@ impl PipelineSourceTask for ScreenCaptureSource<CMSampleBufferCapture> {
 
                 let content_filter = display
                     .raw_handle()
-                    .as_content_filter(&shareable_content)
+                    .as_content_filter(shareable_content)
                     .await
                     .ok_or_else(|| SourceError::AsContentFilter)?;
 

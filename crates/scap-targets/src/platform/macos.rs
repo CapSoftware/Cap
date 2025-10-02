@@ -179,7 +179,10 @@ impl DisplayImpl {
 }
 
 impl DisplayImpl {
-    pub async fn as_sc(&self, content: &sc::ShareableContent) -> Option<arc::R<sc::Display>> {
+    pub async fn as_sc(
+        &self,
+        content: arc::R<sc::ShareableContent>,
+    ) -> Option<arc::R<sc::Display>> {
         content
             .displays()
             .iter()
@@ -189,7 +192,7 @@ impl DisplayImpl {
 
     pub async fn as_content_filter(
         &self,
-        content: &sc::ShareableContent,
+        content: arc::R<sc::ShareableContent>,
     ) -> Option<arc::R<sc::ContentFilter>> {
         self.as_content_filter_excluding_windows(content, vec![])
             .await
@@ -197,7 +200,7 @@ impl DisplayImpl {
 
     pub async fn as_content_filter_excluding_windows(
         &self,
-        content: &sc::ShareableContent,
+        content: arc::R<sc::ShareableContent>,
         windows: Vec<arc::R<sc::Window>>,
     ) -> Option<arc::R<sc::ContentFilter>> {
         let display = content
@@ -476,7 +479,7 @@ impl WindowImpl {
         }
     }
 
-    pub async fn as_sc(&self, content: &sc::ShareableContent) -> Option<arc::R<sc::Window>> {
+    pub async fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {
         content
             .windows()
             .iter()
