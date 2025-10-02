@@ -22,7 +22,6 @@ use windows::{
 /// Muxes to MP4 using a combination of FFmpeg and Media Foundation
 pub struct WindowsMuxer {
     video_tx: SyncSender<(scap_direct3d::Frame, Duration)>,
-    first_frame_tx: Option<SyncSender<Duration>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
 }
@@ -56,8 +55,6 @@ impl Muxer for WindowsMuxer {
         let audio_encoder = audio_config
             .map(|config| AACEncoder::init(config, &mut output))
             .transpose()?;
-
-        let (first_frame_tx, first_frame_rx) = sync_channel::<Duration>(1);
 
         let output = Arc::new(Mutex::new(output));
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -193,7 +190,6 @@ impl Muxer for WindowsMuxer {
 
         Ok(Self {
             video_tx,
-            first_frame_tx: Some(first_frame_tx),
             output,
             audio_encoder,
         })
@@ -216,10 +212,6 @@ impl VideoMuxer for WindowsMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        if let Some(first_frame_tx) = self.first_frame_tx.take() {
-            let _ = first_frame_tx.send(timestamp);
-        }
-
         Ok(self.video_tx.send((frame.frame, timestamp))?)
     }
 }

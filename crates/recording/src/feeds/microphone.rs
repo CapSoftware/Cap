@@ -15,7 +15,6 @@ use std::{
 };
 use tracing::{debug, error, info, trace, warn};
 
-
 pub type MicrophonesMap = IndexMap<String, (Device, SupportedStreamConfig)>;
 
 #[derive(Clone)]

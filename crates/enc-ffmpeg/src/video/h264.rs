@@ -2,11 +2,11 @@ use std::time::Duration;
 
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
+    Dictionary,
     codec::{codec::Codec, context, encoder},
     format::{self},
     frame,
     threading::Config,
-    Dictionary,
 };
 use tracing::{debug, error};
 
