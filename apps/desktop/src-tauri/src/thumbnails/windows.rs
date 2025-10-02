@@ -1,3 +1,5 @@
+use super::*;
+
 pub async fn capture_display_thumbnail(display: &scap_targets::Display) -> Option<String> {
     use image::{ColorType, ImageEncoder, codecs::png::PngEncoder};
     use scap_direct3d::{Capturer, Settings};
