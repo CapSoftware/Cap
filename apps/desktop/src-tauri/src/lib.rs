@@ -421,11 +421,6 @@ async fn create_screenshot(
     println!("Creating screenshot: input={input:?}, output={output:?}, size={size:?}");
 
     let result: Result<(), String> = tokio::task::spawn_blocking(move || -> Result<(), String> {
-        ffmpeg::init().map_err(|e| {
-            eprintln!("Failed to initialize ffmpeg: {e}");
-            e.to_string()
-        })?;
-
         let mut ictx = ffmpeg::format::input(&input).map_err(|e| {
             eprintln!("Failed to create input context: {e}");
             e.to_string()
@@ -683,10 +678,6 @@ async fn copy_file_to_path(app: AppHandle, src: String, dst: String) -> Result<(
 }
 
 pub fn is_valid_mp4(path: &std::path::Path) -> bool {
-    if let Err(_) = ffmpeg::init() {
-        return false;
-    }
-
     ffmpeg::format::input(path).is_ok()
 }
 
@@ -872,8 +863,6 @@ async fn get_video_metadata(path: PathBuf) -> Result<VideoRecordingMetadata, Str
     let recording_meta = RecordingMeta::load_for_project(&path).map_err(|v| v.to_string())?;
 
     fn get_duration_for_path(path: PathBuf) -> Result<f64, String> {
-        ffmpeg::init().map_err(|e| format!("Failed to initialize ffmpeg: {e}"))?;
-
         let input =
             ffmpeg::format::input(&path).map_err(|e| format!("Failed to open video file: {e}"))?;
 
@@ -1826,6 +1815,12 @@ type LoggingHandle = tracing_subscriber::reload::Handle<Option<DynLoggingLayer>,
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub async fn run(recording_logging_handle: LoggingHandle) {
+    ffmpeg::init()
+        .map_err(|e| {
+            error!("Failed to initialize ffmpeg: {e}");
+        })
+        .ok();
+
     let tauri_context = tauri::generate_context!();
 
     let specta_builder = tauri_specta::Builder::new()
