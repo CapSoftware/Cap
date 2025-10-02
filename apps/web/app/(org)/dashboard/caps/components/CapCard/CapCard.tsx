@@ -43,6 +43,7 @@ import { SharingDialog } from "../SharingDialog";
 import { CapCardAnalytics } from "./CapCardAnalytics";
 import { CapCardButton } from "./CapCardButton";
 import { CapCardContent } from "./CapCardContent";
+import { useFeatureFlag } from "@/app/Layout/features";
 
 export interface CapCardProps extends PropsWithChildren {
 	cap: {
@@ -175,6 +176,7 @@ export const CapCard = ({
 		cap.id,
 		cap.hasActiveUpload || false,
 	);
+	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
 	const [imageStatus, setImageStatus] = useState<ImageLoadingStatus>("loading");
 
 	// Helper function to create a drag preview element
@@ -367,7 +369,10 @@ export const CapCard = ({
 							e.stopPropagation();
 							handleDownload();
 						}}
-						disabled={downloadMutation.isPending || cap.hasActiveUpload}
+						disabled={
+							downloadMutation.isPending ||
+							(enableBetaUploadProgress && cap.hasActiveUpload)
+						}
 						className="delay-25"
 						icon={() => {
 							return downloadMutation.isPending ? (
@@ -425,7 +430,10 @@ export const CapCard = ({
 											error: "Failed to duplicate cap",
 										});
 									}}
-									disabled={duplicateMutation.isPending || cap.hasActiveUpload}
+									disabled={
+										duplicateMutation.isPending ||
+										(enableBetaUploadProgress && cap.hasActiveUpload)
+									}
 									className="flex gap-2 items-center rounded-lg"
 								>
 									<FontAwesomeIcon className="size-3" icon={faCopy} />
@@ -514,7 +522,7 @@ export const CapCard = ({
 						href={`/s/${cap.id}`}
 					>
 						{imageStatus !== "success" && uploadProgress ? (
-							<div className="absolute inset-0 w-full h-full z-20">
+							<div className="relative inset-0 w-full h-full z-20">
 								<div className="overflow-hidden relative mx-auto w-full h-full rounded-t-xl border-b border-gray-3 aspect-video bg-black z-5">
 									<div className="flex absolute inset-0 justify-center items-center rounded-t-xl">
 										{uploadProgress.status === "failed" ? (
