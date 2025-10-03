@@ -477,7 +477,7 @@ export const CapCard = ({
 				{!sharedCapCard && onSelectToggle && (
 					<div
 						className={clsx(
-							"absolute top-2 left-2 z-[51] duration-200",
+							"absolute top-2 left-2 z-[49] duration-200",
 							isSelected || anyCapSelected || isDropdownOpen
 								? "opacity-100"
 								: "group-hover:opacity-100 opacity-0",

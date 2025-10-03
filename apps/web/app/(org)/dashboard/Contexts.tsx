@@ -102,7 +102,7 @@ export function DashboardContexts({
 				(member) =>
 					member.userId === user.id &&
 					member.organizationId === space.organizationId &&
-					member.role === "MEMBER",
+					member.role === "member",
 			),
 		) || null;
 

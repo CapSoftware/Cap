@@ -38,6 +38,12 @@ async listCaptureWindows() : Promise<CaptureWindow[]> {
 async listCaptureDisplays() : Promise<CaptureDisplay[]> {
     return await TAURI_INVOKE("list_capture_displays");
 },
+async listDisplaysWithThumbnails() : Promise<CaptureDisplayWithThumbnail[]> {
+    return await TAURI_INVOKE("list_displays_with_thumbnails");
+},
+async listWindowsWithThumbnails() : Promise<CaptureWindowWithThumbnail[]> {
+    return await TAURI_INVOKE("list_windows_with_thumbnails");
+},
 async takeScreenshot() : Promise<null> {
     return await TAURI_INVOKE("take_screenshot");
 },
@@ -263,6 +269,9 @@ async displayInformation(displayId: string) : Promise<DisplayInformation> {
 async getWindowIcon(windowId: string) : Promise<string | null> {
     return await TAURI_INVOKE("get_window_icon", { windowId });
 },
+async focusWindow(windowId: WindowId) : Promise<null> {
+    return await TAURI_INVOKE("focus_window", { windowId });
+},
 async editorDeleteProject() : Promise<null> {
     return await TAURI_INVOKE("editor_delete_project");
 }
@@ -290,6 +299,7 @@ renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenRecordingPicker: RequestOpenRecordingPicker,
 requestOpenSettings: RequestOpenSettings,
+requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestStartRecording: RequestStartRecording,
 targetUnderCursor: TargetUnderCursor
 }>({
@@ -311,6 +321,7 @@ renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenRecordingPicker: "request-open-recording-picker",
 requestOpenSettings: "request-open-settings",
+requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestStartRecording: "request-start-recording",
 targetUnderCursor: "target-under-cursor"
 })
@@ -351,7 +362,9 @@ export type CaptionSegment = { id: string; start: number; end: number; text: str
 export type CaptionSettings = { enabled: boolean; font: string; size: number; color: string; backgroundColor: string; backgroundOpacity: number; position: string; bold: boolean; italic: boolean; outline: boolean; outlineColor: string; exportWithSubtitles: boolean }
 export type CaptionsData = { segments: CaptionSegment[]; settings: CaptionSettings }
 export type CaptureDisplay = { id: DisplayId; name: string; refresh_rate: number }
+export type CaptureDisplayWithThumbnail = { id: DisplayId; name: string; refresh_rate: number; thumbnail: string | null }
 export type CaptureWindow = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number }
+export type CaptureWindowWithThumbnail = { id: WindowId; owner_name: string; name: string; bounds: LogicalBounds; refresh_rate: number; thumbnail: string | null; app_icon: string | null }
 export type ClipConfiguration = { index: number; offsets: ClipOffsets }
 export type ClipOffsets = { camera?: number; mic?: number; system_audio?: number }
 export type CommercialLicense = { licenseKey: string; expiryDate: number | null; refresh: number; activatedOn: number }
@@ -432,6 +445,7 @@ export type RenderFrameEvent = { frame_number: number; fps: number; resolution_b
 export type RequestNewScreenshot = null
 export type RequestOpenRecordingPicker = { target_mode: RecordingTargetMode | null }
 export type RequestOpenSettings = { page: string }
+export type RequestScreenCapturePrewarm = { force?: boolean }
 export type RequestStartRecording = { mode: RecordingMode }
 export type S3UploadMeta = { id: string }
 export type SceneMode = "default" | "cameraOnly" | "hideCamera"

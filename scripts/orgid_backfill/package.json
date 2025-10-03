@@ -1,0 +1,13 @@
+{
+	"name": "@cap/orgid_backfill",
+	"private": true,
+	"scripts": {
+		"backfill": "npx dotenv -e ../../.env -- npx tsx index.ts"
+	},
+	"dependencies": {
+		"@cap/database": "workspace:^",
+		"dotenv": "^17.2.3",
+		"drizzle-orm": "0.44.5",
+		"tsx": "^4.20.6"
+	}
+}

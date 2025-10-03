@@ -2,7 +2,6 @@
 
 import {
 	Button,
-	ListItem,
 	Logo,
 	NavigationMenu,
 	NavigationMenuContent,
@@ -15,6 +14,7 @@ import {
 import { classNames } from "@cap/utils";
 import { Clapperboard, Zap } from "lucide-react";
 import { motion } from "motion/react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, use, useEffect, useState } from "react";
@@ -131,8 +131,8 @@ export const Navbar = () => {
 
 	return (
 		<>
-			<header className="fixed top-4 left-0 right-0 z-[51] md:top-10  animate-in fade-in slide-in-from-top-4 duration-500">
-				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
+			<header className="fixed top-4 left-0 right-0 z-[51] lg:top-10  animate-in fade-in slide-in-from-top-4 duration-500">
+				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
 					<div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
 						<div className="flex items-center">
 							<Link passHref href="/home">
@@ -146,7 +146,7 @@ export const Navbar = () => {
 									}}
 								/>
 							</Link>
-							<div className="hidden md:flex">
+							<div className="hidden lg:flex">
 								<NavigationMenu>
 									<NavigationMenuList className="space-x-0">
 										{Links.map((link) => (
@@ -206,7 +206,24 @@ export const Navbar = () => {
 								</NavigationMenu>
 							</div>
 						</div>
-						<div className="hidden items-center space-x-2 md:flex">
+						<div className="hidden items-center space-x-2 lg:flex">
+							<Button
+								variant="outline"
+								icon={
+									<Image
+										src="/github.svg"
+										alt="Github"
+										width={16}
+										height={16}
+									/>
+								}
+								target="_blank"
+								href="https://github.com/CapSoftware/Cap"
+								size="sm"
+								className="w-full font-medium sm:w-auto"
+							>
+								Github
+							</Button>
 							<Suspense
 								fallback={
 									<Button
@@ -234,7 +251,7 @@ export const Navbar = () => {
 						</div>
 						<button
 							type="button"
-							className="flex md:hidden"
+							className="flex lg:hidden"
 							onClick={() => setShowMobileMenu(!showMobileMenu)}
 						>
 							<div className="flex flex-col gap-[5px] mr-1">
