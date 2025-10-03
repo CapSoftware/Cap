@@ -9,7 +9,10 @@ use cap_recording::{
     RecordingError, RecordingMode,
     feeds::{camera, microphone},
     instant_recording,
-    sources::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget, screen_capture},
+    sources::{
+        screen_capture,
+        screen_capture::{CaptureDisplay, CaptureWindow, ScreenCaptureTarget},
+    },
     studio_recording,
 };
 use cap_rendering::ProjectRecordingsMeta;
@@ -79,17 +82,19 @@ impl InProgressRecording {
     }
 
     pub async fn pause(&self) -> Result<(), RecordingError> {
-        match self {
-            Self::Instant { handle, .. } => handle.pause().await,
-            Self::Studio { handle, .. } => handle.pause().await,
-        }
+        todo!()
+        // match self {
+        //     Self::Instant { handle, .. } => handle.pause().await,
+        //     Self::Studio { handle, .. } => handle.pause().await,
+        // }
     }
 
     pub async fn resume(&self) -> Result<(), String> {
-        match self {
-            Self::Instant { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
-            Self::Studio { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
-        }
+        todo!()
+        // match self {
+        //     Self::Instant { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
+        //     Self::Studio { handle, .. } => handle.resume().await.map_err(|e| e.to_string()),
+        // }
     }
 
     pub fn recording_dir(&self) -> &PathBuf {
@@ -99,7 +104,7 @@ impl InProgressRecording {
         }
     }
 
-    pub async fn stop(self) -> Result<CompletedRecording, RecordingError> {
+    pub async fn stop(self) -> anyhow::Result<CompletedRecording> {
         Ok(match self {
             Self::Instant {
                 handle,
@@ -124,11 +129,19 @@ impl InProgressRecording {
         })
     }
 
-    pub async fn cancel(self) -> Result<(), RecordingError> {
+    pub fn done_fut(&self) -> cap_recording::DoneFut {
         match self {
-            Self::Instant { handle, .. } => handle.cancel().await,
-            Self::Studio { handle, .. } => handle.cancel().await,
+            Self::Instant { handle, .. } => handle.done_fut(),
+            Self::Studio { handle, .. } => handle.done_fut(),
         }
+    }
+
+    pub async fn cancel(self) -> Result<(), RecordingError> {
+        todo!()
+        // match self {
+        //     Self::Instant { handle, .. } => handle.cancel().await,
+        //     Self::Studio { handle, .. } => handle.cancel().await,
+        // }
     }
 
     pub fn mode(&self) -> RecordingMode {
@@ -147,7 +160,7 @@ pub enum CompletedRecording {
         video_upload_info: VideoUploadInfo,
     },
     Studio {
-        recording: studio_recording::CompletedStudioRecording,
+        recording: studio_recording::CompletedRecording,
         target_name: String,
     },
 }
@@ -406,14 +419,13 @@ pub async fn start_recording(
                     Err(SendError::HandlerError(camera::LockFeedError::NoInput)) => None,
                     Err(e) => return Err(e.to_string()),
                 };
-
                 #[cfg(target_os = "macos")]
                 let shareable_content = crate::platform::get_shareable_content()
                     .await
                     .map_err(|e| format!("GetShareableContent: {e}"))?
                     .ok_or_else(|| format!("GetShareableContent/NotAvailable"))?;
 
-                let (actor, actor_done_rx) = match inputs.mode {
+                let actor = match inputs.mode {
                     RecordingMode::Studio => {
                         let mut builder = studio_recording::Actor::builder(
                             recording_dir.clone(),
@@ -434,7 +446,7 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder
+                        let handle = builder
                             .build(
                                 #[cfg(target_os = "macos")]
                                 shareable_content,
@@ -445,15 +457,12 @@ pub async fn start_recording(
                                 e.to_string()
                             })?;
 
-                        (
-                            InProgressRecording::Studio {
-                                handle,
-                                target_name,
-                                inputs,
-                                recording_dir: recording_dir.clone(),
-                            },
-                            actor_done_rx,
-                        )
+                        InProgressRecording::Studio {
+                            handle,
+                            target_name,
+                            inputs,
+                            recording_dir: recording_dir.clone(),
+                        }
                     }
                     RecordingMode::Instant => {
                         let Some(video_upload_info) = video_upload_info.clone() else {
@@ -470,7 +479,7 @@ pub async fn start_recording(
                             builder = builder.with_mic_feed(mic_feed);
                         }
 
-                        let (handle, actor_done_rx) = builder
+                        let handle = builder
                             .build(
                                 #[cfg(target_os = "macos")]
                                 shareable_content,
@@ -481,23 +490,22 @@ pub async fn start_recording(
                                 e.to_string()
                             })?;
 
-                        (
-                            InProgressRecording::Instant {
-                                handle,
-                                progressive_upload,
-                                video_upload_info,
-                                target_name,
-                                inputs,
-                                recording_dir: recording_dir.clone(),
-                            },
-                            actor_done_rx,
-                        )
+                        InProgressRecording::Instant {
+                            handle,
+                            progressive_upload,
+                            video_upload_info,
+                            target_name,
+                            inputs,
+                            recording_dir: recording_dir.clone(),
+                        }
                     }
                 };
 
+                let done_fut = actor.done_fut();
+
                 state.set_current_recording(actor);
 
-                Ok::<_, String>(actor_done_rx)
+                Ok::<_, String>(done_fut)
             }
         })
         .await
@@ -505,8 +513,8 @@ pub async fn start_recording(
     }
     .await;
 
-    let actor_done_rx = match spawn_actor_res {
-        Ok(rx) => rx,
+    let actor_done_fut = match spawn_actor_res {
+        Ok(fut) => fut,
         Err(e) => {
             let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
 
@@ -537,22 +545,25 @@ pub async fn start_recording(
         let state_mtx = Arc::clone(&state_mtx);
         async move {
             fail!("recording::wait_actor_done");
-            let res = actor_done_rx.await;
+            let res = actor_done_fut.await;
             info!("recording wait actor done: {:?}", &res);
             match res {
-                Ok(Ok(_)) => {
+                Ok(()) => {
                     let _ = finish_upload_tx.send(());
                     let _ = RecordingEvent::Stopped.emit(&app);
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     let mut state = state_mtx.write().await;
 
-                    let _ = RecordingEvent::Failed { error: e.clone() }.emit(&app);
+                    let _ = RecordingEvent::Failed {
+                        error: e.to_string(),
+                    }
+                    .emit(&app);
 
                     let mut dialog = MessageDialogBuilder::new(
                         app.dialog().clone(),
                         "An error occurred".to_string(),
-                        e,
+                        e.to_string(),
                     )
                     .kind(tauri_plugin_dialog::MessageDialogKind::Error);
 
@@ -564,10 +575,6 @@ pub async fn start_recording(
 
                     // this clears the current recording for us
                     handle_recording_end(app, None, &mut state).await.ok();
-                }
-                // Actor hasn't errored, it's just finished
-                v => {
-                    info!("recording actor ended: {v:?}");
                 }
             }
         }
@@ -628,7 +635,7 @@ pub async fn restart_recording(app: AppHandle, state: MutableState<'_, App>) -> 
 
     let inputs = recording.inputs().clone();
 
-    let _ = recording.cancel().await;
+    // let _ = recording.cancel().await;
 
     tokio::time::sleep(Duration::from_millis(1000)).await;
 
@@ -658,7 +665,7 @@ pub async fn delete_recording(app: AppHandle, state: MutableState<'_, App>) -> R
         CurrentRecordingChanged.emit(&app).ok();
         RecordingStopped {}.emit(&app).ok();
 
-        let _ = recording.cancel().await;
+        // let _ = recording.cancel().await;
 
         std::fs::remove_dir_all(&recording_dir).ok();
 
@@ -1105,7 +1112,7 @@ fn generate_zoom_segments_from_clicks_impl(
 /// Generates zoom segments based on mouse click events during recording.
 /// Used during the recording completion process.
 pub fn generate_zoom_segments_from_clicks(
-    recording: &studio_recording::CompletedStudioRecording,
+    recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
 ) -> Vec<ZoomSegment> {
     // Build a temporary RecordingMeta so we can use the common implementation
@@ -1162,7 +1169,7 @@ pub fn generate_zoom_segments_for_project(
 
 fn project_config_from_recording(
     app: &AppHandle,
-    completed_recording: &studio_recording::CompletedStudioRecording,
+    completed_recording: &studio_recording::CompletedRecording,
     recordings: &ProjectRecordingsMeta,
     default_config: Option<ProjectConfiguration>,
 ) -> ProjectConfiguration {

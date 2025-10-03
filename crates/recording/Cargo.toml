@@ -22,13 +22,15 @@ cap-camera-ffmpeg = { path = "../camera-ffmpeg" }
 cap-enc-ffmpeg = { path = "../enc-ffmpeg" }
 cap-timestamp = { path = "../timestamp" }
 
-specta.workspace = true
-tokio.workspace = true
-flume.workspace = true
-thiserror.workspace = true
+specta = { workspace = true }
+tokio = { workspace = true }
+flume = { workspace = true }
+thiserror = { workspace = true }
 ffmpeg = { workspace = true }
-
 serde = { workspace = true }
+futures = { workspace = true }
+anyhow = { workspace = true }
+
 serde_json = "1"
 chrono = "0.4.38"
 tracing.workspace = true
@@ -37,7 +39,6 @@ image = "0.25.2"
 either = "1.13.0"
 tracing-subscriber = { version = "0.3.19" }
 relative-path = "1.9.3"
-futures = { workspace = true }
 tokio-util = "0.7.15"
 sha2 = "0.10.9"
 hex = "0.4.3"
@@ -49,25 +50,27 @@ inquire = "0.7.5"
 replace_with = "0.1.8"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+cidre = { workspace = true }
 screencapturekit = "0.3.5"
 cocoa = "0.26.0"
 objc = "0.2.7"
-cidre = { workspace = true }
 objc2-app-kit = "0.3.1"
+
 scap-screencapturekit = { path = "../scap-screencapturekit" }
 cap-enc-avfoundation = { path = "../enc-avfoundation" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
-cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
-cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
-cap-camera-windows = { path = "../camera-windows" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Performance",
 ] }
+
+cap-enc-mediafoundation = { path = "../enc-mediafoundation" }
+cap-mediafoundation-ffmpeg = { path = "../mediafoundation-ffmpeg" }
+cap-mediafoundation-utils = { path = "../mediafoundation-utils" }
+cap-camera-windows = { path = "../camera-windows" }
 scap-direct3d = { path = "../scap-direct3d" }
 scap-ffmpeg = { path = "../scap-ffmpeg" }
 scap-cpal = { path = "../scap-cpal" }

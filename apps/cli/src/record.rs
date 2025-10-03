@@ -75,7 +75,7 @@ impl RecordStart {
             .await
             .unwrap();
 
-        actor.0.stop().await.unwrap();
+        actor.stop().await.unwrap();
 
         Ok(())
     }

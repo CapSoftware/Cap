@@ -1,12 +1,20 @@
-use crate::pipeline::task::PipelineSourceTask;
 use cap_media_info::AudioInfo;
 use cap_timestamp::{Timestamp, Timestamps};
-use flume::{Receiver, Sender};
+use futures::{
+    SinkExt,
+    channel::{mpsc, oneshot},
+};
 use std::{
     collections::VecDeque,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
-use tracing::debug;
+use tracing::{debug, info};
+
+use crate::output_pipeline::AudioFrame;
 
 // Wait TICK_MS for frames to arrive
 // Assume all sources' frames for that tick have arrived after TICK_MS
@@ -15,22 +23,26 @@ use tracing::debug;
 // Current problem is generating an output timestamp that lines up with the input's timestamp
 
 struct MixerSource {
-    rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>,
+    rx: mpsc::Receiver<AudioFrame>,
     info: AudioInfo,
-    buffer: VecDeque<(ffmpeg::frame::Audio, Timestamp)>,
+    buffer: VecDeque<AudioFrame>,
     buffer_last: Option<(Timestamp, Duration)>,
 }
 
 pub struct AudioMixerBuilder {
     sources: Vec<MixerSource>,
-    output: Sender<(ffmpeg::frame::Audio, Timestamp)>,
+}
+
+impl Default for AudioMixerBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AudioMixerBuilder {
-    pub fn new(output: Sender<(ffmpeg::frame::Audio, Timestamp)>) -> Self {
+    pub fn new() -> Self {
         Self {
             sources: Vec::new(),
-            output,
         }
     }
 
@@ -38,7 +50,7 @@ impl AudioMixerBuilder {
         !self.sources.is_empty()
     }
 
-    pub fn add_source(&mut self, info: AudioInfo, rx: Receiver<(ffmpeg::frame::Audio, Timestamp)>) {
+    pub fn add_source(&mut self, info: AudioInfo, rx: mpsc::Receiver<AudioFrame>) {
         self.sources.push(MixerSource {
             info,
             rx,
@@ -47,7 +59,7 @@ impl AudioMixerBuilder {
         });
     }
 
-    pub fn build(self) -> Result<AudioMixer, ffmpeg::Error> {
+    pub fn build(self, output: mpsc::Sender<AudioFrame>) -> Result<AudioMixer, ffmpeg::Error> {
         let mut filter_graph = ffmpeg::filter::Graph::new();
 
         let mut abuffers = self
@@ -109,10 +121,10 @@ impl AudioMixerBuilder {
         Ok(AudioMixer {
             sources: self.sources,
             samples_out: 0,
-            output: self.output,
             last_tick: None,
             abuffers,
             abuffersink,
+            output,
             _filter_graph: filter_graph,
             _amix: amix,
             _aformat: aformat,
@@ -120,12 +132,67 @@ impl AudioMixerBuilder {
             timestamps: Timestamps::now(),
         })
     }
+
+    async fn spawn(self, output: mpsc::Sender<AudioFrame>) -> anyhow::Result<AudioMixerHandle> {
+        let (ready_tx, ready_rx) = oneshot::channel::<anyhow::Result<()>>();
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let thread_handle = std::thread::spawn({
+            let stop_flag = stop_flag.clone();
+            move || self.run(output, ready_tx, stop_flag)
+        });
+
+        ready_rx
+            .await
+            .map_err(|_| anyhow::format_err!("Audio mixer crashed"))??;
+
+        info!("Audio mixer ready");
+
+        Ok(AudioMixerHandle {
+            thread_handle,
+            stop_flag,
+        })
+    }
+
+    pub fn run(
+        self,
+        output: mpsc::Sender<AudioFrame>,
+        ready_tx: oneshot::Sender<anyhow::Result<()>>,
+        stop_flag: Arc<AtomicBool>,
+    ) {
+        let start = Timestamps::now();
+
+        let mut mixer = match self.build(output) {
+            Ok(mixer) => mixer,
+            Err(e) => {
+                tracing::error!("Failed to build audio mixer: {}", e);
+                let _ = ready_tx.send(Err(e.into()));
+                return;
+            }
+        };
+
+        let _ = ready_tx.send(Ok(()));
+
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                info!("Mixer stop flag triggered");
+                break;
+            }
+
+            if let Err(()) = mixer.tick(start, Timestamp::Instant(Instant::now())) {
+                info!("Mixer tick errored");
+                break;
+            }
+
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
 
 pub struct AudioMixer {
     sources: Vec<MixerSource>,
     samples_out: usize,
-    output: Sender<(ffmpeg::frame::Audio, Timestamp)>,
+    output: mpsc::Sender<AudioFrame>,
     last_tick: Option<Timestamp>,
     // sample_timestamps: VecDeque<(usize, Timestamp)>,
     abuffers: Vec<ffmpeg::filter::Context>,
@@ -174,14 +241,18 @@ impl AudioMixer {
 
                         let timestamp = last_end + (elapsed_since_last - remaining);
                         source.buffer_last = Some((timestamp, Self::BUFFER_TIMEOUT));
-                        source.buffer.push_back((frame, timestamp));
+                        source.buffer.push_back(AudioFrame::new(frame, timestamp));
 
                         remaining -= Self::BUFFER_TIMEOUT;
                     }
                 }
             }
 
-            while let Ok((frame, timestamp)) = source.rx.try_recv() {
+            while let Ok(Some(AudioFrame {
+                inner: frame,
+                timestamp,
+            })) = source.rx.try_next()
+            {
                 // if gap between incoming and last, insert silence
                 if let Some((buffer_last_timestamp, buffer_last_duration)) = source.buffer_last {
                     let timestamp_elapsed = timestamp.duration_since(self.timestamps);
@@ -218,7 +289,7 @@ impl AudioMixer {
                                 timestamp,
                                 Duration::from_secs_f64(silence_samples_count as f64 / rate as f64),
                             ));
-                            source.buffer.push_back((frame, timestamp));
+                            source.buffer.push_back(AudioFrame::new(frame, timestamp));
                         }
                     }
                 }
@@ -227,7 +298,7 @@ impl AudioMixer {
                     timestamp,
                     Duration::from_secs_f64(frame.samples() as f64 / frame.rate() as f64),
                 ));
-                source.buffer.push_back((frame, timestamp));
+                source.buffer.push_back(AudioFrame::new(frame, timestamp));
             }
         }
 
@@ -235,12 +306,13 @@ impl AudioMixer {
             self.start_timestamp = self
                 .sources
                 .iter()
-                .filter_map(|s| s.buffer.get(0))
+                .filter_map(|s| s.buffer.front())
                 .min_by(|a, b| {
-                    a.1.duration_since(self.timestamps)
-                        .cmp(&b.1.duration_since(self.timestamps))
+                    a.timestamp
+                        .duration_since(self.timestamps)
+                        .cmp(&b.timestamp.duration_since(self.timestamps))
                 })
-                .map(|v| v.1);
+                .map(|v| v.timestamp);
         }
 
         if let Some(start_timestamp) = self.start_timestamp {
@@ -275,7 +347,7 @@ impl AudioMixer {
                                 timestamp,
                                 Duration::from_secs_f64(chunk_samples as f64 / rate as f64),
                             ));
-                            source.buffer.push_front((frame, timestamp));
+                            source.buffer.push_front(AudioFrame::new(frame, timestamp));
 
                             remaining -= Self::BUFFER_TIMEOUT;
                         }
@@ -294,7 +366,7 @@ impl AudioMixer {
 
         for (i, source) in self.sources.iter_mut().enumerate() {
             for buffer in source.buffer.drain(..) {
-                let _ = self.abuffers[i].source().add(&buffer.0);
+                let _ = self.abuffers[i].source().add(&buffer.inner);
             }
         }
 
@@ -307,7 +379,7 @@ impl AudioMixer {
 
             if self
                 .output
-                .send((filtered, Timestamp::Instant(timestamp)))
+                .try_send(AudioFrame::new(filtered, Timestamp::Instant(timestamp)))
                 .is_err()
             {
                 return Err(());
@@ -321,42 +393,32 @@ impl AudioMixer {
         Ok(())
     }
 
-    pub fn builder(output: Sender<(ffmpeg::frame::Audio, Timestamp)>) -> AudioMixerBuilder {
-        AudioMixerBuilder::new(output)
+    pub fn builder() -> AudioMixerBuilder {
+        AudioMixerBuilder::new()
     }
 }
 
-impl PipelineSourceTask for AudioMixerBuilder {
-    fn run(
-        &mut self,
-        ready_signal: crate::pipeline::task::PipelineReadySignal,
-        mut control_signal: crate::pipeline::control::PipelineControlSignal,
-    ) -> Result<(), String> {
-        let start = Timestamps::now();
+pub struct AudioMixerHandle {
+    thread_handle: std::thread::JoinHandle<()>,
+    stop_flag: Arc<AtomicBool>,
+}
 
-        let this = std::mem::replace(self, AudioMixerBuilder::new(self.output.clone()));
-
-        let mut mixer = this.build().map_err(|e| format!("BuildMixer: {e}"))?;
-
-        let _ = ready_signal.send(Ok(()));
-
-        loop {
-            if control_signal
-                .last()
-                .map(|v| matches!(v, crate::pipeline::control::Control::Shutdown))
-                .unwrap_or(false)
-            {
-                break;
-            }
-
-            mixer
-                .tick(start, Timestamp::Instant(Instant::now()))
-                .map_err(|()| format!("Audio mixer tick failed"))?;
-
-            std::thread::sleep(Duration::from_millis(5));
+impl AudioMixerHandle {
+    pub fn new(thread_handle: std::thread::JoinHandle<()>, stop_flag: Arc<AtomicBool>) -> Self {
+        Self {
+            thread_handle,
+            stop_flag,
         }
+    }
 
-        Ok(())
+    pub fn stop(&self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Drop for AudioMixerHandle {
+    fn drop(&mut self) {
+        self.stop_flag.store(true, Ordering::Relaxed);
     }
 }
 

@@ -40,7 +40,7 @@ use cap_recording::{
         camera::{CameraFeed, DeviceOrModelID},
         microphone::{self, MicrophoneFeed},
     },
-    sources::ScreenCaptureTarget,
+    sources::screen_capture::ScreenCaptureTarget,
 };
 use cap_rendering::{ProjectRecordingsMeta, RenderedFrame};
 use clipboard_rs::common::RustImage;
