@@ -245,7 +245,11 @@ impl ActorBuilder {
         self
     }
 
-    pub async fn build(self) -> anyhow::Result<ActorHandle> {
+    pub async fn build(
+        self,
+
+        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    ) -> anyhow::Result<ActorHandle> {
         spawn_instant_recording_actor(
             self.output_path,
             RecordingBaseInputs {
@@ -253,6 +257,8 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: None,
+                #[cfg(target_os = "macos")]
+                shareable_content,
             },
         )
         .await
@@ -286,6 +292,8 @@ pub async fn spawn_instant_recording_actor(
         inputs.capture_system_audio,
         #[cfg(windows)]
         d3d_device,
+        #[cfg(target_os = "macos")]
+        inputs.shareable_content.retained(),
     )
     .await?;
 

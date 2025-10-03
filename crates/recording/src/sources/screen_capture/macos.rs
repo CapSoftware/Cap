@@ -48,11 +48,6 @@ enum SourceError {
     DidStopWithError(arc::R<ns::Error>),
 }
 
-pub struct ScreenCaptureActor {
-    capturer: scap_screencapturekit::Capturer,
-    capturing: bool,
-}
-
 pub struct VideoFrame {
     pub sample_buf: arc::R<cm::SampleBuf>,
     pub timestamp: Timestamp,
@@ -82,7 +77,7 @@ impl ScreenCaptureConfig<CMSampleBufferCapture> {
 
         let content_filter = display
             .raw_handle()
-            .as_content_filter()
+            .as_content_filter(self.shareable_content.clone())
             .await
             .ok_or_else(|| SourceError::AsContentFilter)?;
 

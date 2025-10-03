@@ -196,6 +196,8 @@ pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     #[cfg(windows)]
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    #[cfg(target_os = "macos")]
+    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
 }
 
 impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
@@ -230,6 +232,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCapture
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device: self.d3d_device.clone(),
+            #[cfg(target_os = "macos")]
+            shareable_content: self.shareable_content.clone(),
         }
     }
 }
@@ -270,6 +274,7 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
         start_time: SystemTime,
         system_audio: bool,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
+        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -394,6 +399,8 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device,
+            #[cfg(target_os = "macos")]
+            shareable_content: shareable_content.retained(),
         })
     }
 

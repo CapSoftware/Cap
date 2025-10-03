@@ -382,7 +382,10 @@ impl ActorBuilder {
         self
     }
 
-    pub async fn build(self) -> anyhow::Result<ActorHandle> {
+    pub async fn build(
+        self,
+        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
+    ) -> anyhow::Result<ActorHandle> {
         spawn_studio_recording_actor(
             self.output_path,
             RecordingBaseInputs {
@@ -390,6 +393,8 @@ impl ActorBuilder {
                 capture_system_audio: self.system_audio,
                 mic_feed: self.mic_feed,
                 camera_feed: self.camera_feed,
+                #[cfg(target_os = "macos")]
+                shareable_content,
             },
             self.custom_cursor,
         )
@@ -601,10 +606,7 @@ impl SegmentPipelineFactory {
             &self.segments_dir,
             &self.cursors_dir,
             self.index,
-            self.base_inputs.capture_target.clone(),
-            self.base_inputs.mic_feed.clone(),
-            self.base_inputs.capture_system_audio,
-            self.base_inputs.camera_feed.clone(),
+            self.base_inputs.clone(),
             cursors,
             next_cursors_id,
             self.custom_cursor_capture,
@@ -662,26 +664,18 @@ async fn create_segment_pipeline(
     segments_dir: &PathBuf,
     cursors_dir: &Path,
     index: u32,
-    capture_target: screen_capture::ScreenCaptureTarget,
-    mic_feed: Option<Arc<MicrophoneFeedLock>>,
-    capture_system_audio: bool,
-    camera_feed: Option<Arc<CameraFeedLock>>,
+    base_inputs: RecordingBaseInputs,
     prev_cursors: Cursors,
     next_cursors_id: u32,
     custom_cursor_capture: bool,
     start_time: Timestamps,
 ) -> anyhow::Result<Pipeline> {
-    let system_audio = if capture_system_audio {
-        let (tx, rx) = mpsc::channel::<AudioFrame>(64);
-        (Some(tx), Some(rx))
-    } else {
-        (None, None)
-    };
-
-    let display = capture_target
+    let display = base_inputs
+        .capture_target
         .display()
         .ok_or(CreateSegmentPipelineError::NoDisplay)?;
-    let crop_bounds = capture_target
+    let crop_bounds = base_inputs
+        .capture_target
         .cursor_crop()
         .ok_or(CreateSegmentPipelineError::NoBounds)?;
 
@@ -689,13 +683,15 @@ async fn create_segment_pipeline(
     let d3d_device = crate::capture_pipeline::create_d3d_device().unwrap();
 
     let screen_config = create_screen_capture(
-        &capture_target,
+        &base_inputs.capture_target,
         !custom_cursor_capture,
         120,
         start_time.system_time(),
         capture_system_audio,
         #[cfg(windows)]
         d3d_device,
+        #[cfg(target_os = "macos")]
+        base_inputs.shareable_content,
     )
     .await
     .unwrap();

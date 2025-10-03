@@ -17,6 +17,7 @@ use futures::{
     channel::{mpsc, oneshot},
 };
 use kameo::prelude::*;
+use scap_direct3d::StopCapturerError;
 use scap_ffmpeg::*;
 use scap_targets::{Display, DisplayId};
 use std::{

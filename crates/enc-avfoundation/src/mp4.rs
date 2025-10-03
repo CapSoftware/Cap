@@ -6,8 +6,6 @@ use tracing::{debug, info};
 
 pub struct MP4Encoder {
     #[allow(unused)]
-    last_pts: Option<i64>,
-    #[allow(unused)]
     config: VideoInfo,
     asset_writer: arc::R<av::AssetWriter>,
     video_input: arc::R<av::AssetWriterInput>,
@@ -15,7 +13,7 @@ pub struct MP4Encoder {
     start_time: cm::Time,
     first_timestamp: Option<cm::Time>,
     segment_first_timestamp: Option<cm::Time>,
-    last_timestamp: Option<cm::Time>,
+    last_pts: Option<cm::Time>,
     is_writing: bool,
     is_paused: bool,
     elapsed_duration: cm::Time,
@@ -173,14 +171,13 @@ impl MP4Encoder {
         asset_writer.start_writing();
 
         Ok(Self {
-            last_pts: None,
             config: video_config,
             audio_input,
             asset_writer,
             video_input,
             first_timestamp: None,
             segment_first_timestamp: None,
-            last_timestamp: None,
+            last_pts: None,
             is_writing: false,
             is_paused: false,
             start_time: cm::Time::zero(),
@@ -224,7 +221,7 @@ impl MP4Encoder {
 
         self.first_timestamp.get_or_insert(time);
         self.segment_first_timestamp.get_or_insert(time);
-        self.last_timestamp = Some(time);
+        self.last_pts = Some(new_pts);
 
         self.video_frames_appended += 1;
 
@@ -326,7 +323,7 @@ impl MP4Encoder {
             .elapsed_duration
             .add(time.sub(self.segment_first_timestamp.unwrap()));
         self.segment_first_timestamp = None;
-        self.last_timestamp = None;
+        self.last_pts = None;
         self.is_paused = true;
     }
 
@@ -346,7 +343,7 @@ impl MP4Encoder {
         self.is_writing = false;
 
         self.asset_writer
-            .end_session_at_src_time(self.last_timestamp.unwrap_or(cm::Time::zero()));
+            .end_session_at_src_time(self.last_pts.unwrap_or(cm::Time::zero()));
         self.video_input.mark_as_finished();
         if let Some(i) = self.audio_input.as_mut() {
             i.mark_as_finished()
@@ -358,7 +355,7 @@ impl MP4Encoder {
         debug!("Appended {} audio frames", self.audio_frames_appended);
 
         debug!("First video timestamp: {:?}", self.first_timestamp);
-        debug!("Last video timestamp: {:?}", self.last_timestamp);
+        debug!("Last video timestamp: {:?}", self.last_pts);
 
         info!("Finished writing");
     }

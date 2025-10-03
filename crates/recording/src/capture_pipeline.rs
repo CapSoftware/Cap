@@ -133,6 +133,7 @@ pub async fn create_screen_capture(
     start_time: SystemTime,
     system_audio: bool,
     #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
 ) -> anyhow::Result<ScreenCaptureConfig<ScreenCaptureMethod>> {
     Ok(ScreenCaptureConfig::<ScreenCaptureMethod>::init(
         capture_target,
@@ -142,6 +143,8 @@ pub async fn create_screen_capture(
         system_audio,
         #[cfg(windows)]
         d3d_device,
+        #[cfg(target_os = "macos")]
+        shareable_content,
     )
     .await?)
 }

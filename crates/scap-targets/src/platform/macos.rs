@@ -20,6 +20,7 @@ use core_graphics::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use tracing::trace;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -178,30 +179,39 @@ impl DisplayImpl {
 }
 
 impl DisplayImpl {
-    pub async fn as_sc(&self) -> Option<arc::R<sc::Display>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
+    pub async fn as_sc(
+        &self,
+        content: arc::R<sc::ShareableContent>,
+    ) -> Option<arc::R<sc::Display>> {
+        content
             .displays()
             .iter()
-            .find(|d| d.display_id().0 == self.0.id)
-            .map(|v| v.retained())
+            .find(|display| display.display_id().0 == self.0.id)
+            .map(|display| display.retained())
     }
 
-    pub async fn as_content_filter(&self) -> Option<arc::R<sc::ContentFilter>> {
-        self.as_content_filter_excluding_windows(vec![]).await
+    pub async fn as_content_filter(
+        &self,
+        content: arc::R<sc::ShareableContent>,
+    ) -> Option<arc::R<sc::ContentFilter>> {
+        self.as_content_filter_excluding_windows(content, vec![])
+            .await
     }
 
     pub async fn as_content_filter_excluding_windows(
         &self,
+        content: arc::R<sc::ShareableContent>,
         windows: Vec<arc::R<sc::Window>>,
     ) -> Option<arc::R<sc::ContentFilter>> {
-        let excluded_windows =
-            ns::Array::from_slice_retained(windows.into_iter().collect::<Vec<_>>().as_slice());
+        let display = content
+            .displays()
+            .iter()
+            .find(|display| display.display_id().0 == self.0.id)
+            .map(|display| display.retained())?;
 
         Some(sc::ContentFilter::with_display_excluding_windows(
-            self.as_sc().await?.as_ref(),
-            &excluded_windows,
+            display.as_ref(),
+            &ns::Array::from_slice_retained(&windows),
         ))
     }
 }
@@ -469,14 +479,12 @@ impl WindowImpl {
         }
     }
 
-    pub async fn as_sc(&self) -> Option<arc::R<sc::Window>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
+    pub async fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {
+        content
             .windows()
             .iter()
-            .find(|w| w.id() == self.0)
-            .map(|v| v.retained())
+            .find(|window| window.id() == self.0)
+            .map(|window| window.retained())
     }
 
     pub fn display(&self) -> Option<DisplayImpl> {
