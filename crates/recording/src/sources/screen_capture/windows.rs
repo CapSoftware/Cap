@@ -132,35 +132,12 @@ impl ScreenCaptureConfig<Direct3DCapture> {
             .try_as_capture_item()
             .map_err(SourceError::AsCaptureItem)?;
 
-        let mut error_tx = Some(error_tx);
-        let capturer = scap_direct3d::Capturer::new(
-            capture_item,
-            settings,
-            move |frame| {
-                let timestamp = frame.inner().SystemRelativeTime()?;
-                let timestamp = Timestamp::PerformanceCounter(PerformanceCounterTimestamp::new(
-                    timestamp.Duration,
-                ));
-                let _ = video_tx.try_send(VideoFrame { frame, timestamp });
-
-                Ok(())
-            },
-            move || {
-                if let Some(error_tx) = error_tx.take() {
-                    let _ = error_tx.send(VideoSourceError::Closed);
-                }
-
-                Ok(())
-            },
-            Some(self.d3d_device.clone()),
-        )
-        .map_err(StartCapturingError::CreateCapturer)?;
-
         Ok((
             VideoSourceConfig(
                 ChannelVideoSourceConfig::new(self.video_info, video_rx),
-                capturer,
-                error_rx,
+                capture_item,
+                settings,
+                self.config.d3d_device.clone(),
             ),
             self.system_audio.then(|| SystemAudioSourceConfig),
         ))
@@ -175,10 +152,19 @@ pub enum VideoSourceError {
 
 pub struct VideoSourceConfig(
     ChannelVideoSourceConfig<VideoFrame>,
-    pub scap_direct3d::Capturer,
-    oneshot::Receiver<VideoSourceError>,
+    GraphicsCaptureItem,
+    scap_direct3d::Settings,
+    pub ID3D11Device,
 );
-pub struct VideoSource(ChannelVideoSource<VideoFrame>, scap_direct3d::Capturer);
+pub struct VideoSource(
+    ChannelVideoSource<VideoFrame>,
+    std::sync::mpsc::SyncSender<VideoControl>,
+);
+
+enum VideoControl {
+    Start(oneshot::Sender<anyhow::Result<()>>),
+    Stop(oneshot::Sender<anyhow::Result<()>>),
+}
 
 impl output_pipeline::VideoSource for VideoSource {
     type Config = VideoSourceConfig;
@@ -192,6 +178,65 @@ impl output_pipeline::VideoSource for VideoSource {
     where
         Self: Sized,
     {
+        let (error_tx, error_rx) = oneshot::channel();
+        let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
+
+        ctx.tasks().spawn_thread("d3d-capture-thread", move || {
+            cap_mediafoundation_utils::init_thread();
+
+            let res = scap_direct3d::Capturer::new(
+                capture_item,
+                settings,
+                move |frame| {
+                    let timestamp = frame.inner().SystemRelativeTime()?;
+                    let timestamp = Timestamp::PerformanceCounter(
+                        PerformanceCounterTimestamp::new(timestamp.Duration),
+                    );
+                    let _ = video_tx.try_send(VideoFrame { frame, timestamp });
+
+                    Ok(())
+                },
+                move || {
+                    let _ = error_tx.send(VideoSourceError::Closed);
+
+                    Ok(())
+                },
+                Some(self.d3d_device.clone()),
+            );
+
+            let capturer = match res {
+                Ok(capturer) => capturer,
+                Err(e) => {
+                    let _ = error_tx.send(VideoSourceError::Closed);
+                    return;
+                }
+            };
+
+            let Ok(VideoControl::Start(reply)) = ctrl_rx.recv() else {
+                return;
+            };
+
+            if reply.send(capturer.start()).is_err() {
+                return;
+            }
+
+            let Ok(VideoControl::Stop(reply)) = ctrl_rx.recv() else {
+                return;
+            };
+
+            if reply.send(capturer.stop()).is_err() {
+                return;
+            }
+        });
+
+        ctx.tasks().spawn("d3d-capture", async move {
+            if let Ok(err) = error_rx.await {
+                return Err(anyhow!("{err}"));
+            }
+
+            Ok(())
+        });
+
         ctx.tasks().spawn("screen-capture", async move {
             if let Ok(err) = config.2.await {
                 return Err(anyhow!("{err}"));
@@ -202,7 +247,7 @@ impl output_pipeline::VideoSource for VideoSource {
 
         ChannelVideoSource::setup(config.0, video_tx, ctx)
             .await
-            .map(|source| Self(source, config.1))
+            .map(|source| Self(source, ctrl_tx))
     }
 
     fn video_info(&self) -> VideoInfo {
@@ -211,10 +256,12 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
         let a = self.0.start();
-        let b = self.1.start();
+
+        let (tx, rx) = oneshot::channel();
+        let _ = self.1.send(VideoControl::Start(tx));
 
         async {
-            b?;
+            rx.await??;
             a.await
         }
         .boxed()
@@ -222,10 +269,12 @@ impl output_pipeline::VideoSource for VideoSource {
 
     fn stop(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
         let a = self.0.stop();
-        let b = self.1.stop();
+
+        let (tx, rx) = oneshot::channel();
+        let _ = self.1.send(VideoControl::Stop(tx));
 
         async {
-            b?;
+            rx.await??;
             a.await
         }
         .boxed()
