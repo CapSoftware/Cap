@@ -21,7 +21,7 @@ use windows::{
 
 /// Muxes to MP4 using a combination of FFmpeg and Media Foundation
 pub struct WindowsMuxer {
-    video_tx: SyncSender<(scap_direct3d::Frame, Duration)>,
+    video_tx: SyncSender<Option<(scap_direct3d::Frame, Duration)>>,
     output: Arc<Mutex<ffmpeg::format::context::Output>>,
     audio_encoder: Option<AACEncoder>,
 }
@@ -49,7 +49,7 @@ impl Muxer for WindowsMuxer {
     {
         let video_config =
             video_config.ok_or_else(|| anyhow!("invariant: video config expected"))?;
-        let (video_tx, video_rx) = sync_channel::<(scap_direct3d::Frame, Duration)>(8);
+        let (video_tx, video_rx) = sync_channel::<Option<(scap_direct3d::Frame, Duration)>>(8);
 
         let mut output = ffmpeg::format::output(&output_path)?;
         let audio_encoder = audio_config
@@ -62,7 +62,7 @@ impl Muxer for WindowsMuxer {
         {
             let output = output.clone();
 
-            tasks.spawn_thread("windows_encoder", move || {
+            tasks.spawn_thread("windows-encoder", move || {
                 cap_mediafoundation_utils::thread_init();
 
                 let encoder = (|| {
@@ -132,7 +132,8 @@ impl Muxer for WindowsMuxer {
                             .run(
                                 Arc::new(AtomicBool::default()),
                                 || {
-                                    let Ok((frame, _)) = video_rx.recv() else {
+                                    let Ok(Some((frame, _))) = video_rx.recv() else {
+                                        trace!("No more frames available");
                                         return Ok(None);
                                     };
 
@@ -157,7 +158,7 @@ impl Muxer for WindowsMuxer {
                             .unwrap();
                     }
                     either::Right(mut encoder) => {
-                        while let Ok((frame, time)) = video_rx.recv() {
+                        while let Ok(Some((frame, time))) = video_rx.recv() {
                             let Ok(mut output) = output.lock() else {
                                 continue;
                             };
@@ -195,12 +196,16 @@ impl Muxer for WindowsMuxer {
         })
     }
 
+    fn stop(&mut self) {
+        let _ = self.video_tx.send(None);
+    }
+
     fn finish(&mut self) -> anyhow::Result<()> {
-        Ok(self
-            .output
-            .lock()
-            .map_err(|e| anyhow!("{e}"))?
-            .write_trailer()?)
+        let mut output = self.output.lock().unwrap();
+        if let Some(audio_encoder) = self.audio_encoder.as_mut() {
+            let _ = audio_encoder.finish(&mut output);
+        }
+        Ok(output.write_trailer()?)
     }
 }
 
@@ -212,7 +217,7 @@ impl VideoMuxer for WindowsMuxer {
         frame: Self::VideoFrame,
         timestamp: Duration,
     ) -> anyhow::Result<()> {
-        Ok(self.video_tx.send((frame.frame, timestamp))?)
+        Ok(self.video_tx.send(Some((frame.frame, timestamp)))?)
     }
 }
 
@@ -221,7 +226,7 @@ impl AudioMuxer for WindowsMuxer {
         if let Some(encoder) = self.audio_encoder.as_mut()
             && let Ok(mut output) = self.output.lock()
         {
-            encoder.queue_frame(frame.inner, timestamp, &mut output);
+            encoder.send_frame(frame.inner, timestamp, &mut output)?;
         }
 
         Ok(())

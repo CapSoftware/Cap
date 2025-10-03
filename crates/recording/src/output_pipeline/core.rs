@@ -123,9 +123,14 @@ impl TaskPool {
         self.0.push((
             name,
             tokio::spawn(
-                future
-                    .instrument(error_span!("", task = name))
-                    .in_current_span(),
+                async {
+                    trace!("Task started");
+                    let res = future.await;
+                    info!("Task finished. Did error: {}", res.is_err());
+                    res
+                }
+                .instrument(error_span!("", task = name))
+                .in_current_span(),
             ),
         ));
     }
@@ -135,8 +140,10 @@ impl TaskPool {
         let (done_tx, done_rx) = oneshot::channel();
         std::thread::spawn(move || {
             let _guard = span.enter();
+            trace!("Task started");
             cb();
             let _ = done_tx.send(());
+            info!("Task finished");
         });
         self.0.push((
             name,
@@ -338,7 +345,14 @@ async fn finish_build(
 
             Ok(())
         }
-        .map(|r| done_tx.send(r)),
+        .then(async move |res| {
+            let muxer_res = muxer.lock().await.finish();
+
+            let _ = done_tx.send(match (res, muxer_res) {
+                (Err(e), _) | (_, Err(e)) => Err(e),
+                _ => Ok(()),
+            });
+        }),
     );
 
     info!("Built pipeline for output {}", path.display());
@@ -373,7 +387,6 @@ async fn setup_muxer<TMuxer: Muxer>(
             pause_flag.clone(),
             &mut setup_ctx.tasks,
         )
-        .instrument(error_span!("muxer-setup"))
         .await?,
     ));
 
@@ -395,8 +408,6 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
         let mut first_tx = Some(first_tx);
 
         video_source.start().await?;
-
-        tracing::trace!("Encoder starting");
 
         stop_token
             .run_until_cancelled(async {
@@ -420,11 +431,7 @@ fn spawn_video_encoder<TMutex: VideoMuxer<VideoFrame = TVideo::Frame>, TVideo: V
 
         video_source.stop().await?;
 
-        tracing::info!("Encoder done receiving frames");
-
-        muxer.lock().await.finish()?;
-
-        tracing::info!("Encoder finished");
+        muxer.lock().await.stop();
 
         Ok(())
     });
@@ -497,13 +504,11 @@ async fn configure_audio<TMutex: AudioMuxer>(
                 })
                 .await;
 
-            info!("Audio encoder sender finished");
-
-            muxer.lock().await.finish()?;
-
             for source in &mut erased_audio_sources {
                 let _ = (source.stop_fn)(source.inner.as_mut()).await;
             }
+
+            muxer.lock().await.stop();
 
             Ok(())
         }
@@ -755,6 +760,8 @@ pub trait Muxer: Send + 'static {
     ) -> anyhow::Result<Self>
     where
         Self: Sized;
+
+    fn stop(&mut self) {}
 
     fn finish(&mut self) -> anyhow::Result<()>;
 }

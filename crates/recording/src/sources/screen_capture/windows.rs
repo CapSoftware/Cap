@@ -13,7 +13,7 @@ use cap_media_info::{AudioInfo, VideoInfo};
 use cap_timestamp::{PerformanceCounterTimestamp, Timestamp, Timestamps};
 use cpal::traits::{DeviceTrait, HostTrait};
 use futures::{
-    FutureExt, SinkExt,
+    FutureExt, SinkExt, StreamExt,
     channel::{mpsc, oneshot},
 };
 use kameo::prelude::*;
@@ -90,9 +90,6 @@ impl ScreenCaptureConfig<Direct3DCapture> {
     pub async fn to_sources(
         &self,
     ) -> anyhow::Result<(VideoSourceConfig, Option<SystemAudioSourceConfig>)> {
-        let (error_tx, error_rx) = oneshot::channel();
-        let (video_tx, video_rx) = flume::bounded(4);
-
         let mut settings = scap_direct3d::Settings {
             pixel_format: Direct3DCapture::PIXEL_FORMAT,
             crop: self.config.crop_bounds.map(|b| {
@@ -133,12 +130,12 @@ impl ScreenCaptureConfig<Direct3DCapture> {
             .map_err(SourceError::AsCaptureItem)?;
 
         Ok((
-            VideoSourceConfig(
-                ChannelVideoSourceConfig::new(self.video_info, video_rx),
+            VideoSourceConfig {
+                video_info: self.video_info,
                 capture_item,
                 settings,
-                self.config.d3d_device.clone(),
-            ),
+                d3d_device: self.d3d_device.clone(),
+            },
             self.system_audio.then(|| SystemAudioSourceConfig),
         ))
     }
@@ -150,16 +147,16 @@ pub enum VideoSourceError {
     Closed,
 }
 
-pub struct VideoSourceConfig(
-    ChannelVideoSourceConfig<VideoFrame>,
-    GraphicsCaptureItem,
-    scap_direct3d::Settings,
-    pub ID3D11Device,
-);
-pub struct VideoSource(
-    ChannelVideoSource<VideoFrame>,
-    std::sync::mpsc::SyncSender<VideoControl>,
-);
+pub struct VideoSourceConfig {
+    video_info: VideoInfo,
+    capture_item: GraphicsCaptureItem,
+    settings: scap_direct3d::Settings,
+    pub d3d_device: ID3D11Device,
+}
+pub struct VideoSource {
+    video_info: VideoInfo,
+    ctrl_tx: std::sync::mpsc::SyncSender<VideoControl>,
+}
 
 enum VideoControl {
     Start(oneshot::Sender<anyhow::Result<()>>),
@@ -171,18 +168,23 @@ impl output_pipeline::VideoSource for VideoSource {
     type Frame = VideoFrame;
 
     async fn setup(
-        config: Self::Config,
-        video_tx: mpsc::Sender<Self::Frame>,
+        VideoSourceConfig {
+            video_info,
+            capture_item,
+            settings,
+            d3d_device,
+        }: Self::Config,
+        mut video_tx: mpsc::Sender<Self::Frame>,
         ctx: &mut output_pipeline::SetupCtx,
     ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
-        let (error_tx, error_rx) = oneshot::channel();
+        let (mut error_tx, mut error_rx) = mpsc::channel(1);
         let (ctrl_tx, ctrl_rx) = std::sync::mpsc::sync_channel::<VideoControl>(1);
 
         ctx.tasks().spawn_thread("d3d-capture-thread", move || {
-            cap_mediafoundation_utils::init_thread();
+            cap_mediafoundation_utils::thread_init();
 
             let res = scap_direct3d::Capturer::new(
                 capture_item,
@@ -196,18 +198,21 @@ impl output_pipeline::VideoSource for VideoSource {
 
                     Ok(())
                 },
-                move || {
-                    let _ = error_tx.send(VideoSourceError::Closed);
+                {
+                    let mut error_tx = error_tx.clone();
+                    move || {
+                        let _ = error_tx.send(anyhow!("closed"));
 
-                    Ok(())
+                        Ok(())
+                    }
                 },
-                Some(self.d3d_device.clone()),
+                Some(d3d_device),
             );
 
-            let capturer = match res {
+            let mut capturer = match res {
                 Ok(capturer) => capturer,
                 Err(e) => {
-                    let _ = error_tx.send(VideoSourceError::Closed);
+                    let _ = error_tx.send(e.into());
                     return;
                 }
             };
@@ -216,7 +221,7 @@ impl output_pipeline::VideoSource for VideoSource {
                 return;
             };
 
-            if reply.send(capturer.start()).is_err() {
+            if reply.send(capturer.start().map_err(Into::into)).is_err() {
                 return;
             }
 
@@ -224,58 +229,47 @@ impl output_pipeline::VideoSource for VideoSource {
                 return;
             };
 
-            if reply.send(capturer.stop()).is_err() {
+            if reply.send(capturer.stop().map_err(Into::into)).is_err() {
                 return;
             }
         });
 
         ctx.tasks().spawn("d3d-capture", async move {
-            if let Ok(err) = error_rx.await {
+            if let Some(err) = error_rx.next().await {
                 return Err(anyhow!("{err}"));
             }
 
             Ok(())
         });
 
-        ctx.tasks().spawn("screen-capture", async move {
-            if let Ok(err) = config.2.await {
-                return Err(anyhow!("{err}"));
-            }
-
-            Ok(())
-        });
-
-        ChannelVideoSource::setup(config.0, video_tx, ctx)
-            .await
-            .map(|source| Self(source, ctrl_tx))
+        Ok(Self {
+            video_info,
+            ctrl_tx,
+        })
     }
 
     fn video_info(&self) -> VideoInfo {
-        self.0.video_info()
+        self.video_info
     }
 
     fn start(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
-        let a = self.0.start();
-
         let (tx, rx) = oneshot::channel();
-        let _ = self.1.send(VideoControl::Start(tx));
+        let _ = self.ctrl_tx.send(VideoControl::Start(tx));
 
         async {
             rx.await??;
-            a.await
+            Ok(())
         }
         .boxed()
     }
 
     fn stop(&mut self) -> futures::future::BoxFuture<'_, anyhow::Result<()>> {
-        let a = self.0.stop();
-
         let (tx, rx) = oneshot::channel();
-        let _ = self.1.send(VideoControl::Stop(tx));
+        let _ = self.ctrl_tx.send(VideoControl::Stop(tx));
 
         async {
             rx.await??;
-            a.await
+            Ok(())
         }
         .boxed()
     }
@@ -344,13 +338,13 @@ impl output_pipeline::AudioSource for SystemAudioSource {
         Direct3DCapture::audio_info()
     }
 
-    async fn start(&mut self) -> anyhow::Result<()> {
-        self.capturer.play()?;
-        Ok(())
+    fn start(&mut self) -> impl Future<Output = anyhow::Result<()>> {
+        let res = self.capturer.play().map_err(Into::into);
+        async { res }
     }
 
-    async fn stop(&mut self) -> anyhow::Result<()> {
-        self.capturer.pause()?;
-        Ok(())
+    fn stop(&mut self) -> impl Future<Output = anyhow::Result<()>> {
+        let res = self.capturer.pause().map_err(Into::into);
+        async { res }
     }
 }

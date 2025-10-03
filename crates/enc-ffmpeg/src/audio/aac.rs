@@ -84,16 +84,15 @@ impl AACEncoder {
         let encoder = encoder.open()?;
 
         let mut output_stream = output.add_stream(codec)?;
-        let stream_index = output_stream.index();
         output_stream.set_time_base(FFRational(1, output_config.rate()));
         output_stream.set_parameters(&encoder);
 
         Ok(Self {
-            base: AudioEncoderBase::new(encoder, resampler, stream_index),
+            base: AudioEncoderBase::new(encoder, resampler, output_stream.index()),
         })
     }
 
-    pub fn queue_frame(
+    pub fn send_frame(
         &mut self,
         frame: frame::Audio,
         timestamp: Duration,
@@ -108,8 +107,8 @@ impl AACEncoder {
 }
 
 impl AudioEncoder for AACEncoder {
-    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
-        let _ = self.queue_frame(frame, Duration::MAX, output);
+    fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
+        let _ = self.send_frame(frame, Duration::MAX, output);
     }
 
     fn finish(&mut self, output: &mut format::context::Output) {

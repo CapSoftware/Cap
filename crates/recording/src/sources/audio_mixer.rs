@@ -192,8 +192,6 @@ impl AudioMixerBuilder {
         if let Err(e) = run() {
             tracing::error!("Audio mixer failed: {}", e);
         }
-
-        info!("Audio mixer processing thread complete");
     }
 }
 

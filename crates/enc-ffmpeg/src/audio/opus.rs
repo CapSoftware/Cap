@@ -106,7 +106,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoder for OpusEncoder {
-    fn queue_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
+    fn send_frame(&mut self, frame: frame::Audio, output: &mut format::context::Output) {
         let _ = self.queue_frame(frame, Duration::MAX, output);
     }
 

@@ -11,10 +11,7 @@ use cap_utils::ensure_dir;
 use kameo::{Actor as _, prelude::*};
 use std::{
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tracing::*;

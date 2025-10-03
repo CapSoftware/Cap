@@ -58,7 +58,7 @@ pub async fn main() {
 
     tokio::time::sleep(Duration::from_millis(10)).await;
 
-    let handle = studio_recording::Actor::builder(
+    let handle = instant_recording::Actor::builder(
         dir.path().into(),
         ScreenCaptureTarget::Display {
             id: Display::primary().id(),

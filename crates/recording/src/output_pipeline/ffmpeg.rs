@@ -99,7 +99,7 @@ impl VideoMuxer for Mp4Muxer {
 impl AudioMuxer for Mp4Muxer {
     fn send_audio_frame(&mut self, frame: AudioFrame, timestamp: Duration) -> anyhow::Result<()> {
         if let Some(audio_encoder) = self.audio_encoder.as_mut() {
-            audio_encoder.queue_frame(frame.inner, timestamp, &mut self.output);
+            audio_encoder.send_frame(frame.inner, timestamp, &mut self.output);
         }
 
         Ok(())

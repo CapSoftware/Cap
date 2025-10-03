@@ -76,7 +76,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         output_path: PathBuf,
         start_time: Timestamps,
     ) -> anyhow::Result<OutputPipeline> {
-        let d3d_device = screen_capture.1.d3d_device().clone();
+        let d3d_device = screen_capture.d3d_device.clone();
 
         OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture)
@@ -96,7 +96,7 @@ impl MakeCapturePipeline for screen_capture::Direct3DCapture {
         mic_feed: Option<Arc<MicrophoneFeedLock>>,
         output_path: PathBuf,
     ) -> anyhow::Result<OutputPipeline> {
-        let d3d_device = screen_capture.1.d3d_device().clone();
+        let d3d_device = screen_capture.d3d_device.clone();
         let mut output_builder = OutputPipeline::builder(output_path.clone())
             .with_video::<screen_capture::VideoSource>(screen_capture);
 

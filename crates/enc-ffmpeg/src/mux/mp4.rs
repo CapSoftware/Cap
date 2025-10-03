@@ -87,7 +87,7 @@ impl MP4File {
             return;
         };
 
-        audio.queue_frame(frame, &mut self.output);
+        audio.send_frame(frame, &mut self.output);
     }
 
     pub fn finish(&mut self) {
