@@ -1,13 +1,10 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_cursor_info::CursorShape;
 use cap_project::{CursorClickEvent, CursorMoveEvent, XY};
-use cap_timestamp::Timestamps;
-use futures::{FutureExt, future::Shared};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 use tokio::sync::oneshot;
-use tokio_util::sync::{CancellationToken, DropGuard};
+use tokio_util::sync::CancellationToken;
 
-#[derive(Clone)]
 pub struct Cursor {
     pub file_name: String,
     pub id: u32,
@@ -17,7 +14,6 @@ pub struct Cursor {
 
 pub type Cursors = HashMap<u64, Cursor>;
 
-#[derive(Clone)]
 pub struct CursorActorResponse {
     // pub cursor_images: HashMap<String, Vec<u8>>,
     pub cursors: Cursors,
@@ -27,13 +23,14 @@ pub struct CursorActorResponse {
 }
 
 pub struct CursorActor {
-    stop: Option<DropGuard>,
-    pub rx: Shared<oneshot::Receiver<CursorActorResponse>>,
+    stop: CancellationToken,
+    rx: oneshot::Receiver<CursorActorResponse>,
 }
 
 impl CursorActor {
-    pub fn stop(&mut self) {
-        drop(self.stop.take());
+    pub async fn stop(self) -> CursorActorResponse {
+        self.stop.cancel();
+        self.rx.await.unwrap()
     }
 }
 
@@ -44,7 +41,7 @@ pub fn spawn_cursor_recorder(
     cursors_dir: PathBuf,
     prev_cursors: Cursors,
     next_cursor_id: u32,
-    start_time: Timestamps,
+    start_time: SystemTime,
 ) -> CursorActor {
     use cap_utils::spawn_actor;
     use device_query::{DeviceQuery, DeviceState};
@@ -84,7 +81,10 @@ pub fn spawn_cursor_recorder(
                 break;
             };
 
-            let elapsed = start_time.instant().elapsed().as_secs_f64() * 1000.0;
+            let Ok(elapsed) = start_time.elapsed() else {
+                continue;
+            };
+            let elapsed = elapsed.as_secs_f64() * 1000.0;
             let mouse_state = device_state.get_mouse();
 
             let cursor_data = get_cursor_data();
@@ -182,8 +182,8 @@ pub fn spawn_cursor_recorder(
     });
 
     CursorActor {
-        stop: Some(stop_token.drop_guard()),
-        rx: rx.shared(),
+        stop: stop_token,
+        rx,
     }
 }
 

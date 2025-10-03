@@ -5,7 +5,6 @@ import { db } from "@cap/database";
 import { nanoId } from "@cap/database/helpers";
 import { comments, notifications, users, videos } from "@cap/database/schema";
 import type { Notification, NotificationBase } from "@cap/web-api-contract";
-import { Video } from "@cap/web-domain";
 import { and, eq, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import type { UserPreferences } from "@/app/(org)/dashboard/dashboard-data";
@@ -32,44 +31,22 @@ export async function createNotification(
 	notification: CreateNotificationInput,
 ) {
 	try {
-		const [videoExists] = await db()
-			.select({ id: videos.id, ownerId: videos.ownerId })
-			.from(videos)
-			.where(eq(videos.id, Video.VideoId.make(notification.videoId)))
-			.limit(1);
-
-		if (!videoExists) {
-			console.error("Video not found for videoId:", notification.videoId);
-			throw new Error(`Video not found for videoId: ${notification.videoId}`);
-		}
-
-		const [ownerResult] = await db()
+		// First, get the video and owner data
+		const [videoResult] = await db()
 			.select({
-				id: users.id,
+				videoId: videos.id,
+				ownerId: users.id,
 				activeOrganizationId: users.activeOrganizationId,
 				preferences: users.preferences,
 			})
-			.from(users)
-			.where(eq(users.id, videoExists.ownerId))
+			.from(videos)
+			.innerJoin(users, eq(users.id, videos.ownerId))
+			.where(eq(videos.id, notification.videoId))
 			.limit(1);
 
-		if (!ownerResult) {
-			console.warn(
-				"Owner not found for videoId:",
-				notification.videoId,
-				"ownerId:",
-				videoExists.ownerId,
-				"- skipping notification creation",
-			);
-			return;
+		if (!videoResult) {
+			throw new Error("Video or owner not found");
 		}
-
-		const videoResult = {
-			videoId: videoExists.id,
-			ownerId: ownerResult.id,
-			activeOrganizationId: ownerResult.activeOrganizationId,
-			preferences: ownerResult.preferences,
-		};
 
 		const { type, ...data } = notification;
 

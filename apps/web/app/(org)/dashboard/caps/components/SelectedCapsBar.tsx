@@ -44,9 +44,9 @@ export const SelectedCapsBar = ({
 						transition: { duration: 0.2 },
 					}}
 					transition={{
-						opacity: { duration: 0.2, ease: "easeOut" },
-						y: { type: "spring", damping: 15, stiffness: 300 },
-						scale: { type: "spring", damping: 15, stiffness: 300 },
+						opacity: { duration: 0.3, ease: "easeOut" },
+						y: { type: "spring", damping: 15, stiffness: 200 },
+						scale: { type: "spring", damping: 15, stiffness: 200 },
 					}}
 				>
 					<div className="flex gap-1 text-sm font-medium text-gray-10">

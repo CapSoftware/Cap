@@ -36,6 +36,10 @@ impl EditorInstance {
         on_state_change: impl Fn(&EditorState) + Send + Sync + 'static,
         frame_cb: Box<dyn FnMut(RenderedFrame) + Send>,
     ) -> Result<Arc<Self>, String> {
+        sentry::configure_scope(|scope| {
+            scope.set_tag("crate", "editor");
+        });
+
         if !project_path.exists() {
             println!("Video path {} not found!", project_path.display());
             panic!("Video path {} not found!", project_path.display());
@@ -207,12 +211,10 @@ impl EditorInstance {
                 };
 
                 let segment = &self.segments[segment_i as usize];
-                let clip_config = project.clips.iter().find(|v| v.index == segment_i);
-                let clip_offsets = clip_config.map(|v| v.offsets).unwrap_or_default();
 
                 if let Some(segment_frames) = segment
                     .decoders
-                    .get_frames(segment_time as f32, !project.camera.hide, clip_offsets)
+                    .get_frames(segment_time as f32, !project.camera.hide)
                     .await
                 {
                     let uniforms = ProjectUniforms::new(

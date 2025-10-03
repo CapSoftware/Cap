@@ -4,12 +4,10 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { spaces } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
-import { runPromise } from "@/lib/server";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 	const user = await getCurrentUser();
@@ -54,18 +52,16 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 		space.organizationId
 	}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
 
-	const [bucket] = await S3Buckets.getBucketAccess(Option.none()).pipe(
-		runPromise,
-	);
+	const bucket = await createBucketProvider();
 
 	try {
 		// Remove previous icon if exists
 		if (space.iconUrl) {
 			// Try to extract the previous S3 key from the URL
-			const key = space.iconUrl.match(/organizations\/.+/)?.[0];
-			if (key) {
+			const prevKeyMatch = space.iconUrl.match(/organizations\/.+/);
+			if (prevKeyMatch && prevKeyMatch[0]) {
 				try {
-					await bucket.deleteObject(key).pipe(runPromise);
+					await bucket.deleteObject(prevKeyMatch[0]);
 				} catch (e) {
 					// Log and continue
 					console.warn("Failed to delete old space icon from S3", e);
@@ -75,23 +71,18 @@ export async function uploadSpaceIcon(formData: FormData, spaceId: string) {
 
 		const sanitizedFile = await sanitizeFile(file);
 
-		await bucket
-			.putObject(
-				fileKey,
-				Effect.promise(() => sanitizedFile.bytes()),
-				{ contentType: file.type },
-			)
-			.pipe(runPromise);
-
-		let iconUrl: string | undefined;
+		await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
+			contentType: file.type,
+		});
 
 		// Construct the icon URL
+		let iconUrl;
 		if (serverEnv().CAP_AWS_BUCKET_URL) {
 			iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
 		} else if (serverEnv().CAP_AWS_ENDPOINT) {
-			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
+			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
 		} else {
-			iconUrl = `https://${bucket.bucketName}.s3.${
+			iconUrl = `https://${bucket.name}.s3.${
 				serverEnv().CAP_AWS_REGION || "us-east-1"
 			}.amazonaws.com/${fileKey}`;
 		}

@@ -9,10 +9,9 @@ export function Client(props: { hash?: string }) {
 	const user = use(useAuthContext().user);
 	const pathname = usePathname();
 	const isSharePage = pathname?.startsWith("/s/");
-	const isBlogPage = pathname?.startsWith("/blog");
 
 	useEffect(() => {
-		if (!isSharePage && !isBlogPage) {
+		if (!isSharePage) {
 			if (props.hash && user) {
 				Intercom({
 					app_id: "efxq71cv",

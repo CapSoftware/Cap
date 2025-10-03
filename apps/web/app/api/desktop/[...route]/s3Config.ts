@@ -3,7 +3,6 @@ import { db } from "@cap/database";
 import { decrypt, encrypt } from "@cap/database/crypto";
 import { nanoId } from "@cap/database/helpers";
 import { s3Buckets } from "@cap/database/schema";
-import { S3Bucket } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
@@ -32,7 +31,7 @@ app.post(
 		try {
 			// Encrypt the sensitive data
 			const encryptedConfig = {
-				id: S3Bucket.S3BucketId.make(nanoId()),
+				id: nanoId(),
 				provider: data.provider,
 				accessKeyId: await encrypt(data.accessKeyId),
 				secretAccessKey: await encrypt(data.secretAccessKey),

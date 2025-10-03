@@ -1,11 +1,13 @@
 import { LogoSpinner } from "@cap/ui";
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 import moment from "moment";
 import Image from "next/image";
 import { memo, useEffect, useRef, useState } from "react";
+import { useUploadingContext } from "@/app/(org)/dashboard/caps/UploadingContext";
 
 interface VideoThumbnailProps {
+	userId: string;
 	videoId: string;
 	alt: string;
 	imageClass?: string;
@@ -41,20 +43,9 @@ function generateRandomGrayScaleColor() {
 	return `rgb(${grayScaleValue}, ${grayScaleValue}, ${grayScaleValue})`;
 }
 
-export const imageUrlQuery = (videoId: string) =>
-	queryOptions({
-		queryKey: ["thumbnail", videoId],
-		queryFn: async () => {
-			const response = await fetch(`/api/thumbnail?videoId=${videoId}`);
-			if (response.ok) {
-				const data = await response.json();
-				return data.screen;
-			} else throw new Error("Failed to fetch pre-signed URLs");
-		},
-	});
-
 export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 	({
+		userId,
 		videoId,
 		alt,
 		imageClass,
@@ -62,8 +53,28 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		containerClass,
 		videoDuration,
 	}) => {
-		const imageUrl = useQuery(imageUrlQuery(videoId));
+		const imageUrl = useQuery({
+			queryKey: ["thumbnail", userId, videoId],
+			queryFn: async () => {
+				const cacheBuster = new Date().getTime();
+				const response = await fetch(
+					`/api/thumbnail?userId=${userId}&videoId=${videoId}&t=${cacheBuster}`,
+				);
+				if (response.ok) {
+					const data = await response.json();
+					return data.screen;
+				} else {
+					throw new Error("Failed to fetch pre-signed URLs");
+				}
+			},
+		});
 		const imageRef = useRef<HTMLImageElement>(null);
+
+		const { uploadingCapId } = useUploadingContext();
+
+		useEffect(() => {
+			imageUrl.refetch();
+		}, [imageUrl.refetch, uploadingCapId]);
 
 		const randomGradient = `linear-gradient(to right, ${generateRandomGrayScaleColor()}, ${generateRandomGrayScaleColor()})`;
 
@@ -72,7 +83,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 		>("loading");
 
 		useEffect(() => {
-			if (imageRef.current?.complete && imageRef.current.naturalWidth !== 0) {
+			if (imageRef.current?.complete && imageRef.current.naturalWidth != 0) {
 				setImageStatus("success");
 			}
 		}, []);
@@ -111,7 +122,7 @@ export const VideoThumbnail: React.FC<VideoThumbnailProps> = memo(
 						key={videoId}
 						style={{ objectFit: objectFit as any }}
 						className={clsx(
-							"w-full h-full rounded-t-xl",
+							"w-full h-full",
 							imageClass,
 							imageStatus === "loading" && "opacity-0",
 						)}

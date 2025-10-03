@@ -1,8 +1,7 @@
 use cap_camera::CameraInfo;
-use cap_camera_ffmpeg::*;
 use cap_fail::fail_err;
 use cap_media_info::VideoInfo;
-use cap_timestamp::Timestamp;
+use ffmpeg::frame;
 use futures::{FutureExt, future::BoxFuture};
 use kameo::prelude::*;
 use replace_with::replace_with_or_abort;
@@ -10,19 +9,26 @@ use std::{
     cmp::Ordering,
     ops::Deref,
     sync::mpsc::{self, SyncSender},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::oneshot, task::LocalSet};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
-use crate::ffmpeg::FFmpegVideoFrame;
+use cap_camera_ffmpeg::*;
 
 const CAMERA_INIT_TIMEOUT: Duration = Duration::from_secs(4);
+
+#[derive(Clone)]
+pub struct RawCameraFrame {
+    pub frame: frame::Video,
+    pub timestamp: Duration,
+    pub reference_time: Instant,
+}
 
 #[derive(Actor)]
 pub struct CameraFeed {
     state: State,
-    senders: Vec<flume::Sender<FFmpegVideoFrame>>,
+    senders: Vec<flume::Sender<RawCameraFrame>>,
     on_ready: Vec<oneshot::Sender<()>>,
     on_disconnect: Vec<Box<dyn Fn() + Send>>,
 }
@@ -52,12 +58,6 @@ impl OpenState {
         if let Some(connecting) = &self.connecting
             && id == connecting.id
         {
-            if let Some(attached) = self.attached.take() {
-                let _ = attached.done_tx.send(());
-            }
-
-            trace!("Attaching new camera");
-
             self.attached = Some(AttachedState {
                 id,
                 camera_info: data.camera_info,
@@ -152,7 +152,7 @@ pub struct SetInput {
 
 pub struct RemoveInput;
 
-pub struct AddSender(pub flume::Sender<FFmpegVideoFrame>);
+pub struct AddSender(pub flume::Sender<RawCameraFrame>);
 
 pub struct ListenForReady(pub oneshot::Sender<()>);
 
@@ -173,7 +173,7 @@ struct InputConnectFailed {
     id: DeviceOrModelID,
 }
 
-struct NewFrame(FFmpegVideoFrame);
+struct NewFrame(RawCameraFrame);
 
 struct Unlock;
 
@@ -212,6 +212,7 @@ struct SetupCameraResult {
     handle: cap_camera::CaptureHandle,
     camera_info: cap_camera::CameraInfo,
     video_info: VideoInfo,
+    // frame_rx: mpsc::Receiver<RawCameraFrame>,
 }
 
 async fn setup_camera(
@@ -254,7 +255,6 @@ async fn setup_camera(
     });
 
     let format = ideal_formats.swap_remove(0);
-
     let frame_rate = format.frame_rate() as u32;
 
     let (ready_tx, ready_rx) = oneshot::channel();
@@ -262,7 +262,7 @@ async fn setup_camera(
 
     let capture_handle = camera
         .start_capturing(format.clone(), move |frame| {
-            let Ok(mut ff_frame) = frame.as_ffmpeg() else {
+            let Ok(mut ff_frame) = frame.to_ffmpeg() else {
                 return;
             };
 
@@ -280,22 +280,10 @@ async fn setup_camera(
             }
 
             let _ = recipient
-                .tell(NewFrame(FFmpegVideoFrame {
-                    inner: ff_frame,
-                    #[cfg(windows)]
-                    timestamp: Timestamp::PerformanceCounter(
-                        cap_timestamp::PerformanceCounterTimestamp::new(
-                            frame.native().perf_counter,
-                        ),
-                    ),
-                    #[cfg(target_os = "macos")]
-                    timestamp: Timestamp::MachAbsoluteTime(
-                        cap_timestamp::MachAbsoluteTimestamp::new(
-                            cidre::cm::Clock::convert_host_time_to_sys_units(
-                                frame.native().sample_buf().pts(),
-                            ),
-                        ),
-                    ),
+                .tell(NewFrame(RawCameraFrame {
+                    frame: ff_frame,
+                    timestamp: frame.timestamp,
+                    reference_time: frame.reference_time,
                 }))
                 .try_send();
         })
@@ -353,14 +341,14 @@ impl Message<SetInput> for CameraFeed {
                     Ok(r) => {
                         let _ = ready_tx.send(Ok(InputConnected {
                             camera_info: r.camera_info.clone(),
-                            video_info: r.video_info,
+                            video_info: r.video_info.clone(),
                             done_tx: done_tx.clone(),
                         }));
 
                         let _ = actor_ref
                             .ask(InputConnected {
                                 camera_info: r.camera_info.clone(),
-                                video_info: r.video_info,
+                                video_info: r.video_info.clone(),
                                 done_tx: done_tx.clone(),
                             })
                             .await;
@@ -376,15 +364,9 @@ impl Message<SetInput> for CameraFeed {
                     }
                 };
 
-                trace!("Waiting for camera to be done");
-
                 let _ = done_rx.recv();
 
-                trace!("Stoppping capture of {:?}", &id);
-
                 let _ = handle.stop_capturing();
-
-                info!("Stopped capture of {:?}", &id);
             })
         });
 

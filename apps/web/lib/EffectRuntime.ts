@@ -1,5 +1,4 @@
 import * as WebSdk from "@effect/opentelemetry/WebSdk";
-import { FetchHttpClient } from "@effect/platform";
 import { Layer, ManagedRuntime } from "effect";
 import {
 	makeUseEffectMutation,
@@ -10,11 +9,7 @@ import { getTracingConfig } from "./tracing";
 
 const TracingLayer = WebSdk.layer(getTracingConfig);
 
-const RuntimeLayer = Layer.mergeAll(
-	Rpc.Default,
-	TracingLayer,
-	FetchHttpClient.layer,
-);
+const RuntimeLayer = Layer.mergeAll(Rpc.Default, TracingLayer);
 
 export type RuntimeLayer = typeof RuntimeLayer;
 

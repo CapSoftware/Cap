@@ -5,7 +5,7 @@ use cidre::*;
 use crate::CapturedFrameExt;
 
 #[derive(thiserror::Error, Debug)]
-pub enum AsFFmpegError {
+pub enum ToFfmpegError {
     #[error("Unsupported media subtype '{0}'")]
     UnsupportedSubType(String),
     #[error("{0}")]
@@ -13,7 +13,7 @@ pub enum AsFFmpegError {
 }
 
 impl CapturedFrameExt for CapturedFrame {
-    fn as_ffmpeg(&self) -> Result<ffmpeg::frame::Video, AsFFmpegError> {
+    fn to_ffmpeg(&self) -> Result<ffmpeg::frame::Video, ToFfmpegError> {
         let native = self.native().clone();
 
         let width = native.image_buf().width();
@@ -112,7 +112,7 @@ impl CapturedFrameExt for CapturedFrame {
                 ff_frame
             }
             format => {
-                return Err(AsFFmpegError::UnsupportedSubType(format.to_string()));
+                return Err(ToFfmpegError::UnsupportedSubType(format.to_string()));
             }
         };
 

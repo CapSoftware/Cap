@@ -7,7 +7,6 @@ import { homepageCopy } from "../../../data/homepage-copy";
 import Faq from "./Faq";
 import Features from "./Features";
 import Header from "./Header";
-import { HomePageSchema } from "./HomePageSchema";
 import Pricing from "./Pricing";
 import RecordingModes from "./RecordingModes";
 import Testimonials from "./Testimonials";
@@ -21,7 +20,6 @@ export const HomePage: React.FC<HomePageProps> = ({
 }) => {
 	return (
 		<>
-			<HomePageSchema />
 			<Header serverHomepageCopyVariant={serverHomepageCopyVariant} />
 			<div className="space-y-[150px] lg:space-y-[200px]">
 				<RecordingModes />

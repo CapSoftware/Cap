@@ -372,138 +372,141 @@ function Inner(props: { initialStore: GeneralSettingsStore | null }) {
 	};
 
 	return (
-		<div class="flex flex-col h-full custom-scroll">
-			<div class="p-4 space-y-6">
-				<AppearanceSection
-					currentTheme={settings.theme ?? "system"}
-					onThemeChange={(newTheme) => {
-						setSettings("theme", newTheme);
-						generalSettingsStore.set({ theme: newTheme });
-					}}
-				/>
+		<div class="flex flex-col w-full h-full">
+			<div class="flex-1 custom-scroll">
+				<div class="p-4 space-y-6">
+					<AppearanceSection
+						currentTheme={settings.theme ?? "system"}
+						onThemeChange={(newTheme) => {
+							setSettings("theme", newTheme);
+							generalSettingsStore.set({ theme: newTheme });
+						}}
+					/>
 
-				<For each={settingsGroups}>
-					{(group) => (
-						<Show when={group.os === ostype || !group.os}>
-							<div>
-								<h3
-									class={cx(
-										"mb-3 text-sm text-gray-12 w-fit",
-										group.titleStyling,
-									)}
-								>
-									{group.title}
-								</h3>
-								<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
-									<For each={group.items}>
-										{(item) => {
-											// Check OS compatibility
-											if (
-												item.type === "toggle" &&
-												item.os &&
-												item.os !== ostype
-											) {
-												return null;
-											}
-
-											if (item.type === "toggle") {
-												return (
-													<ToggleSetting
-														pro={group.title === "Cap Pro"}
-														label={item.label}
-														description={item.description}
-														value={item.value}
-														onChange={item.onChange}
-													/>
-												);
-											} else if (item.type === "select") {
+					<For each={settingsGroups}>
+						{(group) => (
+							<Show when={group.os === ostype || !group.os}>
+								<div>
+									<h3
+										class={cx(
+											"mb-3 text-sm text-gray-12 w-fit",
+											group.titleStyling,
+										)}
+									>
+										{group.title}
+									</h3>
+									<div class="px-3 rounded-xl border divide-y divide-gray-3 border-gray-3 bg-gray-2">
+										<For each={group.items}>
+											{(item) => {
+												// Check OS compatibility
 												if (
-													item.label === "Main window recording start behaviour"
+													item.type === "toggle" &&
+													item.os &&
+													item.os !== ostype
 												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Close", value: "close" },
-															{ text: "Minimise", value: "minimise" },
-														],
-													);
-												} else if (
-													item.label === "Studio recording finish behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Open editor", value: "openEditor" },
-															{
-																text: "Show in overlay",
-																value: "showOverlay",
-															},
-														],
-													);
-												} else if (item.label === "Recording countdown") {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Off", value: 0 },
-															{ text: "3 seconds", value: 3 },
-															{ text: "5 seconds", value: 5 },
-															{ text: "10 seconds", value: 10 },
-														],
-													);
-												} else if (
-													item.label === "After deleting recording behaviour"
-												) {
-													return renderRecordingSelect(
-														item.label,
-														item.description,
-														() => item.value,
-														item.onChange,
-														[
-															{ text: "Do Nothing", value: "doNothing" },
-															{
-																text: "Reopen Recording Window",
-																value: "reopenRecordingWindow",
-															},
-														],
-													);
+													return null;
 												}
-											}
-											return null;
-										}}
-									</For>
+
+												if (item.type === "toggle") {
+													return (
+														<ToggleSetting
+															pro={group.title === "Cap Pro"}
+															label={item.label}
+															description={item.description}
+															value={item.value}
+															onChange={item.onChange}
+														/>
+													);
+												} else if (item.type === "select") {
+													if (
+														item.label ===
+														"Main window recording start behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Close", value: "close" },
+																{ text: "Minimise", value: "minimise" },
+															],
+														);
+													} else if (
+														item.label === "Studio recording finish behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Open editor", value: "openEditor" },
+																{
+																	text: "Show in overlay",
+																	value: "showOverlay",
+																},
+															],
+														);
+													} else if (item.label === "Recording countdown") {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Off", value: 0 },
+																{ text: "3 seconds", value: 3 },
+																{ text: "5 seconds", value: 5 },
+																{ text: "10 seconds", value: 10 },
+															],
+														);
+													} else if (
+														item.label === "After deleting recording behaviour"
+													) {
+														return renderRecordingSelect(
+															item.label,
+															item.description,
+															() => item.value,
+															item.onChange,
+															[
+																{ text: "Do Nothing", value: "doNothing" },
+																{
+																	text: "Reopen Recording Window",
+																	value: "reopenRecordingWindow",
+																},
+															],
+														);
+													}
+												}
+												return null;
+											}}
+										</For>
+									</div>
 								</div>
-							</div>
-						</Show>
-					)}
-				</For>
+							</Show>
+						)}
+					</For>
 
-				<ServerURLSetting
-					value={settings.serverUrl ?? "https://cap.so"}
-					onChange={async (v) => {
-						const url = new URL(v);
-						const origin = url.origin;
+					<ServerURLSetting
+						value={settings.serverUrl ?? "https://cap.so"}
+						onChange={async (v) => {
+							const url = new URL(v);
+							const origin = url.origin;
 
-						if (
-							!(await confirm(
-								`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
-							))
-						)
-							return;
+							if (
+								!(await confirm(
+									`Are you sure you want to change the server URL to '${origin}'? You will need to sign in again.`,
+								))
+							)
+								return;
 
-						await authStore.set(undefined);
-						await commands.setServerUrl(origin);
-						handleChange("serverUrl", origin);
-					}}
-				/>
+							await authStore.set(undefined);
+							await commands.setServerUrl(origin);
+							handleChange("serverUrl", origin);
+						}}
+					/>
+				</div>
 			</div>
 		</div>
 	);

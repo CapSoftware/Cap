@@ -105,9 +105,9 @@ pub(super) fn start_capturing_impl(
 
             callback(CapturedFrame {
                 native: NativeCapturedFrame(image_buf.retained(), data.sample_buf.retained()),
-                // reference_time: Instant::now(),
+                reference_time: Instant::now(),
                 timestamp: data.timestamp,
-                // capture_begin_time: Some(data.capture_begin_time),
+                capture_begin_time: Some(data.capture_begin_time),
             });
         })));
 

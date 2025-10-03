@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { folders } from "@cap/database/schema";
-import type { Folder } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -13,10 +12,10 @@ export async function updateFolder({
 	color,
 	parentId,
 }: {
-	folderId: Folder.FolderId;
+	folderId: string;
 	name?: string;
 	color?: "normal" | "blue" | "red" | "yellow";
-	parentId?: Folder.FolderId | null;
+	parentId?: string | null;
 }) {
 	const user = await getCurrentUser();
 	if (!user || !user.activeOrganizationId)

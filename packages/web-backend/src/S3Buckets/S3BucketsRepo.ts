@@ -3,7 +3,7 @@ import { S3Bucket, type Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
 
-import { Database } from "../Database.ts";
+import { Database } from "../Database";
 
 export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 	"S3BucketsRepo",
@@ -48,26 +48,7 @@ export class S3BucketsRepo extends Effect.Service<S3BucketsRepo>()(
 					}),
 			);
 
-			const getForUser = Effect.fn("S3BucketsRepo.getForUser")(
-				(userId: string) =>
-					Effect.gen(function* () {
-						const [res] = yield* db.execute((db) =>
-							db
-								.select({ bucket: Db.s3Buckets })
-								.from(Db.s3Buckets)
-								.where(Dz.eq(Db.s3Buckets.ownerId, userId)),
-						);
-
-						return Option.fromNullable(res).pipe(
-							Option.map((v) =>
-								S3Bucket.decodeSync({ ...v.bucket, name: v.bucket.bucketName }),
-							),
-						);
-					}),
-			);
-
-			return { getForVideo, getById, getForUser };
+			return { getForVideo, getById };
 		}),
-		dependencies: [Database.Default],
 	},
 ) {}

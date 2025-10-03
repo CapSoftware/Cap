@@ -4,14 +4,12 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { organizations } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
 import DOMPurify from "dompurify";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
 import { JSDOM } from "jsdom";
 import { revalidatePath } from "next/cache";
 import { sanitizeFile } from "@/lib/sanitizeFile";
-import { runPromise } from "@/lib/server";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function uploadOrganizationIcon(
 	formData: FormData,
@@ -58,30 +56,27 @@ export async function uploadOrganizationIcon(
 
 	try {
 		const sanitizedFile = await sanitizeFile(file);
-		let iconUrl: string | undefined;
 
-		await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+		const bucket = await createBucketProvider();
 
-			yield* bucket.putObject(
-				fileKey,
-				yield* Effect.promise(() => sanitizedFile.bytes()),
-				{ contentType: file.type },
-			);
-			// Construct the icon URL
-			if (serverEnv().CAP_AWS_BUCKET_URL) {
-				// If a custom bucket URL is defined, use it
-				iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-			} else if (serverEnv().CAP_AWS_ENDPOINT) {
-				// For custom endpoints like MinIO
-				iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-			} else {
-				// Default AWS S3 URL format
-				iconUrl = `https://${bucket.bucketName}.s3.${
-					serverEnv().CAP_AWS_REGION || "us-east-1"
-				}.amazonaws.com/${fileKey}`;
-			}
-		}).pipe(runPromise);
+		await bucket.putObject(fileKey, await sanitizedFile.bytes(), {
+			contentType: file.type,
+		});
+
+		// Construct the icon URL
+		let iconUrl;
+		if (serverEnv().CAP_AWS_BUCKET_URL) {
+			// If a custom bucket URL is defined, use it
+			iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
+		} else if (serverEnv().CAP_AWS_ENDPOINT) {
+			// For custom endpoints like MinIO
+			iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
+		} else {
+			// Default AWS S3 URL format
+			iconUrl = `https://${bucket.name}.s3.${
+				serverEnv().CAP_AWS_REGION || "us-east-1"
+			}.amazonaws.com/${fileKey}`;
+		}
 
 		// Update organization with new icon URL
 		await db()

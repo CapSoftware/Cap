@@ -2,12 +2,12 @@ import { createQuery } from "@tanstack/solid-query";
 import { Store } from "@tauri-apps/plugin-store";
 import { onCleanup } from "solid-js";
 
-import type {
-	AuthStore,
-	GeneralSettingsStore,
-	HotkeysStore,
-	PresetsStore,
-	RecordingSettingsStore,
+import {
+	type AuthStore,
+	commands,
+	type GeneralSettingsStore,
+	type HotkeysStore,
+	type PresetsStore,
 } from "~/utils/tauri";
 
 let _store: Promise<Store> | undefined;
@@ -60,5 +60,3 @@ export const authStore = declareStore<AuthStore>("auth");
 export const hotkeysStore = declareStore<HotkeysStore>("hotkeys");
 export const generalSettingsStore =
 	declareStore<GeneralSettingsStore>("general_settings");
-export const recordingSettingsStore =
-	declareStore<RecordingSettingsStore>("recording_settings");

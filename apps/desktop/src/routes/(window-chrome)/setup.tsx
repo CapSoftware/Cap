@@ -83,99 +83,101 @@ export default function () {
 
 	const handleContinue = () => {
 		// Just proceed to the main window without saving mode to store
-		commands.showWindow({ Main: { init_target_mode: null } }).then(() => {
+		commands.showWindow("Main").then(() => {
 			getCurrentWindow().close();
 		});
 	};
 
 	return (
-		<div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
-			{showStartup() && (
-				<Startup
-					onClose={() => {
-						showStartupActions.mutate(false);
-					}}
-				/>
-			)}
-
-			<Show when={currentStep() === "permissions"}>
-				<div class="flex flex-col items-center">
-					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Permissions Required
-					</h1>
-					<p class="text-gray-11">Cap needs permissions to run properly.</p>
-				</div>
-
-				<ul class="flex flex-col gap-4 py-8">
-					<For each={permissions}>
-						{(permission) => {
-							const permissionCheck = () => check()?.[permission.key];
-
-							return (
-								<Show when={permissionCheck() !== "notNeeded"}>
-									<li class="flex flex-row items-center gap-4">
-										<div class="flex flex-col flex-[2]">
-											<span class="font-[500] text-[0.875rem] text-[--text-primary]">
-												{permission.name} Permission
-											</span>
-											<span class="text-[--text-secondary]">
-												{permission.description}
-											</span>
-										</div>
-										<Button
-											class="flex-1 shrink-0"
-											onClick={() =>
-												permissionCheck() !== "denied"
-													? requestPermission(permission.key)
-													: openSettings(permission.key)
-											}
-											disabled={isPermitted(permissionCheck())}
-										>
-											{permissionCheck() === "granted"
-												? "Granted"
-												: permissionCheck() !== "denied"
-													? "Grant Permission"
-													: "Request Permission"}
-										</Button>
-									</li>
-								</Show>
-							);
+		<>
+			<div class="flex flex-col px-[2rem] text-[0.875rem] font-[400] flex-1 bg-gray-1 justify-evenly items-center">
+				{showStartup() && (
+					<Startup
+						onClose={() => {
+							showStartupActions.mutate(false);
 						}}
-					</For>
-				</ul>
+					/>
+				)}
 
-				<Button
-					class="px-12"
-					size="lg"
-					disabled={
-						permissions.find((p) => !isPermitted(check()?.[p.key])) !==
-						undefined
-					}
-					onClick={() => setCurrentStep("mode")}
-				>
-					Continue
-				</Button>
-			</Show>
+				<Show when={currentStep() === "permissions"}>
+					<div class="flex flex-col items-center">
+						<IconCapLogo class="size-14 mb-3" />
+						<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+							Permissions Required
+						</h1>
+						<p class="text-gray-11">Cap needs permissions to run properly.</p>
+					</div>
 
-			<Show when={currentStep() === "mode"}>
-				<div class="flex flex-col items-center">
-					<IconCapLogo class="size-14 mb-3" />
-					<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
-						Select Recording Mode
-					</h1>
-					<p class="text-gray-11">Choose how you want to record with Cap.</p>
-				</div>
+					<ul class="flex flex-col gap-4 py-8">
+						<For each={permissions}>
+							{(permission) => {
+								const permissionCheck = () => check()?.[permission.key];
 
-				<div class="w-full py-4">
-					<ModeSelect />
-				</div>
+								return (
+									<Show when={permissionCheck() !== "notNeeded"}>
+										<li class="flex flex-row items-center gap-4">
+											<div class="flex flex-col flex-[2]">
+												<span class="font-[500] text-[0.875rem] text-[--text-primary]">
+													{permission.name} Permission
+												</span>
+												<span class="text-[--text-secondary]">
+													{permission.description}
+												</span>
+											</div>
+											<Button
+												class="flex-1 shrink-0"
+												onClick={() =>
+													permissionCheck() !== "denied"
+														? requestPermission(permission.key)
+														: openSettings(permission.key)
+												}
+												disabled={isPermitted(permissionCheck())}
+											>
+												{permissionCheck() === "granted"
+													? "Granted"
+													: permissionCheck() !== "denied"
+														? "Grant Permission"
+														: "Request Permission"}
+											</Button>
+										</li>
+									</Show>
+								);
+							}}
+						</For>
+					</ul>
 
-				<Button class="px-12" size="lg" onClick={handleContinue}>
-					Continue to Cap
-				</Button>
-			</Show>
-		</div>
+					<Button
+						class="px-12"
+						size="lg"
+						disabled={
+							permissions.find((p) => !isPermitted(check()?.[p.key])) !==
+							undefined
+						}
+						onClick={() => setCurrentStep("mode")}
+					>
+						Continue
+					</Button>
+				</Show>
+
+				<Show when={currentStep() === "mode"}>
+					<div class="flex flex-col items-center">
+						<IconCapLogo class="size-14 mb-3" />
+						<h1 class="text-[1.2rem] font-[700] mb-1 text-[--text-primary]">
+							Select Recording Mode
+						</h1>
+						<p class="text-gray-11">Choose how you want to record with Cap.</p>
+					</div>
+
+					<div class="w-full py-4">
+						<ModeSelect />
+					</div>
+
+					<Button class="px-12" size="lg" onClick={handleContinue}>
+						Continue to Cap
+					</Button>
+				</Show>
+			</div>
+		</>
 	);
 }
 
@@ -503,9 +505,7 @@ function Startup(props: { onClose: () => void }) {
 									size="lg"
 									onClick={async () => {
 										handleStartupCompleted();
-										await commands.showWindow({
-											Main: { init_target_mode: null },
-										});
+										await commands.showWindow("Main");
 										getCurrentWindow().close();
 									}}
 								>

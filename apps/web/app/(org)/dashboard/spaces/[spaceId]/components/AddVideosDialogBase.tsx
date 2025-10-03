@@ -9,7 +9,6 @@ import {
 	Input,
 	LoadingSpinner,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faVideo } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -29,14 +28,14 @@ interface AddVideosDialogBaseProps {
 	entityId: string;
 	entityName: string;
 	onVideosAdded?: () => void;
-	addVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
-	removeVideos: (entityId: string, videoIds: Video.VideoId[]) => Promise<any>;
+	addVideos: (entityId: string, videoIds: string[]) => Promise<any>;
+	removeVideos: (entityId: string, videoIds: string[]) => Promise<any>;
 	getVideos: (limit?: number) => Promise<any>;
 	getEntityVideoIds: (entityId: string) => Promise<any>;
 }
 
-export interface VideoData {
-	id: Video.VideoId;
+export interface Video {
+	id: string;
 	ownerId: string;
 	name: string;
 	createdAt: Date;
@@ -63,7 +62,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 	getVideos,
 	getEntityVideoIds,
 }) => {
-	const [selectedVideos, setSelectedVideos] = useState<Video.VideoId[]>([]);
+	const [selectedVideos, setSelectedVideos] = useState<string[]>([]);
 	const [searchTerm, setSearchTerm] = useState("");
 	const filterTabs = ["all", "added", "notAdded"];
 
@@ -76,7 +75,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 		},
 	});
 
-	const { data: videosData, isLoading } = useQuery<VideoData[]>({
+	const { data: videosData, isLoading } = useQuery<Video[]>({
 		queryKey: ["user-videos"],
 		queryFn: async () => {
 			const result = await getVideos();
@@ -90,7 +89,7 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 		gcTime: 1000 * 60 * 5,
 	});
 
-	const { data: entityVideoIds } = useQuery<Video.VideoId[]>({
+	const { data: entityVideoIds } = useQuery<string[]>({
 		queryKey: ["entity-video-ids", entityId],
 		queryFn: async () => {
 			const result = await getEntityVideoIds(entityId);
@@ -109,8 +108,8 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 			toAdd,
 			toRemove,
 		}: {
-			toAdd: Video.VideoId[];
-			toRemove: Video.VideoId[];
+			toAdd: string[];
+			toRemove: string[];
 		}) => {
 			let addResult = { success: true, message: "", error: "" };
 			let removeResult = { success: true, message: "", error: "" };
@@ -154,25 +153,21 @@ const AddVideosDialogBase: React.FC<AddVideosDialogBaseProps> = ({
 	const [videoTab, setVideoTab] = useState<(typeof filterTabs)[number]>("all");
 
 	// Memoize filtered videos for stable reference
-	const filteredVideos: VideoData[] = useMemo(() => {
+	const filteredVideos: Video[] = useMemo(() => {
 		let vids =
-			videosData?.filter((video: VideoData) =>
+			videosData?.filter((video: Video) =>
 				video.name.toLowerCase().includes(searchTerm.toLowerCase()),
 			) || [];
 		if (videoTab === "added") {
-			vids = vids.filter((video: VideoData) =>
-				entityVideoIds?.includes(video.id),
-			);
+			vids = vids.filter((video: Video) => entityVideoIds?.includes(video.id));
 		} else if (videoTab === "notAdded") {
-			vids = vids.filter(
-				(video: VideoData) => !entityVideoIds?.includes(video.id),
-			);
+			vids = vids.filter((video: Video) => !entityVideoIds?.includes(video.id));
 		}
 		return vids;
 	}, [videosData, searchTerm, videoTab, entityVideoIds]);
 
 	// Memoize handleVideoToggle for stable reference
-	const handleVideoToggle = useCallback((videoId: Video.VideoId) => {
+	const handleVideoToggle = useCallback((videoId: string) => {
 		setSelectedVideos((prev) =>
 			prev.includes(videoId)
 				? prev.filter((id) => id !== videoId)

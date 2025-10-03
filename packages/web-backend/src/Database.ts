@@ -1,19 +1,15 @@
-import { db } from "@cap/database";
-import { Effect, Schema } from "effect";
+import type { db } from "@cap/database";
+import { Context, Data, type Effect } from "effect";
 
-export class DatabaseError extends Schema.TaggedError<DatabaseError>()(
-	"DatabaseError",
-	{ cause: Schema.Unknown },
-) {}
+export class Database extends Context.Tag("Database")<
+	Database,
+	{
+		execute<T>(
+			callback: (_: ReturnType<typeof db>) => Promise<T>,
+		): Effect.Effect<T, DatabaseError>;
+	}
+>() {}
 
-export class Database extends Effect.Service<Database>()("Database", {
-	effect: Effect.gen(function* () {
-		return {
-			execute: <T>(cb: (_: ReturnType<typeof db>) => Promise<T>) =>
-				Effect.tryPromise({
-					try: () => cb(db()),
-					catch: (cause) => new DatabaseError({ cause }),
-				}),
-		};
-	}),
-}) {}
+export class DatabaseError extends Data.TaggedError("DatabaseError")<{
+	message: string;
+}> {}

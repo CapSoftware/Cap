@@ -5,6 +5,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
 import { homepageCopy } from "../../../data/homepage-copy";
 
+interface FaqItem {
+	question: string;
+	answer: string;
+}
+
 const Faq = () => {
 	const [openIndex, setOpenIndex] = useState<number | null>(null);
 
@@ -18,7 +23,7 @@ const Faq = () => {
 			<div className="space-y-4">
 				{homepageCopy.faq.items.map((item, index) => (
 					<div
-						key={index.toString()}
+						key={index}
 						className={clsx(
 							"rounded-xl overflow-hidde border border-gray-5",
 							openIndex === index
@@ -28,7 +33,6 @@ const Faq = () => {
 						)}
 					>
 						<button
-							type="button"
 							className="flex justify-between items-center px-6 py-4 w-full text-left"
 							onClick={() => toggleFaq(index)}
 						>

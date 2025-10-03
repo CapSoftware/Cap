@@ -6,14 +6,14 @@ fn main() {
 #[cfg(windows)]
 mod win {
     use args::Args;
-    use cap_enc_mediafoundation::{d3d::create_d3d_device, media::MF_VERSION, video::H264Encoder};
+    use cap_enc_mediafoundation::{
+        d3d::create_d3d_device,
+        media::MF_VERSION,
+        video::{H264Encoder, InputSample, SampleWriter},
+    };
     use clap::Parser;
     use scap_targets::Display;
-    use std::{
-        path::Path,
-        sync::{Arc, atomic::AtomicBool},
-        time::Duration,
-    };
+    use std::{path::Path, sync::Arc, time::Duration};
     use windows::{
         Foundation::{Metadata::ApiInformation, TimeSpan},
         Graphics::Capture::GraphicsCaptureSession,
@@ -34,6 +34,7 @@ mod win {
         output_path: &str,
         bit_rate: u32,
         frame_rate: u32,
+        resolution: Resolution,
         verbose: bool,
         wait_for_debugger: bool,
     ) -> Result<()> {
@@ -76,7 +77,11 @@ mod win {
             .unwrap();
 
         // Resolve encoding settings
-        let resolution = item.Size()?;
+        let resolution = if let Some(resolution) = resolution.get_size() {
+            resolution
+        } else {
+            item.Size()?
+        };
         let bit_rate = bit_rate * 1000000;
 
         // Start the recording
@@ -102,7 +107,7 @@ mod win {
                             Duration: frame_time.Duration - first_time.Duration,
                         };
 
-                        let _ = frame_tx.send(Some((frame.texture().clone(), timestamp)));
+                        let _ = frame_tx.send(Some(frame));
 
                         Ok(())
                     }
@@ -127,35 +132,56 @@ mod win {
 
             let output_path = std::env::current_dir().unwrap().join(output_path);
 
-            // let sample_writer = Arc::new(SampleWriter::new(output_path.as_path())?);
+            let sample_writer = Arc::new(SampleWriter::new(output_path.as_path())?);
+
+            let stream_index = sample_writer.add_stream(&video_encoder.output_type())?;
 
             capturer.start()?;
-
-            let should_stop_encoder = Arc::new(AtomicBool::new(false));
+            sample_writer.start()?;
 
             std::thread::spawn({
-                // let sample_writer = sample_writer.clone();
-                let should_stop_encoder = should_stop_encoder.clone();
+                let sample_writer = sample_writer.clone();
                 move || {
                     unsafe { MFStartup(MF_VERSION, MFSTARTUP_FULL) }.unwrap();
 
-                    video_encoder
-                        .run(
-                            should_stop_encoder,
-                            || Ok(frame_rx.recv().ok().flatten()),
-                            |sample| {
-                                dbg!(sample);
-                                Ok(())
-                                // sample_writer.write(stream_index, &output_sample).unwrap()
-                            },
-                        )
-                        .unwrap();
+                    video_encoder.start().unwrap();
+
+                    while let Ok(e) = video_encoder.get_event() {
+                        match e {
+                            MediaFoundation::METransformNeedInput => {
+                                let Some(frame) = frame_rx.recv().unwrap() else {
+                                    break;
+                                };
+
+                                if video_encoder
+                                    .handle_needs_input(
+                                        frame.texture(),
+                                        frame.inner().SystemRelativeTime().unwrap(),
+                                    )
+                                    .is_err()
+                                {
+                                    break;
+                                }
+                            }
+                            MediaFoundation::METransformHaveOutput => {
+                                if let Some(output_sample) =
+                                    video_encoder.handle_has_output().unwrap()
+                                {
+                                    sample_writer.write(stream_index, &output_sample).unwrap();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    video_encoder.finish().unwrap();
                 }
             });
 
             pause();
 
             capturer.stop().unwrap();
+            sample_writer.stop()?;
         }
 
         Ok(())
@@ -171,12 +197,20 @@ mod win {
 
         let args = Args::parse();
 
+        if let Some(command) = args.command {
+            match command {
+                args::Commands::EnumEncoders => enum_encoders().unwrap(),
+            }
+            return;
+        }
+
         let monitor_index: usize = args.display;
         let output_path = args.output_file.as_str();
         let verbose = args.verbose;
         let wait_for_debugger = args.wait_for_debugger;
         let bit_rate: u32 = args.bit_rate;
         let frame_rate: u32 = args.frame_rate;
+        let resolution: Resolution = args.resolution;
 
         // Validate some of the params
         if !validate_path(output_path) {
@@ -188,6 +222,7 @@ mod win {
             output_path,
             bit_rate,
             frame_rate,
+            resolution,
             verbose | wait_for_debugger,
             wait_for_debugger,
         );
@@ -201,6 +236,18 @@ mod win {
     fn pause() {
         println!("Press ENTER to stop recording...");
         std::io::Read::read(&mut std::io::stdin(), &mut [0]).unwrap();
+    }
+
+    fn enum_encoders() -> Result<()> {
+        let encoder_devices = VideoEncoderDevice::enumerate()?;
+        if encoder_devices.is_empty() {
+            exit_with_error("No hardware H264 encoders found!");
+        }
+        println!("Encoders ({}):", encoder_devices.len());
+        for (i, encoder_device) in encoder_devices.iter().enumerate() {
+            println!("  {} - {}", i, encoder_device.display_name());
+        }
+        Ok(())
     }
 
     fn validate_path<P: AsRef<Path>>(path: P) -> bool {
@@ -238,6 +285,8 @@ mod win {
     mod args {
         use clap::{Parser, Subcommand};
 
+        use cap_enc_mediafoundation::resolution::Resolution;
+
         #[derive(Parser, Debug)]
         #[clap(author, version, about, long_about = None)]
         pub struct Args {
@@ -252,6 +301,10 @@ mod win {
             /// The frame rate you would like to encode at.
             #[clap(short, long, default_value_t = 60)]
             pub frame_rate: u32,
+
+            /// The resolution you would like to encode at: native, 720p, 1080p, 2160p, or 4320p.
+            #[clap(short, long, default_value_t = Resolution::Native)]
+            pub resolution: Resolution,
 
             /// The index of the encoder you'd like to use to record (use enum-encoders command for a list of encoders and their indices).
             #[clap(short, long, default_value_t = 0)]

@@ -21,6 +21,7 @@ import {
 	parseVTT,
 	type TranscriptEntry,
 } from "@/app/s/[videoId]/_components/utils/transcript-utils";
+import { usePublicEnv } from "@/utils/public-env";
 
 declare global {
 	interface Window {
@@ -43,9 +44,7 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const EmbedVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: Omit<typeof videos.$inferSelect, "password"> & {
-			hasActiveUpload: boolean | undefined;
-		};
+		data: Omit<typeof videos.$inferSelect, "password">;
 		user: typeof userSelectProps | null;
 		comments: CommentWithAuthor[];
 		chapters?: { title: string; start: number }[];
@@ -148,6 +147,8 @@ export const EmbedVideo = forwardRef<
 			}
 		}, [chapters]);
 
+		const publicEnv = usePublicEnv();
+
 		let videoSrc: string;
 		let enableCrossOrigin = false;
 
@@ -162,9 +163,9 @@ export const EmbedVideo = forwardRef<
 		) {
 			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
 		} else if (data.source.type === "MediaConvert") {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+			videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
 		} else {
-			videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+			videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
 		}
 
 		useEffect(() => {
@@ -197,24 +198,20 @@ export const EmbedVideo = forwardRef<
 				<div className="relative w-screen h-screen rounded-xl">
 					{data.source.type === "desktopMP4" ? (
 						<CapVideoPlayer
-							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
 							enableCrossOrigin={enableCrossOrigin}
-							hasActiveUpload={data.hasActiveUpload}
 						/>
 					) : (
 						<HLSVideoPlayer
-							videoId={data.id}
 							mediaPlayerClassName="w-full h-full"
 							videoSrc={videoSrc}
 							chaptersSrc={chaptersUrl || ""}
 							captionsSrc={subtitleUrl || ""}
 							videoRef={videoRef}
-							hasActiveUpload={data.hasActiveUpload}
 						/>
 					)}
 				</div>

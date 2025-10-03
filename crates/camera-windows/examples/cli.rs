@@ -32,12 +32,7 @@ mod windows {
                 let Ok(bytes) = frame.bytes() else {
                     return;
                 };
-                dbg!(
-                    bytes.len(),
-                    frame.pixel_format,
-                    frame.timestamp,
-                    frame.perf_counter
-                );
+                dbg!(bytes.len(), frame.pixel_format);
             })
             .unwrap();
 

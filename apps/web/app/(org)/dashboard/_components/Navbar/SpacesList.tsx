@@ -23,6 +23,7 @@ import type { Spaces } from "../../dashboard-data";
 import { LayersIcon } from "../AnimatedIcons";
 import type { LayersIconHandle } from "../AnimatedIcons/Layers";
 import { ConfirmationDialog } from "../ConfirmationDialog";
+import { navItemClass } from "./Items";
 import SpaceDialog from "./SpaceDialog";
 
 const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
@@ -180,7 +181,7 @@ const SpacesList = ({ toggleMobileNav }: { toggleMobileNav?: () => void }) => {
 						pathname.includes("/dashboard/spaces/browse")
 							? "bg-gray-3 pointer-events-none"
 							: "hover:bg-gray-2",
-						"flex items-center justify-start rounded-xl outline-none tracking-tight overflow-hidden",
+						navItemClass,
 					)}
 				>
 					<LayersIcon

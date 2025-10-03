@@ -1,7 +1,6 @@
 {
 	"name": "@cap/env",
 	"private": true,
-	"type": "module",
 	"main": "./index.ts",
 	"types": "./index.ts",
 	"dependencies": {

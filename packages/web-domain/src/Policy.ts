@@ -1,17 +1,18 @@
 // shoutout https://lucas-barake.github.io/building-a-composable-policy-system/
 
-import { type Brand, Context, Data, Effect, type Option, Schema } from "effect";
+import { Context, Data, Effect, type Option, Schema } from "effect";
+import { CurrentUser } from "./Authentication";
 
-import { CurrentUser } from "./Authentication.ts";
-
-export type Policy<E = never, R = never> = Brand.Branded<
-	Effect.Effect<void, PolicyDeniedError | E, CurrentUser | R>,
-	"Private"
+export type Policy<E = never, R = never> = Effect.Effect<
+	void,
+	PolicyDeniedError | E,
+	CurrentUser | R
 >;
 
-export type PublicPolicy<E = never, R = never> = Brand.Branded<
-	Effect.Effect<void, PolicyDeniedError | E, R>,
-	"Public"
+export type PublicPolicy<E = never, R = never> = Effect.Effect<
+	void,
+	PolicyDeniedError | E,
+	R
 >;
 
 export class PolicyDeniedError extends Schema.TaggedError<PolicyDeniedError>()(
@@ -34,7 +35,7 @@ export const policy = <E, R>(
 			),
 			(result) => (result ? Effect.void : Effect.fail(new PolicyDeniedError())),
 		),
-	) as Policy<E, R>;
+	);
 
 /**
  * Creates a policy from a predicate function that may evaluate the current user,
@@ -52,7 +53,7 @@ export const publicPolicy = <E, R>(
 		return yield* Effect.flatMap(predicate(user), (result) =>
 			result ? Effect.void : Effect.fail(new PolicyDeniedError()),
 		);
-	}) as PublicPolicy<E, R>;
+	});
 
 export class DenyAccess extends Data.TaggedError("DenyAccess")<{}> {}
 

@@ -14,11 +14,10 @@ import { notFound } from "next/navigation";
 import { InviteAccept } from ".//InviteAccept";
 
 type Props = {
-	params: Promise<{ inviteId: string }>;
+	params: { inviteId: string };
 };
 
-export async function generateMetadata(props: Props): Promise<Metadata> {
-	const params = await props.params;
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
 	const inviteId = params.inviteId;
 	const invite = await getInviteDetails(inviteId);
 
@@ -50,8 +49,7 @@ async function getInviteDetails(inviteId: string) {
 	return query[0];
 }
 
-export default async function InvitePage(props: Props) {
-	const params = await props.params;
+export default async function InvitePage({ params }: Props) {
 	const inviteId = params.inviteId;
 	const user = await getCurrentUser();
 	const inviteDetails = await getInviteDetails(inviteId);

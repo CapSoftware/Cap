@@ -9,7 +9,6 @@ import {
 	spaceVideos,
 	users,
 	videos,
-	videoUploads,
 } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
 import { Video } from "@cap/web-domain";
@@ -23,7 +22,7 @@ export const metadata: Metadata = {
 };
 
 // Helper function to fetch shared spaces data for videos
-async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
+async function getSharedSpacesForVideos(videoIds: string[]) {
 	if (videoIds.length === 0) return {};
 
 	// Fetch space-level sharing
@@ -96,10 +95,11 @@ async function getSharedSpacesForVideos(videoIds: Video.VideoId[]) {
 	return sharedSpacesMap;
 }
 
-export default async function CapsPage(props: {
-	searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+export default async function CapsPage({
+	searchParams,
+}: {
+	searchParams: { [key: string]: string | string[] | undefined };
 }) {
-	const searchParams = await props.searchParams;
 	const user = await getCurrentUser();
 
 	if (!user || !user.id) {
@@ -172,17 +172,13 @@ export default async function CapsPage(props: {
           ${videos.createdAt}
         )
       `,
-			hasPassword: sql`${videos.password} IS NOT NULL`.mapWith(Boolean),
-			hasActiveUpload: sql`${videoUploads.videoId} IS NOT NULL`.mapWith(
-				Boolean,
-			),
+			hasPassword: sql<number>`IF(${videos.password} IS NULL, 0, 1)`,
 		})
 		.from(videos)
 		.leftJoin(comments, eq(videos.id, comments.videoId))
 		.leftJoin(sharedVideos, eq(videos.id, sharedVideos.videoId))
 		.leftJoin(organizations, eq(sharedVideos.organizationId, organizations.id))
 		.leftJoin(users, eq(videos.ownerId, users.id))
-		.leftJoin(videoUploads, eq(videos.id, videoUploads.videoId))
 		.where(and(eq(videos.ownerId, userId), isNull(videos.folderId)))
 		.groupBy(
 			videos.id,
@@ -246,6 +242,7 @@ export default async function CapsPage(props: {
 						[key: string]: any;
 				  }
 				| undefined,
+			hasPassword: video.hasPassword === 1,
 		};
 	});
 

@@ -6,15 +6,14 @@ import { MDXRemote } from "next-mdx-remote/rsc";
 import { getDocs } from "@/utils/blog";
 
 interface DocProps {
-	params: Promise<{
+	params: {
 		slug: string;
-	}>;
+	};
 }
 
-export async function generateMetadata(
-	props: DocProps,
-): Promise<Metadata | undefined> {
-	const params = await props.params;
+export async function generateMetadata({
+	params,
+}: DocProps): Promise<Metadata | undefined> {
 	const doc = getDocs().find((doc) => doc.slug === params.slug);
 	if (!doc) {
 		return;
@@ -48,8 +47,7 @@ export async function generateMetadata(
 	};
 }
 
-export default async function DocPage(props: DocProps) {
-	const params = await props.params;
+export default async function DocPage({ params }: DocProps) {
 	const doc = getDocs().find((doc) => doc.slug === params.slug);
 
 	if (!doc) {

@@ -1,15 +1,12 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
 import Hls from "hls.js";
-import { AlertTriangleIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -32,24 +29,20 @@ import {
 
 interface Props {
 	videoSrc: string;
-	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement | null>;
+	videoRef: React.RefObject<HTMLVideoElement>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
-	hasActiveUpload?: boolean;
 }
 
 export function HLSVideoPlayer({
 	videoSrc,
-	videoId,
 	chaptersSrc,
 	captionsSrc,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
-	hasActiveUpload,
 }: Props) {
 	const hlsInstance = useRef<Hls | null>(null);
 	const [currentCue, setCurrentCue] = useState<string>("");
@@ -233,37 +226,11 @@ export function HLSVideoPlayer({
 			}
 		};
 
-		// Ensure all caption tracks remain hidden
-		const ensureTracksHidden = (): void => {
-			const tracks = video.textTracks;
-			for (let i = 0; i < tracks.length; i++) {
-				const track = tracks[i];
-				if (
-					track &&
-					(track.kind === "captions" || track.kind === "subtitles")
-				) {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
-
 		const handleLoadedMetadata = (): void => {
 			setupTracks();
 		};
 
-		// Monitor for track changes and ensure they stay hidden
-		const handleTrackChange = () => {
-			ensureTracksHidden();
-		};
-
 		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-
-		// Add event listeners to monitor track changes
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState >= 1) {
 			setupTracks();
@@ -271,142 +238,110 @@ export function HLSVideoPlayer({
 
 		return () => {
 			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (captionTrack) {
 				captionTrack.removeEventListener("cuechange", handleCueChange);
 			}
 		};
 	}, [captionsSrc]);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
-	const isUploading = uploadProgress?.status === "uploading";
-	const isUploadFailed = uploadProgress?.status === "failed";
-
 	return (
-		<MediaPlayer
-			onMouseEnter={() => setControlsVisible(true)}
-			onMouseLeave={() => setControlsVisible(false)}
-			onTouchStart={() => setControlsVisible(true)}
-			onTouchEnd={() => setControlsVisible(false)}
-			className={clsx(
-				mediaPlayerClassName,
-				"[&::-webkit-media-text-track-display]:!hidden",
-			)}
-			autoHide
-		>
-			{isUploadFailed && (
-				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
-					<AlertTriangleIcon className="text-red-500 size-12" />
-					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						Upload failed. Please try re-uploading from the Cap desktop app via
-						Settings {">"} Previous Recordings.
-					</p>
-				</div>
-			)}
-			<div
+		<>
+			<MediaPlayer
+				onMouseEnter={() => setControlsVisible(true)}
+				onMouseLeave={() => setControlsVisible(false)}
+				onTouchStart={() => setControlsVisible(true)}
+				onTouchEnd={() => setControlsVisible(false)}
 				className={clsx(
-					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					isUploading || videoLoaded || !isUploadFailed
-						? "opacity-0 pointer-events-none"
-						: "opacity-100",
+					mediaPlayerClassName,
+					"[&::-webkit-media-text-track-display]:!hidden",
 				)}
+				autoHide
 			>
-				<div className="flex flex-col gap-2 items-center">
-					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-				</div>
-			</div>
-			<AnimatePresence>
-				{!videoLoaded && isUploading && (
-					<motion.div
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
-					>
-						<ProgressCircle
-							progress={
-								uploadProgress?.status === "uploading"
-									? uploadProgress.progress
-									: 0
-							}
-						/>
-					</motion.div>
-				)}
-				{showPlayButton && videoLoaded && !hasPlayedOnce && !isUploading && (
-					<motion.div
-						whileHover={{ scale: 1.1 }}
-						whileTap={{ scale: 0.9 }}
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						onClick={() => videoRef.current?.play()}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
-					>
-						<FontAwesomeIcon
-							icon={faPlay}
-							className="text-white size-4 xs:size-8 md:size-12"
-						/>
-					</motion.div>
-				)}
-			</AnimatePresence>
-			<MediaPlayerVideo
-				src={undefined} // HLS source is handled by HLS.js
-				ref={videoRef}
-				onPlay={() => {
-					setShowPlayButton(false);
-					setHasPlayedOnce(true);
-				}}
-				playsInline
-				autoPlay={autoplay}
-			>
-				<track default kind="chapters" src={chaptersSrc} />
-				<track label="English" kind="captions" srcLang="en" src={captionsSrc} />
-			</MediaPlayerVideo>
-			{currentCue && toggleCaptions && (
 				<div
 					className={clsx(
-						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
-						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
-						controlsVisible || videoRef.current?.paused
-							? "bottom-16 sm:bottom-20"
-							: "bottom-3 sm:bottom-12",
+						"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+						videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100",
 					)}
 				>
-					{currentCue}
+					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
 				</div>
-			)}
-			<MediaPlayerLoading />
-			<MediaPlayerError />
-			<MediaPlayerVolumeIndicator />
-			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
-				isUploadingOrFailed={isUploading || isUploadFailed}
-			>
-				<MediaPlayerControlsOverlay />
-				<MediaPlayerSeek />
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
-						<MediaPlayerTime />
+				<AnimatePresence>
+					{showPlayButton && videoLoaded && !hasPlayedOnce && (
+						<motion.div
+							whileHover={{ scale: 1.1 }}
+							whileTap={{ scale: 0.9 }}
+							initial={{ opacity: 0, y: 10 }}
+							animate={{ opacity: 1, y: 0 }}
+							exit={{ opacity: 0, y: 10 }}
+							transition={{ duration: 0.2 }}
+							onClick={() => videoRef.current?.play()}
+							className="flex absolute inset-0 z-10 justify-center items-center m-auto bg-blue-500 rounded-full transition-colors transform cursor-pointer hover:bg-blue-600 size-12 xs:size-20 md:size-32"
+						>
+							<FontAwesomeIcon
+								icon={faPlay}
+								className="text-white size-4 xs:size-8 md:size-12"
+							/>
+						</motion.div>
+					)}
+				</AnimatePresence>
+				<MediaPlayerVideo
+					src={undefined} // HLS source is handled by HLS.js
+					ref={videoRef}
+					onPlay={() => {
+						setShowPlayButton(false);
+						setHasPlayedOnce(true);
+					}}
+					playsInline
+					autoPlay={autoplay}
+				>
+					<track default kind="chapters" src={chaptersSrc} />
+					<track
+						label="English"
+						kind="captions"
+						srcLang="en"
+						src={captionsSrc}
+						default
+					/>
+				</MediaPlayerVideo>
+				{currentCue && toggleCaptions && (
+					<div
+						className={clsx(
+							"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
+							"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
+							controlsVisible || videoRef.current?.paused
+								? "bottom-16 sm:bottom-20"
+								: "bottom-3 sm:bottom-12",
+						)}
+					>
+						{currentCue}
 					</div>
-					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
-						<MediaPlayerSettings />
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
+				)}
+				<MediaPlayerLoading />
+				<MediaPlayerError />
+				<MediaPlayerVolumeIndicator />
+				<MediaPlayerControls className="flex-col items-start gap-2.5">
+					<MediaPlayerControlsOverlay />
+					<MediaPlayerSeek />
+					<div className="flex gap-2 items-center w-full">
+						<div className="flex flex-1 gap-2 items-center">
+							<MediaPlayerPlay />
+							<MediaPlayerSeekBackward />
+							<MediaPlayerSeekForward />
+							<MediaPlayerVolume expandable />
+							<MediaPlayerTime />
+						</div>
+						<div className="flex gap-2 items-center">
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
+							/>
+							<MediaPlayerSettings />
+							<MediaPlayerPiP />
+							<MediaPlayerFullscreen />
+						</div>
 					</div>
-				</div>
-			</MediaPlayerControls>
-		</MediaPlayer>
+				</MediaPlayerControls>
+			</MediaPlayer>
+		</>
 	);
 }

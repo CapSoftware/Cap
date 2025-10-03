@@ -1,2 +1,2 @@
-export { buildEnv, NODE_ENV } from "./build.ts";
-export { serverEnv } from "./server.ts";
+export { buildEnv, NODE_ENV } from "./build";
+export { serverEnv } from "./server";

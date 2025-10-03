@@ -1,15 +1,11 @@
 "use client";
 
 import { LogoSpinner } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faPlay } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import clsx from "clsx";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangleIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import CommentStamp from "./CommentStamp";
-import ProgressCircle, { useUploadProgress } from "./ProgressCircle";
 import {
 	MediaPlayer,
 	MediaPlayerCaptions,
@@ -32,40 +28,25 @@ import {
 
 interface Props {
 	videoSrc: string;
-	videoId: Video.VideoId;
 	chaptersSrc: string;
 	captionsSrc: string;
-	videoRef: React.RefObject<HTMLVideoElement | null>;
+	videoRef: React.RefObject<HTMLVideoElement>;
 	mediaPlayerClassName?: string;
 	autoplay?: boolean;
 	enableCrossOrigin?: boolean;
-	hasActiveUpload: boolean | undefined;
-	comments?: Array<{
-		id: string;
-		timestamp: number | null;
-		type: "text" | "emoji";
-		content: string;
-		authorName?: string | null;
-	}>;
-	onSeek?: (time: number) => void;
 }
 
 export function CapVideoPlayer({
 	videoSrc,
-	videoId,
 	chaptersSrc,
 	captionsSrc,
 	videoRef,
 	mediaPlayerClassName,
 	autoplay = false,
 	enableCrossOrigin = false,
-	hasActiveUpload,
-	comments = [],
-	onSeek,
 }: Props) {
 	const [currentCue, setCurrentCue] = useState<string>("");
 	const [controlsVisible, setControlsVisible] = useState(false);
-	const [mainControlsVisible, setMainControlsVisible] = useState(false);
 	const [toggleCaptions, setToggleCaptions] = useState(true);
 	const [showPlayButton, setShowPlayButton] = useState(false);
 	const [videoLoaded, setVideoLoaded] = useState(false);
@@ -81,7 +62,6 @@ export function CapVideoPlayer({
 	const [isRetrying, setIsRetrying] = useState(false);
 	const isRetryingRef = useRef(false);
 	const maxRetries = 3;
-	const [duration, setDuration] = useState(0);
 
 	useEffect(() => {
 		const checkMobile = () => {
@@ -101,10 +81,7 @@ export function CapVideoPlayer({
 				? `${videoSrc}&_t=${timestamp}`
 				: `${videoSrc}?_t=${timestamp}`;
 
-			const response = await fetch(urlWithTimestamp, {
-				method: "GET",
-				headers: { range: "bytes=0-0" },
-			});
+			const response = await fetch(urlWithTimestamp, { method: "HEAD" });
 			const finalUrl = response.redirected ? response.url : urlWithTimestamp;
 
 			// Check if the resolved URL is from a CORS-incompatible service
@@ -231,42 +208,6 @@ export function CapVideoPlayer({
 		fetchNewUrl();
 	}, [fetchNewUrl]);
 
-	// Track video duration for comment markers
-	useEffect(() => {
-		const video = videoRef.current;
-		if (!video) return;
-
-		const handleLoadedMetadata = () => {
-			setDuration(video.duration);
-		};
-
-		video.addEventListener("loadedmetadata", handleLoadedMetadata);
-
-		return () => {
-			video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-		};
-	}, [urlResolved]);
-
-	// Track when all data is ready for comment markers
-	const [markersReady, setMarkersReady] = useState(false);
-	const [hoveredComment, setHoveredComment] = useState<string | null>(null);
-
-	// Memoize hover handlers to prevent render loops
-	const handleMouseEnter = useCallback((commentId: string) => {
-		setHoveredComment(commentId);
-	}, []);
-
-	const handleMouseLeave = useCallback(() => {
-		setHoveredComment(null);
-	}, []);
-
-	useEffect(() => {
-		// Only show markers when we have duration, comments, and video element
-		if (duration > 0 && comments.length > 0 && videoRef.current) {
-			setMarkersReady(true);
-		}
-	}, [duration, comments.length]);
-
 	useEffect(() => {
 		const video = videoRef.current;
 		if (!video || !urlResolved) return;
@@ -346,29 +287,12 @@ export function CapVideoPlayer({
 			}
 		};
 
-		// Ensure all caption tracks remain hidden
-		const ensureTracksHidden = (): void => {
-			const tracks = Array.from(video.textTracks);
-			for (const track of tracks) {
-				if (track.kind === "captions" || track.kind === "subtitles") {
-					if (track.mode !== "hidden") {
-						track.mode = "hidden";
-					}
-				}
-			}
-		};
-
 		const handleLoadedMetadataWithTracks = () => {
 			setVideoLoaded(true);
 			if (!hasPlayedOnce) {
 				setShowPlayButton(true);
 			}
 			setupTracks();
-		};
-
-		// Monitor for track changes and ensure they stay hidden
-		const handleTrackChange = () => {
-			ensureTracksHidden();
 		};
 
 		video.addEventListener("loadeddata", handleLoadedData);
@@ -378,11 +302,6 @@ export function CapVideoPlayer({
 		video.addEventListener("play", handlePlay);
 		video.addEventListener("error", handleError as EventListener);
 		video.addEventListener("loadedmetadata", handleLoadedMetadataWithTracks);
-
-		// Add event listeners to monitor track changes
-		video.textTracks.addEventListener("change", handleTrackChange);
-		video.textTracks.addEventListener("addtrack", handleTrackChange);
-		video.textTracks.addEventListener("removetrack", handleTrackChange);
 
 		if (video.readyState === 4) {
 			handleLoadedData();
@@ -412,10 +331,9 @@ export function CapVideoPlayer({
 					"loadedmetadata",
 					handleLoadedMetadataWithTracks,
 				);
-				video.textTracks.removeEventListener("change", handleTrackChange);
-				video.textTracks.removeEventListener("addtrack", handleTrackChange);
-				video.textTracks.removeEventListener("removetrack", handleTrackChange);
-				if (retryTimeout.current) clearTimeout(retryTimeout.current);
+				if (retryTimeout.current) {
+					clearTimeout(retryTimeout.current);
+				}
 			};
 		}
 
@@ -429,9 +347,6 @@ export function CapVideoPlayer({
 				"loadedmetadata",
 				handleLoadedMetadataWithTracks,
 			);
-			video.textTracks.removeEventListener("change", handleTrackChange);
-			video.textTracks.removeEventListener("addtrack", handleTrackChange);
-			video.textTracks.removeEventListener("removetrack", handleTrackChange);
 			if (retryTimeout.current) {
 				clearTimeout(retryTimeout.current);
 			}
@@ -464,109 +379,61 @@ export function CapVideoPlayer({
 		return `https://placeholder.pics/svg/224x128/dc2626/ffffff/Error`;
 	}, []);
 
-	const uploadProgress = useUploadProgress(videoId, hasActiveUpload || false);
-	const isUploading = uploadProgress?.status === "uploading";
-	const isUploadFailed = uploadProgress?.status === "failed";
-
-	const prevUploadProgress = useRef<typeof uploadProgress>(uploadProgress);
-	useEffect(() => {
-		// Check if we transitioned from having upload progress to null which means it's completed and reload the video.
-		// This prevents it just showing the dreaded "Format error" screen.
-		if (prevUploadProgress.current && !uploadProgress && !videoLoaded) {
-			reloadVideo();
-			// Make it more reliable.
-			setTimeout(() => reloadVideo(), 1000);
-		}
-		prevUploadProgress.current = uploadProgress;
-	}, [uploadProgress, videoLoaded, reloadVideo]);
-
 	return (
-		<MediaPlayer
-			onMouseEnter={() => setControlsVisible(true)}
-			onMouseLeave={() => setControlsVisible(false)}
-			onTouchStart={() => setControlsVisible(true)}
-			onTouchEnd={() => setControlsVisible(false)}
-			className={clsx(
-				mediaPlayerClassName,
-				"[&::-webkit-media-text-track-display]:!hidden",
-			)}
-			autoHide
-		>
-			{isUploadFailed && (
-				<div className="flex absolute inset-0 flex-col px-3 gap-3 z-[20] justify-center items-center bg-black transition-opacity duration-300">
-					<AlertTriangleIcon className="text-red-500 size-12" />
-					<p className="text-gray-11 text-sm leading-relaxed text-center text-balance w-full max-w-[340px] mx-auto">
-						Upload failed. Please try re-uploading from the Cap desktop app via
-						Settings {">"} Previous Recordings.
-					</p>
-				</div>
-			)}
-			<div
+		<>
+			<MediaPlayer
+				onMouseEnter={() => setControlsVisible(true)}
+				onMouseLeave={() => setControlsVisible(false)}
+				onTouchStart={() => setControlsVisible(true)}
+				onTouchEnd={() => setControlsVisible(false)}
 				className={clsx(
-					"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
-					videoLoaded || !!uploadProgress
-						? "opacity-0 pointer-events-none"
-						: "opacity-100",
+					mediaPlayerClassName,
+					"[&::-webkit-media-text-track-display]:!hidden",
 				)}
+				autoHide
 			>
-				<div className="flex flex-col gap-2 items-center">
-					<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
-					{retryCount.current > 0 && (
-						<p className="text-sm text-white opacity-75">
-							Preparing video... ({retryCount.current}/{maxRetries})
-						</p>
+				<div
+					className={clsx(
+						"flex absolute inset-0 z-10 justify-center items-center bg-black transition-opacity duration-300",
+						videoLoaded ? "opacity-0 pointer-events-none" : "opacity-100",
 					)}
-				</div>
-			</div>
-			{urlResolved && (
-				<MediaPlayerVideo
-					src={resolvedVideoSrc}
-					ref={videoRef}
-					onLoadedData={() => {
-						setVideoLoaded(true);
-					}}
-					onPlay={() => {
-						setShowPlayButton(false);
-						setHasPlayedOnce(true);
-					}}
-					crossOrigin={useCrossOrigin ? "anonymous" : undefined}
-					playsInline
-					autoPlay={autoplay}
 				>
-					{chaptersSrc && <track default kind="chapters" src={chaptersSrc} />}
-					{captionsSrc && (
+					<div className="flex flex-col items-center gap-2">
+						<LogoSpinner className="w-8 h-auto animate-spin sm:w-10" />
+						{retryCount.current > 0 && (
+							<p className="text-white text-sm opacity-75">
+								Preparing video... ({retryCount.current}/{maxRetries})
+							</p>
+						)}
+					</div>
+				</div>
+				{urlResolved && (
+					<MediaPlayerVideo
+						src={resolvedVideoSrc}
+						ref={videoRef}
+						onLoadedData={() => {
+							setVideoLoaded(true);
+						}}
+						onPlay={() => {
+							setShowPlayButton(false);
+							setHasPlayedOnce(true);
+						}}
+						crossOrigin={useCrossOrigin ? "anonymous" : undefined}
+						playsInline
+						autoPlay={autoplay}
+					>
+						<track default kind="chapters" src={chaptersSrc} />
 						<track
 							label="English"
 							kind="captions"
 							srcLang="en"
 							src={captionsSrc}
+							default
 						/>
-					)}
-				</MediaPlayerVideo>
-			)}
-			<AnimatePresence>
-				{!videoLoaded && isUploading && !isUploadFailed && (
-					<motion.div
-						initial={{ opacity: 0, y: 10 }}
-						animate={{ opacity: 1, y: 0 }}
-						exit={{ opacity: 0, y: 10 }}
-						transition={{ duration: 0.2 }}
-						className="flex absolute inset-0 z-10 justify-center items-center m-auto size-[130px] md:size-32"
-					>
-						<ProgressCircle
-							progress={
-								uploadProgress?.status === "uploading"
-									? uploadProgress.progress
-									: 0
-							}
-						/>
-					</motion.div>
+					</MediaPlayerVideo>
 				)}
-				{showPlayButton &&
-					videoLoaded &&
-					!hasPlayedOnce &&
-					!isUploading &&
-					!isUploadFailed && (
+				<AnimatePresence>
+					{showPlayButton && videoLoaded && !hasPlayedOnce && (
 						<motion.div
 							whileHover={{ scale: 1.1 }}
 							whileTap={{ scale: 0.9 }}
@@ -583,83 +450,52 @@ export function CapVideoPlayer({
 							/>
 						</motion.div>
 					)}
-			</AnimatePresence>
-			{currentCue && toggleCaptions && (
-				<div
-					className={clsx(
-						"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
-						"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
-						controlsVisible || videoRef.current?.paused
-							? "bottom-16 sm:bottom-24"
-							: "bottom-3 sm:bottom-12",
-					)}
-				>
-					{currentCue}
-				</div>
-			)}
-			<MediaPlayerLoading />
-			{!isRetrying && !isRetryingRef.current && !isUploading && (
-				<MediaPlayerError />
-			)}
-			<MediaPlayerVolumeIndicator />
-
-			{mainControlsVisible &&
-				markersReady &&
-				comments
-					.filter(
-						(comment) => comment && comment.timestamp !== null && comment.id,
-					)
-					.map((comment) => {
-						const position = (Number(comment.timestamp) / duration) * 100;
-						const containerPadding = 20;
-						const availableWidth = `calc(100% - ${containerPadding * 2}px)`;
-						const adjustedPosition = `calc(${containerPadding}px + (${position}% * ${availableWidth} / 100%))`;
-
-						return (
-							<CommentStamp
-								key={comment.id}
-								comment={comment}
-								adjustedPosition={adjustedPosition}
-								handleMouseEnter={handleMouseEnter}
-								handleMouseLeave={handleMouseLeave}
-								onSeek={onSeek}
-								hoveredComment={hoveredComment}
+				</AnimatePresence>
+				{currentCue && toggleCaptions && (
+					<div
+						className={clsx(
+							"absolute left-1/2 transform -translate-x-1/2 text-sm sm:text-xl z-40 pointer-events-none bg-black/80 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-center transition-all duration-300 ease-in-out",
+							"max-w-[90%] sm:max-w-[480px] md:max-w-[600px]",
+							controlsVisible || videoRef.current?.paused
+								? "bottom-16 sm:bottom-20"
+								: "bottom-3 sm:bottom-12",
+						)}
+					>
+						{currentCue}
+					</div>
+				)}
+				<MediaPlayerLoading />
+				{!isRetrying && !isRetryingRef.current && <MediaPlayerError />}
+				<MediaPlayerVolumeIndicator />
+				<MediaPlayerControls className="flex-col items-start gap-2.5">
+					<MediaPlayerControlsOverlay />
+					<MediaPlayerSeek
+						tooltipThumbnailSrc={
+							isMobile || !useCrossOrigin
+								? undefined
+								: generateVideoFrameThumbnail
+						}
+					/>
+					<div className="flex gap-2 items-center w-full">
+						<div className="flex flex-1 gap-2 items-center">
+							<MediaPlayerPlay />
+							<MediaPlayerSeekBackward />
+							<MediaPlayerSeekForward />
+							<MediaPlayerVolume expandable />
+							<MediaPlayerTime />
+						</div>
+						<div className="flex gap-2 items-center">
+							<MediaPlayerCaptions
+								setToggleCaptions={setToggleCaptions}
+								toggleCaptions={toggleCaptions}
 							/>
-						);
-					})}
-
-			<MediaPlayerControls
-				className="flex-col items-start gap-2.5"
-				mainControlsVisible={(arg: boolean) => setMainControlsVisible(arg)}
-				isUploadingOrFailed={isUploading || isUploadFailed}
-			>
-				<MediaPlayerControlsOverlay />
-				<MediaPlayerSeek
-					tooltipThumbnailSrc={
-						isMobile || !useCrossOrigin || isUploading
-							? undefined
-							: generateVideoFrameThumbnail
-					}
-				/>
-				<div className="flex gap-2 items-center w-full">
-					<div className="flex flex-1 gap-2 items-center">
-						<MediaPlayerPlay />
-						<MediaPlayerSeekBackward />
-						<MediaPlayerSeekForward />
-						<MediaPlayerVolume expandable />
-						<MediaPlayerTime />
+							<MediaPlayerSettings />
+							<MediaPlayerPiP />
+							<MediaPlayerFullscreen />
+						</div>
 					</div>
-					<div className="flex gap-2 items-center">
-						<MediaPlayerCaptions
-							setToggleCaptions={setToggleCaptions}
-							toggleCaptions={toggleCaptions}
-						/>
-						<MediaPlayerSettings />
-						<MediaPlayerPiP />
-						<MediaPlayerFullscreen />
-					</div>
-				</div>
-			</MediaPlayerControls>
-		</MediaPlayer>
+				</MediaPlayerControls>
+			</MediaPlayer>
+		</>
 	);
 }

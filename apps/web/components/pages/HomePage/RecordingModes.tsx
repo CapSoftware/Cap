@@ -4,14 +4,13 @@ import { Button } from "@cap/ui";
 import clsx from "clsx";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
 import { Clapperboard, Zap } from "lucide-react";
-import { type JSX, useState } from "react";
+import { useState } from "react";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
 	getPlatformIcon,
 } from "@/utils/platform";
 import { homepageCopy } from "../../../data/homepage-copy";
-import UpgradeToPro from "../_components/UpgradeToPro";
 
 interface Mode {
 	name: "Instant Mode" | "Studio Mode";
@@ -148,21 +147,28 @@ const RecordingModes = () => {
 					</p>
 				</div>
 				<div className="p-6">
-					<div className="flex flex-col items-center space-y-4 sm:flex-row sm:space-y-0 sm:space-x-4 sm:justify-center">
+					<div className="flex flex-col items-center space-y-2 sm:flex-row sm:space-y-0 sm:space-x-4 sm:justify-center">
 						<Button
-							variant="dark"
+							variant="gray"
 							href={
 								platform === "windows"
 									? "/download"
 									: getDownloadUrl(platform, isIntel)
 							}
 							size="lg"
-							className="flex justify-center items-center font-medium w-fit"
+							className="flex justify-center items-center w-full font-medium sm:w-auto"
 						>
 							{!loading && getPlatformIcon(platform)}
 							{getDownloadButtonText(platform, loading, isIntel)}
 						</Button>
-						<UpgradeToPro text={homepageCopy.header.cta.primaryButton} />
+						<Button
+							variant="blue"
+							href="/pricing"
+							size="lg"
+							className="w-full font-medium sm:w-auto"
+						>
+							{homepageCopy.header.cta.primaryButton}
+						</Button>
 					</div>
 				</div>
 			</div>

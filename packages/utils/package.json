@@ -1,17 +1,17 @@
 {
 	"name": "@cap/utils",
-	"type": "module",
-	"main": "./src/index.ts",
-	"types": "./src/index.ts",
+	"version": "0.0.0",
+	"main": "./src/index.tsx",
+	"types": "./src/index.tsx",
 	"exports": {
-		".": "./src/index.ts"
+		".": "./src/index.tsx"
 	},
 	"scripts": {
 		"typecheck": "tsc -b"
 	},
 	"devDependencies": {
-		"react": "^19.1.1",
-		"react-dom": "^19.1.1",
+		"react": "^19.1.0",
+		"react-dom": "^19.1.0",
 		"react-router-dom": "^6.18.0",
 		"tsconfig": "workspace:*",
 		"typescript": "^5.8.3"

@@ -48,7 +48,6 @@ export async function getDashboardData(user: typeof userSelectProps) {
 					email: users.email,
 					inviteQuota: users.inviteQuota,
 					image: users.image,
-					defaultOrgId: users.defaultOrgId,
 				},
 			})
 			.from(organizations)

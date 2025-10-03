@@ -1,5 +1,4 @@
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
-import clsx from "clsx";
 import { forwardRef, memo, useImperativeHandle } from "react";
 
 export interface ProArtRef {
@@ -7,12 +6,8 @@ export interface ProArtRef {
 	playDefaultAnimation: () => void;
 }
 
-interface ProArtProps {
-	className?: string;
-}
-
 export const ProArt = memo(
-	forwardRef<ProArtRef, ProArtProps>(({ className }, ref) => {
+	forwardRef<ProArtRef>((_, ref) => {
 		const { rive, RiveComponent: ProRive } = useRive({
 			src: "/rive/pricing.riv",
 			artboard: "pro",
@@ -39,9 +34,7 @@ export const ProArt = memo(
 		}));
 
 		return (
-			<ProRive
-				className={clsx(className, "mx-auto w-full max-w-[100px] h-[80px]")}
-			/>
+			<ProRive className="w-full max-w-[210px] mx-auto h-[195px] relative bottom-5" />
 		);
 	}),
 );

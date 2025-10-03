@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use cap_media_info::{Pixel, VideoInfo};
 use ffmpeg::{
     Dictionary,
@@ -10,9 +8,8 @@ use ffmpeg::{
 };
 use tracing::{debug, error};
 
-use crate::base::EncoderBase;
-
 pub struct H264EncoderBuilder {
+    name: &'static str,
     bpp: f32,
     input_config: VideoInfo,
     preset: H264Preset,
@@ -38,8 +35,9 @@ pub enum H264EncoderError {
 impl H264EncoderBuilder {
     pub const QUALITY_BPP: f32 = 0.3;
 
-    pub fn new(input_config: VideoInfo) -> Self {
+    pub fn new(name: &'static str, input_config: VideoInfo) -> Self {
         Self {
+            name,
             input_config,
             bpp: Self::QUALITY_BPP,
             preset: H264Preset::Ultrafast,
@@ -105,7 +103,7 @@ impl H264EncoderBuilder {
         encoder.set_width(input_config.width);
         encoder.set_height(input_config.height);
         encoder.set_format(format);
-        encoder.set_time_base(input_config.time_base);
+        encoder.set_time_base(input_config.frame_rate.invert());
         encoder.set_frame_rate(Some(input_config.frame_rate));
 
         // let target_bitrate = compression.bitrate();
@@ -119,46 +117,41 @@ impl H264EncoderBuilder {
         encoder.set_bit_rate(bitrate);
         encoder.set_max_bit_rate(bitrate);
 
-        let encoder = encoder.open_with(encoder_options)?;
+        let video_encoder = encoder.open_with(encoder_options)?;
 
         let mut output_stream = output.add_stream(codec)?;
         let stream_index = output_stream.index();
-        output_stream.set_time_base((1, H264Encoder::TIME_BASE));
+        output_stream.set_time_base(input_config.frame_rate.invert());
         output_stream.set_rate(input_config.frame_rate);
-        output_stream.set_parameters(&encoder);
+        output_stream.set_parameters(&video_encoder);
 
         Ok(H264Encoder {
-            base: EncoderBase::new(stream_index),
-            encoder,
+            tag: self.name,
+            encoder: video_encoder,
+            stream_index,
             config: self.input_config,
             converter,
+            packet: ffmpeg::Packet::empty(),
         })
     }
 }
 
 pub struct H264Encoder {
-    base: EncoderBase,
+    #[allow(unused)]
+    tag: &'static str,
     encoder: encoder::Video,
     config: VideoInfo,
     converter: Option<ffmpeg::software::scaling::Context>,
+    stream_index: usize,
+    packet: ffmpeg::Packet,
 }
 
 impl H264Encoder {
-    const TIME_BASE: i32 = 90000;
-
-    pub fn builder(input_config: VideoInfo) -> H264EncoderBuilder {
-        H264EncoderBuilder::new(input_config)
+    pub fn builder(name: &'static str, input_config: VideoInfo) -> H264EncoderBuilder {
+        H264EncoderBuilder::new(name, input_config)
     }
 
-    pub fn queue_frame(
-        &mut self,
-        mut frame: frame::Video,
-        timestamp: Duration,
-        output: &mut format::context::Output,
-    ) {
-        self.base
-            .update_pts(&mut frame, timestamp, &mut self.encoder);
-
+    pub fn queue_frame(&mut self, frame: frame::Video, output: &mut format::context::Output) {
         let frame = if let Some(converter) = &mut self.converter {
             let mut new_frame = frame::Video::empty();
             match converter.run(&frame, &mut new_frame) {
@@ -181,17 +174,34 @@ impl H264Encoder {
             frame
         };
 
-        if let Err(e) = self.base.send_frame(&frame, output, &mut self.encoder) {
+        if let Err(e) = self.encoder.send_frame(&frame) {
             tracing::error!("Failed to send frame to encoder: {:?}", e);
             return;
+        }
+
+        self.process_frame(output);
+    }
+
+    fn process_frame(&mut self, output: &mut format::context::Output) {
+        while self.encoder.receive_packet(&mut self.packet).is_ok() {
+            self.packet.set_stream(self.stream_index);
+            self.packet.rescale_ts(
+                self.config.time_base,
+                output.stream(self.stream_index).unwrap().time_base(),
+            );
+            if let Err(e) = self.packet.write_interleaved(output) {
+                tracing::error!("Failed to write packet: {:?}", e);
+                break;
+            }
         }
     }
 
     pub fn finish(&mut self, output: &mut format::context::Output) {
-        if let Err(e) = self.base.process_eof(output, &mut self.encoder) {
+        if let Err(e) = self.encoder.send_eof() {
             tracing::error!("Failed to send EOF to encoder: {:?}", e);
             return;
         }
+        self.process_frame(output);
     }
 }
 

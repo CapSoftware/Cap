@@ -4,11 +4,10 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
 import type { VideoMetadata } from "@cap/database/types";
-import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-export async function editDate(videoId: Video.VideoId, date: string) {
+export async function editDate(videoId: string, date: string) {
 	const user = await getCurrentUser();
 
 	if (!user || !date || !videoId) {

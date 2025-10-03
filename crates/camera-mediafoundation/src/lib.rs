@@ -13,16 +13,13 @@ use std::{
         Mutex,
         mpsc::{Receiver, Sender, channel},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing::error;
 use windows::Win32::{
     Foundation::{S_FALSE, *},
     Media::MediaFoundation::*,
-    System::{
-        Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
-        Performance::QueryPerformanceCounter,
-    },
+    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoInitialize},
 };
 use windows_core::{ComObjectInner, Interface, PWSTR, implement};
 
@@ -545,8 +542,9 @@ fn get_device_model_id(device_id: &str) -> Option<String> {
 
 pub struct CallbackData {
     pub sample: IMFSample,
+    pub reference_time: Instant,
     pub timestamp: Duration,
-    pub perf_counter: i64,
+    pub capture_begin_time: Instant,
 }
 
 #[implement(IMFCaptureEngineOnSampleCallback, IMFCaptureEngineOnEventCallback)]
@@ -557,9 +555,6 @@ struct VideoCallback {
 
 impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
     fn OnSample(&self, psample: windows_core::Ref<'_, IMFSample>) -> windows_core::Result<()> {
-        let mut perf_counter = 0;
-        unsafe { QueryPerformanceCounter(&mut perf_counter)? };
-
         let Some(sample) = psample.as_ref() else {
             return Ok(());
         };
@@ -568,12 +563,28 @@ impl IMFCaptureEngineOnSampleCallback_Impl for VideoCallback_Impl {
             return Ok(());
         };
 
-        let sample_time = unsafe { sample.GetSampleTime() }?;
+        let reference_time = Instant::now();
+        let mf_time_now = Duration::from_micros(unsafe { MFGetSystemTime() / 10 } as u64);
+
+        let raw_time_stamp = unsafe { sample.GetSampleTime() }.unwrap_or(0);
+        let timestamp = Duration::from_micros((raw_time_stamp / 10) as u64);
+
+        let raw_capture_begin_time =
+            unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) }
+                .or_else(
+                    // retry, it's what chromium does /shrug
+                    |_| unsafe { sample.GetUINT64(&MFSampleExtension_DeviceReferenceSystemTime) },
+                )
+                .unwrap_or(unsafe { MFGetSystemTime() } as u64);
+
+        let capture_begin_time =
+            reference_time + Duration::from_micros(raw_capture_begin_time / 10) - mf_time_now;
 
         (callback)(CallbackData {
             sample: sample.clone(),
-            timestamp: Duration::from_micros(sample_time as u64 / 10),
-            perf_counter,
+            reference_time,
+            timestamp,
+            capture_begin_time,
         });
 
         Ok(())

@@ -5,7 +5,7 @@ import { faMoon, faSun } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useClickAway } from "@uidotdev/usehooks";
 import { AnimatePresence, motion } from "framer-motion";
-import { X } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import Link from "next/link";
 import { type MutableRefObject, useState } from "react";
 import { useTheme } from "../../Contexts";
@@ -54,7 +54,7 @@ export const AdminMobileNav = () => {
 						<LogoBadge className="block w-auto h-8" />
 					</Link>
 				</div>
-				<div className="flex gap-4 items-center px-4 h-full">
+				<div className="flex gap-4 items-center h-full">
 					<div
 						onClick={() => {
 							setThemeHandler(theme === "light" ? "dark" : "light");
@@ -66,6 +66,12 @@ export const AdminMobileNav = () => {
 							icon={theme === "dark" ? faSun : faMoon}
 						/>
 					</div>
+					<button
+						className="flex flex-col gap-2 justify-center items-center px-5 h-full text-white border-l border-gray-3 lg:hidden"
+						onClick={() => setSidebarOpen(true)}
+					>
+						<Menu className="text-gray-12 size-7" aria-hidden="true" />
+					</button>
 				</div>
 			</div>
 		</>

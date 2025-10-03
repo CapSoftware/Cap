@@ -1,21 +1,21 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import { Video } from "@cap/web-domain";
+import { serverEnv } from "@cap/env";
+import { S3_BUCKET_URL } from "@cap/utils";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
 import type { NextRequest } from "next/server";
-import { runPromise } from "@/lib/server";
 import { getHeaders } from "@/utils/helpers";
+import { createBucketProvider } from "@/utils/s3";
 
 export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
 	const { searchParams } = request.nextUrl;
+	const userId = searchParams.get("userId");
 	const videoId = searchParams.get("videoId");
 	const origin = request.headers.get("origin") as string;
 
-	if (!videoId)
+	if (!userId || !videoId) {
 		return new Response(
 			JSON.stringify({
 				error: true,
@@ -26,42 +26,64 @@ export async function GET(request: NextRequest) {
 				headers: getHeaders(origin),
 			},
 		);
+	}
 
-	const [query] = await db()
+	const query = await db()
 		.select({
 			video: videos,
 			bucket: s3Buckets,
 		})
 		.from(videos)
 		.leftJoin(s3Buckets, eq(videos.bucket, s3Buckets.id))
-		.where(eq(videos.id, Video.VideoId.make(videoId)));
+		.where(eq(videos.id, videoId));
 
-	if (!query)
+	if (query.length === 0) {
 		return new Response(
-			JSON.stringify({ error: true, message: "Video not found" }),
+			JSON.stringify({ error: true, message: "Video does not exist" }),
 			{
-				status: 404,
+				status: 401,
 				headers: getHeaders(origin),
 			},
 		);
+	}
 
-	const prefix = `${query.video.ownerId}/${query.video.id}/`;
+	const result = query[0];
+	if (!result?.video) {
+		return new Response(
+			JSON.stringify({ error: true, message: "Video not found" }),
+			{
+				status: 401,
+				headers: getHeaders(origin),
+			},
+		);
+	}
+
+	const { video } = result;
+	const prefix = `${userId}/${videoId}/`;
+
+	let thumbnailUrl: string;
+
+	if (!result.bucket || video.awsBucket === serverEnv().CAP_AWS_BUCKET) {
+		thumbnailUrl = `${S3_BUCKET_URL}/${prefix}screenshot/screen-capture.jpg`;
+		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+			status: 200,
+			headers: getHeaders(origin),
+		});
+	}
+
+	const bucketProvider = await createBucketProvider(result.bucket);
 
 	try {
-		const [bucket] = await S3Buckets.getBucketAccess(
-			Option.fromNullable(query.bucket?.id),
-		).pipe(runPromise);
-
-		const listResponse = await bucket
-			.listObjects({ prefix: prefix })
-			.pipe(runPromise);
+		const listResponse = await bucketProvider.listObjects({
+			prefix: prefix,
+		});
 		const contents = listResponse.Contents || [];
 
-		const thumbnailKey = contents.find((item) =>
+		const thumbnailKey = contents.find((item: any) =>
 			item.Key?.endsWith("screen-capture.jpg"),
 		)?.Key;
 
-		if (!thumbnailKey)
+		if (!thumbnailKey) {
 			return new Response(
 				JSON.stringify({
 					error: true,
@@ -72,15 +94,9 @@ export async function GET(request: NextRequest) {
 					headers: getHeaders(origin),
 				},
 			);
+		}
 
-		const thumbnailUrl = await bucket
-			.getSignedObjectUrl(thumbnailKey)
-			.pipe(runPromise);
-
-		return new Response(JSON.stringify({ screen: thumbnailUrl }), {
-			status: 200,
-			headers: getHeaders(origin),
-		});
+		thumbnailUrl = await bucketProvider.getSignedObjectUrl(thumbnailKey);
 	} catch (error) {
 		return new Response(
 			JSON.stringify({
@@ -94,4 +110,9 @@ export async function GET(request: NextRequest) {
 			},
 		);
 	}
+
+	return new Response(JSON.stringify({ screen: thumbnailUrl }), {
+		status: 200,
+		headers: getHeaders(origin),
+	});
 }

@@ -2,6 +2,7 @@ import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { NODE_ENV } from "@cap/env";
 import { Logo } from "@cap/ui";
+import { userIsPro } from "@cap/utils";
 import { useTranscript } from "hooks/use-transcript";
 import {
 	forwardRef,
@@ -11,6 +12,7 @@ import {
 	useState,
 } from "react";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { usePublicEnv } from "@/utils/public-env";
 import { CapVideoPlayer } from "./CapVideoPlayer";
 import { HLSVideoPlayer } from "./HLSVideoPlayer";
 import {
@@ -33,47 +35,25 @@ type CommentWithAuthor = typeof commentsSchema.$inferSelect & {
 export const ShareVideo = forwardRef<
 	HTMLVideoElement,
 	{
-		data: typeof videos.$inferSelect & {
-			ownerIsPro?: boolean;
-			hasActiveUpload?: boolean;
-		};
+		data: typeof videos.$inferSelect;
 		user: typeof userSelectProps | null;
 		comments: MaybePromise<CommentWithAuthor[]>;
 		chapters?: { title: string; start: number }[];
 		aiProcessing?: boolean;
 	}
->(({ data, comments, chapters = [] }, ref) => {
+>(({ data, user, comments, chapters = [], aiProcessing = false }, ref) => {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
-	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement, []);
+	useImperativeHandle(ref, () => videoRef.current as HTMLVideoElement);
 
 	const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
 	const [transcriptData, setTranscriptData] = useState<TranscriptEntry[]>([]);
 	const [subtitleUrl, setSubtitleUrl] = useState<string | null>(null);
 	const [chaptersUrl, setChaptersUrl] = useState<string | null>(null);
-	const [commentsData, setCommentsData] = useState<CommentWithAuthor[]>([]);
 
 	const { data: transcriptContent, error: transcriptError } = useTranscript(
 		data.id,
 		data.transcriptionStatus,
 	);
-
-	// Handle comments data
-	useEffect(() => {
-		if (comments) {
-			if (Array.isArray(comments)) {
-				setCommentsData(comments);
-			} else {
-				comments.then(setCommentsData);
-			}
-		}
-	}, [comments]);
-
-	// Handle seek functionality
-	const handleSeek = (time: number) => {
-		if (videoRef.current) {
-			videoRef.current.currentTime = time;
-		}
-	};
 
 	useEffect(() => {
 		if (transcriptContent) {
@@ -143,6 +123,8 @@ export const ShareVideo = forwardRef<
 		}
 	}, [chapters]);
 
+	const publicEnv = usePublicEnv();
+
 	let videoSrc: string;
 	let enableCrossOrigin = false;
 
@@ -157,9 +139,9 @@ export const ShareVideo = forwardRef<
 	) {
 		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=master`;
 	} else if (data.source.type === "MediaConvert") {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/output/video_recording_000.m3u8`;
 	} else {
-		videoSrc = `/api/playlist?userId=${data.ownerId}&videoId=${data.id}&videoType=video`;
+		videoSrc = `${publicEnv.s3BucketUrl}/${data.ownerId}/${data.id}/combined-source/stream.m3u8`;
 	}
 
 	return (
@@ -167,37 +149,25 @@ export const ShareVideo = forwardRef<
 			<div className="relative h-full">
 				{data.source.type === "desktopMP4" ? (
 					<CapVideoPlayer
-						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
 						enableCrossOrigin={enableCrossOrigin}
-						hasActiveUpload={data.hasActiveUpload}
-						comments={commentsData.map((comment) => ({
-							id: comment.id,
-							type: comment.type,
-							timestamp: comment.timestamp,
-							content: comment.content,
-							authorName: comment.authorName,
-						}))}
-						onSeek={handleSeek}
 					/>
 				) : (
 					<HLSVideoPlayer
-						videoId={data.id}
 						mediaPlayerClassName="w-full h-full max-w-full max-h-full rounded-xl"
 						videoSrc={videoSrc}
 						chaptersSrc={chaptersUrl || ""}
 						captionsSrc={subtitleUrl || ""}
 						videoRef={videoRef}
-						hasActiveUpload={data.hasActiveUpload}
 					/>
 				)}
 			</div>
 
-			{!data.ownerIsPro && (
+			{!userIsPro(user) && (
 				<div className="absolute top-4 left-4 z-30">
 					<div
 						className="block cursor-pointer"

@@ -1,12 +1,11 @@
 use ffmpeg::{format, frame};
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 
 use crate::audio::{OpusEncoder, OpusEncoderError};
 
 pub struct OggFile {
     encoder: OpusEncoder,
     output: format::context::Output,
-    finished: bool,
 }
 
 impl OggFile {
@@ -22,32 +21,15 @@ impl OggFile {
         // make sure this happens after adding all encoders!
         output.write_header()?;
 
-        Ok(Self {
-            encoder,
-            output,
-            finished: false,
-        })
+        Ok(Self { encoder, output })
     }
 
-    pub fn encoder(&self) -> &OpusEncoder {
-        &self.encoder
-    }
-
-    pub fn queue_frame(&mut self, frame: frame::Audio, timestamp: Duration) {
-        let _ = self.encoder.queue_frame(frame, timestamp, &mut self.output);
+    pub fn queue_frame(&mut self, frame: frame::Audio) {
+        self.encoder.queue_frame(frame, &mut self.output);
     }
 
     pub fn finish(&mut self) {
-        if !self.finished {
-            let _ = self.encoder.finish(&mut self.output);
-            self.output.write_trailer().unwrap();
-            self.finished = true;
-        }
-    }
-}
-
-impl Drop for OggFile {
-    fn drop(&mut self) {
-        self.finish();
+        self.encoder.finish(&mut self.output);
+        self.output.write_trailer().unwrap();
     }
 }

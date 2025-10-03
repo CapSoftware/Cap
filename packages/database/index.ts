@@ -1,10 +1,11 @@
+import { serverEnv } from "@cap/env";
 import { Client, type Config } from "@planetscale/database";
 import { sql } from "drizzle-orm";
 import type { AnyMySqlColumn } from "drizzle-orm/mysql-core";
 import { drizzle } from "drizzle-orm/planetscale-serverless";
 
 function createDrizzle() {
-	const URL = process.env.DATABASE_URL!;
+	const URL = serverEnv().DATABASE_URL;
 
 	let fetchHandler: Promise<Config["fetch"]> | undefined;
 

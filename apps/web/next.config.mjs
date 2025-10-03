@@ -12,6 +12,7 @@ const { version } = packageJson;
 
 const nextConfig = {
 	reactStrictMode: true,
+	swcMinify: true,
 	transpilePackages: [
 		"@cap/ui",
 		"@cap/utils",
@@ -26,6 +27,7 @@ const nextConfig = {
 		ignoreBuildErrors: true,
 	},
 	experimental: {
+		instrumentationHook: process.env.NEXT_PUBLIC_DOCKER_BUILD === "true",
 		optimizePackageImports: [
 			"@cap/ui",
 			"@cap/utils",
@@ -50,7 +52,7 @@ const nextConfig = {
 			process.env.NODE_ENV === "development" && {
 				protocol: "http",
 				hostname: "localhost",
-				port: "9000",
+				port: "3902",
 				pathname: "**",
 			},
 		].filter(Boolean),
@@ -108,25 +110,6 @@ const nextConfig = {
 	// If the DOCKER_BUILD environment variable is set to true, we are output nextjs to standalone ready for docker deployment
 	output:
 		process.env.NEXT_PUBLIC_DOCKER_BUILD === "true" ? "standalone" : undefined,
-	// webpack: (config) => {
-	// 	config.module.rules.push({
-	// 		test: /\.(?:js|ts)$/,
-	// 		use: [
-	// 			{
-	// 				loader: "babel-loader",
-	// 				options: {
-	// 					presets: ["next/babel"],
-	// 					plugins: [
-	// 						"@babel/plugin-transform-private-property-in-object",
-	// 						"@babel/plugin-transform-private-methods",
-	// 					],
-	// 				},
-	// 			},
-	// 		],
-	// 	});
-
-	// 	return config;
-	// },
 };
 
 export default nextConfig;

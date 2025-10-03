@@ -157,7 +157,7 @@ export function LoginForm() {
 				</motion.p>
 			</motion.div>
 			<MotionLink layout="position" className="flex mx-auto size-fit" href="/">
-				<MotionLogoBadge layout="position" className="size-12" />
+				<MotionLogoBadge layout="position" className="w-[72px] h-[72px]" />
 			</MotionLink>
 			<motion.div
 				layout="position"
@@ -437,19 +437,7 @@ const NormalLogin = ({
                   </div>
                 )} */}
 			</motion.div>
-			<motion.p
-				layout="position"
-				className="mt-3 mb-2 text-xs text-center text-gray-9"
-			>
-				Don't have an account?{" "}
-				<Link
-					href="/signup"
-					className="text-xs font-semibold text-blue-9 hover:text-blue-8"
-				>
-					Sign up here
-				</Link>
-			</motion.p>
-			<div className="flex gap-4 items-center mt-4 mb-4">
+			<div className="flex gap-4 items-center my-4">
 				<span className="flex-1 h-px bg-gray-5" />
 				<p className="text-sm text-center text-gray-10">OR</p>
 				<span className="flex-1 h-px bg-gray-5" />
@@ -459,16 +447,18 @@ const NormalLogin = ({
 				className="flex flex-col gap-3 justify-center items-center"
 			>
 				{!oauthError && (
-					<MotionButton
-						variant="gray"
-						type="button"
-						className="flex gap-2 justify-center items-center w-full text-sm"
-						onClick={handleGoogleSignIn}
-						disabled={loading || emailSent}
-					>
-						<Image src="/google.svg" alt="Google" width={16} height={16} />
-						Login with Google
-					</MotionButton>
+					<>
+						<MotionButton
+							variant="gray"
+							type="button"
+							className="flex gap-2 justify-center items-center w-full text-sm"
+							onClick={handleGoogleSignIn}
+							disabled={loading}
+						>
+							<Image src="/google.svg" alt="Google" width={16} height={16} />
+							Login with Google
+						</MotionButton>
+					</>
 				)}
 
 				{oauthError && (
@@ -479,7 +469,8 @@ const NormalLogin = ({
 						/>
 						<p className="text-xs leading-5 text-gray-50">
 							It looks like you've previously used this email to sign up via
-							email login. Please enter your email.
+							email login. Please enter your email below to receive a sign in
+							link.
 						</p>
 					</div>
 				)}
@@ -489,7 +480,7 @@ const NormalLogin = ({
 					className="w-full"
 					layout
 					onClick={() => setShowOrgInput(true)}
-					disabled={loading || emailSent}
+					disabled={loading}
 				>
 					<LucideArrowUpRight size={20} />
 					Login with SAML SSO

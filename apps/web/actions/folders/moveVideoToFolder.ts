@@ -3,7 +3,6 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { folders, spaceVideos, videos } from "@cap/database/schema";
-import type { Folder, Video } from "@cap/web-domain";
 import { and, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
@@ -12,8 +11,8 @@ export async function moveVideoToFolder({
 	folderId,
 	spaceId,
 }: {
-	videoId: Video.VideoId;
-	folderId: Folder.FolderId | null;
+	videoId: string;
+	folderId: string | null;
 	spaceId?: string | null;
 }) {
 	const user = await getCurrentUser();
@@ -24,7 +23,7 @@ export async function moveVideoToFolder({
 
 	// Get the current video to know its original folder
 	const [currentVideo] = await db()
-		.select({ folderId: videos.folderId, id: videos.id })
+		.select({ folderId: videos.folderId })
 		.from(videos)
 		.where(eq(videos.id, videoId));
 

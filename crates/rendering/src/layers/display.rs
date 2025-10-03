@@ -75,8 +75,7 @@ impl DisplayLayer {
             },
         );
 
-        // Update existing uniform buffer in place; bind group remains valid.
-        uniforms.write_to_buffer(queue, &self.uniforms_buffer);
+        queue.write_buffer(&self.uniforms_buffer, 0, bytemuck::cast_slice(&[uniforms]));
     }
 
     pub fn render(&self, pass: &mut wgpu::RenderPass<'_>) {

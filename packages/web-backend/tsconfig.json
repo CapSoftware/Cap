@@ -7,6 +7,9 @@
 		"composite": true,
 		"outDir": "dist",
 		"noEmit": false,
-		"emitDeclarationOnly": true
-	}
+		"emitDeclarationOnly": true,
+		"strict": true,
+		"noUncheckedIndexedAccess": true
+	},
+	"references": [{ "path": "../web-domain" }, { "path": "../database" }]
 }

@@ -24,8 +24,5 @@ tracing.workspace = true
 tracing-subscriber = "0.3.19"
 flume.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
-cidre = { workspace = true }
-
 [lints]
 workspace = true

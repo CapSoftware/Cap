@@ -1,15 +1,18 @@
 use cap_cursor_capture::CursorCropBounds;
 use cap_media_info::{AudioInfo, VideoInfo};
-use cap_timestamp::Timestamp;
+use ffmpeg::sys::AV_TIME_BASE_Q;
+use flume::Sender;
 use scap_targets::{Display, DisplayId, Window, WindowId, bounds::*};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::time::SystemTime;
-use tracing::*;
+use tracing::{error, warn};
 
-#[cfg(target_os = "windows")]
+use crate::pipeline::{control::Control, task::PipelineSourceTask};
+
+#[cfg(windows)]
 mod windows;
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 pub use windows::*;
 
 #[cfg(target_os = "macos")]
@@ -19,9 +22,8 @@ pub use macos::*;
 
 pub struct StopCapturing;
 
-#[derive(Debug, Clone, thiserror::Error)]
+#[derive(Debug, Clone)]
 pub enum StopCapturingError {
-    #[error("NotCapturing")]
     NotCapturing,
 }
 
@@ -188,31 +190,35 @@ impl ScreenCaptureTarget {
     }
 }
 
-pub struct ScreenCaptureConfig<TCaptureFormat: ScreenCaptureFormat> {
+pub struct ScreenCaptureSource<TCaptureFormat: ScreenCaptureFormat> {
     config: Config,
     video_info: VideoInfo,
+    tokio_handle: tokio::runtime::Handle,
+    video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
+    audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
     start_time: SystemTime,
-    pub system_audio: bool,
     _phantom: std::marker::PhantomData<TCaptureFormat>,
     #[cfg(windows)]
     d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    #[cfg(target_os = "macos")]
-    shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
 }
 
-impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureConfig<T> {
+impl<T: ScreenCaptureFormat> std::fmt::Debug for ScreenCaptureSource<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScreenCaptureSource")
             // .field("bounds", &self.bounds)
             // .field("output_resolution", &self.output_resolution)
             .field("fps", &self.config.fps)
             .field("video_info", &self.video_info)
+            .field(
+                "audio_info",
+                &self.audio_tx.as_ref().map(|_| self.audio_info()),
+            )
             .finish()
     }
 }
 
-unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureConfig<T> {}
-unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureConfig<T> {}
+unsafe impl<T: ScreenCaptureFormat> Send for ScreenCaptureSource<T> {}
+unsafe impl<T: ScreenCaptureFormat> Sync for ScreenCaptureSource<T> {}
 
 pub trait ScreenCaptureFormat {
     type VideoFormat;
@@ -222,18 +228,18 @@ pub trait ScreenCaptureFormat {
     fn audio_info() -> AudioInfo;
 }
 
-impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureConfig<TCaptureFormat> {
+impl<TCaptureFormat: ScreenCaptureFormat> Clone for ScreenCaptureSource<TCaptureFormat> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
             video_info: self.video_info,
+            video_tx: self.video_tx.clone(),
+            audio_tx: self.audio_tx.clone(),
+            tokio_handle: self.tokio_handle.clone(),
             start_time: self.start_time,
-            system_audio: self.system_audio,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device: self.d3d_device.clone(),
-            #[cfg(target_os = "macos")]
-            shareable_content: self.shareable_content.clone(),
         }
     }
 }
@@ -265,16 +271,17 @@ pub enum ScreenCaptureInitError {
     NoBounds,
 }
 
-impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
+impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureSource<TCaptureFormat> {
     #[allow(clippy::too_many_arguments)]
     pub async fn init(
         target: &ScreenCaptureTarget,
         show_cursor: bool,
         max_fps: u32,
+        video_tx: Sender<(TCaptureFormat::VideoFormat, f64)>,
+        audio_tx: Option<Sender<(ffmpeg::frame::Audio, f64)>>,
         start_time: SystemTime,
-        system_audio: bool,
+        tokio_handle: tokio::runtime::Handle,
         #[cfg(windows)] d3d_device: ::windows::Win32::Graphics::Direct3D11::ID3D11Device,
-        #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
     ) -> Result<Self, ScreenCaptureInitError> {
         cap_fail::fail!("ScreenCaptureSource::init");
 
@@ -394,13 +401,13 @@ impl<TCaptureFormat: ScreenCaptureFormat> ScreenCaptureConfig<TCaptureFormat> {
                 output_size.height() as u32,
                 fps,
             ),
+            video_tx,
+            audio_tx,
+            tokio_handle,
             start_time,
-            system_audio,
             _phantom: std::marker::PhantomData,
             #[cfg(windows)]
             d3d_device,
-            #[cfg(target_os = "macos")]
-            shareable_content: shareable_content.retained(),
         })
     }
 

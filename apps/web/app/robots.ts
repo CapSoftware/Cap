@@ -1,12 +1,12 @@
 import type { MetadataRoute } from "next";
-import { headers, type UnsafeUnwrappedHeaders } from "next/headers";
+import { headers } from "next/headers";
 import { seoPages } from "@/lib/seo-pages";
 
 export const revalidate = 0;
 
 export default function robots(): MetadataRoute.Robots {
 	const seoPageSlugs = Object.keys(seoPages);
-	const headersList = headers() as unknown as UnsafeUnwrappedHeaders;
+	const headersList = headers();
 	const referrer = headersList.get("x-referrer") || "";
 
 	const allowedReferrers = [

@@ -41,7 +41,6 @@
 		"core:window:allow-set-theme",
 		"core:window:allow-set-progress-bar",
 		"core:window:allow-set-effects",
-		"core:window:allow-set-ignore-cursor-events",
 		"core:webview:default",
 		"core:webview:allow-create-webview-window",
 		"core:app:allow-version",

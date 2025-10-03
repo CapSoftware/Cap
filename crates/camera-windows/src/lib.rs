@@ -98,8 +98,8 @@ impl VideoDeviceInfo {
                                 height: format.height() as usize,
                                 pixel_format: format.pixel_format,
                                 timestamp: data.timestamp,
-                                perf_counter: data.perf_counter,
-                                // capture_begin_time: Some(data.capture_begin_time),
+                                reference_time: data.reference_time,
+                                capture_begin_time: Some(data.capture_begin_time),
                             })
                         }
                     }),
@@ -128,8 +128,8 @@ impl VideoDeviceInfo {
                             width: video_info.bmiHeader.biWidth as usize,
                             height: video_info.bmiHeader.biHeight as usize,
                             timestamp: data.timestamp,
-                            perf_counter: data.perf_counter,
-                            // capture_begin_time: None,
+                            reference_time: data.reference_time,
+                            capture_begin_time: None,
                         });
                     }),
                 )?;
@@ -178,9 +178,9 @@ pub struct Frame {
     pub pixel_format: PixelFormat,
     pub width: usize,
     pub height: usize,
-    // pub reference_time: Instant,
+    pub reference_time: Instant,
     pub timestamp: Duration,
-    pub perf_counter: i64,
+    pub capture_begin_time: Option<Instant>,
     inner: FrameInner,
 }
 

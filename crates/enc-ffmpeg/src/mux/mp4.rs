@@ -1,6 +1,6 @@
 use cap_media_info::RawVideoFormat;
 use ffmpeg::{format, frame};
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 use tracing::{info, trace};
 
 use crate::{
@@ -70,12 +70,12 @@ impl MP4File {
         RawVideoFormat::YUYV420
     }
 
-    pub fn queue_video_frame(&mut self, frame: frame::Video, timestamp: Duration) {
+    pub fn queue_video_frame(&mut self, frame: frame::Video) {
         if self.is_finished {
             return;
         }
 
-        self.video.queue_frame(frame, timestamp, &mut self.output);
+        self.video.queue_frame(frame, &mut self.output);
     }
 
     pub fn queue_audio_frame(&mut self, frame: frame::Audio) {
@@ -87,7 +87,7 @@ impl MP4File {
             return;
         };
 
-        audio.send_frame(frame, &mut self.output);
+        audio.queue_frame(frame, &mut self.output);
     }
 
     pub fn finish(&mut self) {
@@ -118,12 +118,6 @@ impl MP4File {
 
     pub fn video_mut(&mut self) -> &mut H264Encoder {
         &mut self.video
-    }
-}
-
-impl Drop for MP4File {
-    fn drop(&mut self) {
-        self.finish();
     }
 }
 

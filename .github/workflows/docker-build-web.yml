@@ -38,6 +38,7 @@ jobs:
           echo "NEXT_PUBLIC_DOCKER_BUILD=true" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_BUCKET=capso" >> .env
           echo "NEXT_PUBLIC_CAP_AWS_REGION=us-east-1" >> .env
+          cat .env
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3

@@ -2,7 +2,6 @@
 
 import type { videos } from "@cap/database/schema";
 import { Button } from "@cap/ui";
-import { useMutation } from "@tanstack/react-query";
 import { useInvalidateTranscript, useTranscript } from "hooks/use-transcript";
 import { Check, Copy, Download, Edit3, MessageSquare, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -143,33 +142,6 @@ export const Transcript: React.FC<TranscriptProps> = ({
 
 	const invalidateTranscript = useInvalidateTranscript();
 
-	const retryTranscriptionMutation = useMutation({
-		mutationFn: async () => {
-			const response = await fetch(
-				`/api/videos/${data.id}/retry-transcription`,
-				{
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-				},
-			);
-
-			if (!response.ok) {
-				const errorText = await response.text();
-				throw new Error(`Failed to retry transcription: ${errorText}`);
-			}
-
-			return response.json();
-		},
-		onSuccess: () => {
-			// Reset status - Share.tsx polling will automatically detect the change and trigger transcription
-			setIsTranscriptionProcessing(true);
-			invalidateTranscript(data.id);
-		},
-		onError: (error) => {
-			console.error("Failed to retry transcription:", error);
-		},
-	});
-
 	useEffect(() => {
 		if (transcriptContent) {
 			const parsed = parseVTT(transcriptContent);
@@ -239,6 +211,11 @@ export const Transcript: React.FC<TranscriptProps> = ({
 			return () => clearInterval(intervalId);
 		}
 	}, [data.id, data.transcriptionStatus, data.createdAt]);
+
+	const handleReset = () => {
+		setIsLoading(true);
+		invalidateTranscript(data.id);
+	};
 
 	const handleTranscriptClick = (entry: TranscriptEntry) => {
 		if (editingEntry === entry.id) {
@@ -444,39 +421,14 @@ export const Transcript: React.FC<TranscriptProps> = ({
 		);
 	}
 
-	const showRetryButton =
-		data.transcriptionStatus === "ERROR" ||
-		data.transcriptionStatus === null ||
-		(!transcriptData.length && !isTranscriptionProcessing);
-
-	if (showRetryButton) {
+	if (hasTimedOut || (!transcriptData.length && !isTranscriptionProcessing)) {
 		return (
 			<div className="flex justify-center items-center h-full text-gray-1">
 				<div className="text-center">
 					<MessageSquare className="mx-auto mb-2 w-8 h-8 text-gray-300" />
-					<p className="mb-4 text-sm font-medium text-gray-12">
-						{data.transcriptionStatus === "ERROR"
-							? "Transcript not available"
-							: "No transcript available"}
+					<p className="text-sm font-medium text-gray-12">
+						No transcript available
 					</p>
-					{canEdit &&
-						(data.transcriptionStatus === "ERROR" ||
-							data.transcriptionStatus === null ||
-							hasTimedOut) && (
-							<Button
-								onClick={() => {
-									retryTranscriptionMutation.mutate();
-								}}
-								disabled={retryTranscriptionMutation.isPending}
-								variant="primary"
-								size="sm"
-								spinner={retryTranscriptionMutation.isPending}
-							>
-								{retryTranscriptionMutation.isPending
-									? "Retrying..."
-									: "Retry Transcription"}
-							</Button>
-						)}
 				</div>
 			</div>
 		);
@@ -566,7 +518,6 @@ export const Transcript: React.FC<TranscriptProps> = ({
 											e.stopPropagation();
 											startEditing(entry);
 										}}
-										type="button"
 										className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-gray-3 rounded-md transition-all duration-200"
 										title="Edit transcript"
 									>

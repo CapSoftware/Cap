@@ -53,7 +53,6 @@ const ReferIcon = forwardRef<ReferIconHandle, ReferIconProps>(
 				onAnimationComplete={() => setIsAnimating(false)}
 				{...props}
 			>
-				<title>Box</title>
 				<path
 					strokeLinecap="round"
 					strokeLinejoin="round"

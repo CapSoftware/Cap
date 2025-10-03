@@ -1,28 +1,15 @@
-import * as Db from "@cap/database/schema";
 import { CurrentUser, Policy, Video } from "@cap/web-domain";
-import * as Dz from "drizzle-orm";
-import { Array, Effect, Option, pipe } from "effect";
-
-import { Database } from "../Database.ts";
-import { S3Buckets } from "../S3Buckets/index.ts";
-import { S3BucketAccess } from "../S3Buckets/S3BucketAccess.ts";
-import { VideosPolicy } from "./VideosPolicy.ts";
-import { VideosRepo } from "./VideosRepo.ts";
+import { Array, Effect, Option } from "effect";
+import { S3Buckets } from "../S3Buckets";
+import { S3BucketAccess } from "../S3Buckets/S3BucketAccess";
+import { VideosPolicy } from "./VideosPolicy";
+import { VideosRepo } from "./VideosRepo";
 
 export class Videos extends Effect.Service<Videos>()("Videos", {
 	effect: Effect.gen(function* () {
-		const db = yield* Database;
 		const repo = yield* VideosRepo;
 		const policy = yield* VideosPolicy;
 		const s3Buckets = yield* S3Buckets;
-
-		const getById = (id: Video.VideoId) =>
-			repo
-				.getById(id)
-				.pipe(
-					Policy.withPublicPolicy(policy.canView(id)),
-					Effect.withSpan("Videos.getById"),
-				);
 
 		return {
 			/*
@@ -30,7 +17,13 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 			 */
 			// This is only for external use since it does an access check,
 			// internal use should prefer the repo directly
-			getById,
+			getById: (id: Video.VideoId) =>
+				repo
+					.getById(id)
+					.pipe(
+						Policy.withPublicPolicy(policy.canView(id)),
+						Effect.withSpan("Videos.getById"),
+					),
 
 			/*
 			 * Delete a video. Will fail if the user does not have access.
@@ -42,25 +35,30 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Effect.flatMap(Effect.catchAll(() => new Video.NotFoundError())),
 					);
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderLayer(
+					video.bucketId,
+				);
 
 				yield* repo
 					.delete(video.id)
 					.pipe(Policy.withPolicy(policy.isOwner(video.id)));
 
-				const user = yield* CurrentUser;
+				yield* Effect.gen(function* () {
+					const s3 = yield* S3BucketAccess;
+					const user = yield* CurrentUser;
 
-				const prefix = `${user.id}/${video.id}/`;
+					const prefix = `${user.id}/${video.id}/`;
 
-				const listedObjects = yield* bucket.listObjects({ prefix });
+					const listedObjects = yield* s3.listObjects({ prefix });
 
-				if (listedObjects.Contents?.length) {
-					yield* bucket.deleteObjects(
-						listedObjects.Contents.map((content) => ({
-							Key: content.Key,
-						})),
-					);
-				}
+					if (listedObjects.Contents?.length) {
+						yield* s3.deleteObjects(
+							listedObjects.Contents.map((content) => ({
+								Key: content.Key,
+							})),
+						);
+					}
+				}).pipe(Effect.provide(S3ProviderLayer));
 			}),
 
 			/*
@@ -77,96 +75,35 @@ export class Videos extends Effect.Service<Videos>()("Videos", {
 						Policy.withPolicy(policy.isOwner(videoId)),
 					);
 
-				const [bucket] = yield* s3Buckets.getBucketAccess(video.bucketId);
+				const [S3ProviderLayer] = yield* s3Buckets.getProviderLayer(
+					video.bucketId,
+				);
 
 				// Don't duplicate password or sharing data
-				const newVideoId = yield* repo.create(video);
+				const newVideoId = yield* repo.create(yield* video.toJS());
 
-				const prefix = `${video.ownerId}/${video.id}/`;
-				const newPrefix = `${video.ownerId}/${newVideoId}/`;
+				yield* Effect.gen(function* () {
+					const s3 = yield* S3BucketAccess;
+					const bucketName = yield* s3.bucketName;
 
-				const allObjects = yield* bucket.listObjects({ prefix });
+					const prefix = `${video.ownerId}/${video.id}/`;
+					const newPrefix = `${video.ownerId}/${newVideoId}/`;
 
-				if (allObjects.Contents)
-					yield* Effect.all(
-						Array.filterMap(allObjects.Contents, (obj) =>
-							Option.map(Option.fromNullable(obj.Key), (key) => {
-								const newKey = key.replace(prefix, newPrefix);
-								return bucket.copyObject(
-									`${bucket.bucketName}/${obj.Key}`,
-									newKey,
-								);
-							}),
-						),
-						{ concurrency: 1 },
-					);
-			}),
+					const allObjects = yield* s3.listObjects({ prefix });
 
-			/*
-			 * Gets the progress of a video upload.
-			 */
-			getUploadProgress: Effect.fn("Videos.getUploadProgress")(function* (
-				videoId: Video.VideoId,
-			) {
-				const [result] = yield* db
-					.execute((db) =>
-						db
-							.select({
-								uploaded: Db.videoUploads.uploaded,
-								total: Db.videoUploads.total,
-								startedAt: Db.videoUploads.startedAt,
-								updatedAt: Db.videoUploads.updatedAt,
-							})
-							.from(Db.videoUploads)
-							.where(Dz.eq(Db.videoUploads.videoId, videoId)),
-					)
-					.pipe(Policy.withPublicPolicy(policy.canView(videoId)));
-
-				return pipe(
-					result,
-					Option.fromNullable,
-					Option.map((r) => new Video.UploadProgress(r)),
-				);
-			}),
-
-			create: Effect.fn("Videos.create")(repo.create),
-
-			getDownloadInfo: Effect.fn("Videos.getDownloadInfo")(function* (
-				videoId: Video.VideoId,
-			) {
-				const [video] = yield* repo
-					.getById(videoId)
-					.pipe(
-						Effect.flatMap(
-							Effect.catchTag(
-								"NoSuchElementException",
-								() => new Video.NotFoundError(),
+					if (allObjects.Contents)
+						yield* Effect.all(
+							Array.filterMap(allObjects.Contents, (obj) =>
+								Option.map(Option.fromNullable(obj.Key), (key) => {
+									const newKey = key.replace(prefix, newPrefix);
+									return s3.copyObject(`${bucketName}/${obj.Key}`, newKey);
+								}),
 							),
-						),
-						Policy.withPublicPolicy(policy.canView(videoId)),
-					);
-
-				const [bucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
-
-				return yield* Option.fromNullable(Video.Video.getSource(video)).pipe(
-					Option.filter((v) => v._tag === "Mp4Source"),
-					Option.map((v) =>
-						bucket.getSignedObjectUrl(v.getFileKey()).pipe(
-							Effect.map((downloadUrl) => ({
-								fileName: `${video.name}.mp4`,
-								downloadUrl,
-							})),
-						),
-					),
-					Effect.transposeOption,
-				);
+							{ concurrency: 1 },
+						);
+				}).pipe(Effect.provide(S3ProviderLayer));
 			}),
 		};
 	}),
-	dependencies: [
-		VideosPolicy.Default,
-		VideosRepo.Default,
-		Database.Default,
-		S3Buckets.Default,
-	],
+	dependencies: [VideosPolicy.Default, VideosRepo.Default, S3Buckets.Default],
 }) {}

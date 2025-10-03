@@ -24,11 +24,11 @@ const CapAIBox = ({
 					}}
 					onMouseEnter={() => setHovered(true)}
 					onMouseLeave={() => setHovered(false)}
-					className="hidden p-3 mb-6 w-[calc(100%-12px)] mx-auto rounded-xl border transition-colors cursor-pointer md:block hover:bg-gray-2 h-fit border-gray-3"
+					className="hidden p-3 mb-6 w-full rounded-xl border transition-colors cursor-pointer md:block hover:bg-gray-2 h-fit border-gray-3"
 				>
 					<div className="flex justify-between items-center px-3 pb-3 w-full">
 						<h3 className="text-sm font-medium text-gray-12">Cap AI</h3>
-						<p className="text-[11px] text-gray-10">Available now</p>
+						<p className="text-xs text-gray-10">Available now</p>
 					</div>
 					<CapAIArt />
 					<div

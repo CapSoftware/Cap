@@ -47,8 +47,7 @@ export async function middleware(request: NextRequest) {
 				path.startsWith("/login") ||
 				path.startsWith("/invite") ||
 				path.startsWith("/self-hosting") ||
-				path.startsWith("/terms") ||
-				path.startsWith("/verify-otp")
+				path.startsWith("/terms")
 			) &&
 			process.env.NODE_ENV !== "development"
 		)

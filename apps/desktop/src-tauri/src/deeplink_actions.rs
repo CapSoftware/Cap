@@ -1,6 +1,4 @@
-use cap_recording::{
-    RecordingMode, feeds::camera::DeviceOrModelID, sources::screen_capture::ScreenCaptureTarget,
-};
+use cap_recording::{RecordingMode, feeds::camera::DeviceOrModelID, sources::ScreenCaptureTarget};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Url};

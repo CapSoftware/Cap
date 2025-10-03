@@ -9,13 +9,12 @@ import {
 	sharedVideos,
 	videos,
 } from "@cap/database/schema";
-import type { Video } from "@cap/web-domain";
 import { and, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 export async function addVideosToOrganization(
 	organizationId: string,
-	videoIds: Video.VideoId[],
+	videoIds: string[],
 ) {
 	try {
 		const user = await getCurrentUser();

@@ -1,14 +1,11 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import { Button } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { useSearchParams } from "next/navigation";
 import type React from "react";
 import {
 	type ComponentProps,
 	forwardRef,
 	type PropsWithChildren,
-	startTransition,
-	useCallback,
 	useEffect,
 	useImperativeHandle,
 	useRef,
@@ -27,7 +24,7 @@ export const Comments = Object.assign(
 		{
 			setComments: React.Dispatch<React.SetStateAction<CommentType[]>>;
 			user: typeof userSelectProps | null;
-			videoId: Video.VideoId;
+			videoId: string;
 			optimisticComments: CommentType[];
 			setOptimisticComments: (newComment: CommentType) => void;
 			handleCommentSuccess: (comment: CommentType) => void;
@@ -40,7 +37,6 @@ export const Comments = Object.assign(
 			setOptimisticComments,
 			setComments,
 			handleCommentSuccess,
-			onSeek,
 		} = props;
 		const commentParams = useSearchParams().get("comment");
 		const replyParams = useSearchParams().get("reply");
@@ -56,28 +52,30 @@ export const Comments = Object.assign(
 				commentsContainerRef.current.scrollTop =
 					commentsContainerRef.current.scrollHeight;
 			}
-		}, [commentParams, replyParams]);
+		}, []);
 
-		const scrollToBottom = useCallback(() => {
+		const scrollToBottom = () => {
 			if (commentsContainerRef.current) {
 				commentsContainerRef.current.scrollTo({
 					top: commentsContainerRef.current.scrollHeight,
 					behavior: "smooth",
 				});
 			}
-		}, []);
+		};
 
-		useImperativeHandle(ref, () => ({ scrollToBottom }), [scrollToBottom]);
+		useImperativeHandle(
+			ref,
+			() => ({
+				scrollToBottom,
+			}),
+			[],
+		);
 
 		const rootComments = optimisticComments.filter(
 			(comment) => !comment.parentCommentId || comment.parentCommentId === "",
 		);
 
 		const handleNewComment = async (content: string) => {
-			// Get current video time from the video element
-			const videoElement = document.querySelector("video") as HTMLVideoElement;
-			const currentTime = videoElement?.currentTime || 0;
-
 			const optimisticComment: CommentType = {
 				id: `temp-${Date.now()}`,
 				authorId: user?.id || "anonymous",
@@ -87,14 +85,12 @@ export const Comments = Object.assign(
 				videoId: props.videoId,
 				parentCommentId: "",
 				type: "text",
-				timestamp: currentTime,
+				timestamp: null,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			startTransition(() => {
-				setOptimisticComments(optimisticComment);
-			});
+			setOptimisticComments(optimisticComment);
 
 			try {
 				const data = await newComment({
@@ -102,7 +98,6 @@ export const Comments = Object.assign(
 					videoId: props.videoId,
 					parentCommentId: "",
 					type: "text",
-					timestamp: currentTime,
 				});
 				handleCommentSuccess(data);
 			} catch (error) {
@@ -112,8 +107,6 @@ export const Comments = Object.assign(
 
 		const handleReply = async (content: string) => {
 			if (!replyingTo) return;
-			const videoElement = document.querySelector("video") as HTMLVideoElement;
-			const currentTime = videoElement?.currentTime || 0;
 
 			const parentComment = optimisticComments.find((c) => c.id === replyingTo);
 			const actualParentId = parentComment?.parentCommentId
@@ -129,14 +122,12 @@ export const Comments = Object.assign(
 				videoId: props.videoId,
 				parentCommentId: actualParentId,
 				type: "text",
-				timestamp: currentTime,
+				timestamp: null,
 				updatedAt: new Date(),
 				sending: true,
 			};
 
-			startTransition(() => {
-				setOptimisticComments(optimisticReply);
-			});
+			setOptimisticComments(optimisticReply);
 
 			try {
 				const data = await newComment({
@@ -144,7 +135,6 @@ export const Comments = Object.assign(
 					videoId: props.videoId,
 					parentCommentId: actualParentId,
 					type: "text",
-					timestamp: currentTime,
 				});
 
 				handleCommentSuccess(data);
@@ -210,7 +200,7 @@ export const Comments = Object.assign(
 								onCancelReply={handleCancelReply}
 								onDelete={handleDeleteComment}
 								user={user}
-								onSeek={onSeek}
+								onSeek={props.onSeek}
 							/>
 						))}
 					</div>
@@ -227,7 +217,7 @@ export const Comments = Object.assign(
 					ComponentProps<typeof CommentInput>,
 					"user" | "placholder" | "buttonLabel"
 				>;
-				commentsContainerRef?: React.RefObject<HTMLDivElement | null>;
+				commentsContainerRef?: React.RefObject<HTMLDivElement>;
 			}>,
 		) => (
 			<>
@@ -238,7 +228,7 @@ export const Comments = Object.assign(
 					{props.children}
 				</div>
 
-				<div className="flex-none p-2 border-t border-gray-5 bg-gray-2">
+				<div className="flex-none p-2 border-t border-gray-200 bg-gray-1">
 					{props.user ? (
 						<CommentInput
 							{...props.commentInputProps}

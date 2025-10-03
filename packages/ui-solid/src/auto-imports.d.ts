@@ -6,7 +6,6 @@
 // biome-ignore lint: disable
 export {}
 declare global {
-  const IconCapArrowLeft: typeof import('~icons/cap/arrow-left.jsx')['default']
   const IconCapArrows: typeof import('~icons/cap/arrows.jsx')['default']
   const IconCapAudioOn: typeof import('~icons/cap/audio-on.jsx')['default']
   const IconCapBgBlur: typeof import('~icons/cap/bg-blur.jsx')['default']

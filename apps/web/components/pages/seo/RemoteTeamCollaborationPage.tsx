@@ -1,9 +1,7 @@
-import { Clapperboard, Zap } from "lucide-react";
 import Script from "next/script";
 import { SeoPageTemplate } from "@/components/seo/SeoPageTemplate";
-import type { SeoPageContent } from "@/components/seo/types";
 
-export const remoteTeamCollaborationContent: SeoPageContent = {
+export const remoteTeamCollaborationContent = {
 	title:
 		"Remote Team Collaboration Software: Asynchronous Screen Recording for Distributed Teams",
 	description:
@@ -47,30 +45,23 @@ export const remoteTeamCollaborationContent: SeoPageContent = {
 	],
 
 	recordingModes: {
-		title: "Two Ways to Record with Cap",
+		title: "Two Recording Modes for Different Team Needs",
 		description:
-			"Cap gives you flexible recording options to match your workflow needs, with both modes available in the free plan",
+			"Cap adapts to the way your remote team works with flexible recording options",
 		modes: [
 			{
-				icon: <Zap fill="yellow" className="mb-4 size-8" strokeWidth={1.5} />,
-				title: "Instant Mode",
+				title: "Instant Mode for Quick Updates",
 				description:
-					"Share your screen right away with a simple link—no waiting, just record and share in seconds. Record up to 5-minute shareable links for free, perfect for quick demos and explanations. Includes built-in thread commenting for easy collaboration.",
+					"Perfect for daily standups and quick status updates. Record and share in seconds with a simple link that teammates can instantly access. Includes built-in commenting for immediate feedback.",
 			},
 			{
-				icon: (
-					<Clapperboard
-						fill="var(--blue-9)"
-						className="mb-4 size-8"
-						strokeWidth={1.5}
-					/>
-				),
-				title: "Studio Mode",
+				title: "Studio Mode for Detailed Presentations",
 				description:
-					"Available completely free for personal use! Records at top quality up to 4K. Captures both your screen and webcam separately so you can edit them later, giving you professional-level production control.",
+					"Ideal for comprehensive project walkthroughs and training videos. Record high-quality videos up to 4K with separate screen and webcam capture for professional-level team communications.",
 			},
 		],
 	},
+
 	useCasesTitle: "How Remote Teams Use Cap",
 	useCasesDescription:
 		"Real solutions for common remote collaboration challenges",
@@ -135,45 +126,45 @@ export const remoteTeamCollaborationContent: SeoPageContent = {
 		rows: [
 			[
 				"Time Zone Flexibility",
-				{ text: "Complete async freedom", status: "positive" },
-				{ text: "Requires coordination", status: "negative" },
-				{ text: "Async but limited context", status: "positive" },
+				"✅ Complete async freedom",
+				"❌ Requires coordination",
+				"✅ Async but limited context",
 			],
 			[
 				"Visual Context",
-				{ text: "Full screen & webcam capture", status: "positive" },
-				{ text: "Live video", status: "positive" },
-				{ text: "Text only or static images", status: "negative" },
+				"✅ Full screen & webcam capture",
+				"✅ Live video",
+				"❌ Text only or static images",
 			],
 			[
 				"Reusability",
-				{ text: "Persistent, rewatch anytime", status: "positive" },
-				{ text: "Recordings often unwieldy", status: "warning" },
-				{ text: "Searchable archives", status: "positive" },
+				"✅ Persistent, rewatch anytime",
+				"⚠️ Recordings often unwieldy",
+				"✅ Searchable archives",
 			],
 			[
 				"Information Density",
-				{ text: "High (visual + audio)", status: "positive" },
-				{ text: "High but with overhead", status: "positive" },
-				{ text: "Medium to low", status: "warning" },
+				"✅ High (visual + audio)",
+				"✅ High but with overhead",
+				"⚠️ Medium to low",
 			],
 			[
 				"Time Efficiency",
-				{ text: "Watch at 2x speed, skip sections", status: "positive" },
-				{ text: "Full real-time commitment", status: "negative" },
-				{ text: "Quick to scan", status: "positive" },
+				"✅ Watch at 2x speed, skip sections",
+				"❌ Full real-time commitment",
+				"✅ Quick to scan",
 			],
 			[
 				"Feedback System",
-				{ text: "Built-in threaded comments", status: "positive" },
-				{ text: "Live discussion", status: "positive" },
-				{ text: "Separate threads", status: "warning" },
+				"✅ Built-in threaded comments",
+				"✅ Live discussion",
+				"⚠️ Separate threads",
 			],
 			[
 				"Privacy & Security",
-				{ text: "Own your data with S3 integration", status: "positive" },
-				{ text: "Varies by provider", status: "warning" },
-				{ text: "Varies by provider", status: "warning" },
+				"✅ Own your data with S3 integration",
+				"⚠️ Varies by provider",
+				"⚠️ Varies by provider",
 			],
 		],
 	},

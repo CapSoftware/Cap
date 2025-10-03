@@ -2,7 +2,6 @@
 
 import { Button } from "@cap/ui";
 import { useDetectPlatform } from "hooks/useDetectPlatform";
-import Link from "next/link";
 import {
 	getDownloadButtonText,
 	getDownloadUrl,
@@ -118,40 +117,40 @@ export const DownloadPage = () => {
 				{/* Discreet SEO Links */}
 				<div className="pt-8 mt-32 text-xs border-t border-gray-200 opacity-70 text-gray-1">
 					<div className="flex flex-wrap gap-y-2 gap-x-4 justify-center mx-auto max-w-lg">
-						<Link
+						<a
 							href="/screen-recorder"
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Screen Recorder
-						</Link>
+						</a>
 						<span className="hidden md:inline">•</span>
-						<Link
+						<a
 							href="/free-screen-recorder"
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Free Screen Recorder
-						</Link>
+						</a>
 						<span className="hidden md:inline">•</span>
-						<Link
+						<a
 							href="/screen-recorder-mac"
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Mac Screen Recorder
-						</Link>
+						</a>
 						<span className="hidden md:inline">•</span>
-						<Link
+						<a
 							href="/screen-recorder-windows"
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Windows Screen Recorder
-						</Link>
+						</a>
 						<span className="hidden md:inline">•</span>
-						<Link
+						<a
 							href="/screen-recording-software"
 							className="text-xs hover:text-gray-8 hover:underline"
 						>
 							Recording Software
-						</Link>
+						</a>
 					</div>
 				</div>
 			</div>

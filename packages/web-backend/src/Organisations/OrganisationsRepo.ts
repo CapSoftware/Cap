@@ -1,9 +1,9 @@
 import * as Db from "@cap/database/schema";
 import type { Video } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
-import { Array, Effect } from "effect";
+import { Effect } from "effect";
 
-import { Database } from "../Database.ts";
+import { Database } from "../Database";
 
 export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 	"OrganisationsRepo",
@@ -31,26 +31,7 @@ export class OrganisationsRepo extends Effect.Service<OrganisationsRepo>()(
 								),
 							),
 					),
-
-				membership: (userId: string, orgId: string) =>
-					db
-						.execute((db) =>
-							db
-								.select({
-									membershipId: Db.organizationMembers.id,
-									role: Db.organizationMembers.role,
-								})
-								.from(Db.organizationMembers)
-								.where(
-									Dz.and(
-										Dz.eq(Db.organizationMembers.userId, userId),
-										Dz.eq(Db.organizationMembers.organizationId, orgId),
-									),
-								),
-						)
-						.pipe(Effect.map(Array.get(0))),
 			};
 		}),
-		dependencies: [Database.Default],
 	},
 ) {}

@@ -1,5 +1,10 @@
 import { serverEnv } from "@cap/env";
-import { provideOptionalAuth, S3Buckets, Videos } from "@cap/web-backend";
+import {
+	provideOptionalAuth,
+	S3BucketAccess,
+	S3Buckets,
+	Videos,
+} from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import {
 	HttpApi,
@@ -17,7 +22,7 @@ import {
 	generateMasterPlaylist,
 } from "@/utils/video/ffmpeg/helpers";
 
-export const dynamic = "force-dynamic";
+export const revalidate = "force-dynamic";
 
 const GetPlaylistParams = Schema.Struct({
 	videoId: Video.VideoId,
@@ -55,7 +60,14 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							),
 						);
 
-						return yield* getPlaylistResponse(video, urlParams);
+						const [S3ProviderLayer, customBucket] =
+							yield* s3Buckets.getProviderLayer(video.bucketId);
+
+						return yield* getPlaylistResponse(
+							video,
+							Option.isSome(customBucket),
+							urlParams,
+						).pipe(Effect.provide(S3ProviderLayer));
 					}).pipe(
 						provideOptionalAuth,
 						Effect.tapErrorCause(Effect.logError),
@@ -66,7 +78,6 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 							S3Error: () => new HttpApiError.InternalServerError(),
 							UnknownException: () => new HttpApiError.InternalServerError(),
 						}),
-						Effect.provideService(S3Buckets, s3Buckets),
 					),
 				);
 			}),
@@ -76,12 +87,13 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 
 const getPlaylistResponse = (
 	video: Video.Video,
+	isCustomBucket: boolean,
 	urlParams: (typeof GetPlaylistParams)["Type"],
 ) =>
 	Effect.gen(function* () {
-		const [s3, customBucket] = yield* S3Buckets.getBucketAccess(video.bucketId);
+		const s3 = yield* S3BucketAccess;
 
-		if (Option.isNone(customBucket)) {
+		if (!isCustomBucket) {
 			let redirect = `${video.ownerId}/${video.id}/combined-source/stream.m3u8`;
 
 			if (video.source.type === "desktopMP4" || urlParams.videoType === "mp4")
@@ -228,7 +240,7 @@ const getPlaylistResponse = (
 		}).pipe(Effect.withSpan("generateUrls"));
 	});
 
-const handler = apiToHandler(ApiLive);
+const { handler } = apiToHandler(ApiLive);
 
-export const GET = (r: Request) => handler(r);
-export const HEAD = (r: Request) => handler(r);
+export const GET = handler;
+export const HEAD = handler;

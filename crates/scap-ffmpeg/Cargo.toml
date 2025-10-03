@@ -8,6 +8,7 @@ license = "MIT"
 ffmpeg = { workspace = true }
 cpal = { workspace = true }
 scap-cpal = { optional = true, path = "../scap-cpal" }
+cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 [target.'cfg(windows)'.dependencies]
 scap-direct3d = { path = "../scap-direct3d" }

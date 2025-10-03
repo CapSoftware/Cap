@@ -46,8 +46,6 @@ jobs:
 
       - uses: ./.github/actions/setup-js
 
-      - run: pnpm web exec next typegen
-
       - name: Typecheck
         run: pnpm typecheck
 
@@ -76,8 +74,6 @@ jobs:
         uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
 
       - name: Check formatting
         run: cargo fmt --check
@@ -97,7 +93,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.settings.target }}
-          components: clippy
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2

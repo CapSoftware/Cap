@@ -335,27 +335,6 @@ Minimize `useEffect` usage: compute during render, handle logic in event handler
 - Loading: Use static skeletons that mirror content; no bouncing animations.
 - Performance: Memoize expensive work; code-split naturally; use Next/Image for remote assets.
 
-## Effect Patterns
-
-### Managed Runtimes
-- `apps/web/lib/server.ts` builds a `ManagedRuntime` from `Layer.mergeAll` so database, S3, policy, and tracing services are available to every request. Always run server-side effects through `EffectRuntime.runPromise`/`runPromiseExit` from this module so cookie-derived context and `VideoPasswordAttachment` are attached automatically.
-- `apps/web/lib/EffectRuntime.ts` exposes a browser runtime that merges the RPC client and tracing layers. Client code should lean on `useEffectQuery`, `useEffectMutation`, and `useRpcClient`; never call `ManagedRuntime.make` yourself inside components.
-
-### API Route Construction
-- Next.js API folders under `apps/web/app/api/*` wrap Effect handlers with `@effect/platform`'s `HttpApi`/`HttpApiBuilder`. Follow the existing pattern: declare a contract class via `HttpApi.make`, configure groups/endpoints with `Schema`, and only export the `handler` returned by `apiToHandler(ApiLive)`.
-- Inside `HttpApiBuilder.group` blocks, acquire services (e.g., `Videos`, `S3Buckets`) with `yield*` inside `Effect.gen`. Provide layers using `Layer.provide` rather than manual `provideService` calls so dependencies stay declarative.
-- Map domain-level errors to transport errors with `HttpApiError.*`. Keep error translation exhaustive (`Effect.catchTags`, `Effect.tapErrorCause(Effect.logError)`) to preserve observability.
-- Use `HttpAuthMiddleware` for required auth and `provideOptionalAuth` when guests are allowed. The middleware/utility already hydrate `CurrentUser`, so avoid duplicating session lookups in route handlers.
-- Shared HTTP contracts that power the desktop app live in `packages/web-api-contract-effect`; update them alongside route changes to keep schemas in sync.
-
-### Server Components & Effects
-- Server components that need Effect services should call `EffectRuntime.runPromise(effect.pipe(provideOptionalAuth))`. This keeps request cookies, tracing spans, and optional auth consistent with the API layer.
-- Prefer lifting Drizzle queries or other async work into `Effect.gen` blocks and reusing domain services (`Videos`, `VideosPolicy`, etc.) rather than writing ad-hoc logic.
-
-### Client Integration
-- React Query hooks should wrap Effect workflows with `useEffectQuery`/`useEffectMutation` from `apps/web/lib/EffectRuntime.ts`; these helpers surface Fail/Die causes consistently and plug into tracing/span metadata.
-- When a mutation or query needs the RPC transport, resolve it through `useRpcClient()` and invoke the strongly-typed procedures exposed by `packages/web-domain` instead of reaching into fetch directly.
-
 ## Desktop (Solid + Tauri) Patterns
 - Data fetching: `@tanstack/solid-query` for server state.
 - IPC: Call generated `commands` and `events` from `tauri_specta`. Listen directly to generated events and prefer the typed interfaces.

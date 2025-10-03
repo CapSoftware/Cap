@@ -51,8 +51,6 @@ pub fn create_capturer(
     })
 }
 
-unsafe impl Send for Capturer {}
-
 pub struct Capturer {
     stream: Stream,
     config: StreamConfig,

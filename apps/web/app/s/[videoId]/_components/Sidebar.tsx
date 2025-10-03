@@ -1,7 +1,6 @@
 import type { userSelectProps } from "@cap/database/auth/session";
 import type { comments as commentsSchema, videos } from "@cap/database/schema";
 import { classNames } from "@cap/utils";
-import type { Video } from "@cap/web-domain";
 import { AnimatePresence, motion } from "framer-motion";
 import { forwardRef, Suspense, useState } from "react";
 import { Activity } from "./tabs/Activity";
@@ -30,7 +29,7 @@ interface SidebarProps {
 	setCommentsData: React.Dispatch<React.SetStateAction<CommentType[]>>;
 	views: MaybePromise<number>;
 	onSeek?: (time: number) => void;
-	videoId: Video.VideoId;
+	videoId: string;
 	aiData?: {
 		title?: string | null;
 		summary?: string | null;
@@ -156,9 +155,9 @@ export const Sidebar = forwardRef<{ scrollToBottom: () => void }, SidebarProps>(
 		};
 
 		return (
-			<div className="bg-white rounded-2xl border border-gray-5 overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
+			<div className="new-card-style overflow-hidden h-[calc(100vh-16rem)] lg:h-full flex flex-col lg:aspect-video">
 				<div className="flex-none">
-					<div className="flex border-b border-gray-5">
+					<div className="flex border-b border-gray-200">
 						{tabs.map((tab) => (
 							<button
 								key={tab.id}

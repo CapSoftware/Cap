@@ -319,7 +319,7 @@ const FolderCard = ({
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 				className={clsx(
-					"flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-all duration-200 cursor-pointer bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
+					"flex justify-between items-center px-4 py-4 w-full h-auto rounded-lg border transition-colors duration-200 cursor-pointer bg-gray-3 hover:bg-gray-4 hover:border-gray-6",
 					isDragOver ? "border-blue-10 bg-gray-4" : "border-gray-5",
 					isMovingVideo && "opacity-70",
 				)}
@@ -331,7 +331,6 @@ const FolderCard = ({
 					/>
 					<div
 						onClick={(e) => {
-							e.preventDefault();
 							e.stopPropagation();
 						}}
 						className="flex flex-col justify-center h-10"
@@ -348,11 +347,11 @@ const FolderCard = ({
 										await updateFolderNameHandler();
 									}
 								}}
-								onKeyDown={async (e) => {
+								onKeyDown={(e) => {
 									if (e.key === "Enter") {
 										setIsRenaming(false);
 										if (updateName.trim() !== name) {
-											await updateFolderNameHandler();
+											updateFolderNameHandler();
 										}
 									}
 								}}
@@ -360,17 +359,15 @@ const FolderCard = ({
                  focus:ring-0 focus:border-none text-gray-12 text-[15px] max-w-[116px] truncate p-0 m-0 h-[22px] leading-[22px] overflow-hidden font-normal tracking-normal"
 							/>
 						) : (
-							<div
+							<p
 								onClick={(e) => {
-									e.preventDefault();
 									e.stopPropagation();
 									setIsRenaming(true);
 								}}
+								className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal"
 							>
-								<p className="text-[15px] truncate text-gray-12 w-full max-w-[116px] m-0 p-0 h-[22px] leading-[22px] font-normal tracking-normal">
-									{updateName}
-								</p>
-							</div>
+								{updateName}
+							</p>
 						)}
 						<p className="text-sm truncate text-gray-10 w-fit">{`${videoCount} ${
 							videoCount === 1 ? "video" : "videos"

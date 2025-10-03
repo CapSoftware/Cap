@@ -5,12 +5,10 @@ import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId, nanoIdLength } from "@cap/database/helpers";
 import { spaceMembers, spaces, users } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
-import { S3Buckets } from "@cap/web-backend";
 import { and, eq, inArray } from "drizzle-orm";
-import { Effect, Option } from "effect";
 import { revalidatePath } from "next/cache";
 import { v4 as uuidv4 } from "uuid";
-import { runPromise } from "@/lib/server";
+import { createBucketProvider } from "@/utils/s3";
 
 interface CreateSpaceResponse {
 	success: boolean;
@@ -91,29 +89,25 @@ export async function createSpace(
 					user.activeOrganizationId
 				}/spaces/${spaceId}/icon-${Date.now()}.${fileExtension}`;
 
-				await Effect.gen(function* () {
-					const [bucket] = yield* S3Buckets.getBucketAccess(Option.none());
+				const bucket = await createBucketProvider();
 
-					yield* bucket.putObject(
-						fileKey,
-						yield* Effect.promise(() => iconFile.bytes()),
-						{ contentType: iconFile.type },
-					);
+				await bucket.putObject(fileKey, await iconFile.bytes(), {
+					contentType: iconFile.type,
+				});
 
-					// Construct the icon URL
-					if (serverEnv().CAP_AWS_BUCKET_URL) {
-						// If a custom bucket URL is defined, use it
-						iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
-					} else if (serverEnv().CAP_AWS_ENDPOINT) {
-						// For custom endpoints like MinIO
-						iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.bucketName}/${fileKey}`;
-					} else {
-						// Default AWS S3 URL format
-						iconUrl = `https://${bucket.bucketName}.s3.${
-							serverEnv().CAP_AWS_REGION || "us-east-1"
-						}.amazonaws.com/${fileKey}`;
-					}
-				}).pipe(runPromise);
+				// Construct the icon URL
+				if (serverEnv().CAP_AWS_BUCKET_URL) {
+					// If a custom bucket URL is defined, use it
+					iconUrl = `${serverEnv().CAP_AWS_BUCKET_URL}/${fileKey}`;
+				} else if (serverEnv().CAP_AWS_ENDPOINT) {
+					// For custom endpoints like MinIO
+					iconUrl = `${serverEnv().CAP_AWS_ENDPOINT}/${bucket.name}/${fileKey}`;
+				} else {
+					// Default AWS S3 URL format
+					iconUrl = `https://${bucket.name}.s3.${
+						serverEnv().CAP_AWS_REGION || "us-east-1"
+					}.amazonaws.com/${fileKey}`;
+				}
 			} catch (error) {
 				console.error("Error uploading space icon:", error);
 				return {
@@ -172,9 +166,7 @@ export async function createSpace(
 					if (!userId) return null;
 					// Creator is always Owner, others are Member
 					const role =
-						email.toLowerCase() === creatorEmail
-							? ("Admin" as const)
-							: ("member" as const);
+						email.toLowerCase() === creatorEmail ? "Admin" : "Member";
 					return {
 						id: uuidv4().substring(0, nanoIdLength),
 						spaceId,

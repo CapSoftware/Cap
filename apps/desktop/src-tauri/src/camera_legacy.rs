@@ -1,11 +1,11 @@
-use cap_recording::FFmpegVideoFrame;
+use cap_recording::feeds::camera::RawCameraFrame;
 use flume::Sender;
 use tokio_util::sync::CancellationToken;
 
 use crate::frame_ws::{WSFrame, create_frame_ws};
 
-pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, CancellationToken) {
-    let (camera_tx, mut _camera_rx) = flume::bounded::<FFmpegVideoFrame>(4);
+pub async fn create_camera_preview_ws() -> (Sender<RawCameraFrame>, u16, CancellationToken) {
+    let (camera_tx, mut _camera_rx) = flume::bounded::<RawCameraFrame>(4);
     let (_camera_tx, camera_rx) = flume::bounded::<WSFrame>(4);
     std::thread::spawn(move || {
         use ffmpeg::format::Pixel;
@@ -13,7 +13,7 @@ pub async fn create_camera_preview_ws() -> (Sender<FFmpegVideoFrame>, u16, Cance
         let mut converter: Option<(Pixel, ffmpeg::software::scaling::Context)> = None;
 
         while let Ok(raw_frame) = _camera_rx.recv() {
-            let mut frame = raw_frame.inner;
+            let mut frame = raw_frame.frame;
 
             if frame.format() != Pixel::RGBA || frame.width() > 1280 || frame.height() > 720 {
                 let converter = match &mut converter {

@@ -102,7 +102,7 @@ export const SubfolderDialog: React.FC<Props> = ({
 			},
 			{} as Record<
 				(typeof FolderOptions)[number]["value"],
-				React.RefObject<FolderHandle | null>
+				React.RefObject<FolderHandle>
 			>,
 		),
 	);

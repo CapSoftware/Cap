@@ -7,10 +7,11 @@ export const metadata = {
 	title: "Verify Code | Cap",
 };
 
-export default async function VerifyOTPPage(props: {
-	searchParams: Promise<{ email?: string; next?: string; lastSent?: string }>;
+export default async function VerifyOTPPage({
+	searchParams,
+}: {
+	searchParams: { email?: string; next?: string; lastSent?: string };
 }) {
-	const searchParams = await props.searchParams;
 	const session = await getSession();
 
 	if (session?.user) {

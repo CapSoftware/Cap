@@ -39,6 +39,10 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 								Effect.logError(e).pipe(
 									Effect.andThen(() => new HttpApiError.InternalServerError()),
 								),
+							UnknownException: (e) =>
+								Effect.logError(e).pipe(
+									Effect.andThen(() => new HttpApiError.InternalServerError()),
+								),
 						}),
 					),
 				);
@@ -47,6 +51,6 @@ const ApiLive = HttpApiBuilder.api(Api).pipe(
 	),
 );
 
-const handler = apiToHandler(ApiLive);
+const { handler } = apiToHandler(ApiLive);
 
 export const DELETE = handler;

@@ -124,10 +124,9 @@ export const POST = async (req: Request) => {
 		}
 		event = stripe().webhooks.constructEvent(buf, sig, webhookSecret);
 		console.log(`✅ Event received: ${event.type}`);
-	} catch (err: unknown) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.log(`❌ Error message: ${message}`);
-		return new Response(`Webhook Error: ${message}`, { status: 400 });
+	} catch (err: any) {
+		console.log(`❌ Error message: ${err.message}`);
+		return new Response(`Webhook Error: ${err.message}`, { status: 400 });
 	}
 
 	if (relevantEvents.has(event.type)) {
@@ -150,8 +149,8 @@ export const POST = async (req: Request) => {
 					metadata: "metadata" in customer ? customer.metadata : undefined,
 				});
 
-				let foundUserId: string | undefined;
-				let customerEmail: string | null | undefined;
+				let foundUserId;
+				let customerEmail;
 
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId;
@@ -264,14 +263,8 @@ export const POST = async (req: Request) => {
 							price_id: subscription.items.data[0]?.price.id,
 							quantity: inviteQuota,
 							platform:
-								typeof session.metadata === "object" &&
-								session.metadata !== null &&
-								"platform" in session.metadata &&
-								typeof (session.metadata as Record<string, unknown>)
-									.platform === "string"
-									? ((session.metadata as Record<string, unknown>)
-											.platform as string)
-									: "web",
+								(session.metadata && (session.metadata as any).platform) ||
+								"web",
 							is_first_purchase: isFirstPurchase,
 							is_guest_checkout: isGuestCheckout,
 						},
@@ -302,8 +295,8 @@ export const POST = async (req: Request) => {
 					metadata: "metadata" in customer ? customer.metadata : undefined,
 				});
 
-				let foundUserId: string | undefined;
-				let customerEmail: string | null | undefined;
+				let foundUserId;
+				let customerEmail;
 
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId;
@@ -384,7 +377,7 @@ export const POST = async (req: Request) => {
 				const customer = await stripe().customers.retrieve(
 					subscription.customer as string,
 				);
-				let foundUserId: string | undefined;
+				let foundUserId;
 				if ("metadata" in customer) {
 					foundUserId = customer.metadata.userId;
 				}

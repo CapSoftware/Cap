@@ -3,14 +3,11 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { s3Buckets, videos } from "@cap/database/schema";
-import { S3Buckets } from "@cap/web-backend";
-import type { Video } from "@cap/web-domain";
 import { eq } from "drizzle-orm";
-import { Effect, Option } from "effect";
-import { runPromise } from "@/lib/server";
+import { createBucketProvider } from "@/utils/s3";
 
 export async function getTranscript(
-	videoId: Video.VideoId,
+	videoId: string,
 ): Promise<{ success: boolean; content?: string; message: string }> {
 	const user = await getCurrentUser();
 
@@ -48,24 +45,20 @@ export async function getTranscript(
 		};
 	}
 
+	const bucket = await createBucketProvider(result.bucket);
+
 	try {
-		const vttContent = await Effect.gen(function* () {
-			const [bucket] = yield* S3Buckets.getBucketAccess(
-				Option.fromNullable(result.bucket?.id),
-			);
+		const transcriptKey = `${video.ownerId}/${videoId}/transcription.vtt`;
 
-			return yield* bucket.getObject(
-				`${video.ownerId}/${videoId}/transcription.vtt`,
-			);
-		}).pipe(runPromise);
+		const vttContent = await bucket.getObject(transcriptKey);
 
-		if (Option.isNone(vttContent)) {
+		if (!vttContent) {
 			return { success: false, message: "Transcript file not found" };
 		}
 
 		return {
 			success: true,
-			content: vttContent.value,
+			content: vttContent,
 			message: "Transcript retrieved successfully",
 		};
 	} catch (error) {

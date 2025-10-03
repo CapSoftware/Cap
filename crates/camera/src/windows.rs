@@ -73,8 +73,8 @@ pub(super) fn start_capturing_impl(
     Ok(WindowsCaptureHandle {
         inner: device.start_capturing(format.native(), move |frame| {
             callback(CapturedFrame {
-                // reference_time: frame.reference_time,
-                // capture_begin_time: frame.capture_begin_time,
+                reference_time: frame.reference_time,
+                capture_begin_time: frame.capture_begin_time,
                 timestamp: frame.timestamp,
                 native: NativeCapturedFrame(frame),
             });

@@ -11,10 +11,7 @@ import { SonnerToaster } from "@/components/SonnerToastProvider";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 import { PublicEnvContext } from "@/utils/public-env";
 import { AuthContextProvider } from "./Layout/AuthContext";
-import { GTag } from "./Layout/GTag";
-import { MetaPixel } from "./Layout/MetaPixel";
 import { PosthogIdentify } from "./Layout/PosthogIdentify";
-import { PurchaseTracker } from "./Layout/PurchaseTracker";
 import {
 	PostHogProvider,
 	ReactQueryProvider,
@@ -115,15 +112,14 @@ export default async function RootLayout({ children }: PropsWithChildren) {
 								<PublicEnvContext
 									value={{
 										webUrl: buildEnv.NEXT_PUBLIC_WEB_URL,
+										awsBucket: buildEnv.NEXT_PUBLIC_CAP_AWS_BUCKET,
+										s3BucketUrl: S3_BUCKET_URL,
 									}}
 								>
 									<ReactQueryProvider>
 										<SonnerToaster />
 										<main className="w-full">{children}</main>
 										<PosthogIdentify />
-										<MetaPixel />
-										<GTag />
-										<PurchaseTracker />
 									</ReactQueryProvider>
 								</PublicEnvContext>
 							</SessionProvider>

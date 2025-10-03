@@ -3,7 +3,7 @@
 use std::{
     fmt::{Debug, Display},
     ops::Deref,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(target_os = "macos")]
@@ -190,9 +190,9 @@ pub enum StartCapturingError {
 #[derive(Debug)]
 pub struct CapturedFrame {
     native: NativeCapturedFrame,
-    // pub reference_time: Instant,
+    pub reference_time: Instant,
     pub timestamp: Duration,
-    // pub capture_begin_time: Option<Instant>,
+    pub capture_begin_time: Option<Instant>,
 }
 
 impl CapturedFrame {

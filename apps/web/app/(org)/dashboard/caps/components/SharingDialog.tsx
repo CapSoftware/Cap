@@ -9,7 +9,6 @@ import {
 	Input,
 	Switch,
 } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import { faCopy, faShareNodes } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -27,7 +26,7 @@ import { Tooltip } from "@/components/Tooltip";
 interface SharingDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
-	capId: Video.VideoId;
+	capId: string;
 	capName: string;
 	sharedSpaces: {
 		id: string;
@@ -68,7 +67,7 @@ export const SharingDialog: React.FC<SharingDialogProps> = ({
 			spaceIds,
 			public: isPublic,
 		}: {
-			capId: Video.VideoId;
+			capId: string;
 			spaceIds: string[];
 			public: boolean;
 		}) => {

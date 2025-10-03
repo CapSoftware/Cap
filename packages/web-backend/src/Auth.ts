@@ -1,11 +1,11 @@
 import { getServerSession } from "@cap/database/auth/auth-options";
 import * as Db from "@cap/database/schema";
-import { CurrentUser, HttpAuthMiddleware, Policy } from "@cap/web-domain";
-import { HttpApiError, HttpServerRequest } from "@effect/platform";
+import { CurrentUser, HttpAuthMiddleware } from "@cap/web-domain";
+import { HttpApiError, type HttpApp } from "@effect/platform";
 import * as Dz from "drizzle-orm";
-import { type Cause, Effect, Layer, Option, Schema } from "effect";
+import { type Cause, Effect, Layer, Option } from "effect";
 
-import { Database, type DatabaseError } from "./Database.ts";
+import { Database, type DatabaseError } from "./Database";
 
 export const getCurrentUser = Effect.gen(function* () {
 	const db = yield* Database;
@@ -37,47 +37,24 @@ export const HttpAuthMiddlewareLive = Layer.effect(
 
 		return HttpAuthMiddleware.of(
 			Effect.gen(function* () {
-				const headers = yield* HttpServerRequest.schemaHeaders(
-					Schema.Struct({ authorization: Schema.optional(Schema.String) }),
-				);
-				const authHeader = headers.authorization?.split(" ")[1];
-
-				let user;
-
-				if (authHeader?.length === 36) {
-					user = yield* database
-						.execute((db) =>
-							db
-								.select()
-								.from(Db.users)
-								.leftJoin(
-									Db.authApiKeys,
-									Dz.eq(Db.users.id, Db.authApiKeys.userId),
-								)
-								.where(Dz.eq(Db.authApiKeys.id, authHeader)),
-						)
-						.pipe(Effect.map(([entry]) => Option.fromNullable(entry?.users)));
-				} else {
-					user = yield* getCurrentUser;
-				}
-
-				return yield* user.pipe(
-					Option.map((user) => ({
-						id: user.id,
-						email: user.email,
-						activeOrganizationId: user.activeOrganizationId,
-					})),
+				const user = yield* getCurrentUser.pipe(
+					Effect.flatten,
 					Effect.catchTag(
 						"NoSuchElementException",
 						() => new HttpApiError.Unauthorized(),
 					),
 				);
+
+				return {
+					id: user.id,
+					email: user.email,
+					activeOrgId: user.activeOrganizationId,
+				};
 			}).pipe(
 				Effect.provideService(Database, database),
 				Effect.catchTags({
 					UnknownException: () => new HttpApiError.InternalServerError(),
 					DatabaseError: () => new HttpApiError.InternalServerError(),
-					ParseError: () => new HttpApiError.BadRequest(),
 				}),
 			),
 		);
@@ -98,7 +75,7 @@ export const provideOptionalAuth = <A, E, R>(
 				CurrentUser.context({
 					id: user.id,
 					email: user.email,
-					activeOrganizationId: user.activeOrganizationId,
+					activeOrgId: user.activeOrganizationId,
 				}),
 			),
 			Option.match({

@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow};
-use cap_recording::{
-    FFmpegVideoFrame,
-    feeds::{self, camera::CameraFeed},
+use cap_recording::feeds::{
+    self,
+    camera::{CameraFeed, RawCameraFrame},
 };
 use ffmpeg::{
     format::{self, Pixel},
@@ -123,8 +123,7 @@ impl CameraPreviewManager {
             LocalSet::new().block_on(
                 &rt,
                 renderer.run(window, default_state, reconfigure_rx, camera_rx),
-            );
-            info!("DONE");
+            )
         });
 
         self.preview = Some(InitializedCameraPreview { reconfigure });
@@ -465,7 +464,7 @@ impl Renderer {
         window: WebviewWindow,
         default_state: CameraPreviewState,
         mut reconfigure: broadcast::Receiver<ReconfigureEvent>,
-        camera_rx: flume::Receiver<FFmpegVideoFrame>,
+        camera_rx: flume::Receiver<RawCameraFrame>,
     ) {
         let mut resampler_frame = Cached::default();
         let Ok(mut scaler) = scaling::Context::get(
@@ -496,7 +495,7 @@ impl Renderer {
         } {
             match event {
                 Ok(frame) => {
-                    let aspect_ratio = frame.inner.width() as f32 / frame.inner.height() as f32;
+                    let aspect_ratio = frame.frame.width() as f32 / frame.frame.height() as f32;
                     self.sync_ratio_uniform_and_resize_window_to_it(&window, &state, aspect_ratio);
 
                     if let Ok(surface) = self.surface.get_current_texture().map_err(|err| {
@@ -509,16 +508,16 @@ impl Renderer {
                             .get_or_init((output_width, output_height), frame::Video::empty);
 
                         scaler.cached(
-                            frame.inner.format(),
-                            frame.inner.width(),
-                            frame.inner.height(),
+                            frame.frame.format(),
+                            frame.frame.width(),
+                            frame.frame.height(),
                             format::Pixel::RGBA,
                             output_width,
                             output_height,
                             ffmpeg::software::scaling::flag::Flags::FAST_BILINEAR,
                         );
 
-                        if let Err(err) = scaler.run(&frame.inner, resampler_frame) {
+                        if let Err(err) = scaler.run(&frame.frame, resampler_frame) {
                             error!("Error rescaling frame with ffmpeg: {err:?}");
                             continue;
                         }

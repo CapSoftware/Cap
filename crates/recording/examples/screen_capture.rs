@@ -1,6 +1,6 @@
 use cap_recording::{
-    pipeline::control::PipelineControlSignal,
-    sources::{CMSampleBufferCapture, ScreenCaptureConfig, ScreenCaptureTarget},
+    pipeline::{control::PipelineControlSignal, task::PipelineSourceTask},
+    sources::{CMSampleBufferCapture, ScreenCaptureSource, ScreenCaptureTarget},
 };
 use scap_targets::Window;
 use std::time::SystemTime;
@@ -13,7 +13,7 @@ async fn main() {
     let (ready_tx, _ready_rx) = flume::unbounded();
     let (_ctrl_tx, ctrl_rx) = flume::unbounded();
 
-    let mut source = ScreenCaptureConfig::<CMSampleBufferCapture>::init(
+    let mut source = ScreenCaptureSource::<CMSampleBufferCapture>::init(
         &ScreenCaptureTarget::Window {
             id: Window::list()
                 .into_iter()

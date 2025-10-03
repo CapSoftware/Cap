@@ -1,7 +1,6 @@
 "use client";
 
 import { Avatar } from "@cap/ui";
-import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import Image from "next/image";
 import Link from "next/link";
@@ -49,7 +48,7 @@ export function ClientMyCapsLink() {
 	};
 
 	const handleDrop = async (
-		e: React.DragEvent<HTMLAnchorElement> | { id: Video.VideoId; name: string },
+		e: React.DragEvent<HTMLAnchorElement> | { id: string; name: string },
 	) => {
 		if ("preventDefault" in e) {
 			e.preventDefault();
@@ -75,7 +74,7 @@ export function ClientMyCapsLink() {
 	};
 
 	// Common function to process the drop for both desktop and mobile
-	const processDrop = async (capData: { id: Video.VideoId; name: string }) => {
+	const processDrop = async (capData: { id: string; name: string }) => {
 		setIsDragOver(false);
 
 		try {

@@ -1,15 +1,8 @@
 "use client";
 
 import type { userSelectProps } from "@cap/database/auth/session";
-import type { Video } from "@cap/web-domain";
 import type React from "react";
-import {
-	forwardRef,
-	type JSX,
-	type RefObject,
-	Suspense,
-	useState,
-} from "react";
+import { forwardRef, Suspense, useState } from "react";
 import { CapCardAnalytics } from "@/app/(org)/dashboard/caps/components/CapCard/CapCardAnalytics";
 import type { CommentType } from "../../../Share";
 import { AuthOverlay } from "../../AuthOverlay";
@@ -23,7 +16,7 @@ interface ActivityProps {
 	user: typeof userSelectProps | null;
 	onSeek?: (time: number) => void;
 	handleCommentSuccess: (comment: CommentType) => void;
-	videoId: Video.VideoId;
+	videoId: string;
 	optimisticComments: CommentType[];
 	setOptimisticComments: (newComment: CommentType) => void;
 	isOwnerOrMember: boolean;
@@ -70,7 +63,6 @@ export const Activity = Object.assign(
 							user={user}
 							videoId={videoId}
 							setShowAuthOverlay={setShowAuthOverlay}
-							onSeek={props.onSeek}
 						/>
 					)}
 				</Activity.Shell>

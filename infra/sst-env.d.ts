@@ -5,7 +5,14 @@
 
 declare module "sst" {
 	export interface Resource {
-		DATABASE_URL: {
+		DISCORD_BOT_TOKEN: {
+			type: "sst.sst.Secret";
+			value: string;
+		};
+		DiscordBotScript: {
+			type: "sst.cloudflare.Worker";
+		};
+		GITHUB_APP_PRIVATE_KEY: {
 			type: "sst.sst.Secret";
 			value: string;
 		};

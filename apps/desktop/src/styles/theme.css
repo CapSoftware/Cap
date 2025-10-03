@@ -154,23 +154,6 @@
 .gray-button-shadow {
 	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.4) inset;
 }
-
-.dark .gray-button-border {
-	@apply border-gray-2;
-}
-
-.gray-button-border {
-	@apply border-gray-8;
-}
-
-.dark .dark-button-border {
-	@apply border-gray-2;
-}
-
-.dark-button-border {
-	@apply border-gray-12;
-}
-
 [data-transparent-window] {
 	background: transparent !important;
 }

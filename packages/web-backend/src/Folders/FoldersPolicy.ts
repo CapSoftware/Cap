@@ -2,8 +2,7 @@ import * as Db from "@cap/database/schema";
 import { type Folder, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect } from "effect";
-
-import { Database } from "../Database.ts";
+import { Database } from "../Database";
 
 export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 	"FoldersPolicy",
@@ -42,6 +41,5 @@ export class FoldersPolicy extends Effect.Service<FoldersPolicy>()(
 
 			return { canEdit };
 		}),
-		dependencies: [Database.Default],
 	},
 ) {}

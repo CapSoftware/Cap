@@ -1,18 +1,16 @@
 "use client";
 
-import type { Folder } from "@cap/web-domain";
 import clsx from "clsx";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { toast } from "sonner";
-
 import { moveVideoToFolder } from "@/actions/folders/moveVideoToFolder";
 import { useDashboardContext } from "../../../Contexts";
 import { AllFolders } from "../../../caps/components/Folders";
 
 interface BreadcrumbItemProps {
-	id: Folder.FolderId;
+	id: string;
 	name: string;
 	color: "normal" | "blue" | "red" | "yellow";
 	isLast: boolean;

@@ -8,9 +8,16 @@ export const revalidate = 0;
 
 export async function GET(
 	req: Request,
-	props: RouteContext<"/api/releases/tauri/[version]/[target]/[arch]">,
+	{
+		params,
+	}: {
+		params: {
+			version: string;
+			target: string;
+			arch: string;
+		};
+	},
 ) {
-	const params = await props.params;
 	try {
 		params.arch = "arch";
 

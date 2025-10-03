@@ -14,7 +14,6 @@
 		"moduleResolution": "bundler",
 		"resolveJsonModule": true,
 		"isolatedModules": true,
-		"strictNullChecks": true,
 		"noEmit": true,
 		"jsx": "preserve",
 		"incremental": true,
@@ -27,7 +26,6 @@
 			"@/utils/*": ["utils/*"],
 			"@/lib/*": ["lib/*"],
 			"@/actions/*": ["actions/*"],
-			"@/data/*": ["data/*"],
 			"@/services": ["services"]
 		},
 		"types": ["node"]

@@ -9,15 +9,14 @@ import { ToolsPageTemplate } from "@/components/tools/ToolsPageTemplate";
 import type { ToolPageContent } from "@/components/tools/types";
 
 interface ConversionPageProps {
-	params: Promise<{
+	params: {
 		conversionPath: string;
-	}>;
+	};
 }
 
-export async function generateMetadata(
-	props: ConversionPageProps,
-): Promise<Metadata> {
-	const params = await props.params;
+export async function generateMetadata({
+	params,
+}: ConversionPageProps): Promise<Metadata> {
 	const { conversionPath } = params;
 
 	if (!CONVERSION_CONFIGS[conversionPath]) {
@@ -60,8 +59,7 @@ export async function generateStaticParams() {
 	}));
 }
 
-export default async function ConversionPage(props: ConversionPageProps) {
-	const params = await props.params;
+export default function ConversionPage({ params }: ConversionPageProps) {
 	const { conversionPath } = params;
 
 	if (!CONVERSION_CONFIGS[conversionPath]) {

@@ -4,7 +4,7 @@ import { HomePage } from "@/components/pages/HomePage";
 import { getBootstrapData } from "@/utils/getBootstrapData";
 
 export default async function Home() {
-	const cookieStore = await cookies();
+	const cookieStore = cookies();
 	const sessionCookie = cookieStore.get("next-auth.session-token");
 	const bootstrapData = await getBootstrapData();
 

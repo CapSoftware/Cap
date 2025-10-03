@@ -23,7 +23,7 @@ export default function Page() {
 	const queryClient = useQueryClient();
 
 	return (
-		<div class="flex relative flex-col gap-3 items-center p-4 mx-auto h-full custom-scroll">
+		<div class="flex overflow-y-auto relative flex-col gap-3 items-center p-4 mx-auto w-full h-full custom-scroll">
 			<Switch fallback={<CommercialLicensePurchase />}>
 				<Match when={license.data?.type === "pro" && license.data}>
 					<div class="flex justify-center items-center w-full h-screen">

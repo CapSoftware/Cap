@@ -1,9 +1,8 @@
 import { Rpc, RpcGroup } from "@effect/rpc";
 import { Schema } from "effect";
-
-import { RpcAuthMiddleware } from "./Authentication.ts";
-import { InternalError } from "./Errors.ts";
-import { PolicyDeniedError } from "./Policy.ts";
+import { RpcAuthMiddleware } from "./Authentication";
+import { InternalError } from "./Errors";
+import { PolicyDeniedError } from "./Policy";
 
 export const FolderId = Schema.String.pipe(Schema.brand("FolderId"));
 export type FolderId = typeof FolderId.Type;

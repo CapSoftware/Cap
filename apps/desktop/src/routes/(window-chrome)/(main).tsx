@@ -40,7 +40,6 @@ import {
 	type CaptureWindow,
 	commands,
 	events,
-	type RecordingMode,
 	type ScreenCaptureTarget,
 } from "~/utils/tauri";
 
@@ -197,7 +196,7 @@ function Page() {
 	});
 
 	const toggleRecording = createMutation(() => ({
-		mutationFn: async (payload: { mode: RecordingMode }) => {
+		mutationFn: async () => {
 			if (!isRecording()) {
 				const capture_target = ((): ScreenCaptureTarget => {
 					switch (rawOptions.captureTarget.variant) {
@@ -240,7 +239,7 @@ function Page() {
 
 				await commands.startRecording({
 					capture_target,
-					mode: payload.mode,
+					mode: rawOptions.mode,
 					capture_system_audio: rawOptions.captureSystemAudio,
 				});
 			} else await commands.stopRecording();
@@ -345,7 +344,7 @@ function Page() {
 									}
 								}}
 								class={cx(
-									"text-[0.6rem] ml-2 rounded-lg px-1 py-0.5",
+									"text-[0.6rem] rounded-lg px-1 py-0.5",
 									license.data?.type === "pro"
 										? "bg-[--blue-400] text-gray-1 dark:text-gray-12"
 										: "bg-gray-3 cursor-pointer hover:bg-gray-5",
@@ -487,68 +486,36 @@ function Page() {
 						Instant Mode
 					</SignInButton>
 				) : (
-					<Tooltip
-						childClass="w-full flex"
-						placement="top"
-						content={
-							<>
-								Instant Mode recordings are limited
-								<br /> to 5 mins,{" "}
-								<button
-									class="underline"
-									onClick={() => commands.showWindow("Upgrade")}
-								>
-									Upgrade to Pro
-								</button>
-							</>
-						}
-						openDelay={0}
-						closeDelay={0}
-						disabled={
-							!(
-								rawOptions.mode === "instant" &&
-								auth.data?.plan?.upgraded === false
-							)
-						}
+					<Button
+						disabled={toggleRecording.isPending}
+						variant="blue"
+						size="md"
+						onClick={() => toggleRecording.mutate()}
+						class="flex flex-grow justify-center items-center"
 					>
-						<Button
-							disabled={toggleRecording.isPending}
-							variant="blue"
-							size="md"
-							onClick={() => toggleRecording.mutate({ mode: rawOptions.mode })}
-							class="flex flex-grow justify-center items-center"
-						>
-							{isRecording() ? (
-								"Stop Recording"
-							) : (
-								<>
-									{rawOptions.mode === "instant" ? (
-										<IconCapInstant
-											class={cx(
-												"size-[0.8rem] mr-1.5",
-												toggleRecording.isPending
-													? "opacity-50"
-													: "opacity-100",
-											)}
-										/>
-									) : (
-										<IconCapFilmCut
-											class={cx(
-												"size-[0.8rem] mr-2 -mt-[1.5px]",
-												toggleRecording.isPending
-													? "opacity-50"
-													: "opacity-100",
-											)}
-										/>
-									)}
-									{rawOptions.mode === "instant" &&
-									auth.data?.plan?.upgraded === false
-										? "Start 5 min recording"
-										: "Start recording"}
-								</>
-							)}
-						</Button>
-					</Tooltip>
+						{isRecording() ? (
+							"Stop Recording"
+						) : (
+							<>
+								{rawOptions.mode === "instant" ? (
+									<IconCapInstant
+										class={cx(
+											"size-[0.8rem] mr-1.5",
+											toggleRecording.isPending ? "opacity-50" : "opacity-100",
+										)}
+									/>
+								) : (
+									<IconCapFilmCut
+										class={cx(
+											"size-[0.8rem] mr-2 -mt-[1.5px]",
+											toggleRecording.isPending ? "opacity-50" : "opacity-100",
+										)}
+									/>
+								)}
+								Start Recording
+							</>
+						)}
+					</Button>
 				)}
 			</div>
 		</div>

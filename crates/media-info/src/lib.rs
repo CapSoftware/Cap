@@ -1,3 +1,4 @@
+use cap_ffmpeg_utils::*;
 use cpal::{SampleFormat, SupportedBufferSize, SupportedStreamConfig};
 use ffmpeg::frame;
 pub use ffmpeg::{
@@ -26,32 +27,21 @@ pub enum AudioInfoError {
 impl AudioInfo {
     pub const MAX_AUDIO_CHANNELS: u16 = 2;
 
-    pub const fn new(
+    pub fn new(
         sample_format: Sample,
         sample_rate: u32,
         channel_count: u16,
     ) -> Result<Self, AudioInfoError> {
-        if Self::channel_layout_raw(channel_count).is_none() {
-            return Err(AudioInfoError::ChannelLayout(channel_count));
-        }
+        Self::channel_layout_raw(channel_count)
+            .ok_or(AudioInfoError::ChannelLayout(channel_count))?;
 
         Ok(Self {
             sample_format,
             sample_rate,
-            channels: channel_count as usize,
+            channels: channel_count.into(),
             time_base: FFRational(1, 1_000_000),
             buffer_size: 1024,
         })
-    }
-
-    pub const fn new_raw(sample_format: Sample, sample_rate: u32, channel_count: u16) -> Self {
-        Self {
-            sample_format,
-            sample_rate,
-            channels: channel_count as usize,
-            time_base: FFRational(1, 1_000_000),
-            buffer_size: 1024,
-        }
     }
 
     pub fn from_stream_config(config: &SupportedStreamConfig) -> Self {
@@ -88,7 +78,7 @@ impl AudioInfo {
         })
     }
 
-    const fn channel_layout_raw(channels: u16) -> Option<ChannelLayout> {
+    fn channel_layout_raw(channels: u16) -> Option<ChannelLayout> {
         Some(match channels {
             1 => ChannelLayout::MONO,
             2 => ChannelLayout::STEREO,
@@ -104,8 +94,8 @@ impl AudioInfo {
         self.sample_format.bytes()
     }
 
-    pub const fn rate(&self) -> i32 {
-        self.sample_rate as i32
+    pub fn rate(&self) -> i32 {
+        self.sample_rate.try_into().unwrap()
     }
 
     pub fn empty_frame(&self, sample_count: usize) -> frame::Audio {
@@ -115,12 +105,13 @@ impl AudioInfo {
         frame
     }
 
-    pub fn wrap_frame(&self, data: &[u8]) -> frame::Audio {
+    pub fn wrap_frame(&self, data: &[u8], timestamp: i64) -> frame::Audio {
         let sample_size = self.sample_size();
         let interleaved_chunk_size = sample_size * self.channels;
         let samples = data.len() / interleaved_chunk_size;
 
         let mut frame = frame::Audio::new(self.sample_format, samples, self.channel_layout());
+        frame.set_pts(Some(timestamp));
         frame.set_rate(self.sample_rate);
 
         if self.channels == 0 {
@@ -140,7 +131,7 @@ impl AudioInfo {
                 for channel in 0..self.channels {
                     let channel_start = channel * sample_size;
                     let channel_end = channel_start + sample_size;
-                    frame.data_mut(channel)[start..end]
+                    frame.plane_data_mut(channel)[start..end]
                         .copy_from_slice(&interleaved_chunk[channel_start..channel_end]);
                 }
             }
