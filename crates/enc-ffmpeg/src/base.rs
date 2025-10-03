@@ -2,10 +2,9 @@ use std::time::Duration;
 
 use ffmpeg::{
     Packet,
-    codec::{context, encoder},
-    format::{self, Sample, sample::Type},
+    codec::encoder,
+    format::{self},
     frame,
-    threading::Config,
 };
 
 pub struct EncoderBase {
