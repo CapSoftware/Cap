@@ -1,4 +1,4 @@
-use cap_recording::sources::{list_displays, list_windows};
+use cap_recording::sources::screen_capture::{list_displays, list_windows};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tracing::*;
