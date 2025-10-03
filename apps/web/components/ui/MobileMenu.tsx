@@ -56,19 +56,18 @@ const externalLinks: NavLink[] = [
 ];
 
 const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
-	console.log(auth, "auth");
 	return (
-		<div className="overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2 block md:hidden">
+		<div className="block overflow-auto fixed top-0 left-0 z-40 px-4 w-full h-full bg-gray-2">
 			<div className="pb-12">
 				<nav className="relative mt-24 mobile">
 					<ul className="p-0 space-y-4">
 						{internalLinks.map((link, index) => (
-							<li key={`internal-${index}`}>
+							<li key={`internal-${index.toString()}`}>
 								<Link
 									onClick={() => setShowMobileMenu(false)}
 									href={link.href}
 									passHref
-									className="text-lg text-black"
+									className="text-lg font-medium text-gray-12"
 								>
 									{link.text}
 								</Link>
@@ -76,15 +75,17 @@ const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
 						))}
 						<div className="pt-5 pb-8 space-y-4">
 							{externalLinks.map((link, index) => (
-								<li key={`external-${index}`}>
+								<li key={`external-${index.toString()}`}>
 									<Link
 										href={link.href}
 										passHref
 										target="_blank"
-										className="flex items-center text-lg text-black"
+										className="flex items-center text-lg text-gray-12"
 									>
 										{link.icon}
-										<span className="ml-2 text-lg text-black">{link.text}</span>
+										<span className="ml-2 text-lg font-medium text-gray-11">
+											{link.text}
+										</span>
 									</Link>
 								</li>
 							))}
@@ -92,23 +93,33 @@ const MobileMenu: React.FC<MobileMenuProps> = ({ setShowMobileMenu, auth }) => {
 					</ul>
 					<div className="flex flex-col gap-4 items-center">
 						{auth === null && (
-							<Button
-								variant="gray"
-								href="/login"
-								size="lg"
-								className="w-full font-medium"
-							>
-								Login
-							</Button>
+							<>
+								<Button
+									variant="dark"
+									href={auth ? "/dashboard" : "/signup"}
+									size="lg"
+									className="w-full font-medium sm:w-auto"
+								>
+									{auth ? "Dashboard" : "Sign Up"}
+								</Button>
+								<Button
+									variant="gray"
+									href="/login"
+									size="lg"
+									className="w-full font-medium"
+								>
+									Login
+								</Button>
+							</>
 						)}
 
 						<Button
-							variant="primary"
-							href={auth === null ? "/download" : "/dashboard"}
+							variant="blue"
+							href={"/download"}
 							size="lg"
-							className="w-full font-medium"
+							className="mt-6 w-full font-medium"
 						>
-							{auth === null ? "Download App" : "Dashboard"}
+							Download App
 						</Button>
 					</div>
 				</nav>

@@ -2,7 +2,6 @@
 
 import {
 	Button,
-	ListItem,
 	Logo,
 	NavigationMenu,
 	NavigationMenuContent,
@@ -13,12 +12,12 @@ import {
 	navigationMenuTriggerStyle,
 } from "@cap/ui";
 import { classNames } from "@cap/utils";
-import { faGithub } from "@fortawesome/free-brands-svg-icons";
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { motion } from "framer-motion";
+import { Clapperboard, Zap } from "lucide-react";
+import { motion } from "motion/react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Suspense, use, useState } from "react";
+import { Suspense, use, useEffect, useState } from "react";
 import MobileMenu from "@/components/ui/MobileMenu";
 import { useAuthContext } from "../Layout/AuthContext";
 
@@ -26,6 +25,24 @@ const Links = [
 	{
 		label: "Product",
 		dropdown: [
+			{
+				label: "Instant Mode",
+				sub: "Quick recordings with instant shareable links",
+				href: "/features/instant-mode",
+				icon: <Zap fill="yellow" className="size-4" strokeWidth={1.5} />,
+			},
+			{
+				label: "Studio Mode",
+				sub: "Professional recordings with advanced editing",
+				href: "/features/studio-mode",
+				icon: (
+					<Clapperboard
+						fill="var(--blue-9)"
+						className="size-4"
+						strokeWidth={1.5}
+					/>
+				),
+			},
 			{
 				label: "Download App",
 				sub: "Downloads for macOS & Windows",
@@ -70,9 +87,9 @@ const Links = [
 				href: "/faq",
 			},
 			{
-				label: "Email support",
-				sub: "Support via email",
-				href: "mailto:hello@cap.so",
+				label: "Help Center",
+				sub: "Guides, tutorials, and more. Currently in progress.",
+				href: "https://help.cap.so",
 			},
 			{
 				label: "Chat support",
@@ -82,16 +99,16 @@ const Links = [
 		],
 	},
 	{
-		label: "Pricing",
-		href: "/pricing",
-	},
-	{
 		label: "About",
 		href: "/about",
 	},
 	{
 		label: "Blog",
 		href: "/blog",
+	},
+	{
+		label: "Pricing",
+		href: "/pricing",
 	},
 ];
 
@@ -100,16 +117,36 @@ export const Navbar = () => {
 	const [showMobileMenu, setShowMobileMenu] = useState(false);
 	const auth = use(useAuthContext().user);
 
+	const [hideLogoName, setHideLogoName] = useState(false);
+
+	useEffect(() => {
+		const onScroll = () => {
+			setHideLogoName(window.scrollY > 10);
+		};
+		document.addEventListener("scroll", onScroll, { passive: true });
+		return () => {
+			document.removeEventListener("scroll", onScroll);
+		};
+	}, []);
+
 	return (
 		<>
-			<header className="fixed top-4 left-0 right-0 z-[51] md:top-10  animate-in fade-in slide-in-from-top-4 duration-500">
-				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md md:max-w-fit border-zinc-200 h-fit">
+			<header className="fixed top-4 left-0 right-0 z-[51] lg:top-10  animate-in fade-in slide-in-from-top-4 duration-500">
+				<nav className="p-2 mx-auto w-full max-w-[calc(100%-20px)] bg-white rounded-full border backdrop-blur-md lg:max-w-fit border-zinc-200 h-fit">
 					<div className="flex gap-12 justify-between items-center mx-auto max-w-4xl h-full transition-all">
 						<div className="flex items-center">
 							<Link passHref href="/home">
-								<Logo className="w-[90px]" />
+								<Logo
+									hideLogoName={hideLogoName}
+									className="transition-all duration-[0.2s] ease-out"
+									viewBoxDimensions={hideLogoName ? "0 0 60 40" : "0 0 120 40"}
+									style={{
+										width: hideLogoName ? 45.5 : 90,
+										height: 40,
+									}}
+								/>
 							</Link>
-							<div className="hidden md:flex">
+							<div className="hidden lg:flex">
 								<NavigationMenu>
 									<NavigationMenuList className="space-x-0">
 										{Links.map((link) => (
@@ -126,13 +163,24 @@ export const Navbar = () => {
 														<NavigationMenuContent>
 															<ul className="grid gap-3 p-6 md:w-[400px] lg:w-[500px] lg:grid-cols-2">
 																{link.dropdown.map((sublink) => (
-																	<ListItem
-																		key={sublink.href}
-																		href={sublink.href}
-																		title={sublink.label}
-																	>
-																		{sublink.sub}
-																	</ListItem>
+																	<li key={sublink.href}>
+																		<NavigationMenuLink asChild>
+																			<a
+																				href={sublink.href}
+																				className="block p-3 space-y-1 leading-none no-underline rounded-md transition-all duration-200 outline-none select-none hover:bg-gray-2 hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground"
+																			>
+																				<div className="flex gap-2 items-center text-base font-medium leading-none transition-colors duration-200 text-zinc-700 group-hover:text-zinc-900">
+																					{sublink.icon && sublink.icon}
+																					<span className="font-semibold text-gray-12">
+																						{sublink.label}
+																					</span>
+																				</div>
+																				<p className="text-sm leading-snug transition-colors duration-200 line-clamp-2 text-zinc-500 group-hover:text-zinc-700">
+																					{sublink.sub}
+																				</p>
+																			</a>
+																		</NavigationMenuLink>
+																	</li>
 																))}
 															</ul>
 														</NavigationMenuContent>
@@ -158,13 +206,21 @@ export const Navbar = () => {
 								</NavigationMenu>
 							</div>
 						</div>
-						<div className="hidden items-center space-x-2 md:flex">
+						<div className="hidden items-center space-x-2 lg:flex">
 							<Button
-								variant="gray"
+								variant="outline"
+								icon={
+									<Image
+										src="/github.svg"
+										alt="Github"
+										width={16}
+										height={16}
+									/>
+								}
+								target="_blank"
 								href="https://github.com/CapSoftware/Cap"
 								size="sm"
 								className="w-full font-medium sm:w-auto"
-								icon={<FontAwesomeIcon className="size-4" icon={faGithub} />}
 							>
 								Github
 							</Button>
@@ -180,11 +236,22 @@ export const Navbar = () => {
 									</Button>
 								}
 							>
+								{!auth && (
+									<Button
+										variant="gray"
+										href="/login"
+										size="sm"
+										className="w-full font-medium sm:w-auto"
+									>
+										Login
+									</Button>
+								)}
 								<LoginOrDashboard />
 							</Suspense>
 						</div>
 						<button
-							className="flex md:hidden"
+							type="button"
+							className="flex lg:hidden"
 							onClick={() => setShowMobileMenu(!showMobileMenu)}
 						>
 							<div className="flex flex-col gap-[5px] mr-1">
@@ -229,14 +296,15 @@ export const Navbar = () => {
 
 function LoginOrDashboard() {
 	const auth = use(useAuthContext().user);
+
 	return (
 		<Button
 			variant="dark"
-			href={auth ? "/dashboard" : "/login"}
+			href={auth ? "/dashboard" : "/signup"}
 			size="sm"
 			className="w-full font-medium sm:w-auto"
 		>
-			{auth ? "Dashboard" : "Login"}
+			{auth ? "Dashboard" : "Sign Up"}
 		</Button>
 	);
 }

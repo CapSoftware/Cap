@@ -43,6 +43,7 @@ type VideoWithOrganizationInfo = typeof videos.$inferSelect & {
 	organizationId?: string;
 	sharedOrganizations?: { id: string; name: string }[];
 	hasPassword?: boolean;
+	ownerIsPro?: boolean;
 };
 
 interface ShareProps {
@@ -212,15 +213,48 @@ export const Share = ({
 
 	const aiLoading = shouldShowLoading();
 
-	const handleSeek = (time: number) => {
-		if (playerRef.current) {
-			playerRef.current.currentTime = time;
+	const handleSeek = useCallback((time: number) => {
+		const v =
+			playerRef.current ??
+			(document.querySelector("video") as HTMLVideoElement | null);
+		if (!v) {
+			console.warn("Video player not ready");
+			return;
 		}
-	};
+		const seekOnce = (t: number) => {
+			const dur =
+				Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+			const clamped = dur ? Math.max(0, Math.min(dur - 0.001, t)) : t;
+			try {
+				v.currentTime = clamped;
+			} catch (e) {
+				console.error("Failed to seek video:", e);
+			}
+		};
+		if (v.readyState >= 1) {
+			seekOnce(time);
+			return;
+		}
+		let timeoutId: ReturnType<typeof setTimeout> | null = null;
+		const handleReady = () => {
+			seekOnce(time);
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
+			if (timeoutId) clearTimeout(timeoutId);
+		};
+		v.addEventListener("canplay", handleReady, { once: true });
+		v.addEventListener("loadedmetadata", handleReady, { once: true });
+		timeoutId = setTimeout(() => {
+			v.removeEventListener("canplay", handleReady);
+			v.removeEventListener("loadedmetadata", handleReady);
+		}, 3000);
+	}, []);
 
 	const handleOptimisticComment = useCallback(
 		(comment: CommentType) => {
-			setOptimisticComments(comment);
+			startTransition(() => {
+				setOptimisticComments(comment);
+			});
 			setTimeout(() => {
 				activityRef.current?.scrollToBottom();
 			}, 100);
@@ -241,7 +275,7 @@ export const Share = ({
 		<div className="mt-4">
 			<div className="flex flex-col gap-4 lg:flex-row">
 				<div className="flex-1">
-					<div className="overflow-hidden relative p-3 aspect-video new-card-style">
+					<div className="overflow-hidden relative bg-white rounded-2xl border aspect-video border-gray-5">
 						<div className="absolute inset-3 w-[calc(100%-1.5rem)] h-[calc(100%-1.5rem)] overflow-hidden rounded-xl">
 							<ShareVideo
 								data={{ ...data, transcriptionStatus }}
@@ -333,7 +367,7 @@ export const Share = ({
 				{!aiLoading &&
 					(aiData?.summary ||
 						(aiData?.chapters && aiData.chapters.length > 0)) && (
-						<div className="p-4 new-card-style">
+						<div className="p-4 bg-white rounded-2xl border border-gray-3">
 							{aiData?.summary && (
 								<>
 									<h3 className="text-lg font-medium">Summary</h3>

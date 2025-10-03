@@ -51,6 +51,31 @@ html {
 	color: #000000;
 	background-color: #f2f2f2;
 }
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
+}
+
+.dashboard-grid {
+	display: grid;
+	grid-template-columns: auto 1fr 1fr;
+	grid-template-areas:
+		"sidebar main main"
+		"sidebar main main";
+	height: 100dvh;
+	width: 100vw;
+	min-height: 100dvh;
+}
+
+.left-perspective {
+	transform: scale(1.2) rotateX(47deg) rotateY(31deg) rotate(324deg);
+}
 
 ::-webkit-scrollbar {
 	width: 4px;
@@ -62,9 +87,8 @@ html {
 	border-radius: 10px;
 }
 
-/* Handle */
 ::-webkit-scrollbar-thumb {
-	background: rgb(116, 116, 116);
+	background: var(--gray-7);
 	border-radius: 10px;
 }
 
@@ -78,6 +102,22 @@ html {
 
 .dark .gray-button-shadow {
 	box-shadow: 0 1.5px 0 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.dark .gray-button-border {
+	@apply border-gray-2;
+}
+
+.gray-button-border {
+	@apply border-gray-8;
+}
+
+.dark .dark-button-border {
+	@apply border-gray-2;
+}
+
+.dark-button-border {
+	@apply border-gray-12;
 }
 
 .gray-button-shadow {
@@ -271,6 +311,16 @@ a.bg-primary:hover {
 	mask-composite: exclude;
 }
 
+@media all and (max-width: 1024px) {
+	.dashboard-grid {
+		grid-template-columns: 1fr;
+		grid-template-rows: 1fr;
+		grid-template-areas:
+			"main"
+			"main";
+	}
+}
+
 @media (prefers-color-scheme: dark) {
 	body,
 	html {
@@ -292,11 +342,10 @@ span,
 input,
 label,
 button {
-	@apply tracking-normal text-gray-10 font-normal leading-[1.5rem];
+	@apply tracking-normal font-normal leading-[1.5rem];
 }
 
-a,
-button {
+a {
 	@apply transition-all;
 }
 
@@ -575,12 +624,18 @@ slot:not(.dashboard-layout slot) {
 .hide-scroll::-webkit-scrollbar {
 	display: none;
 }
-
 /* Custom scrollbar */
 .custom-scroll {
 	overflow-y: auto;
+	scrollbar-gutter: stable;
 }
 
+/* Fallback for scrollbar-gutter */
+@supports not (scrollbar-gutter: stable) {
+	.custom-scroll {
+		padding-right: 3px; /* Reserve space for scrollbar */
+	}
+}
 .custom-scroll::-webkit-scrollbar {
 	width: 3px;
 	background-color: transparent;
@@ -838,6 +893,12 @@ footer a {
 		--chart-3: 30 80% 55%;
 		--chart-4: 280 65% 60%;
 		--chart-5: 340 75% 55%;
+	}
+}
+
+@media (max-width: 768px) {
+	.intercom-lightweight-app-launcher {
+		bottom: 90px !important;
 	}
 }
 

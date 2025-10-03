@@ -8,7 +8,6 @@ ffmpeg.workspace = true
 thiserror.workspace = true
 cpal.workspace = true
 
-cap-ffmpeg-utils = { path = "../ffmpeg-utils" }
 
 [lints]
 workspace = true

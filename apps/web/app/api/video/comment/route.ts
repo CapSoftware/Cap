@@ -88,9 +88,9 @@ async function handlePost(request: NextRequest) {
 	}
 }
 
-export const POST = (request: NextRequest) => {
-	const headersList = headers();
-	return rateLimitMiddleware(10, handlePost(request), headersList);
+export const POST = async (request: NextRequest) => {
+	const headersList = await headers();
+	return rateLimitMiddleware(10, handlePost(request), headersList) as any;
 };
 
 export async function GET() {

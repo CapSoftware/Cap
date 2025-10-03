@@ -4,8 +4,6 @@ import { createContext, type PropsWithChildren, useContext } from "react";
 
 type PublicEnvContext = {
 	webUrl: string;
-	awsBucket: string;
-	s3BucketUrl: string;
 };
 
 const Context = createContext<PublicEnvContext | null>(null);

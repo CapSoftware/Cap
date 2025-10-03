@@ -7,10 +7,14 @@ import {
 	useQuery,
 } from "@tanstack/solid-query";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { createMemo } from "solid-js";
+import { createEffect, createMemo } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { useRecordingOptions } from "~/routes/(window-chrome)/OptionsContext";
-import { authStore, generalSettingsStore } from "~/store";
+import {
+	authStore,
+	generalSettingsStore,
+	recordingSettingsStore,
+} from "~/store";
 import { createQueryInvalidate } from "./events";
 import {
 	type CameraInfo,
@@ -35,12 +39,36 @@ export const listWindows = queryOptions({
 		return w;
 	},
 	reconcile: "id",
-	refetchInterval: 1000,
+	refetchInterval: false,
 });
 
 export const listScreens = queryOptions({
 	queryKey: ["capture", "displays"] as const,
 	queryFn: () => commands.listCaptureDisplays(),
+	reconcile: "id",
+	refetchInterval: 1000,
+});
+
+export const listWindowsWithThumbnails = queryOptions({
+	queryKey: ["capture", "windows-thumbnails"] as const,
+	queryFn: async () => {
+		const w = await commands.listWindowsWithThumbnails();
+
+		w.sort(
+			(a, b) =>
+				a.owner_name.localeCompare(b.owner_name) ||
+				a.name.localeCompare(b.name),
+		);
+
+		return w;
+	},
+	reconcile: "id",
+	refetchInterval: false,
+});
+
+export const listDisplaysWithThumbnails = queryOptions({
+	queryKey: ["capture", "displays-thumbnails"] as const,
+	queryFn: () => commands.listDisplaysWithThumbnails(),
 	reconcile: "id",
 	refetchInterval: 1000,
 });
@@ -106,12 +134,18 @@ export function createOptionsQuery() {
 		if (e.key === PERSIST_KEY) _setState(JSON.parse(e.newValue ?? "{}"));
 	});
 
-	const [state, setState] = makePersisted([_state, _setState], {
-		name: PERSIST_KEY,
+	createEffect(() => {
+		recordingSettingsStore.set({
+			target: _state.captureTarget,
+			micName: _state.micName,
+			cameraId: _state.cameraID,
+			mode: _state.mode,
+			systemAudio: _state.captureSystemAudio,
+		});
 	});
 
-	createEventListener(window, "storage", (e) => {
-		if (e.key === PERSIST_KEY) setState(JSON.parse(e.newValue ?? "{}"));
+	const [state, setState] = makePersisted([_state, _setState], {
+		name: PERSIST_KEY,
 	});
 
 	return { rawOptions: state, setOptions: setState };

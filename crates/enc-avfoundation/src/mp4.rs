@@ -1,15 +1,10 @@
-use cap_ffmpeg_utils::PlanarData;
 use cap_media_info::{AudioInfo, VideoInfo};
 use cidre::{cm::SampleTimingInfo, objc::Obj, *};
-use ffmpeg::{ffi::AV_TIME_BASE_Q, frame};
-use std::path::PathBuf;
+use ffmpeg::frame;
+use std::{path::PathBuf, time::Duration};
 use tracing::{debug, info};
 
 pub struct MP4Encoder {
-    #[allow(unused)]
-    tag: &'static str,
-    #[allow(unused)]
-    last_pts: Option<i64>,
     #[allow(unused)]
     config: VideoInfo,
     asset_writer: arc::R<av::AssetWriter>,
@@ -18,7 +13,7 @@ pub struct MP4Encoder {
     start_time: cm::Time,
     first_timestamp: Option<cm::Time>,
     segment_first_timestamp: Option<cm::Time>,
-    last_timestamp: Option<cm::Time>,
+    last_pts: Option<cm::Time>,
     is_writing: bool,
     is_paused: bool,
     elapsed_duration: cm::Time,
@@ -47,7 +42,7 @@ pub enum InitError {
 #[derive(thiserror::Error, Debug)]
 pub enum QueueVideoFrameError {
     #[error("AppendError/{0}")]
-    AppendError(&'static cidre::ns::Exception),
+    AppendError(arc::R<ns::Exception>),
     #[error("Failed")]
     Failed,
 }
@@ -68,10 +63,9 @@ pub enum QueueAudioFrameError {
 
 impl MP4Encoder {
     pub fn init(
-        tag: &'static str,
+        output: PathBuf,
         video_config: VideoInfo,
         audio_config: Option<AudioInfo>,
-        output: PathBuf,
         output_height: Option<u32>,
     ) -> Result<Self, InitError> {
         debug!("{video_config:#?}");
@@ -177,15 +171,13 @@ impl MP4Encoder {
         asset_writer.start_writing();
 
         Ok(Self {
-            tag,
-            last_pts: None,
             config: video_config,
             audio_input,
             asset_writer,
             video_input,
             first_timestamp: None,
             segment_first_timestamp: None,
-            last_timestamp: None,
+            last_pts: None,
             is_writing: false,
             is_paused: false,
             start_time: cm::Time::zero(),
@@ -195,26 +187,28 @@ impl MP4Encoder {
         })
     }
 
+    /// Expects frames with whatever pts values you like
+    /// They will be made relative when encoding
     pub fn queue_video_frame(
         &mut self,
         frame: &cidre::cm::SampleBuf,
+        timestamp: Duration,
     ) -> Result<(), QueueVideoFrameError> {
         if self.is_paused || !self.video_input.is_ready_for_more_media_data() {
             return Ok(());
-        }
+        };
 
-        let time = frame.pts();
+        let time = cm::Time::new(timestamp.as_millis() as i64, 1_000);
+
+        let new_pts = self
+            .elapsed_duration
+            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
 
         if !self.is_writing {
             self.is_writing = true;
-            self.asset_writer.start_session_at_src_time(time);
+            self.asset_writer.start_session_at_src_time(new_pts);
             self.start_time = time;
         }
-
-        let new_pts = self
-            .start_time
-            .add(self.elapsed_duration)
-            .add(time.sub(self.segment_first_timestamp.unwrap_or(time)));
 
         let mut timing = frame.timing_info(0).unwrap();
         timing.pts = new_pts;
@@ -222,20 +216,26 @@ impl MP4Encoder {
 
         self.video_input
             .append_sample_buf(&frame)
-            .map_err(QueueVideoFrameError::AppendError)
+            .map_err(|e| QueueVideoFrameError::AppendError(e.retained()))
             .and_then(|v| v.then_some(()).ok_or(QueueVideoFrameError::Failed))?;
 
         self.first_timestamp.get_or_insert(time);
         self.segment_first_timestamp.get_or_insert(time);
-        self.last_timestamp = Some(time);
+        self.last_pts = Some(new_pts);
 
         self.video_frames_appended += 1;
 
         Ok(())
     }
 
-    pub fn queue_audio_frame(&mut self, frame: frame::Audio) -> Result<(), QueueAudioFrameError> {
-        if self.is_paused {
+    /// Expects frames with pts values relative to the first frame's pts
+    /// in the timebase of 1 / sample rate
+    pub fn queue_audio_frame(
+        &mut self,
+        frame: frame::Audio,
+        timestamp: Duration,
+    ) -> Result<(), QueueAudioFrameError> {
+        if self.is_paused || !self.is_writing {
             return Ok(());
         }
 
@@ -244,8 +244,13 @@ impl MP4Encoder {
         };
 
         if !audio_input.is_ready_for_more_media_data() {
-            return Err(QueueAudioFrameError::NotReady);
+            return Ok(());
         }
+
+        let time = cm::Time::new(
+            (timestamp.as_secs_f64() * frame.rate() as f64) as i64,
+            frame.rate() as i32,
+        );
 
         let audio_desc = cat::audio::StreamBasicDesc::common_f32(
             frame.rate() as f64,
@@ -265,7 +270,7 @@ impl MP4Encoder {
         if frame.is_planar() {
             let mut offset = 0;
             for plane_i in 0..frame.planes() {
-                let data = frame.plane_data(plane_i);
+                let data = frame.data(plane_i);
                 block_buf_slice[offset..offset + data.len()]
                     .copy_from_slice(&data[0..frame.samples() * frame.format().bytes()]);
                 offset += data.len();
@@ -276,8 +281,6 @@ impl MP4Encoder {
 
         let format_desc =
             cm::AudioFormatDesc::with_asbd(&audio_desc).map_err(QueueAudioFrameError::Setup)?;
-
-        let time = cm::Time::new(frame.pts().unwrap_or(0), AV_TIME_BASE_Q.den);
 
         let pts = self
             .start_time
@@ -320,7 +323,7 @@ impl MP4Encoder {
             .elapsed_duration
             .add(time.sub(self.segment_first_timestamp.unwrap()));
         self.segment_first_timestamp = None;
-        self.last_timestamp = None;
+        self.last_pts = None;
         self.is_paused = true;
     }
 
@@ -340,7 +343,7 @@ impl MP4Encoder {
         self.is_writing = false;
 
         self.asset_writer
-            .end_session_at_src_time(self.last_timestamp.unwrap_or(cm::Time::zero()));
+            .end_session_at_src_time(self.last_pts.unwrap_or(cm::Time::zero()));
         self.video_input.mark_as_finished();
         if let Some(i) = self.audio_input.as_mut() {
             i.mark_as_finished()
@@ -352,9 +355,15 @@ impl MP4Encoder {
         debug!("Appended {} audio frames", self.audio_frames_appended);
 
         debug!("First video timestamp: {:?}", self.first_timestamp);
-        debug!("Last video timestamp: {:?}", self.last_timestamp);
+        debug!("Last video timestamp: {:?}", self.last_pts);
 
         info!("Finished writing");
+    }
+}
+
+impl Drop for MP4Encoder {
+    fn drop(&mut self) {
+        self.finish();
     }
 }
 

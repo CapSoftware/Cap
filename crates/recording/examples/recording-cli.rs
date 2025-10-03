@@ -1,11 +1,13 @@
-use std::time::Duration;
-
-use cap_recording::{RecordingBaseInputs, screen_capture::ScreenCaptureTarget};
+use cap_recording::{screen_capture::ScreenCaptureTarget, *};
 use scap_targets::Display;
-use tracing::info;
+use std::time::Duration;
+use tracing::*;
 
 #[tokio::main]
 pub async fn main() {
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    unsafe { std::env::set_var("RUST_BACKTRACE", "1") };
+
     #[cfg(windows)]
     {
         use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
@@ -22,26 +24,67 @@ pub async fn main() {
 
     info!("Recording to directory '{}'", dir.path().display());
 
-    let (handle, _ready_rx) = cap_recording::spawn_studio_recording_actor(
-        "test".to_string(),
+    // let camera_info = cap_camera::list_cameras().next().unwrap();
+
+    // let camera_feed = CameraFeed::spawn(CameraFeed::default());
+
+    // camera_feed
+    //     .ask(feeds::camera::SetInput {
+    //         id: feeds::camera::DeviceOrModelID::from_info(&camera_info),
+    //     })
+    //     .await
+    //     .unwrap()
+    //     .await
+    //     .unwrap();
+
+    // let (error_tx, _) = flume::bounded(1);
+    // let mic_feed = MicrophoneFeed::spawn(MicrophoneFeed::new(error_tx));
+
+    // mic_feed
+    //     .ask(microphone::SetInput {
+    //         label:
+    //         // MicrophoneFeed::list()
+    //         //     .into_iter()
+    //         //     .find(|(k, _)| k.contains("Focusrite"))
+    //         MicrophoneFeed::default()
+    //             .map(|v| v.0)
+    //             .unwrap(),
+    //     })
+    //     .await
+    //     .unwrap()
+    //     .await
+    //     .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let handle = instant_recording::Actor::builder(
         dir.path().into(),
-        RecordingBaseInputs {
-            capture_target: ScreenCaptureTarget::Display {
-                id: Display::primary().id(),
-            },
-            capture_system_audio: true,
-            camera_feed: None,
-            mic_feed: None,
+        ScreenCaptureTarget::Display {
+            id: Display::primary().id(),
         },
-        false,
-        // true,
+    )
+    .with_system_audio(true)
+    // .with_camera_feed(std::sync::Arc::new(
+    //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
+    // ))
+    .build(
+        #[cfg(target_os = "macos")]
+        cidre::sc::ShareableContent::current().await.unwrap(),
     )
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    let _ = tokio::select!(
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            trace!("Sleep done");
+            let _ = handle.stop().await;
+        }
+        res = handle.done_fut() => {
+            debug!("{res:?}");
+        }
+    );
 
-    let _ = handle.stop().await;
+    info!("Recording finished");
 
     std::mem::forget(dir);
 }

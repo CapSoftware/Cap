@@ -1,4 +1,5 @@
 import { Fit, Layout, useRive } from "@rive-app/react-canvas";
+import clsx from "clsx";
 import { forwardRef, memo, useImperativeHandle } from "react";
 
 export interface CommercialArtRef {
@@ -6,8 +7,12 @@ export interface CommercialArtRef {
 	playDefaultAnimation: () => void;
 }
 
+interface Props {
+	className?: string;
+}
+
 export const CommercialArt = memo(
-	forwardRef<CommercialArtRef>((_, ref) => {
+	forwardRef<CommercialArtRef, Props>((props, ref) => {
 		const { rive, RiveComponent: CommercialRive } = useRive({
 			src: "/rive/pricing.riv",
 			artboard: "commercial",
@@ -34,7 +39,12 @@ export const CommercialArt = memo(
 		}));
 
 		return (
-			<CommercialRive className="w-full max-w-[200px] mx-auto h-[175px]" />
+			<CommercialRive
+				className={clsx(
+					"w-full max-w-[100px] mx-auto h-[90px]",
+					props.className,
+				)}
+			/>
 		);
 	}),
 );

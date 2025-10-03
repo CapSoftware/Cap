@@ -6,7 +6,7 @@ members = ["apps/cli", "apps/desktop/src-tauri", "crates/*"]
 anyhow = { version = "1.0.86" }
 # This includes a currently-unreleased fix that ensures the audio stream is actually
 # stopped and released on drop on macOS
-cpal = { git = "https://github.com/RustAudio/cpal", rev = "f43d36e55494993bbbde3299af0c53e5cdf4d4cf" }
+cpal = { git = "https://github.com/CapSoftware/cpal", rev = "3cc779a7b4ca" }
 ffmpeg = { package = "ffmpeg-next", git = "https://github.com/CapSoftware/rust-ffmpeg", rev = "49db1fede112" }
 tokio = { version = "1.39.3", features = [
     "macros",
@@ -34,7 +34,7 @@ nokhwa-bindings-macos = { git = "https://github.com/CapSoftware/nokhwa", rev = "
 wgpu = "25.0.0"
 flume = "0.11.0"
 thiserror = "1.0"
-sentry = { version = "0.34.0", features = [
+sentry = { version = "0.42.0", features = [
     "anyhow",
     "backtrace",
     "debug-images",
@@ -67,6 +67,7 @@ unexpected_cfgs = "allow"
 [workspace.lints.clippy]
 dbg_macro = "deny"
 let_underscore_future = "deny"
+unchecked_duration_subtraction = "deny"
 
 # Optimize for smaller binary size
 [profile.release]

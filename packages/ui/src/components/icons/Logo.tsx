@@ -4,15 +4,17 @@ export const Logo = ({
 	showBeta,
 	white,
 	hideLogoName,
+	viewBoxDimensions = "0 0 120 40",
+	style,
 }: {
-	className: string;
+	className?: string;
 	showVersion?: boolean;
 	showBeta?: boolean;
 	white?: boolean;
 	hideLogoName?: boolean;
+	style?: React.CSSProperties;
+	viewBoxDimensions?: `${string} ${string} ${string} ${string}`;
 }) => {
-	const viewBoxDimensions = hideLogoName ? "0 0 40 40" : "0 0 120 40";
-
 	return (
 		<div className="flex items-center">
 			<svg
@@ -20,6 +22,7 @@ export const Logo = ({
 				xmlns="http://www.w3.org/2000/svg"
 				preserveAspectRatio="xMidYMid meet"
 				fill="none"
+				style={style}
 				aria-label="Cap Logo"
 				className={className}
 			>
