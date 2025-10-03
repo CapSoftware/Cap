@@ -8,16 +8,11 @@ use ffmpeg::{
     threading::Config,
 };
 
-use crate::audio::buffered_resampler::BufferedResampler;
-
 use super::AudioEncoder;
+use crate::audio::{base::AudioEncoderBase, buffered_resampler::BufferedResampler};
 
 pub struct OpusEncoder {
-    encoder: encoder::Audio,
-    packet: ffmpeg::Packet,
-    resampler: BufferedResampler,
-    stream_index: usize,
-    first_pts: Option<i64>,
+    base: AudioEncoderBase,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -28,6 +23,8 @@ pub enum OpusEncoderError {
     CodecNotFound,
     #[error("Sample rate not supported: {0}")]
     RateNotSupported(i32),
+    #[error("Resampler: {0}")]
+    Resampler(ffmpeg::Error),
 }
 
 impl OpusEncoder {
@@ -73,20 +70,8 @@ impl OpusEncoder {
         output_config.sample_format = Self::SAMPLE_FORMAT;
         output_config.sample_rate = rate as u32;
 
-        let resampler = ffmpeg::software::resampler(
-            (
-                input_config.sample_format,
-                input_config.channel_layout(),
-                input_config.sample_rate,
-            ),
-            (
-                output_config.sample_format,
-                output_config.channel_layout(),
-                output_config.sample_rate,
-            ),
-        )
-        .unwrap();
-        let resampler = BufferedResampler::new(resampler);
+        let resampler = BufferedResampler::new(input_config, output_config)
+            .map_err(OpusEncoderError::Resampler)?;
 
         encoder.set_bit_rate(Self::OUTPUT_BITRATE);
         encoder.set_rate(rate);
@@ -102,67 +87,21 @@ impl OpusEncoder {
         output_stream.set_parameters(&encoder);
 
         Ok(Self {
-            encoder,
-            stream_index,
-            packet: ffmpeg::Packet::empty(),
-            resampler,
-            first_pts: None,
+            base: AudioEncoderBase::new(encoder, resampler, stream_index),
         })
     }
 
     pub fn queue_frame(
         &mut self,
-        mut frame: frame::Audio,
+        frame: frame::Audio,
         timestamp: Duration,
         output: &mut format::context::Output,
     ) {
-        if timestamp != Duration::MAX {
-            let Some(pts) = frame.pts() else {
-                tracing::error!("Frame has no pts");
-                return;
-            };
-
-            let time_base = self.encoder.time_base();
-            let rate = time_base.denominator() as f64 / time_base.numerator() as f64;
-            frame.set_pts(Some((timestamp.as_secs_f64() * rate).round() as i64));
-
-            let first_pts = self.first_pts.get_or_insert(pts);
-
-            frame.set_pts(Some(pts - *first_pts));
-        }
-
-        self.resampler.add_frame(frame);
-
-        let frame_size = self.encoder.frame_size() as usize;
-
-        while let Some(frame) = self.resampler.get_frame(frame_size) {
-            self.encoder.send_frame(&frame).unwrap();
-
-            self.process_packets(output);
-        }
+        self.base.send_frame(frame, timestamp, output);
     }
 
-    fn process_packets(&mut self, output: &mut format::context::Output) {
-        while self.encoder.receive_packet(&mut self.packet).is_ok() {
-            self.packet.set_stream(self.stream_index);
-            self.packet.rescale_ts(
-                self.encoder.time_base(),
-                output.stream(self.stream_index).unwrap().time_base(),
-            );
-            self.packet.write_interleaved(output).unwrap();
-        }
-    }
-
-    pub fn finish(&mut self, output: &mut format::context::Output) {
-        while let Some(frame) = self.resampler.flush(self.encoder.frame_size() as usize) {
-            self.encoder.send_frame(&frame).unwrap();
-
-            self.process_packets(output);
-        }
-
-        self.encoder.send_eof().unwrap();
-
-        self.process_packets(output);
+    pub fn finish(&mut self, output: &mut format::context::Output) -> Result<(), ffmpeg::Error> {
+        self.base.finish(output)
     }
 }
 
