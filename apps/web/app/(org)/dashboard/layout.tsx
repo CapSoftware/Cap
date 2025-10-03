@@ -63,8 +63,9 @@ export default async function DashboardLayout({
 			user.stripeSubscriptionStatus !== "cancelled") ||
 		!!user.thirdPartyStripeSubscriptionId;
 
-	const theme = cookies().get("theme")?.value ?? "light";
-	const sidebar = cookies().get("sidebarCollapsed")?.value ?? "false";
+	const theme = (await cookies()).get("theme")?.value ?? "light";
+	const sidebar = (await cookies()).get("sidebarCollapsed")?.value ?? "false";
+	const referClicked = (await cookies()).get("referClicked")?.value ?? "false";
 
 	return (
 		<UploadingProvider>
@@ -78,8 +79,9 @@ export default async function DashboardLayout({
 				initialSidebarCollapsed={sidebar === "true"}
 				anyNewNotifications={anyNewNotifications}
 				userPreferences={userPreferences}
+				referClicked={referClicked === "true"}
 			>
-				<div className="dashboard-grid">
+				<div className="bg-gray-2 dashboard-grid">
 					<DesktopNav />
 					<div className="flex h-full [grid-area:main] focus:outline-none">
 						<MobileNav />

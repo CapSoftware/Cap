@@ -1,4 +1,4 @@
-import type { Folder, Video } from "@cap/web-domain";
+import type { Folder, S3Bucket, Video } from "@cap/web-domain";
 import {
 	boolean,
 	customType,
@@ -8,15 +8,16 @@ import {
 	int,
 	json,
 	mysqlTable,
+	primaryKey,
 	text,
 	timestamp,
-	tinyint,
 	uniqueIndex,
 	varchar,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm/relations";
-import { nanoIdLength } from "./helpers";
-import type { VideoMetadata } from "./types";
+
+import { nanoIdLength } from "./helpers.ts";
+import type { VideoMetadata } from "./types/index.ts";
 
 const nanoId = customType<{ data: string; notNull: true }>({
 	dataType() {
@@ -87,6 +88,7 @@ export const users = mysqlTable(
 		onboarding_completed_at: timestamp("onboarding_completed_at"),
 		customBucket: nanoIdNullable("customBucket"),
 		inviteQuota: int("inviteQuota").notNull().default(1),
+		defaultOrgId: nanoIdNullable("defaultOrgId"),
 	},
 	(table) => ({
 		emailIndex: uniqueIndex("email_idx").on(table.email),
@@ -166,13 +168,16 @@ export const organizations = mysqlTable(
 	}),
 );
 
+export type OrganisationMemberRole = "owner" | "member";
 export const organizationMembers = mysqlTable(
 	"organization_members",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
 		userId: nanoId("userId").notNull(),
 		organizationId: nanoId("organizationId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -193,7 +198,9 @@ export const organizationInvites = mysqlTable(
 		organizationId: nanoId("organizationId").notNull(),
 		invitedEmail: varchar("invitedEmail", { length: 255 }).notNull(),
 		invitedByUserId: nanoId("invitedByUserId").notNull(),
-		role: varchar("role", { length: 255 }).notNull(),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.$type<OrganisationMemberRole>(),
 		status: varchar("status", { length: 255 }).notNull().default("pending"),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
@@ -240,8 +247,10 @@ export const videos = mysqlTable(
 	{
 		id: nanoId("id").notNull().primaryKey().unique().$type<Video.VideoId>(),
 		ownerId: nanoId("ownerId").notNull(),
+		// TODO: make this non-null
+		orgId: nanoIdNullable("orgId"),
 		name: varchar("name", { length: 255 }).notNull().default("My Video"),
-		bucket: nanoIdNullable("bucket"),
+		bucket: nanoIdNullable("bucket").$type<S3Bucket.S3BucketId>(),
 		// in seconds
 		duration: float("duration"),
 		width: int("width"),
@@ -258,7 +267,7 @@ export const videos = mysqlTable(
 			>()
 			.notNull()
 			.default({ type: "MediaConvert" }),
-		folderId: nanoIdNullable("folderId"),
+		folderId: nanoIdNullable("folderId").$type<Folder.FolderId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		// PRIVATE
@@ -275,19 +284,19 @@ export const videos = mysqlTable(
 		jobStatus: varchar("jobStatus", { length: 255 }),
 		skipProcessing: boolean("skipProcessing").notNull().default(false),
 	},
-	(table) => ({
-		idIndex: index("id_idx").on(table.id),
-		ownerIdIndex: index("owner_id_idx").on(table.ownerId),
-		publicIndex: index("is_public_idx").on(table.public),
-		folderIdIndex: index("folder_id_idx").on(table.folderId),
-	}),
+	(table) => [
+		index("id_idx").on(table.id),
+		index("owner_id_idx").on(table.ownerId),
+		index("is_public_idx").on(table.public),
+		index("folder_id_idx").on(table.folderId),
+	],
 );
 
 export const sharedVideos = mysqlTable(
 	"shared_videos",
 	{
 		id: nanoId("id").notNull().primaryKey().unique(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		organizationId: nanoId("organizationId").notNull(),
 		sharedByUserId: nanoId("sharedByUserId").notNull(),
 		sharedAt: timestamp("sharedAt").notNull().defaultNow(),
@@ -313,7 +322,7 @@ export const comments = mysqlTable(
 		content: text("content").notNull(),
 		timestamp: float("timestamp"),
 		authorId: nanoId("authorId").notNull(),
-		videoId: nanoId("videoId").notNull(),
+		videoId: nanoId("videoId").notNull().$type<Video.VideoId>(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 		parentCommentId: nanoId("parentCommentId"),
@@ -367,7 +376,7 @@ export const notifications = mysqlTable(
 );
 
 export const s3Buckets = mysqlTable("s3_buckets", {
-	id: nanoId("id").notNull().primaryKey().unique(),
+	id: nanoId("id").notNull().primaryKey().unique().$type<S3Bucket.S3BucketId>(),
 	ownerId: nanoId("ownerId").notNull(),
 	// Use encryptedText for sensitive fields
 	region: encryptedText("region").notNull(),
@@ -548,7 +557,10 @@ export const spaceMembers = mysqlTable(
 		id: nanoId("id").notNull().primaryKey().unique(),
 		spaceId: nanoId("spaceId").notNull(),
 		userId: nanoId("userId").notNull(),
-		role: varchar("role", { length: 255 }).notNull().default("member"),
+		role: varchar("role", { length: 255 })
+			.notNull()
+			.default("member")
+			.$type<"member" | "Admin">(),
 		createdAt: timestamp("createdAt").notNull().defaultNow(),
 		updatedAt: timestamp("updatedAt").notNull().defaultNow().onUpdateNow(),
 	},
@@ -648,3 +660,16 @@ export const videoUploads = mysqlTable("video_uploads", {
 	startedAt: timestamp("started_at").notNull().defaultNow(),
 	updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+export const importedVideos = mysqlTable(
+	"imported_videos",
+	{
+		id: nanoId("id").notNull(),
+		orgId: nanoIdNullable("orgId").notNull(),
+		source: varchar("source", { length: 255, enum: ["loom"] }).notNull(),
+		sourceId: varchar("source_id", { length: 255 }).notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.orgId, table.source, table.sourceId] }),
+	],
+);

@@ -2,6 +2,7 @@ import { Button, Switch } from "@cap/ui";
 import { getProPlanId } from "@cap/utils";
 import {
 	faCloud,
+	faCreditCard,
 	faLink,
 	faMagic,
 	faMinus,
@@ -106,7 +107,7 @@ export const ProCard = () => {
 			onMouseLeave={() => {
 				proArtRef.current?.playDefaultAnimation();
 			}}
-			className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-2xl bg-gray-12"
+			className="flex relative flex-col flex-1 justify-between p-8 text-white rounded-2xl shadow-lg bg-gray-12"
 		>
 			<div>
 				<div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
@@ -119,7 +120,7 @@ export const ProCard = () => {
 					<h3 className="mb-2 text-xl font-semibold text-center">
 						{homepageCopy.pricing.pro.title}
 					</h3>
-					<p className="mb-4 text-sm font-medium text-center text-gray-9">
+					<p className="mb-4 text-sm font-medium text-center text-gray-6">
 						{homepageCopy.pricing.pro.description}
 					</p>
 				</div>
@@ -184,42 +185,42 @@ export const ProCard = () => {
 				</div>
 
 				<div className="flex flex-wrap gap-5 justify-center items-center p-5 my-8 w-full rounded-xl border xs:gap-3 xs:p-3 xs:rounded-full xs:justify-between bg-zinc-700/50 border-zinc-700">
-					<div className="flex gap-3 justify-center items-center">
-						<p className="text-base text-gray-1">
+					<div className="flex gap-2 justify-center items-center">
+						<p className="text-sm text-gray-1">
 							{homepageCopy.pricing.pro.labels.users}
 						</p>
 						<div className="flex items-center">
 							<Button
 								onClick={decrementUsers}
-								className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+								className="p-1 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
 								aria-label="Decrease user count"
 							>
 								<FontAwesomeIcon
 									icon={faMinus}
-									className="text-gray-12 size-3"
+									className="text-gray-12 size-2"
 								/>
 							</Button>
-							<span className="w-8 font-medium tabular-nums text-center text-white">
+							<span className="w-5 font-medium tabular-nums text-center text-white">
 								<NumberFlow value={users} />
 							</span>
 							<Button
 								onClick={incrementUsers}
-								className="px-1.5 py-1.5 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
+								className="p-1 bg-gray-1 hover:bg-gray-3 min-w-fit h-fit"
 								aria-label="Increase user count"
 							>
 								<FontAwesomeIcon
 									icon={faPlus}
-									className="text-gray-12 size-3"
+									className="text-gray-12 size-2"
 								/>
 							</Button>
 						</div>
 					</div>
 
 					<div className="flex justify-center items-center">
-						<div className="flex gap-2 items-center">
+						<div className="flex gap-0 items-center">
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									!isAnnually ? "text-white" : "text-gray-8",
 								)}
 							>
@@ -229,11 +230,12 @@ export const ProCard = () => {
 								checked={isAnnually}
 								onCheckedChange={setIsAnnually}
 								aria-label="Billing Cycle For Pro"
+								className="scale-75"
 								id="billing-cycle-cap-pro"
 							/>
 							<span
 								className={clsx(
-									"text-md",
+									"text-sm",
 									isAnnually ? "text-white" : "text-gray-8",
 								)}
 							>
@@ -248,12 +250,20 @@ export const ProCard = () => {
 				<ul className="space-y-3">
 					<li className="flex items-center text-sm text-gray-1">
 						<FontAwesomeIcon
+							icon={faCreditCard}
+							className="flex-shrink-0 mr-3 text-gray-4"
+							style={{ fontSize: "14px", minWidth: "14px" }}
+						/>
+						<span className="text-gray-4">Everything from Desktop License</span>
+					</li>
+					<li className="flex items-center text-sm text-gray-1">
+						<FontAwesomeIcon
 							icon={faCloud}
 							className="flex-shrink-0 mr-3 text-gray-4"
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
 						<span className="text-gray-4">
-							Unlimited cloud storage & shareable links
+							Unlimited cloud storage & unlimited shareable links
 						</span>
 					</li>
 					<li className="flex items-center text-sm text-gray-1">
@@ -263,7 +273,7 @@ export const ProCard = () => {
 							style={{ fontSize: "14px", minWidth: "14px" }}
 						/>
 						<span className="text-gray-4">
-							Automatic AI title, transcription, summary, and chapter generation
+							Automatic AI title, transcription, summary, and chapters
 						</span>
 					</li>
 					<li className="flex items-center text-sm">

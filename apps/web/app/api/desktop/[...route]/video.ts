@@ -2,16 +2,25 @@ import { db } from "@cap/database";
 import { sendEmail } from "@cap/database/emails/config";
 import { FirstShareableLink } from "@cap/database/emails/first-shareable-link";
 import { nanoId } from "@cap/database/helpers";
-import { s3Buckets, videos, videoUploads } from "@cap/database/schema";
+import {
+	organizationMembers,
+	organizations,
+	s3Buckets,
+	users,
+	videos,
+	videoUploads,
+} from "@cap/database/schema";
 import { buildEnv, NODE_ENV, serverEnv } from "@cap/env";
 import { userIsPro } from "@cap/utils";
+import { S3Buckets } from "@cap/web-backend";
 import { Video } from "@cap/web-domain";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, eq, gt, gte, lt, lte } from "drizzle-orm";
+import { and, count, eq, gt, gte, lt, lte, or } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { Hono } from "hono";
 import { z } from "zod";
+import { runPromise } from "@/lib/server";
 import { dub } from "@/utils/dub";
-import { createBucketProvider } from "@/utils/s3";
 import { stringOrNumberOptional } from "@/utils/zod";
 import { withAuth } from "../../utils";
 
@@ -32,6 +41,7 @@ app.get(
 			width: stringOrNumberOptional,
 			height: stringOrNumberOptional,
 			fps: stringOrNumberOptional,
+			orgId: z.string().optional(),
 		}),
 	),
 	async (c) => {
@@ -45,6 +55,7 @@ app.get(
 				width,
 				height,
 				fps,
+				orgId,
 			} = c.req.valid("query");
 			const user = c.get("user");
 
@@ -69,10 +80,6 @@ app.get(
 				.from(s3Buckets)
 				.where(eq(s3Buckets.ownerId, user.id));
 
-			console.log("User bucket:", customBucket ? "found" : "not found");
-
-			const bucket = await createBucketProvider(customBucket);
-
 			const date = new Date();
 			const formattedDate = `${date.getDate()} ${date.toLocaleString(
 				"default",
@@ -83,9 +90,9 @@ app.get(
 				const [video] = await db()
 					.select()
 					.from(videos)
-					.where(eq(videos.id, videoId));
+					.where(eq(videos.id, Video.VideoId.make(videoId)));
 
-				if (video) {
+				if (video)
 					return c.json({
 						id: video.id,
 						// All deprecated
@@ -93,10 +100,61 @@ app.get(
 						aws_region: "n/a",
 						aws_bucket: "n/a",
 					});
-				}
 			}
 
-			const idToUse = nanoId();
+			const userOrganizations = await db()
+				.select({
+					id: organizations.id,
+					name: organizations.name,
+				})
+				.from(organizations)
+				.leftJoin(
+					organizationMembers,
+					eq(organizations.id, organizationMembers.organizationId),
+				)
+				.where(
+					or(
+						// User owns the organization
+						eq(organizations.ownerId, user.id),
+						// User is a member of the organization
+						eq(organizationMembers.userId, user.id),
+					),
+				)
+				// Remove duplicates if user is both owner and member
+				.groupBy(organizations.id, organizations.name)
+				.orderBy(organizations.createdAt);
+			const userOrgIds = userOrganizations.map((org) => org.id);
+
+			let videoOrgId: string;
+			if (orgId) {
+				// Hard error if the user requested org is non-existent or they don't have access.
+				if (!userOrgIds.includes(orgId))
+					return c.json({ error: "forbidden_org" }, { status: 403 });
+				videoOrgId = orgId;
+			} else if (user.defaultOrgId) {
+				// User's defaultOrgId is no longer valid, switch to first available org
+				if (!userOrgIds.includes(user.defaultOrgId)) {
+					if (!userOrganizations[0])
+						return c.json({ error: "no_valid_org" }, { status: 403 });
+
+					videoOrgId = userOrganizations[0].id;
+
+					// Update user's defaultOrgId to the new valid org
+					await db()
+						.update(users)
+						.set({
+							defaultOrgId: videoOrgId,
+						})
+						.where(eq(users.id, user.id));
+				} else videoOrgId = user.defaultOrgId;
+			} else {
+				// No orgId provided and no defaultOrgId, use first available org
+				if (!userOrganizations[0])
+					return c.json({ error: "no_valid_org" }, { status: 403 });
+				videoOrgId = userOrganizations[0].id;
+			}
+
+			const idToUse = Video.VideoId.make(nanoId());
 
 			const videoName =
 				name ??
@@ -108,8 +166,7 @@ app.get(
 					id: idToUse,
 					name: videoName,
 					ownerId: user.id,
-					awsRegion: "auto",
-					awsBucket: bucket.name,
+					orgId: videoOrgId,
 					source:
 						recordingMode === "hls"
 							? { type: "local" as const }
@@ -125,9 +182,15 @@ app.get(
 					fps,
 				});
 
-			await db().insert(videoUploads).values({
-				videoId: idToUse,
-			});
+			const xCapVersion = c.req.header("X-Cap-Desktop-Version");
+			const clientSupportsUploadProgress = xCapVersion
+				? isAtLeastSemver(xCapVersion, 0, 3, 68)
+				: false;
+
+			if (clientSupportsUploadProgress)
+				await db().insert(videoUploads).values({
+					videoId: idToUse,
+				});
 
 			if (buildEnv.NEXT_PUBLIC_IS_CAP && NODE_ENV === "production")
 				await dub().links.create({
@@ -197,7 +260,7 @@ app.delete(
 	"/delete",
 	zValidator("query", z.object({ videoId: z.string() })),
 	async (c) => {
-		const { videoId } = c.req.valid("query");
+		const videoId = Video.VideoId.make(c.req.valid("query").videoId);
 		const user = c.get("user");
 
 		try {
@@ -219,18 +282,22 @@ app.delete(
 				.delete(videos)
 				.where(and(eq(videos.id, videoId), eq(videos.ownerId, user.id)));
 
-			const bucket = await createBucketProvider(result.bucket);
-
-			const listedObjects = await bucket.listObjects({
-				prefix: `${user.id}/${videoId}/`,
-			});
-
-			if (listedObjects.Contents?.length)
-				await bucket.deleteObjects(
-					listedObjects.Contents.map((content: any) => ({
-						Key: content.Key,
-					})),
+			await Effect.gen(function* () {
+				const [bucket] = yield* S3Buckets.getBucketAccess(
+					Option.fromNullable(result.bucket?.id),
 				);
+
+				const listedObjects = yield* bucket.listObjects({
+					prefix: `${user.id}/${videoId}/`,
+				});
+
+				if (listedObjects.Contents?.length)
+					yield* bucket.deleteObjects(
+						listedObjects.Contents.map((content: any) => ({
+							Key: content.Key,
+						})),
+					);
+			}).pipe(runPromise);
 
 			return c.json(true);
 		} catch (error) {
@@ -291,14 +358,13 @@ app.post(
 					),
 				);
 
-			if (result.rowsAffected === 0) {
-				const result2 = await db().insert(videoUploads).values({
+			if (result.rowsAffected === 0)
+				await db().insert(videoUploads).values({
 					videoId,
 					uploaded,
 					total,
 					updatedAt,
 				});
-			}
 
 			if (uploaded === total)
 				await db()
@@ -312,3 +378,27 @@ app.post(
 		}
 	},
 );
+
+function isAtLeastSemver(
+	versionString: string,
+	major: number,
+	minor: number,
+	patch: number,
+): boolean {
+	const match = versionString
+		.replace(/^v/, "")
+		.match(/^(\d+)\.(\d+)\.(\d+)(?:-(.+))?/);
+	if (!match) return false;
+	const [, vMajor, vMinor, vPatch, prerelease] = match;
+	const M = vMajor ? parseInt(vMajor, 10) || 0 : 0;
+	const m = vMinor ? parseInt(vMinor, 10) || 0 : 0;
+	const p = vPatch ? parseInt(vPatch, 10) || 0 : 0;
+	if (M > major) return true;
+	if (M < major) return false;
+	if (m > minor) return true;
+	if (m < minor) return false;
+	if (p > patch) return true;
+	if (p < patch) return false;
+	// Equal triplet: accept only non-prerelease
+	return !prerelease;
+}

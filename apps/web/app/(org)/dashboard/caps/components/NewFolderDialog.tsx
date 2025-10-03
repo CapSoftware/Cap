@@ -1,3 +1,5 @@
+"use client";
+
 import {
 	Button,
 	Dialog,
@@ -94,7 +96,7 @@ export const NewFolderDialog: React.FC<Props> = ({
 			},
 			{} as Record<
 				(typeof FolderOptions)[number]["value"],
-				React.RefObject<FolderHandle>
+				React.RefObject<FolderHandle | null>
 			>,
 		),
 	);

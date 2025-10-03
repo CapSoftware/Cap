@@ -41,7 +41,7 @@ export const CommercialArt = memo(
 		return (
 			<CommercialRive
 				className={clsx(
-					"w-full max-w-[100px] mx-auto h-[80px]",
+					"w-full max-w-[100px] mx-auto h-[90px]",
 					props.className,
 				)}
 			/>

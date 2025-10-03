@@ -64,16 +64,48 @@ function Inner() {
 	});
 	onCleanup(() => unsubTargetUnderCursor.then((unsub) => unsub()));
 
-	const windowIcon = createQuery(() => ({
-		queryKey: ["windowIcon", targetUnderCursor.window?.id],
+	const selectedWindow = createQuery(() => ({
+		queryKey: ["selectedWindow", rawOptions.captureTarget],
 		queryFn: async () => {
-			if (!targetUnderCursor.window?.id) return null;
-			return await commands.getWindowIcon(
-				targetUnderCursor.window.id.toString(),
-			);
+			if (rawOptions.captureTarget.variant !== "window") return null;
+			const windowId = rawOptions.captureTarget.id;
+
+			const windows = await commands.listCaptureWindows();
+			const window = windows.find((w) => w.id === windowId);
+
+			if (!window) return null;
+
+			return {
+				id: window.id,
+				app_name: window.owner_name || window.name || "Unknown",
+				bounds: window.bounds,
+			};
 		},
-		enabled: !!targetUnderCursor.window?.id,
-		staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+		enabled:
+			rawOptions.captureTarget.variant === "window" &&
+			rawOptions.targetMode === "window",
+		staleTime: 5 * 1000,
+	}));
+
+	const windowToShow = () => {
+		const hoveredWindow = targetUnderCursor.window;
+		if (hoveredWindow) return hoveredWindow;
+		if (rawOptions.captureTarget.variant === "window") {
+			const selected = selectedWindow.data;
+			if (selected) return selected;
+		}
+		return hoveredWindow;
+	};
+
+	const windowIcon = createQuery(() => ({
+		queryKey: ["windowIcon", windowToShow()?.id],
+		queryFn: async () => {
+			const window = windowToShow();
+			if (!window?.id) return null;
+			return await commands.getWindowIcon(window.id.toString());
+		},
+		enabled: !!windowToShow()?.id,
+		staleTime: 5 * 60 * 1000,
 	}));
 
 	const displayInformation = createQuery(() => ({
@@ -184,10 +216,12 @@ function Inner() {
 			<Match
 				when={
 					rawOptions.targetMode === "window" &&
-					targetUnderCursor.display_id === params.displayId
+					(targetUnderCursor.display_id === params.displayId ||
+						(rawOptions.captureTarget.variant === "window" &&
+							selectedWindow.data))
 				}
 			>
-				<Show when={targetUnderCursor.window} keyed>
+				<Show when={windowToShow()} keyed>
 					{(windowUnderCursor) => (
 						<div
 							data-over={targetUnderCursor.display_id === params.displayId}
@@ -841,7 +875,7 @@ function ShowCapFreeWarning(props: { isInstantMode: boolean }) {
 	return (
 		<Suspense>
 			<Show when={props.isInstantMode && auth.data?.plan?.upgraded === false}>
-				<p class="text-sm text-center max-w-64">
+				<p class="text-sm text-center text-white max-w-64">
 					Instant Mode recordings are limited to 5 mins,{" "}
 					<button
 						class="underline"

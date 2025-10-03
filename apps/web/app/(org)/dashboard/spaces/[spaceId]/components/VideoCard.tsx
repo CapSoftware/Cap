@@ -6,10 +6,10 @@ import type React from "react";
 import { memo } from "react";
 import { Tooltip } from "@/components/Tooltip";
 import { VideoThumbnail } from "@/components/VideoThumbnail";
-import type { Video } from "./AddVideosDialogBase";
+import type { VideoData } from "./AddVideosDialogBase";
 
 interface VideoCardProps {
-	video: Video;
+	video: VideoData;
 	isSelected: boolean;
 	onToggle: () => void;
 	isAlreadyInEntity: boolean;
@@ -100,7 +100,6 @@ const VideoCard: React.FC<VideoCardProps> = memo(
 				>
 					<VideoThumbnail
 						imageClass="w-full h-full transition-all duration-200 group-hover:scale-105"
-						userId={video.ownerId}
 						videoId={video.id}
 						alt={`${video.name} Thumbnail`}
 						objectFit="cover"

@@ -170,8 +170,8 @@ impl MicrophoneFeedLock {
         &self.config
     }
 
-    pub fn audio_info(&self) -> &AudioInfo {
-        &self.audio_info
+    pub fn audio_info(&self) -> AudioInfo {
+        self.audio_info
     }
 }
 

@@ -3,9 +3,10 @@ import * as Db from "@cap/database/schema";
 import { CurrentUser, Folder, Policy } from "@cap/web-domain";
 import * as Dz from "drizzle-orm";
 import { Effect, Option } from "effect";
-import { Database, type DatabaseError } from "../Database";
-import { FoldersPolicy } from "./FoldersPolicy";
+import { Database, type DatabaseError } from "../Database.ts";
+import { FoldersPolicy } from "./FoldersPolicy.ts";
 
+// @effect-diagnostics-next-line leakingRequirements:off
 export class Folders extends Effect.Service<Folders>()("Folders", {
 	effect: Effect.gen(function* () {
 		const db = yield* Database;
@@ -78,7 +79,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 							.where(
 								Dz.and(
 									Dz.eq(Db.folders.id, parentId),
-									Dz.eq(Db.folders.organizationId, user.activeOrgId),
+									Dz.eq(Db.folders.organizationId, user.activeOrganizationId),
 								),
 							),
 					);
@@ -90,7 +91,7 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 					id: Folder.FolderId.make(nanoId()),
 					name: data.name,
 					color: data.color,
-					organizationId: user.activeOrgId,
+					organizationId: user.activeOrganizationId,
 					createdById: user.id,
 					spaceId: data.spaceId,
 					parentId: data.parentId,
@@ -123,5 +124,5 @@ export class Folders extends Effect.Service<Folders>()("Folders", {
 			}),
 		};
 	}),
-	dependencies: [FoldersPolicy.Default],
+	dependencies: [FoldersPolicy.Default, Database.Default],
 }) {}

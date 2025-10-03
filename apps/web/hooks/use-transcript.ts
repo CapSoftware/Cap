@@ -1,8 +1,9 @@
+import type { Video } from "@cap/web-domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTranscript } from "@/actions/videos/get-transcript";
 
 export const useTranscript = (
-	videoId: string,
+	videoId: Video.VideoId,
 	transcriptionStatus?: string | null,
 ) => {
 	return useQuery({

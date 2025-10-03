@@ -3,6 +3,7 @@
 import type { Video } from "@cap/web-domain";
 import clsx from "clsx";
 import { Effect, Option } from "effect";
+import { useFeatureFlag } from "@/app/Layout/features";
 import { useEffectQuery } from "@/lib/EffectRuntime";
 import { withRpc } from "@/lib/Rpcs";
 
@@ -22,7 +23,10 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * 60 * SECOND;
 const DAY = 24 * HOUR;
 
-export function useUploadProgress(videoId: Video.VideoId, enabled: boolean) {
+export function useUploadProgress(videoId: Video.VideoId, enabledRaw: boolean) {
+	const enableBetaUploadProgress = useFeatureFlag("enableUploadProgress");
+	const enabled = enableBetaUploadProgress ? enabledRaw : false;
+
 	const query = useEffectQuery({
 		queryKey: ["getUploadProgress", videoId],
 		queryFn: () =>
