@@ -192,16 +192,24 @@ pub fn list_cameras() -> Vec<cap_camera::CameraInfo> {
     cap_camera::list_cameras().collect()
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
-pub fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
-    tauri::async_runtime::block_on(collect_displays_with_thumbnails())
+pub async fn list_displays_with_thumbnails() -> Result<Vec<CaptureDisplayWithThumbnail>, String> {
+    tokio::task::spawn_blocking(|| {
+        tauri::async_runtime::block_on(collect_displays_with_thumbnails())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-#[tauri::command(async)]
+#[tauri::command]
 #[specta::specta]
 pub async fn list_windows_with_thumbnails() -> Result<Vec<CaptureWindowWithThumbnail>, String> {
-    tauri::async_runtime::block_on(collect_windows_with_thumbnails())
+    tokio::task::spawn_blocking(
+        || tauri::async_runtime::block_on(collect_windows_with_thumbnails()),
+    )
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Deserialize, Type, Clone, Debug)]
