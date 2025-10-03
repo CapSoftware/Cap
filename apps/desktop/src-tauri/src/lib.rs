@@ -19,6 +19,7 @@ mod presets;
 mod recording;
 mod recording_settings;
 mod target_select_overlay;
+mod thumbnails;
 mod tray;
 mod upload;
 mod web_api;
@@ -79,6 +80,8 @@ use tauri_plugin_notification::{NotificationExt, PermissionState};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+#[cfg(target_os = "macos")]
+use tokio::sync::Mutex;
 use tokio::sync::{RwLock, oneshot};
 use tracing::{error, trace};
 use upload::{S3UploadMeta, create_or_get_video, upload_image, upload_video};
@@ -318,6 +321,12 @@ pub struct RequestOpenRecordingPicker {
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
 pub struct RequestOpenSettings {
     page: String,
+}
+
+#[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
+pub struct RequestScreenCapturePrewarm {
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Deserialize, specta::Type, Serialize, tauri_specta::Event, Debug, Clone)]
@@ -1939,6 +1948,7 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             RequestOpenRecordingPicker,
             RequestNewScreenshot,
             RequestOpenSettings,
+            RequestScreenCapturePrewarm,
             NewNotification,
             AuthenticationInvalid,
             audio_meter::AudioInputLevelChange,
@@ -2077,6 +2087,8 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
             fake_window::init(&app);
             app.manage(target_select_overlay::WindowFocusManager::default());
             app.manage(EditorWindowIds::default());
+            #[cfg(target_os = "macos")]
+            app.manage(crate::platform::ScreenCapturePrewarmer::default());
 
             tokio::spawn({
                 let camera_feed = camera_feed.clone();
@@ -2204,6 +2216,12 @@ pub async fn run(recording_logging_handle: LoggingHandle) {
                 }
                 .show(&app)
                 .await;
+            });
+
+            #[cfg(target_os = "macos")]
+            RequestScreenCapturePrewarm::listen_any_spawn(&app, async |event, app| {
+                let prewarmer = app.state::<crate::platform::ScreenCapturePrewarmer>();
+                prewarmer.request(event.force).await;
             });
 
             let app_handle = app.clone();

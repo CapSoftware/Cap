@@ -1007,6 +1007,7 @@ dependencies = [
  "cap-recording",
  "cap-rendering",
  "cap-utils",
+ "cidre 0.11.0",
  "clap",
  "ffmpeg-next",
  "flume",
@@ -7491,6 +7492,7 @@ dependencies = [
  "objc",
  "serde",
  "specta",
+ "tokio",
  "tracing",
  "windows 0.60.0",
 ]

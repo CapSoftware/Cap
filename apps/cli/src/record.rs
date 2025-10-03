@@ -61,7 +61,10 @@ impl RecordStart {
         let actor = studio_recording::Actor::builder(path, target_info)
             .with_system_audio(self.system_audio)
             .with_custom_cursor(false)
-            .build()
+            .build(
+                #[cfg(target_os = "macos")]
+                cidre::sc::ShareableContent::current().await.unwrap(),
+            )
             .await
             .map_err(|e| e.to_string())?;
 

@@ -45,6 +45,8 @@ pub struct RecordingBaseInputs {
     pub capture_system_audio: bool,
     pub mic_feed: Option<Arc<MicrophoneFeedLock>>,
     pub camera_feed: Option<Arc<CameraFeedLock>>,
+    #[cfg(target_os = "macos")]
+    pub shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
 }
 
 #[derive(specta::Type, Serialize, Deserialize, Clone, Debug)]
