@@ -14,6 +14,8 @@ const PreferencesSchema = z.object({
 	}),
 });
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
 	const currentUser = await getCurrentUser();
 	if (!currentUser) {

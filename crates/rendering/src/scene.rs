@@ -64,17 +64,17 @@ pub struct InterpolatedScene {
 }
 
 impl InterpolatedScene {
-    fn from_single_mode(mode: SceneMode) -> Self {
-        let (camera_opacity, screen_opacity, camera_scale) = Self::get_scene_values(&mode);
+    fn from_single_mode(scene_mode: SceneMode) -> Self {
+        let (camera_opacity, screen_opacity, camera_scale) = Self::get_scene_values(&scene_mode);
 
         InterpolatedScene {
             camera_opacity,
             screen_opacity,
             camera_scale,
-            scene_mode: mode.clone(),
+            scene_mode,
             transition_progress: 1.0,
-            from_mode: mode.clone(),
-            to_mode: mode,
+            from_mode: scene_mode,
+            to_mode: scene_mode,
             screen_blur: 0.0,
             camera_only_zoom: 1.0,
             camera_only_blur: 0.0,
@@ -101,21 +101,17 @@ impl InterpolatedScene {
                     );
                     if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                         // Small gap between same modes, no transition needed
-                        return InterpolatedScene::from_single_mode(segment.mode.clone());
+                        return InterpolatedScene::from_single_mode(segment.mode);
                     } else if gap > 0.01 {
                         SceneMode::Default
                     } else {
-                        prev_seg.mode.clone()
+                        prev_seg.mode
                     }
                 } else {
                     SceneMode::Default
                 };
                 let progress = (cursor.time - transition_start) / SCENE_TRANSITION_DURATION;
-                (
-                    prev_mode,
-                    segment.mode.clone(),
-                    ease_in_out(progress as f32) as f64,
-                )
+                (prev_mode, segment.mode, ease_in_out(progress as f32) as f64)
             } else if cursor.time >= transition_end && cursor.time < segment.end {
                 if let Some(next_seg) = cursor.next_segment() {
                     let gap = next_seg.start - segment.end;
@@ -130,13 +126,13 @@ impl InterpolatedScene {
                     );
                     if gap < MIN_GAP_FOR_TRANSITION && same_mode {
                         // Keep the current mode without transitioning
-                        (segment.mode.clone(), segment.mode.clone(), 1.0)
+                        (segment.mode, segment.mode, 1.0)
                     } else if gap > 0.01 {
                         // There's a significant gap, so transition to default scene
                         let progress =
                             ((cursor.time - transition_end) / SCENE_TRANSITION_DURATION).min(1.0);
                         (
-                            segment.mode.clone(),
+                            segment.mode,
                             SceneMode::Default,
                             ease_in_out(progress as f32) as f64,
                         )
@@ -145,8 +141,8 @@ impl InterpolatedScene {
                         let progress =
                             ((cursor.time - transition_end) / SCENE_TRANSITION_DURATION).min(1.0);
                         (
-                            segment.mode.clone(),
-                            next_seg.mode.clone(),
+                            segment.mode,
+                            next_seg.mode,
                             ease_in_out(progress as f32) as f64,
                         )
                     }
@@ -155,13 +151,13 @@ impl InterpolatedScene {
                     let progress =
                         ((cursor.time - transition_end) / SCENE_TRANSITION_DURATION).min(1.0);
                     (
-                        segment.mode.clone(),
+                        segment.mode,
                         SceneMode::Default,
                         ease_in_out(progress as f32) as f64,
                     )
                 }
             } else {
-                (segment.mode.clone(), segment.mode.clone(), 1.0)
+                (segment.mode, segment.mode, 1.0)
             }
         } else if let Some(next_segment) = cursor.next_segment() {
             let transition_start = next_segment.start - SCENE_TRANSITION_DURATION;
@@ -178,18 +174,18 @@ impl InterpolatedScene {
                         | (SceneMode::SplitView, SceneMode::SplitView)
                 );
                 if gap < MIN_GAP_FOR_TRANSITION && same_mode {
-                    (prev_seg.mode.clone(), prev_seg.mode.clone(), 1.0)
+                    (prev_seg.mode, prev_seg.mode, 1.0)
                 } else if cursor.time >= transition_start {
                     // Start transitioning into the next segment
                     let prev_mode = if gap > 0.01 {
                         SceneMode::Default
                     } else {
-                        prev_seg.mode.clone()
+                        prev_seg.mode
                     };
                     let progress = (cursor.time - transition_start) / SCENE_TRANSITION_DURATION;
                     (
                         prev_mode,
-                        next_segment.mode.clone(),
+                        next_segment.mode,
                         ease_in_out(progress as f32) as f64,
                     )
                 } else {
@@ -201,7 +197,7 @@ impl InterpolatedScene {
                 let progress = (cursor.time - transition_start) / SCENE_TRANSITION_DURATION;
                 (
                     SceneMode::Default,
-                    next_segment.mode.clone(),
+                    next_segment.mode,
                     ease_in_out(progress as f32) as f64,
                 )
             } else {
@@ -277,9 +273,9 @@ impl InterpolatedScene {
             screen_opacity,
             camera_scale,
             scene_mode: if transition_progress > 0.5 {
-                next_mode.clone()
+                next_mode
             } else {
-                current_mode.clone()
+                current_mode
             },
             transition_progress,
             from_mode: current_mode,

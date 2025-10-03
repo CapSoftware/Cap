@@ -1,3 +1,4 @@
+import { ProgressCircle } from "@cap/ui-solid";
 import Tooltip from "@corvu/tooltip";
 import {
 	createMutation,
@@ -5,7 +6,7 @@ import {
 	queryOptions,
 	useQueryClient,
 } from "@tanstack/solid-query";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { remove } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -19,10 +20,14 @@ import {
 	type ParentProps,
 	Show,
 } from "solid-js";
-
 import { trackEvent } from "~/utils/analytics";
 import { createTauriEventListener } from "~/utils/createEventListener";
-import { commands, events, type RecordingMetaWithMode } from "~/utils/tauri";
+import {
+	commands,
+	events,
+	type RecordingMetaWithMode,
+	type UploadProgress,
+} from "~/utils/tauri";
 
 type Recording = {
 	meta: RecordingMetaWithMode;
@@ -147,7 +152,12 @@ export default function Recordings() {
 					</For>
 				</div>
 
-				<div class="flex flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+				<div class="flex relative flex-col flex-1 mt-4 rounded-xl border custom-scroll bg-gray-2 border-gray-3">
+					<Show when={filteredRecordings().length === 0}>
+						<p class="text-center text-[--text-tertiary] absolute flex items-center justify-center w-full h-full">
+							No {activeTab()} recordings
+						</p>
+					</Show>
 					<ul class="p-4 flex flex-col gap-5 w-full text-[--text-primary]">
 						<For each={filteredRecordings()}>
 							{(recording) => (
@@ -237,13 +247,19 @@ function RecordingItem(props: {
 				</Show>
 				<Show when={mode() === "instant"}>
 					{(_) => {
+						const [progress, setProgress] = createSignal(0);
 						const reupload = createMutation(() => ({
-							mutationFn: () => {
-								return commands.uploadExportedVideo(
+							mutationFn: async () => {
+								setProgress(0);
+								return await commands.uploadExportedVideo(
 									props.recording.path,
 									"Reupload",
+									new Channel<UploadProgress>((progress) =>
+										setProgress(Math.round(progress.progress * 100)),
+									),
 								);
 							},
+							onSettled: () => setProgress(0),
 						}));
 
 						return (
@@ -255,7 +271,11 @@ function RecordingItem(props: {
 											onClick={() => reupload.mutate()}
 										>
 											{reupload.isPending ? (
-												<IconLucideLoaderCircle class="animate-spin" />
+												<ProgressCircle
+													variant="primary"
+													progress={progress()}
+													size="sm"
+												/>
 											) : (
 												<IconLucideRotateCcw class="size-4" />
 											)}

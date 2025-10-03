@@ -16,11 +16,10 @@ const MAX_AI_PROCESSING_TIME = 10 * 60 * 1000;
 
 export interface VideoStatusResult {
 	transcriptionStatus: "PROCESSING" | "COMPLETE" | "ERROR" | null;
-	aiProcessing: boolean;
 	aiTitle: string | null;
+	aiProcessing: boolean;
 	summary: string | null;
 	chapters: { title: string; start: number }[] | null;
-	// generationError: string | null;
 	error?: string;
 }
 
@@ -180,7 +179,8 @@ export async function getVideoStatus(
 					);
 				} catch (error) {
 					console.error(
-						`[Get Status] Error generating AI metadata for video ${videoId}:`,
+						"[Get Status] Error generating AI metadata for video %s",
+						videoId,
 						error,
 					);
 
@@ -198,15 +198,14 @@ export async function getVideoStatus(
 									metadata: {
 										...currentMetadata,
 										aiProcessing: false,
-										// generationError:
-										// 	error instanceof Error ? error.message : String(error),
 									},
 								})
 								.where(eq(videos.id, videoId));
 						}
 					} catch (resetError) {
 						console.error(
-							`[Get Status] Failed to reset AI processing flag for video ${videoId}:`,
+							`[Get Status] Failed to reset AI processing flag for video %s`,
+							videoId,
 							resetError,
 						);
 					}

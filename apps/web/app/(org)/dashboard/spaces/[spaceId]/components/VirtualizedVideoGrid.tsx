@@ -1,13 +1,14 @@
+import type { Video } from "@cap/web-domain";
 import { Grid, useGrid } from "@virtual-grid/react";
-import React, { useEffect, useRef, useState } from "react";
-import type { Video } from "./AddVideosDialogBase";
+import React, { type RefObject, useEffect, useRef, useState } from "react";
+import type { VideoData } from "./AddVideosDialogBase";
 import VideoCard from "./VideoCard";
 
 interface VirtualizedVideoGridProps {
-	videos: Video[];
+	videos: VideoData[];
 	selectedVideos: string[];
-	handleVideoToggle: (id: string) => void;
-	entityVideoIds: string[];
+	handleVideoToggle: (id: Video.VideoId) => void;
+	entityVideoIds: Video.VideoId[];
 	height?: number;
 	columnCount?: number;
 	rowHeight?: number;
@@ -49,7 +50,7 @@ const VirtualizedVideoGrid = ({
 
 	// Initialize the grid with responsive column count
 	const grid = useGrid({
-		scrollRef,
+		scrollRef: scrollRef as RefObject<HTMLDivElement>, // React typing version mismatch
 		count: videos.length,
 		columns: responsiveColumnCount,
 		gap: {

@@ -18,7 +18,7 @@ const DOCKER_S3_ENVS = {
 	secretKey: "capS3root",
 	bucket: "capso",
 	region: "us-east-1",
-	endpoint: "http://localhost:3902",
+	endpoint: "http://localhost:9000",
 };
 
 const DOCKER_DB_ENVS = {

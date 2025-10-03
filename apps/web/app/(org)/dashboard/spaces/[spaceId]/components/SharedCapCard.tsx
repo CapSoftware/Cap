@@ -14,6 +14,7 @@ interface SharedCapCardProps {
 		totalReactions: number;
 		ownerName: string | null;
 		metadata?: VideoMetadata;
+		hasActiveUpload: boolean | undefined;
 	};
 	analytics: number;
 	isLoadingAnalytics: boolean;
@@ -49,7 +50,6 @@ export const SharedCapCard: React.FC<SharedCapCardProps> = ({
 				isLoadingAnalytics={isLoadingAnalytics}
 				cap={cap}
 				analytics={displayCount}
-				sharedCapCard
 				userId={userId}
 			>
 				<div className="mb-2 space-y-1">

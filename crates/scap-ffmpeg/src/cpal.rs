@@ -1,4 +1,3 @@
-use cap_ffmpeg_utils::PlanarData;
 use cpal::{SampleFormat, StreamConfig};
 use ffmpeg::format::{Sample, sample};
 
@@ -32,7 +31,7 @@ impl DataExt for ::cpal::Data {
                 let base = (i as usize) * plane_size;
 
                 ffmpeg_frame
-                    .plane_data_mut(i as usize)
+                    .data_mut(i as usize)
                     .copy_from_slice(&self.bytes()[base..base + plane_size]);
             }
         } else {

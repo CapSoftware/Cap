@@ -4,14 +4,16 @@ import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { nanoId } from "@cap/database/helpers";
 import { comments } from "@cap/database/schema";
+import type { Video } from "@cap/web-domain";
 import { revalidatePath } from "next/cache";
 import { createNotification } from "@/lib/Notification";
 
 export async function newComment(data: {
 	content: string;
-	videoId: string;
+	videoId: Video.VideoId;
 	type: "text" | "emoji";
 	parentCommentId: string;
+	timestamp: number;
 }) {
 	const user = await getCurrentUser();
 
@@ -23,6 +25,7 @@ export async function newComment(data: {
 	const videoId = data.videoId;
 	const type = data.type;
 	const parentCommentId = data.parentCommentId;
+	const timestamp = data.timestamp;
 	const conditionalType = parentCommentId
 		? "reply"
 		: type === "emoji"
@@ -40,7 +43,7 @@ export async function newComment(data: {
 		type: type,
 		content: content,
 		videoId: videoId,
-		timestamp: null,
+		timestamp: timestamp ?? null,
 		parentCommentId: parentCommentId,
 		createdAt: new Date(),
 		updatedAt: new Date(),

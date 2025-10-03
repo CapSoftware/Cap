@@ -2,7 +2,12 @@ use std::{ffi::c_void, str::FromStr};
 
 use cidre::{arc, ns, sc};
 use cocoa::appkit::NSScreen;
-use core_foundation::{array::CFArray, base::FromVoid, number::CFNumber, string::CFString};
+use core_foundation::{
+    array::CFArray,
+    base::{FromVoid, TCFType},
+    number::CFNumber,
+    string::CFString,
+};
 use core_graphics::{
     display::{
         CFDictionary, CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGDisplayCopyDisplayMode,
@@ -15,6 +20,7 @@ use core_graphics::{
 };
 
 use crate::bounds::{LogicalBounds, LogicalPosition, LogicalSize, PhysicalSize};
+use tracing::trace;
 
 #[derive(Clone, Copy)]
 pub struct DisplayImpl(CGDisplay);
@@ -173,30 +179,39 @@ impl DisplayImpl {
 }
 
 impl DisplayImpl {
-    pub async fn as_sc(&self) -> Option<arc::R<sc::Display>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
+    pub async fn as_sc(
+        &self,
+        content: arc::R<sc::ShareableContent>,
+    ) -> Option<arc::R<sc::Display>> {
+        content
             .displays()
             .iter()
-            .find(|d| d.display_id().0 == self.0.id)
-            .map(|v| v.retained())
+            .find(|display| display.display_id().0 == self.0.id)
+            .map(|display| display.retained())
     }
 
-    pub async fn as_content_filter(&self) -> Option<arc::R<sc::ContentFilter>> {
-        self.as_content_filter_excluding_windows(vec![]).await
+    pub async fn as_content_filter(
+        &self,
+        content: arc::R<sc::ShareableContent>,
+    ) -> Option<arc::R<sc::ContentFilter>> {
+        self.as_content_filter_excluding_windows(content, vec![])
+            .await
     }
 
     pub async fn as_content_filter_excluding_windows(
         &self,
+        content: arc::R<sc::ShareableContent>,
         windows: Vec<arc::R<sc::Window>>,
     ) -> Option<arc::R<sc::ContentFilter>> {
-        let excluded_windows =
-            ns::Array::from_slice_retained(windows.into_iter().collect::<Vec<_>>().as_slice());
+        let display = content
+            .displays()
+            .iter()
+            .find(|display| display.display_id().0 == self.0.id)
+            .map(|display| display.retained())?;
 
         Some(sc::ContentFilter::with_display_excluding_windows(
-            self.as_sc().await?.as_ref(),
-            &excluded_windows,
+            display.as_ref(),
+            &ns::Array::from_slice_retained(&windows),
         ))
     }
 }
@@ -314,6 +329,22 @@ impl WindowImpl {
             window_dict
                 .find(kCGWindowOwnerName)
                 .map(|v| CFString::from_void(*v).to_string())
+        }
+    }
+
+    pub fn owner_pid(&self) -> Option<i32> {
+        let windows =
+            core_graphics::window::copy_window_info(kCGWindowListOptionIncludingWindow, self.0)?;
+
+        let window_dict =
+            unsafe { CFDictionary::<CFString, *const c_void>::from_void(*windows.get(0)?) };
+
+        let key = CFString::from_static_string("kCGWindowOwnerPID");
+
+        unsafe {
+            window_dict
+                .find(key.as_concrete_TypeRef())
+                .and_then(|v| CFNumber::from_void(*v).to_i32())
         }
     }
 
@@ -448,14 +479,12 @@ impl WindowImpl {
         }
     }
 
-    pub async fn as_sc(&self) -> Option<arc::R<sc::Window>> {
-        sc::ShareableContent::current()
-            .await
-            .ok()?
+    pub async fn as_sc(&self, content: arc::R<sc::ShareableContent>) -> Option<arc::R<sc::Window>> {
+        content
             .windows()
             .iter()
-            .find(|w| w.id() == self.0)
-            .map(|v| v.retained())
+            .find(|window| window.id() == self.0)
+            .map(|window| window.retained())
     }
 
     pub fn display(&self) -> Option<DisplayImpl> {

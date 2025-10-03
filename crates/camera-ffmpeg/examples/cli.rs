@@ -23,7 +23,7 @@ fn main() {
 
     let _handle = selected_camera
         .start_capturing(selected_format.0, |frame| {
-            let Ok(ff_frame) = frame.to_ffmpeg() else {
+            let Ok(ff_frame) = frame.as_ffmpeg() else {
                 eprintln!("Failed to convert frame to FFmpeg");
                 return;
             };

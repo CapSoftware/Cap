@@ -1,10 +1,13 @@
 import { db } from "@cap/database";
 import { s3Buckets, videos } from "@cap/database/schema";
 import { serverEnv } from "@cap/env";
+import { S3Buckets } from "@cap/web-backend";
+import type { Video } from "@cap/web-domain";
 import { createClient } from "@deepgram/sdk";
 import { eq } from "drizzle-orm";
+import { Effect, Option } from "effect";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
-import { createBucketProvider } from "@/utils/s3";
+import { runPromise } from "./server";
 
 type TranscribeResult = {
 	success: boolean;
@@ -12,9 +15,10 @@ type TranscribeResult = {
 };
 
 export async function transcribeVideo(
-	videoId: string,
+	videoId: Video.VideoId,
 	userId: string,
 	aiGenerationEnabled = false,
+	isRetry = false,
 ): Promise<TranscribeResult> {
 	if (!serverEnv().DEEPGRAM_API_KEY) {
 		return {
@@ -69,24 +73,60 @@ export async function transcribeVideo(
 		.set({ transcriptionStatus: "PROCESSING" })
 		.where(eq(videos.id, videoId));
 
-	const bucket = await createBucketProvider(result.bucket);
+	const [bucket] = await S3Buckets.getBucketAccess(
+		Option.fromNullable(result.bucket?.id),
+	).pipe(runPromise);
 
 	try {
 		const videoKey = `${userId}/${videoId}/result.mp4`;
 
-		const videoUrl = await bucket.getSignedObjectUrl(videoKey);
+		const videoUrl = await bucket.getSignedObjectUrl(videoKey).pipe(runPromise);
+
+		// Check if video file actually exists before transcribing
+		try {
+			const headResponse = await fetch(videoUrl, {
+				method: "GET",
+				headers: { range: "bytes=0-0" },
+			});
+			if (!headResponse.ok) {
+				// Video not ready yet - reset to null for retry
+				await db()
+					.update(videos)
+					.set({ transcriptionStatus: null })
+					.where(eq(videos.id, videoId));
+
+				return {
+					success: false,
+					message: "Video file not ready yet - will retry automatically",
+				};
+			}
+		} catch {
+			console.log(
+				`[transcribeVideo] Video file not accessible yet for ${videoId}, will retry later`,
+			);
+			await db()
+				.update(videos)
+				.set({ transcriptionStatus: null })
+				.where(eq(videos.id, videoId));
+
+			return {
+				success: false,
+				message: "Video file not ready yet - will retry automatically",
+			};
+		}
 
 		const transcription = await transcribeAudio(videoUrl);
 
+		// Note: Empty transcription is valid for silent videos (just contains "WEBVTT\n\n")
 		if (transcription === "") {
 			throw new Error("Failed to transcribe audio");
 		}
 
-		await bucket.putObject(
-			`${userId}/${videoId}/transcription.vtt`,
-			transcription,
-			{ contentType: "text/vtt" },
-		);
+		await bucket
+			.putObject(`${userId}/${videoId}/transcription.vtt`, transcription, {
+				contentType: "text/vtt",
+			})
+			.pipe(runPromise);
 
 		await db()
 			.update(videos)
@@ -126,18 +166,42 @@ export async function transcribeVideo(
 		};
 	} catch (error) {
 		console.error("Error transcribing video:", error);
+
+		// Determine if this is a temporary or permanent error
+		const errorMessage = error instanceof Error ? error.message : String(error);
+		const isTemporaryError =
+			errorMessage.includes("not found") ||
+			errorMessage.includes("access denied") ||
+			errorMessage.includes("network") ||
+			!isRetry; // First attempt failures are often temporary
+
+		const newStatus = isTemporaryError ? null : "ERROR";
+
 		await db()
 			.update(videos)
-			.set({ transcriptionStatus: "ERROR" })
+			.set({ transcriptionStatus: newStatus })
 			.where(eq(videos.id, videoId));
 
-		return { success: false, message: "Error processing video file" };
+		return {
+			success: false,
+			message: isTemporaryError
+				? "Video not ready - will retry"
+				: "Transcription failed permanently",
+		};
 	}
 }
 
 function formatToWebVTT(result: any): string {
 	let output = "WEBVTT\n\n";
 	let captionIndex = 1;
+
+	// Handle case where there are no utterances (silent video)
+	if (!result.results.utterances || result.results.utterances.length === 0) {
+		console.log(
+			"[formatToWebVTT] No utterances found - video appears to be silent",
+		);
+		return output; // Return valid but empty VTT file
+	}
 
 	result.results.utterances.forEach((utterance: any) => {
 		const words = utterance.words;

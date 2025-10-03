@@ -9,6 +9,7 @@ import {
 	DialogTitle,
 	Input,
 } from "@cap/ui";
+import type { Video } from "@cap/web-domain";
 import { faLock } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { useMutation } from "@tanstack/react-query";
@@ -22,7 +23,7 @@ import {
 interface PasswordDialogProps {
 	isOpen: boolean;
 	onClose: () => void;
-	videoId: string;
+	videoId: Video.VideoId;
 	hasPassword: boolean;
 	onPasswordUpdated: (protectedStatus: boolean) => void;
 }

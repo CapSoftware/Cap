@@ -4,10 +4,11 @@ import { getMetadataBySlug } from "@/lib/seo-metadata";
 import { getPageBySlug } from "@/lib/seo-pages";
 
 type Props = {
-	params: { slug: string };
+	params: Promise<{ slug: string }>;
 };
 
-export async function generateMetadata({ params }: Props): Promise<Metadata> {
+export async function generateMetadata(props: Props): Promise<Metadata> {
+	const params = await props.params;
 	const metadata = getMetadataBySlug(params.slug);
 
 	if (!metadata) {
@@ -30,7 +31,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 	};
 }
 
-export default function SeoPage({ params }: Props) {
+export default async function SeoPage(props: Props) {
+	const params = await props.params;
 	const page = getPageBySlug(params.slug);
 
 	if (!page) {

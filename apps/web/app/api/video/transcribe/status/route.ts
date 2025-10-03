@@ -1,7 +1,8 @@
 import { db } from "@cap/database";
 import { getCurrentUser } from "@cap/database/auth/session";
 import { videos } from "@cap/database/schema";
-import { count, eq } from "drizzle-orm";
+import type { Video } from "@cap/web-domain";
+import { eq } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { generateAiMetadata } from "@/actions/videos/generate-ai-metadata";
 import { isAiGenerationEnabled } from "@/utils/flags";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
 	const user = await getCurrentUser();
 	const url = new URL(request.url);
-	const videoId = url.searchParams.get("videoId");
+	const videoId = url.searchParams.get("videoId") as Video.VideoId;
 
 	if (!user) {
 		return Response.json({ auth: false }, { status: 401 });

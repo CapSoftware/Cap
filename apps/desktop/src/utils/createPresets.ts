@@ -28,6 +28,7 @@ export function createPresets() {
 			const config = { ...preset.config };
 			// @ts-expect-error we reeeally don't want the timeline in the preset
 			config.timeline = undefined;
+			config.clips = undefined;
 
 			await updatePresets((store) => {
 				store.presets.push({ name: preset.name, config });
