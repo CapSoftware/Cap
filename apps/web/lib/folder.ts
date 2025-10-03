@@ -445,6 +445,13 @@ export const moveVideosToFolder = Effect.fn(function* (
           )
         )
     );
+    const spaceVideoIds = new Set(spaceRows.map((row) => row.videoId));
+    const missingVideoIds = videoIds.filter((id) => !spaceVideoIds.has(id));
+    if (missingVideoIds.length > 0) {
+      throw new Error(
+        "Some videos are not in the specified space or you don't have permission to move them"
+      );
+    }
     originalFolderIds = [
       ...new Set(spaceRows.map((r) => r.folderId).filter(Boolean)),
     ];
