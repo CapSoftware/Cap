@@ -244,7 +244,6 @@ impl ActorBuilder {
 
     pub async fn build(
         self,
-
         #[cfg(target_os = "macos")] shareable_content: cidre::arc::R<cidre::sc::ShareableContent>,
     ) -> anyhow::Result<ActorHandle> {
         spawn_instant_recording_actor(

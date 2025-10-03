@@ -67,7 +67,10 @@ pub async fn main() {
     // .with_camera_feed(std::sync::Arc::new(
     //     camera_feed.ask(feeds::camera::Lock).await.unwrap(),
     // ))
-    .build()
+    .build(
+        #[cfg(target_os = "macos")]
+        cidre::sc::ShareableContent::current().await.unwrap(),
+    )
     .await
     .unwrap();
 

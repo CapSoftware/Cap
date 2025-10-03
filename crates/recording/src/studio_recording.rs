@@ -687,7 +687,7 @@ async fn create_segment_pipeline(
         !custom_cursor_capture,
         120,
         start_time.system_time(),
-        capture_system_audio,
+        base_inputs.capture_system_audio,
         #[cfg(windows)]
         d3d_device,
         #[cfg(target_os = "macos")]
@@ -713,7 +713,7 @@ async fn create_segment_pipeline(
     .await
     .context("screen pipeline setup")?;
 
-    let camera = OptionFuture::from(camera_feed.map(|camera_feed| {
+    let camera = OptionFuture::from(base_inputs.camera_feed.map(|camera_feed| {
         OutputPipeline::builder(dir.join("camera.mp4"))
             .with_video::<sources::Camera>(camera_feed)
             .with_timestamps(start_time)
@@ -724,7 +724,7 @@ async fn create_segment_pipeline(
     .transpose()
     .context("camera pipeline setup")?;
 
-    let microphone = OptionFuture::from(mic_feed.map(|mic_feed| {
+    let microphone = OptionFuture::from(base_inputs.mic_feed.map(|mic_feed| {
         OutputPipeline::builder(dir.join("audio-input.ogg"))
             .with_audio_source::<sources::Microphone>(mic_feed)
             .with_timestamps(start_time)
