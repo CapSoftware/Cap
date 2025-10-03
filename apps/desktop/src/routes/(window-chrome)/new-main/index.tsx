@@ -318,26 +318,45 @@ function Page() {
 
 	const displayTargets = useQuery(() => ({
 		...listDisplaysWithThumbnails,
-		enabled: hasOpenedDisplayMenu(),
 		refetchInterval: false,
 	}));
 
 	const windowTargets = useQuery(() => ({
 		...listWindowsWithThumbnails,
-		enabled: hasOpenedWindowMenu(),
 		refetchInterval: false,
 	}));
+
+	const screens = useQuery(() => listScreens);
+	const windows = useQuery(() => listWindows);
 
 	const hasDisplayTargetsData = () => displayTargets.status === "success";
 	const hasWindowTargetsData = () => windowTargets.status === "success";
 
-	const displayTargetsData = createMemo(() =>
-		hasDisplayTargetsData() ? displayTargets.data : undefined,
-	);
+	const existingDisplayIds = createMemo(() => {
+		const currentScreens = screens.data;
+		if (!currentScreens) return undefined;
+		return new Set(currentScreens.map((screen) => screen.id));
+	});
 
-	const windowTargetsData = createMemo(() =>
-		hasWindowTargetsData() ? windowTargets.data : undefined,
-	);
+	const displayTargetsData = createMemo(() => {
+		if (!hasDisplayTargetsData()) return undefined;
+		const ids = existingDisplayIds();
+		if (!ids) return displayTargets.data;
+		return displayTargets.data?.filter((target) => ids.has(target.id));
+	});
+
+	const existingWindowIds = createMemo(() => {
+		const currentWindows = windows.data;
+		if (!currentWindows) return undefined;
+		return new Set(currentWindows.map((win) => win.id));
+	});
+
+	const windowTargetsData = createMemo(() => {
+		if (!hasWindowTargetsData()) return undefined;
+		const ids = existingWindowIds();
+		if (!ids) return windowTargets.data;
+		return windowTargets.data?.filter((target) => ids.has(target.id));
+	});
 
 	const displayMenuLoading = () =>
 		!hasDisplayTargetsData() &&
@@ -430,8 +449,6 @@ function Page() {
 		else commands.closeTargetSelectOverlays();
 	});
 
-	const screens = useQuery(() => listScreens);
-	const windows = useQuery(() => listWindows);
 	const cameras = useQuery(() => listVideoDevices);
 	const mics = useQuery(() => listAudioDevices);
 
