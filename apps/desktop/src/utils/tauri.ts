@@ -299,6 +299,7 @@ renderFrameEvent: RenderFrameEvent,
 requestNewScreenshot: RequestNewScreenshot,
 requestOpenRecordingPicker: RequestOpenRecordingPicker,
 requestOpenSettings: RequestOpenSettings,
+requestScreenCapturePrewarm: RequestScreenCapturePrewarm,
 requestStartRecording: RequestStartRecording,
 targetUnderCursor: TargetUnderCursor,
 uploadProgressEvent: UploadProgressEvent
@@ -321,6 +322,7 @@ renderFrameEvent: "render-frame-event",
 requestNewScreenshot: "request-new-screenshot",
 requestOpenRecordingPicker: "request-open-recording-picker",
 requestOpenSettings: "request-open-settings",
+requestScreenCapturePrewarm: "request-screen-capture-prewarm",
 requestStartRecording: "request-start-recording",
 targetUnderCursor: "target-under-cursor",
 uploadProgressEvent: "upload-progress-event"
@@ -445,6 +447,7 @@ export type RenderFrameEvent = { frame_number: number; fps: number; resolution_b
 export type RequestNewScreenshot = null
 export type RequestOpenRecordingPicker = { target_mode: RecordingTargetMode | null }
 export type RequestOpenSettings = { page: string }
+export type RequestScreenCapturePrewarm = { force?: boolean }
 export type RequestStartRecording = { mode: RecordingMode }
 export type S3UploadMeta = { id: string }
 export type SceneMode = "default" | "cameraOnly" | "hideCamera"

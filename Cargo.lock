@@ -1029,6 +1029,7 @@ dependencies = [
  "cap-recording",
  "cap-rendering",
  "cap-utils",
+ "cidre 0.11.0",
  "clap",
  "ffmpeg-next",
  "flume",
@@ -1209,7 +1210,6 @@ dependencies = [
  "lazy_static",
  "log",
  "md5",
- "mp4",
  "nix 0.29.0",
  "objc",
  "objc2-app-kit",
@@ -1449,6 +1449,7 @@ dependencies = [
 name = "cap-recording"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cap-audio",
  "cap-camera",
  "cap-camera-ffmpeg",
@@ -7524,6 +7525,7 @@ dependencies = [
  "objc",
  "serde",
  "specta",
+ "tokio",
  "tracing",
  "windows 0.60.0",
 ]

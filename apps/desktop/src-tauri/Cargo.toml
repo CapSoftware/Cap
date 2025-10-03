@@ -53,7 +53,6 @@ specta-typescript = "0.0.7"
 tokio.workspace = true
 uuid = { version = "1.10.0", features = ["v4"] }
 image = "0.25.2"
-mp4 = "0.14.0"
 futures-intrusive = "0.5.0"
 anyhow.workspace = true
 futures = { workspace = true }
