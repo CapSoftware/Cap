@@ -295,6 +295,7 @@ export const getChildFolders = Effect.fn(function* (
       .where(
         and(
           eq(folders.parentId, folderId),
+          eq(folders.organizationId, user.activeOrganizationId),
           root.variant === "space"
             ? eq(folders.spaceId, root.spaceId)
             : undefined
@@ -425,21 +426,57 @@ export const moveVideosToFolder = Effect.fn(function* (
     }
   }
 
-  // Store original folder IDs for potential revalidation
-  const originalFolderIds = [
-    ...new Set(existingVideos.map((v) => v.folderId).filter(Boolean)),
-  ];
+  // Determine original folder ids and perform the move based on context
+  let originalFolderIds: (string | null)[] = [];
 
-  // Perform the move operation
-  yield* db.execute((db) =>
-    db
-      .update(videos)
-      .set({
-        folderId: targetFolderId,
-        updatedAt: new Date(),
-      })
-      .where(inArray(videos.id, videoIds))
-  );
+  if (root?.variant === "space") {
+    // Collect originals from space_videos
+    const spaceRows = yield* db.execute((db) =>
+      db
+        .select({
+          folderId: spaceVideos.folderId,
+          videoId: spaceVideos.videoId,
+        })
+        .from(spaceVideos)
+        .where(
+          and(
+            eq(spaceVideos.spaceId, root.spaceId),
+            inArray(spaceVideos.videoId, videoIds)
+          )
+        )
+    );
+    originalFolderIds = [
+      ...new Set(spaceRows.map((r) => r.folderId).filter(Boolean)),
+    ];
+
+    // Update per-space folder placement
+    yield* db.execute((db) =>
+      db
+        .update(spaceVideos)
+        .set({ folderId: targetFolderId })
+        .where(
+          and(
+            eq(spaceVideos.spaceId, root.spaceId),
+            inArray(spaceVideos.videoId, videoIds)
+          )
+        )
+    );
+  } else {
+    // ORG/global placement via videos.folderId
+    originalFolderIds = [
+      ...new Set(existingVideos.map((v) => v.folderId).filter(Boolean)),
+    ];
+
+    yield* db.execute((db) =>
+      db
+        .update(videos)
+        .set({
+          folderId: targetFolderId,
+          updatedAt: new Date(),
+        })
+        .where(inArray(videos.id, videoIds))
+    );
+  }
 
   return {
     movedCount: videoIds.length,
