@@ -173,24 +173,18 @@ impl AudioMixerBuilder {
 
         let _ = ready_tx.send(Ok(()));
 
-        let mut run = || {
-            loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                mixer
-                    .tick(start, Timestamp::Instant(Instant::now()))
-                    .map_err(|()| anyhow::format_err!("Audio mixer tick failed"))?;
-
-                std::thread::sleep(Duration::from_millis(5));
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                info!("Mixer stop flag triggered");
+                break;
             }
 
-            Ok::<(), anyhow::Error>(())
-        };
+            if let Err(()) = mixer.tick(start, Timestamp::Instant(Instant::now())) {
+                info!("Mixer tick errored");
+                break;
+            }
 
-        if let Err(e) = run() {
-            tracing::error!("Audio mixer failed: {}", e);
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 }

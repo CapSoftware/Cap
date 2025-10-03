@@ -1,8 +1,7 @@
 use cap_recording::{screen_capture::ScreenCaptureTarget, *};
-use kameo::prelude::*;
 use scap_targets::Display;
 use std::time::Duration;
-use tracing::info;
+use tracing::*;
 
 #[tokio::main]
 pub async fn main() {
@@ -72,9 +71,15 @@ pub async fn main() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
-
-    handle.stop().await.unwrap();
+    let _ = tokio::select!(
+        _ = tokio::time::sleep(Duration::from_secs(5)) => {
+            trace!("Sleep done");
+            let _ = handle.stop().await;
+        }
+        res = handle.done_fut() => {
+            debug!("{res:?}");
+        }
+    );
 
     info!("Recording finished");
 

@@ -126,7 +126,10 @@ impl TaskPool {
                 async {
                     trace!("Task started");
                     let res = future.await;
-                    info!("Task finished. Did error: {}", res.is_err());
+                    match &res {
+                        Ok(_) => info!("Task finished successfully"),
+                        Err(err) => error!("Task failed: {}", err),
+                    }
                     res
                 }
                 .instrument(error_span!("", task = name))
